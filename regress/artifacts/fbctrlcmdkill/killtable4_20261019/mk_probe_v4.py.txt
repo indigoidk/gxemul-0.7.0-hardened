@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+"""mk_probe_v4.py SRC DST -- #567 probe v4: the WIDTH class closed in ONE diff, by the class-closure amendment (pass 2's
+E13 and F2's E15-E19 are two consecutive passes breaching one class).  v3 held width x bound edge and width x dispatch;
+v4 adds the rest of the space the arm's code distinguishes, crossed with width:
+  W:latch  width x LATCH x edge: sd 3 with the latch CLEAR (refused, announced -- an sd refusal SETS the latch), then
+           sb, sh, sw 3 with it SET (refused, silent), then GET by sb, sh, sd with it SET (each zeroes X1; COMMAND 2);
+  W:sb     the latch SET by a byte refusal: sb 3 (announced), sh 4 (silent);
+  M3       width at a NON-COMMAND port (3, 4, 5 stored at X2 by sb, sh, sd) and on the READ path (COMMAND read by lb,
+           lh, ld, lw: 2 each; X1 kept: no read stored or ran anything);
+  sessions clean 24 -> 27.  Exact-anchor edits of v3, each anchor once; v3's sessions and rows are unchanged."""
+import io, sys
+NL = chr(10)
+src, dst = sys.argv[1], sys.argv[2]
+t = io.open(src, encoding="utf-8", newline="").read()
+
+
+def rep(old, new, name):
+    global t
+    assert t.count(old) == 1, (name, t.count(old), old[:80])
+    t = t.replace(old, new)
+
+
+# --- code ---------------------------------------------------------------------------------------------------
+rep('OPS = dict(sb=0x28, sh=0x29, sw=0x2b, sd=0x3f, lw=0x23)',
+    'OPS = dict(sb=0x28, sh=0x29, sw=0x2b, sd=0x3f, lw=0x23, lb=0x20, lh=0x21, ld=0x37)', "OPS")
+rep('assert ins("sh", "t1", 0x10) == 0xa5090010' + NL,
+    'assert ins("sh", "t1", 0x10) == 0xa5090010' + NL +
+    'assert ins("lb", "t6", 0x10) == 0x810e0010' + NL +
+    'assert ins("lh", "t7", 0x10) == 0x850f0010' + NL +
+    'assert ins("ld", "s0", 0x10) == 0xdd100010' + NL, "pins")
+rep('def get(reg):' + NL + '    return ("lw", reg, 16)',
+    'def get(reg, op="lw"):' + NL + '    return (op, reg, 16)', "get")
+rep('row("x2 quiet", len(M2["cmd"]), 0, "no command announce")' + NL,
+    'row("x2 quiet", len(M2["cmd"]), 0, "no command announce")' + NL +
+    'M3 = track(session("M3", [sel("s3"), put("s3", "sb"), get("t2"), put("s4", "sh"), get("t3"), put("s5", "sd"),' + NL +
+    '                          get("t4"), sel("zr"), put("s2"), sel("s1"), put("t5"), sel("zr"),' + NL +
+    '                          get("t6", "lb"), get("t7", "lh"), get("s0", "ld"), get("t1"), sel("s1"), get("s7")],' + NL +
+    '                   BASE_REGS, ["t2", "t3", "t4", "t6", "t7", "s0", "t1", "s7"], stub))' + NL +
+    'row("x2 sb", hx(M3["vals"].get("t2")), "0x3", "3 at X2 by sb is ordinary storage")' + NL +
+    'row("x2 sh", hx(M3["vals"].get("t3")), "0x4", "4 by sh")' + NL +
+    'row("x2 sd", hx(M3["vals"].get("t4")), "0x5", "5 by sd")' + NL +
+    'row("m3 quiet", len(M3["cmd"]), 0, "no command announce")' + NL +
+    'row("rdw lb", hx(M3["vals"].get("t6")), "0x2", "COMMAND read by lb")' + NL +
+    'row("rdw lh", hx(M3["vals"].get("t7")), "0x2", "by lh")' + NL +
+    'row("rdw ld", hx(M3["vals"].get("s0")), "0x2", "by ld")' + NL +
+    'row("rdw lw", hx(M3["vals"].get("t1")), "0x2", "and by lw after them: no read stored anything")' + NL +
+    'row("rdw x1", hx(M3["vals"].get("s7")), "0x7b", "no read ran GET: X1 keeps 123")' + NL, "M3")
+rep('row("two cmd", hx(T2["vals"].get("t2")), "0x0", "COMMAND keeps its power-on 0")' + NL,
+    'row("two cmd", hx(T2["vals"].get("t2")), "0x0", "COMMAND keeps its power-on 0")' + NL +
+    'W1 = track(session("W:latch", [sel("zr"), put("s3", "sd"),                    # sd 3, the latch CLEAR: refused, announced' + NL +
+    '                               put("s3", "sb"), put("s3", "sh"), put("s3"),   # sb, sh, sw 3, the latch SET: silent' + NL +
+    '                               sel("s1"), put("t5"), sel("zr"), put("s2", "sb"), sel("s1"), get("t3"),  # GET by sb' + NL +
+    '                               put("t5"), sel("zr"), put("s2", "sh"), sel("s1"), get("t4"),             # GET by sh' + NL +
+    '                               put("t5"), sel("zr"), put("s2", "sd"), sel("s1"), get("t6"),             # GET by sd' + NL +
+    '                               sel("zr"), get("t2")],' + NL +
+    '                   BASE_REGS, ["t3", "t4", "t6", "t2"], stub))' + NL +
+    'row("wl alive", alive(W1), "alive", "sd 3, the latch clear; sb, sh, sw 3, the latch set: refused at every width")' + NL +
+    'row("wl once", ",".join(W1["cmd"]) or "-", "0x3", "one announce: the sd 3 set the latch; sb, sh, sw 3 silent")' + NL +
+    'row("wl sb get x1", hx(W1["vals"].get("t3")), "0x0", "GET by sb with the latch set runs: X1 123 -> 0")' + NL +
+    'row("wl sh get x1", hx(W1["vals"].get("t4")), "0x0", "and by sh")' + NL +
+    'row("wl sd get x1", hx(W1["vals"].get("t6")), "0x0", "and by sd")' + NL +
+    'row("wl cmd", hx(W1["vals"].get("t2")), "0x2", "the last GET is stored")' + NL +
+    'W2 = track(session("W:sb", [sel("zr"), put("s3", "sb"), put("s4", "sh"), get("t2")], BASE_REGS, ["t2"], stub))' + NL +
+    'row("wb once", ",".join(W2["cmd"]) or "-", "0x3", "sb 3 set the latch: the sh 4 after it stays silent")' + NL +
+    'row("wb cmd", hx(W2["vals"].get("t2")), "0x0", "COMMAND keeps its power-on 0")' + NL, "W1 W2")
+rep('row("sessions clean", sum(1 for S in ALL if S["status"] == "SURVIVED" and S["exit"] == 0), 24,' + NL +
+    '    "all 24 sessions ran to the end and exited 0")',
+    'row("sessions clean", sum(1 for S in ALL if S["status"] == "SURVIVED" and S["exit"] == 0), 27,' + NL +
+    '    "all 27 sessions ran to the end and exited 0")', "sessions 27")
+
+# --- docstring: session descriptions ------------------------------------------------------------------------
+rep("  M2   a DATA write of 3 to a NON-COMMAND port (PORT=3, X2) is ordinary storage: reads back 3, no announce.\n",
+    "  M2   a DATA write of 3 to a NON-COMMAND port (PORT=3, X2) is ordinary storage: reads back 3, no announce.\n"
+    "  M3   WIDTH at a non-COMMAND port and on the read path: 3, 4 and 5 stored at X2 by sb, sh and sd (each reads\n"
+    "       back; no announce); then COMMAND = 2 by a GET, X1 = 123, and COMMAND read by lb, lh, ld and lw -- 2 each,\n"
+    "       so no read stored anything -- and X1 still 123, so no read ran the GET.\n", "doc M3")
+rep("       and the read: ONE command announce, naming 0x3; COMMAND reads 0.\n",
+    "       and the read: ONE command announce, naming 0x3; COMMAND reads 0.\n"
+    "  W:latch  WIDTH x LATCH at the bound's edges: sd 3 with the latch CLEAR (refused and announced -- an sd refusal\n"
+    "       sets the latch), then sb, sh and sw 3 with it SET (refused, silent), then GET by sb, sh and sd with it SET\n"
+    "       (each zeroes X1 again; COMMAND reads 2).\n"
+    "  W:sb  the latch SET by a byte refusal: sb 3 (announced), then sh 4 (silent); COMMAND keeps 0.\n", "doc W")
+io.open(dst, "w", encoding="utf-8", newline="").write(t)
+print("probe v4 written:", dst)

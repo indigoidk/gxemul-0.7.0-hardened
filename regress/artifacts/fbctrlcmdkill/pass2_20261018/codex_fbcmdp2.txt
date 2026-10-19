@@ -1,0 +1,95 @@
+ASTRA_FBCMD_P2_20261018
+VERDICT: SHIP WITH CHANGES -- The scalar guard is sound, but reachable 16-byte writes defeat full-value refusal, and the probe overstates coverage.
+
+FLAG: The universal “FULL access value” premise is false. PPC `X(stvx)` supplies 16 bytes; `memory_readmax64()` accumulates into 64 bits and discards the upper half. See [the producer](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:3872) and [the decoder](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/memory.c:55).
+
+FLAG: “Every cell … is held” overstates the probe’s coverage. All accepted COMMAND writes use `sw`; accepted `sb`, `sh`, and `sd` commands are absent. See [the frozen programs](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlcmdkill/pass2_20261018/frozen/fbctrl_cmd_probe.py.txt:296).
+
+FLAG: “No resize attempted” is not what `nosmall` measures. `SMALL_RE` recognizes only the `0 x 0` warning, whereas refusal sessions seed dimensions 123×77. See [the regex](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlcmdkill/pass2_20261018/frozen/fbctrl_cmd_probe.py.txt:89) and [the assertion](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlcmdkill/pass2_20261018/frozen/fbctrl_cmd_probe.py.txt:321).
+
+1. **Premise audit.**
+
+   For `sb`, `sh`, `sw`, and `sd`, the producer widths are respectively 1, 2, 4, and 8 bytes. The unsigned accumulator starts at zero; both byte-order branches preserve those complete scalar values. At each width, the accepted values are exactly `{0,1,2}`.
+
+   However, ordinary `testppc` installs this same device, and its implemented `stvx`/`stvxl` path supplies 16 bytes. DATA offset `0x10` plus 16 bytes exactly fits the device’s `0x20` extent, so the dispatcher does not shorten the transfer. See [testppc setup](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_test.c:440) and [device-length handling](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:495).
+
+   Enumerating representative actual vector payloads through the decoder:
+
+   | Upper 64 bits | Lower 64 bits | `idata` | Result |
+   |---:|---:|---:|---|
+   | 1 | 0 | 0 | Executes NOP |
+   | 1 | 1 | 1 | Executes SET |
+   | 1 | 2 | 2 | Executes GET |
+   | 1 | 3 | 3 | Refuses |
+
+   Thus `0x10000000000000002` executes GET despite being unsupported as a complete transfer. Handle oversized COMMAND writes before conversion and add a vector-store regression. This is a source-derived counterexample, not a new emulator measurement.
+
+   The other three premises hold. COMMAND starts at zero; the guarded dynamic store is its only subsequent writer; GET writes X1/Y1. Even the vector counterexample stores only 0–2, so the command-default exit remains unreachable. Reads and refused-write preservation are unchanged. See [the frozen device](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlcmdkill/pass2_20261018/frozen/dev_fbctrl.c.txt:113).
+
+   Reconstructing `B_gateoff` yields HEAD’s DATA arm, comparing with line endings normalized. Its extra unused latch and comment do not preserve any part of the removed behavior. I also compared all 95 emitted rows: names, observations, and statuses match both the draft pre-fix leg and the final HEAD leg. Clause (b) is supported.
+
+2. **Small edit that breaks behavior while passing.**
+
+   Retain the COMMAND guard, but change its value condition to:
+
+   ```c
+   (idata > DEV_FBCTRL_COMMAND_GET_RESOLUTION || len != 4)
+   ```
+
+   This wrongly refuses legal byte, halfword, and doubleword commands. Enumeration of the generated programs found **37 COMMAND writes across 22 sessions**; this mutant changes none of their branch decisions. Every legal command is a word store, and every non-word command tested is already invalid.
+
+   All 95 rows are therefore predicted to remain green, including `acc get cmd`, `ref sb3 once`, and `ref sh4 once`. This prediction was checked against the generated programs, not by running a mutant emulator.
+
+3. **Option-set completeness.**
+
+   Nothing supports implementing FILL/COPY or abandoning refusal before storage. Member 3 remains appropriate. The newly established producer width requires an explicit oversized-access policy; a 64-bit comparison alone cannot deliver the universal full-transfer promise.
+
+4. **DEPENDS-ON gaps.**
+
+   The missing accepted-width cells are explicitly:
+
+   `sb:0, sb:1, sb:2; sh:0, sh:1, sh:2; sd:0, sd:1, sd:2`.
+
+   D5 tests invalid short commands escaping refusal. It does not test valid non-word commands being incorrectly refused.
+
+   The **read/no-dispatch cell** also lacks a measured mutant. M1 supplies an observable, but E4 deliberately retains `writeflag == MEM_WRITE`; it cannot establish that M1 detects dispatch on reads. See [E4’s actual edit](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlcmdkill/killtable1b_20261018/mutants/E4_hoist.diff:12).
+
+   Likewise, D9 changes the refusal branch’s port guard, not the separate accepted-path dispatch guard. The reachable 16-byte producer is unmeasured altogether. These gaps are additional to the disclosed latch-set/wide-alias intersection.
+
+5. **A third non-varying channel exists.**
+
+   Under D1, `R:w1` executes SET with dimensions 123×77. `ref w1 cmd` and `ref w1 once` fail, but `ref w1 nosmall` stays green because a valid-size resize does not print the exact `0 x 0` warning. This is already visible in [D1’s recorded rows](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlcmdkill/killtable1_20261018/D1_u32.raw:63), and identically in `B_gateoff`.
+
+   The other rows still kill those mutants. Correct the `nosmall` claim and use an observable capable of detecting the resize attempt if that stronger assertion is retained.
+
+6. **Gate block.**
+
+   I reproduced the recorded row totals. The probe emits:
+
+   `2 controls + 66 refusal + 10 acceptance + 5 latch + 4 M1/M2 + 2 T2 + 4 P1/P2 + 2 free-run = 95`.
+
+   The current `got`/`want` producers are whitespace-free, so the anchored pattern has no demonstrated whitespace omission. All supplied bad logs are rejected.
+
+   The replay’s completeness hole is **substitution**: uniqueness proves 95 distinct names, not the expected 95 names. Replacing an expected row with an unrelated unique passing row while retaining `95/95`, `OK`, and exit zero passes all nine checks. The deletion and duplication controls do not test this. See [the uniqueness check](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlcmdkill/pass2_20261018/frozen/gate16_block567.txt:43). This is a completeness limitation, not evidence that an honestly reported failing row escapes the current gate.
+
+   There is also a child-exit gap: `track()` checks disassembly only, and `free alive` checks status without exit status. Several non-refusal sessions can ignore a nonzero exit after producing their expected observations. Fold successful session status and child exit into CONTROL. See [the frozen tracking helper](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlcmdkill/pass2_20261018/frozen/fbctrl_cmd_probe.py.txt:277).
+
+7. **Census repair.**
+
+   Prefer a prerequisite commit repairing #564: PTY count `74→75` and its grandfathered name; then #567 contributes `75→76` and converted count `25→26`. That separates attribution and dependencies. Combining them is not a functional defect.
+
+   Independent enumeration confirms 76 PTY probes, 44 promptless probes matching the 44 grandfathered names, and 26 converted probes in this working tree. The score checker reports 36 pinned probes. These counts describe the dirty working tree; they do not establish the census of a clean checkout omitting its disclosed untracked probe.
+
+8. **Accepted dispositions.**
+
+   None of the five is categorically wrong as narrowly stated:
+
+   - **(a)** E2 supplies live evidence for the isolated NOP cell.
+   - **(b)** The other ten classes plus `two cmd` kill D8; that does not make `ref w2 cmd` informative.
+   - **(c)** Both null logs really have 15 green rows: eleven `nosmall` rows and four quiet rows. Their failed controls, scores, and exits reject the runs. This does not cover the separate child-exit gap above.
+   - **(d)** Explicit grandfathering is defensible temporary debt; it does not repair readiness.
+   - **(e)** Gate 16 placement is defensible temporary organizational debt. The device block precedes the kernel check, and a later skip preserves prior failures.
+
+   The substantive errors are the universal width premise and the stronger coverage/channel claims, rather than those five aggregate dispositions.
+
+Review and enumeration were read-only. I did not rebuild or rerun the emulator.

@@ -1,0 +1,59 @@
+#!/usr/bin/env python3
+"""mk_probe_v3.py SRC DST -- #567 probe v3: the width x bound-edge class CLOSED in one diff (accept 2 and refuse 3 at
+every width -- the cells v2 lacked are sh and sd), and the latch's persistence across an intervening accept and read.
+  A:edges  GET (the at-bound 2) by sd and by sh: its dispatch zeroes X1, so dispatch at both widths is observable;
+  R:edges  3 (past the bound) refused by sh, then by sd;
+  T2       refuse 3, accept a NOP, read COMMAND, refuse 5, refuse sd 0x100000005: still ONE announce;
+  sessions clean  22 -> 24.  Exact-anchor edits of v2, each anchor once."""
+import io, sys
+NL = chr(10)
+src, dst = sys.argv[1], sys.argv[2]
+t = io.open(src, encoding="utf-8", newline="").read()
+
+
+def rep(old, new, name):
+    global t
+    assert t.count(old) == 1, (name, t.count(old), old[:80])
+    t = t.replace(old, new)
+
+
+# --- code ---------------------------------------------------------------------------------------------------
+rep('    row("ref %s noset" % name, S["res"], 0, "no SET ran: no resolution-change line")' + NL + NL,
+    '    row("ref %s noset" % name, S["res"], 0, "no SET ran: no resolution-change line")' + NL + NL +
+    'RE = track(session("R:edges", SEED + [put("s3", "sh"), put("s3", "sd")] + READ3, BASE_REGS, ["t2", "t3", "t4"], stub))' + NL +
+    'row("edge alive", alive(RE), "alive", "sh 3, then sd 3, at COMMAND: the past-bound 3 refused at both widths")' + NL +
+    'row("edge cmd", hx(RE["vals"].get("t2")), "0x2", "COMMAND keeps 2")' + NL +
+    'row("edge once", ",".join(RE["cmd"]) or "-", "0x3", "one announce, the first value; the latch then set")' + NL + NL,
+    "R:edges")
+rep('row("acc get quiet", len(A2["cmd"]), 0, "no command announce")' + NL,
+    'row("acc get quiet", len(A2["cmd"]), 0, "no command announce")' + NL +
+    'A3 = track(session("A:edges", [sel("s1"), put("t5"), sel("zr"), put("s2", "sd"), sel("s1"), get("t3"),' + NL +
+    '                               put("t5"), sel("zr"), put("s2", "sh"), sel("s1"), get("t4"), sel("zr"), get("t2")],' + NL +
+    '                   BASE_REGS, ["t3", "t4", "t2"], stub))' + NL +
+    'row("acc sd get x1", hx(A3["vals"].get("t3")), "0x0", "GET_RESOLUTION by sd runs: X1 123 -> 0")' + NL +
+    'row("acc sh get x1", hx(A3["vals"].get("t4")), "0x0", "and by sh: X1 123 -> 0 again")' + NL +
+    'row("acc edges cmd", hx(A3["vals"].get("t2")), "0x2", "the at-bound 2 accepted by sd and by sh")' + NL +
+    'row("acc edges quiet", len(A3["cmd"]), 0, "no command announce")' + NL,
+    "A:edges")
+rep('T2 = track(session("T2", [sel("zr"), put("s3"), put("s5"), put("s7", "sd"), get("t2")],' + NL,
+    'T2 = track(session("T2", [sel("zr"), put("s3"), put("zr"), get("t3"), put("s5"), put("s7", "sd"), get("t2")],' + NL,
+    "T2 program")
+rep('"0x3", "3, 5, then sd 0x100000005 with the latch set: one announce")',
+    '"0x3", "3; a NOP and a read; 5; sd 0x100000005: one announce")', "T2 note")
+rep('row("sessions clean", sum(1 for S in ALL if S["status"] == "SURVIVED" and S["exit"] == 0), 22,' + NL +
+    '    "all 22 sessions ran to the end and exited 0")',
+    'row("sessions clean", sum(1 for S in ALL if S["status"] == "SURVIVED" and S["exit"] == 0), 24,' + NL +
+    '    "all 24 sessions ran to the end and exited 0")', "sessions 24")
+
+# --- docstring: session descriptions ------------------------------------------------------------------------
+rep("  A:n  ACCEPT, latch clear, one width each:",
+    "  A:edges  ACCEPT GET_RESOLUTION -- the at-bound 2 -- by sd and by sh: each dispatch zeroes X1 (123 -> 0), so dispatch\n"
+    "       at both widths is observable; COMMAND reads 2, no announce.\n"
+    "  R:edges  REFUSE 3 -- past the bound -- by sh, then by sd, on the seeded device: alive, COMMAND keeps 2, one announce.\n"
+    "  A:n  ACCEPT, latch clear, one width each:", "doc edges")
+rep("  T2   three refusals -- 3, 5, then sd 0x100000005 with the latch SET: ONE command announce, naming 0x3; COMMAND\n"
+    "       keeps its power-on 0.",
+    "  T2   refuse 3; ACCEPT a NOP; READ COMMAND; refuse 5; refuse sd 0x100000005 -- the latch persists across the accept\n"
+    "       and the read: ONE command announce, naming 0x3; COMMAND reads 0.", "doc T2")
+io.open(dst, "w", encoding="utf-8", newline="").write(t)
+print("probe v3 written:", dst)

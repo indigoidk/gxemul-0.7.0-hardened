@@ -1,0 +1,60 @@
+I will verify the repair against the tree, and pressure F3, F10, F13, F18, D1, and D3 harder than the other seats' findings. The verdict comes after the code, not from the dispositions.GROK_FBCMD_F2_20261019
+VERDICT: SHIP WITH CHANGES -- E12, E13 and E14 are dead on the logs, and the product guard is right for every value it compares; an `sd` or `sh` bound raised by one still restores `default:`'s `exit(1)` and leaves all 99 rows green.
+
+FLAG: Upward width bound. `idata > (len == 8 ? DEV_FBCTRL_COMMAND_GET_RESOLUTION + 1 : DEV_FBCTRL_COMMAND_GET_RESOLUTION)` at the DATA `else if` in `src/devices/dev_fbctrl.c`. Every `sd` immediate in `regress/fbctrl_cmd_probe.py` is 0 or greater than 3 (`A:nop`, `w0`–`w3`, `m1d`, T2's `0x100000005`). `ref w3 cmd` stays green. The `sh` twin (`len == 2 ? 3 : 2`) leaves `ref sh4 cmd` green. Accepting GET (2) on `sd` does not kill either edit: 2 is still under the raised bound.
+FLAG: NOT CLAIMED (6) misplaces the loss. `memory_rw` calls the device with the caller's buffer and `len` (`src/cpus/memory_rw.c`, the `devices[i].f` call). `stvx`/`stvxl` pass 16 bytes (`cpu_ppc_instr.c` `X(stvx)`, `PPC_31_STVXL`). A 16-byte store at DATA fits `DEV_FBCTRL_LENGTH`. The callback receives all 16 bytes; `memory_readmax64()` then keeps the low half on this big-endian PPC (`cpu_ppc.c` sets `EMUL_BIG_ENDIAN`).
+FLAG: Latch persistence. `d->warned_cmd = 0` after the accept store, or on the read path. No session refuses, accepts or reads, then refuses again (`L` accepts after one refusal; `T2` reads only after its three refusals). `latch once` and `two once` stay green.
+
+1. Adjudications
+
+- **F1 — REFINE.** Low-half 0, 1 or 2 is accepted and runs, and that cannot put 3+ in the `int` cell, so `default:` is not reached. The bytes are discarded in the callback, after it has been handed `data` and `len`. `default_test()` installs fbctrl at `machine_test.c:154`; line 337 is testmips's own install; testppc calls `default_test` at line 444.
+- **F2 — REFINE.** E13 is 89/99. The ten red A-rows are real; `acc nop x1` stays green because a refused NOP also leaves X1 at 123. `sb` is pinned at both edges (accept 2, refuse 3). `sh` is pinned at 1 and 4. `sd` is pinned at 0 and at values above 3. The effects line "stored and runs … at every width" overclaims the `sd` NOP, whose body is empty.
+- **F3 — UPHOLD.** `debug("[ dev_fbctrl: changing resolution to %i,%i ]\n"` is the first statement of `SET_RESOLUTION`, before `dev_fb_resize`. `ref w1 noset` is `got=1` under `B_gateoff` and under E11, which is the 123×77 SET the old `nosmall` row could not see. `acc set res` is `got=1` on the fix.
+- **F4 — UPHOLD.** E12's log: `rdcmd val` stays `0x2`, `rdcmd again` is `0x0`, `rdx1 again` is `0x0`. On a read, `idata` is left 0, the value is returned, then the store runs.
+- **F5 — UPHOLD.** E7 was already killed by the seeded GET's re-run. No new row was owed.
+- **F6 — UPHOLD.** The v2 replay's `neg_substituted` log is red on one named row, and the fix's log is 109 checks, 0 red.
+- **F7 — UPHOLD.** Eleven `R:` sessions plus C, A:nop, A:set, A:get, L, M1, M2, T2, P1, P2 and F are 22 `track()` calls. `sessions clean` is 22 on the fix and 0-class on a dead run.
+- **F8 — REFINE.** E14 is 97/99: `two once` stays `0x3`, `two cmd` is `-`, `sessions clean` is 21. That kills `(!warned_cmd || idata <= 0xffffffff)`. An exemption of only the wide aliases of 0–2 is still outside those two red rows, and the header already files it.
+- **F9 — UPHOLD.** E8, E9 and E10 match the v1 scores the disposition cites, and they stay red on v2.
+- **F10 — UPHOLD.** E5 is `(int64_t) idata`. E11 is `(int) idata`. On this toolchain E11 stores `w0` as 0, runs SET for `w1` (`ref w1 noset` is 1), and `exit(1)`s `m1w` and `m1d` (`sessions clean` 20). The probe header names those as three edits.
+- **F11 — UPHOLD.** The four D9 rows and `ref w2 cmd` can be green for the reason the disposition records. Other rows kill those mutants.
+- **F12 — UPHOLD.** A stale 13/6 numstat against a 14/6 diff is a record correction.
+- **F13 — UPHOLD.** `B_gateoff` deletes only the refusal `else if` and leaves `warned_cmd` and the `default:` comment. It scores 38/99 with `sessions clean` 9, the same totals as the HEAD leg.
+- **F14 — REFINE.** The split is the right landing order. The working tree already has `EXPECT_PTY_PROBES=76` and `EXPECT_CONVERTED=26`, and neither commit exists yet.
+- **F15 — REFINE.** The gate-16 comment records the debt and the third-probe stop. The `gatedevicesplit` ledger row still states only the next `gate_arm.sh` device probe.
+- **F16 — UPHOLD.** An unfenced probe hangs the gate. That is a visible hang, the same shape as the `#549` block, and it is not a false pass.
+- **F17 — UPHOLD.** `&& idata != 6` matches no row. A relational compare is held at edges, and the header says so.
+- **F18 — REFINE.** A parseable `FBCMD_RESULT=0/0` with no row lines now fails each of the 99 name greps, so that example is no longer only the two equality pins. `g16_extract_v2.sh` still starts at `FCROW` and never runs the `python3` launch. "No change" fits the launch only.
+- **F19 — REFINE.** `sb`/`sh`/`sw`/`sd` are covered by the 64-bit compare of `idata`. The 16-byte case is F1: the callback has the bytes, and the compare does not.
+- **F20 — REFINE.** COMMAND's runtime writer is the accept store in the DATA arm, and `DEVINIT` `memset`s the struct. GET_RESOLUTION also has four assignments, all to X1 and Y1.
+- **D1 — REFINE.** File it with `fbctrlvec128`. A PPC `stvx` oracle is outside this MIPS detector, and a `len > 8` refusal would ship unwitnessed. "No host kill" only restates that the stored command is 0, 1 or 2; a 128-bit pattern whose low half is 1 still runs SET_RESOLUTION. That is this round's width bug one step further out.
+- **D2 — REFINE.** The measured E14 edit is closed. The alias-only exemption stays disclosed. `two once` staying green is why a later NOP alias would also stay green.
+- **D3 — UPHOLD.** `rdcmd val` cannot see a store that happens after the value is returned. The second read is the row that goes red. My pass-2 prediction is overturned by `E12_elseif.raw`.
+- **D5 — REFINE.** Landing the block in gate 16 with the comment is coherent. The ledger stop named in the disposition is not in `OUTSTANDING_BUGS.md` yet.
+
+2. **F2's "repaired" is the wrong completeness claim, and F1's mechanism sentence is false.**
+
+E13's death is real and should stay. What should not stay is the effects sentence that a command is stored and runs at every width: the only accepted `sd` is NOP, and `case DEV_FBCTRL_COMMAND_NOP` is an empty body. Raising the `sd` bound from 2 to 3, or the `sh` bound from 2 to 3, restores the host kill and does not move a current row. Adding an accepted `sd` of 2, which is the natural next patch, still leaves that raised bound green.
+
+The sentence I am responsible for is NOT CLAIMED (6)'s "the device never sees the rest." `DEVICE_ACCESS(fbctrl)` is entered with the 16-byte buffer. `memory_readmax64()` drops the prefix while building `idata`. F3, F4, F6, F7, F10 and F13 survived a second look at the logs and the diffs. F18's "no change" is only half right.
+
+3. **Yes. Source-derived from the probe's immediates; this mutant was not built.**
+
+Name: `sd` bound up by one (`E18` in the width × edge grid).
+
+Edit, on the fix, at the DATA refusal condition:
+
+```c
+idata > (len == 8 ? DEV_FBCTRL_COMMAND_GET_RESOLUTION + 1
+                  : DEV_FBCTRL_COMMAND_GET_RESOLUTION)
+```
+
+`sd` of 3 is FILL, takes `default:`, and calls `exit(1)`. The probe never issues `sd` of 3. It does issue `sd` of 0 and `sd` of `0x100000003`. Both classify exactly as they do on the fix, so the score stays 99/99, `FBCMD_CONTROL=OK`, and the v2 name checks stay green.
+
+The row that stays green is `ref w3 cmd`. `acc nop cmd` also stays green.
+
+The same shape at halfword width, `len == 2 ? 3 : 2`, leaves `ref sh4 cmd` green and host-kills `sh` of 3. Byte width does not have this hole: `A:get` is `sb` of 2 and `R:sb3` is `sb` of 3.
+
+4. **A refusal that follows an accept, or a read, never happens.**
+
+`warned_cmd = 0` on the accept path, or on every read, scores 99/99. `L` is refuse-then-accept. `T2` is three refusals and then one read. `latch once` and `two once` stay at a single `0x3`. The v2 contract's "latch set" cell is only "set and never cleared." The packet's line 337 for `default_test`'s fbctrl install is testmips; the PPC install is line 154.

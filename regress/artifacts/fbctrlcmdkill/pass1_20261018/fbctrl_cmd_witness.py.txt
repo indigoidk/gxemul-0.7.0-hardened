@@ -1,0 +1,203 @@
+#!/usr/bin/env python3
+"""fbctrlcmdkill WITNESS (rung 3, test-first) -- dev_fbctrl.c's fbctrl_command() ends the emulator process on any command
+other than NOP (0), SET_RESOLUTION (1) and GET_RESOLUTION (2), reached by ONE guest DATA write while the COMMAND port (0)
+is selected, on an UNMODIFIED `-E testmips` (machine_test.c installs `fbctrl addr=0x12f00000`).  t0 = kseg1 of
+DEV_FBCTRL_ADDRESS; PORT is +0x00, DATA +0x10.  The harness is regress/fbctrl_port_probe.py's (#549), copied, not
+imported: that file runs its rows at import.
+
+SESSIONS, each on a fresh emulator, every word stepped and compared with the emulator's own step line:
+  C   controls: PORT=5, DATA=0x2a, read DATA back (LIVENESS: 0x2a); PORT=1, DATA=123, PORT=0, DATA=2 (GET_RESOLUTION:
+      with no X11 it zeroes X1 and Y1), PORT=1, read DATA (DEVICE-SIGNATURE: 0, where RAM would keep 123).
+  K3  PORT=0, DATA=3 (DEV_FBCTRL_COMMAND_FILL, documented in testmachine/dev_fb.h, TODO in the source), then PORT=5.
+  K4  the same with 4 (COPY).          K5  with 5 (undocumented).
+  KM  with sw 0xffffffff (the int command -1).
+  KW  with sd 0x100000003 -- d->port[] is int, so the command the switch reads is 3: the width path into the kill.
+Rows: `live', `devsig', and per K session `cmd N' = SURVIVED/DIED and `cmd N exit' = the child's exit status.
+Pre-fix the K rows are expected to read DIED with exit 1; a fix makes them SURVIVED.
+Output: rows, then FBCMDW_CONTROL=OK|FAILED, FBCMDW_RESULT=n/t, FBCMDW_DONE.
+usage: fbctrl_cmd_witness.py <gxemul-binary>"""
+import os, pty, re, select, signal, sys, time
+
+BIN = sys.argv[1]
+STUBADDR = 0xffffffff80100000
+CODE = 0xffffffff80100020
+FBCTRL = 0xffffffffb2f00000
+REG = dict(zr=0, t0=8, t1=9, t2=10, t3=11, t4=12, t5=13, t6=14, t7=15, s0=16, s1=17, s2=18, s3=19)
+OPS = dict(sw=0x2b, sd=0x3f, lw=0x23)
+
+
+def ins(op, rt, off, base="t0"):
+    return (OPS[op] << 26) | (REG[base] << 21) | (REG[rt] << 16) | (off & 0xffff)
+
+
+def text(op, rt, off, base="t0"):
+    return "%s %s,%d(%s)" % (op, rt, off, base)
+
+
+ANCHOR = (0x0f << 26) | (REG["t7"] << 16)
+assert ins("sw", "t1", 0) == 0xad090000            # pinned independently of the helper
+assert ins("lw", "t2", 0x10) == 0x8d0a0010
+assert ins("sd", "t5", 0) == 0xfd0d0000
+assert ANCHOR == 0x3c0f0000
+
+
+def stub_path():
+    p = "/tmp/gx_fbcmdw_%d.bin" % os.getpid()
+    with open(p, "wb") as f:
+        f.write(b"\x00\x00\x00\x00")
+    return p
+
+
+def session(label, prog, regs, reads, stub):
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.execvp(BIN, [BIN, "-V", "-E", "testmips", "-M", "64", "0x%x:%s" % (STUBADDR, stub)])
+        os._exit(127)
+    buf = ""
+    dead = [False]
+
+    def rd(t=0.4):
+        nonlocal buf
+        r, _, _ = select.select([fd], [], [], t)
+        if fd not in r:
+            return True
+        try:
+            d = os.read(fd, 65536)
+        except OSError:
+            dead[0] = True
+            return False
+        if not d:
+            dead[0] = True
+            return False
+        buf += d.decode("latin1", "replace")
+        return True
+
+    def wait(mark=0, echo=None, timeout=60):
+        t = time.time()
+        while time.time() - t < timeout:
+            if not rd():
+                return False
+            resp = buf[mark:]
+            if echo is not None and echo not in resp:
+                continue
+            if len(buf) > mark and resp.rstrip().endswith("GXemul>"):
+                return True
+        return False
+
+    def send(x, timeout=60):
+        b = (x + "\n").encode("latin1")
+        mark = len(buf)
+        n = 0
+        try:
+            while n < len(b):
+                n += os.write(fd, b[n:])
+        except OSError:
+            dead[0] = True
+            return False
+        return wait(mark=mark, echo=x if x else None, timeout=timeout)
+
+    words = [ins(op, rt, off) for op, rt, off in prog] + [ANCHOR]
+    status, badis, vals, steps = "?", [], {}, 0
+    if not wait(timeout=120):
+        status = "NO-PROMPT"
+    else:
+        for i, w in enumerate(words):
+            send("put w 0x%x, 0x%08x" % (CODE + 4 * i, w))
+        for name, val in regs:
+            send("%s=0x%x" % (name, val & 0xffffffffffffffff))
+        send("pc=0x%x" % CODE)
+        status = "SURVIVED"
+        for i, (op, rt, off) in enumerate(prog):
+            mark = len(buf)
+            if not send("step 1", timeout=30) or dead[0]:
+                status = "DIED"
+                break
+            steps += 1
+            seg = buf[mark:]
+            m = re.search(r"%016x:?\s+%08x\s+([^\r\n<]+)" % (CODE + 4 * i, words[i]), seg)
+            got = re.sub(r"\s+", " ", m.group(1)).strip() if m else "(no step line)"
+            if not got.startswith(text(op, rt, off)):
+                badis.append("+0x%02x planted 0x%08x -> %r, expected %r" % (4 * i, words[i], got, text(op, rt, off)))
+        if status == "SURVIVED":
+            for name in reads:
+                got = None
+                for _ in range(2):
+                    mark = len(buf)
+                    if not send("print %s" % name, timeout=30) or dead[0]:
+                        break
+                    m = re.search(r"(?m)^0x([0-9a-fA-F]+)\s*$", buf[mark:])
+                    if m:
+                        got = int(m.group(1), 16)
+                        break
+                vals[name] = got
+    try:
+        os.write(fd, b"quit\n")
+    except OSError:
+        pass
+    t1 = time.time()
+    while time.time() - t1 < 20.0:
+        if not rd(0.1):
+            break
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+    rpid, st = 0, None
+    t1 = time.time()
+    while rpid == 0 and time.time() - t1 < 10.0:
+        try:
+            rpid, st = os.waitpid(pid, os.WNOHANG)
+        except OSError:
+            break
+        if rpid == 0:
+            time.sleep(0.05)
+    if rpid == 0:
+        try:
+            os.kill(pid, signal.SIGKILL)
+            _, st = os.waitpid(pid, 0)
+        except OSError:
+            st = None
+    code = os.WEXITSTATUS(st) if st is not None and os.WIFEXITED(st) else None
+    unimpl = len(re.findall(r"fbctrl_command: Unimplemented command", buf))
+    print("  session %-3s %-9s steps=%d/%d exit=%s unimpl_msgs=%d" % (label, status, steps, len(prog), code, unimpl))
+    for b in badis:
+        print("      DISASSEMBLY MISMATCH: %s" % b)
+    return {"status": status, "exit": code, "badis": badis, "vals": vals, "buf": buf}
+
+
+RESULTS = []
+
+
+def row(name, got, want, note=""):
+    ok = got == want
+    RESULTS.append(ok)
+    print("  %-14s got=%-12s want=%-12s %s  %s" % (name, got, want, "ok" if ok else "FAIL", note))
+    return ok
+
+
+stub = stub_path()
+print("fbctrl_cmd_witness -- binary=%s machine=testmips" % BIN)
+C = session("C", [("sw", "t1", 0), ("sw", "t2", 16), ("lw", "t3", 16),
+                  ("sw", "t4", 0), ("sw", "t5", 16), ("sw", "zr", 0), ("sw", "t6", 16),
+                  ("sw", "t4", 0), ("lw", "s0", 16)],
+            [("t0", FBCTRL), ("t1", 5), ("t2", 0x2a), ("t4", 1), ("t5", 123), ("t6", 2)], ["t3", "s0"], stub)
+ctl_ok = (C["status"] == "SURVIVED" and not C["badis"] and C["vals"].get("t3") == 0x2a and C["vals"].get("s0") == 0)
+row("live", "0x%x" % C["vals"]["t3"] if C["vals"].get("t3") is not None else "-", "0x2a",
+    "a known value returns through PORT/DATA")
+row("devsig", "0x%x" % C["vals"]["s0"] if C["vals"].get("s0") is not None else "-", "0x0",
+    "GET_RESOLUTION zeroed X1 (RAM would keep 123)")
+K = [("3", "sw", 3), ("4", "sw", 4), ("5", "sw", 5), ("-1", "sw", 0xffffffff), ("2^32+3", "sd", 0x100000003)]
+for name, op, val in K:
+    S = session("K" + name, [("sw", "zr", 0), (op, "t1", 16), ("sw", "t2", 0)],
+                [("t0", FBCTRL), ("t1", val), ("t2", 5)], [], stub)
+    ctl_ok = ctl_ok and not S["badis"]
+    row("cmd %s" % name, S["status"], "SURVIVED", "DATA write of %s at COMMAND (%s)" % (hex(val), op))
+    row("cmd %s exit" % name, "%s" % S["exit"], "0", "the child's exit status after quit")
+try:
+    os.unlink(stub)
+except OSError:
+    pass
+print("FBCMDW_CONTROL=%s" % ("OK" if ctl_ok else "FAILED"))
+print("FBCMDW_RESULT=%d/%d" % (sum(RESULTS), len(RESULTS)))
+print("FBCMDW_DONE")
+sys.exit(0 if ctl_ok and all(RESULTS) else 1)

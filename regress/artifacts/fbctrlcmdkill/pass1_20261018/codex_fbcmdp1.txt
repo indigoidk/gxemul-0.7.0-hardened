@@ -1,0 +1,41 @@
+ASTRA_FBCMD_P1_20261018
+VERDICT: 3 DECLINE + LATCHED ANNOUNCE -- Validate the full command before storage; refuse unsupported values while preserving guest-visible state.
+
+FLAG: “DOCUMENTS FILL/COPY” overstates the specification: [src/include/testmachine/dev_fb.h:51](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/testmachine/dev_fb.h:51) supplies TODO constants, without command semantics; [src/devices/dev_fbctrl.c:99](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c:99) supplies no implementations.
+
+FLAG: FAULT is not technically unavailable on MIPS. A failed device access can deliver `EXCEPTION_DBE`, including for writes ([src/cpus/memory_rw.c:603](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:603)). Choosing to acknowledge and decline the store is a policy decision.
+
+1. **Choose member 3.** Preserve a bounded diagnostic without allowing unsupported commands to terminate the emulator. One message, such as “unsupported command 0x…; ignored; COMMAND unchanged (once),” truthfully covers both unimplemented named commands and unknown values. One per-device `warned_cmd` suffices; separate messages and latches are unnecessary. Keep it independent of `warned_port`.
+
+   The omitted member is **6 BACKED ACCEPT**, explicitly defined at [tools/CLAUDE.md:2042](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/CLAUDE.md:2042). There is no warrant here to invent command semantics or additional storage. FAULT is mechanically possible, but no identified controller specification requires unsupported command values to cause a bus error.
+
+2. **Validate full `uint64_t idata` before assigning COMMAND.** Accept exactly 0, 1 and 2; decline everything else. Currently, narrowing happens at [src/devices/dev_fbctrl.c:150](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c:150), before dispatch.
+
+   On refusal, preserve the previous COMMAND, selector, argument/color cells and framebuffer; only the announcement latch changes. Selecting port 0 and reading **DATA** therefore returns the previous accepted command, initially 0. Reading **PORT** returns the selector. This preservation policy is a new explicit contract, not something already specified by the header.
+
+   Place the refusal before the COMMAND store, preserve ordinary non-COMMAND DATA handling, and retain the common tail and handled return value of 1.
+
+3. **Ship a separate, gated command probe.** The existing probe explicitly excludes this defect ([regress/fbctrl_port_probe.py:156](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py:156)). Reuse its harness approach and retain its 117-row selector contract. Extending it is also valid, but requires revising its contract and exact gate counts—not merely appending witness sessions.
+
+   | Rows | Observable channel and mutant distinguished |
+   |---|---|
+   | Refuse 3, 4, unknown positive 5, `sw 0xffffffff`, and `sd 0x100000003`, with latch clear and set | Actual guest progress past the store, successful subsequent access, then normal quit/exit 0 catch restored kills, hangs and faulting refusals. Read back COMMAND and seeded cells to catch unintended storage. |
+   | Wide aliases `0x100000000`, `0x100000001`, `0x100000002` | Previous COMMAND survives; wide+1 leaves framebuffer layout unchanged; wide+2 preserves nonzero X1/Y1. These catch truncated dispatch. **Wide+3 survival alone cannot:** truncated 3 is also refused. |
+   | First and second refusals, including different classes | Command-message counts must be **1 immediately after the first and still 1 after the second**; the first message names the full value. Detect missing diagnostics, flooding and truncation in reporting. |
+   | Refusals separated by accepted commands and ordinary traffic | Count remains 1. Exercise selector and command warnings in both orders to catch shared latches. Include a free-running announcement check to catch demotion to verbosity-gated `debug()`. |
+   | NOP acceptance | Start with COMMAND=2, write 0, then read COMMAND=0; arguments/framebuffer remain unchanged and no command warning appears. Detect refusal of NOP; an observationally identical no-op is equivalent. |
+   | SET_RESOLUTION acceptance | Use valid dimensions and observe an actual resize, not merely COMMAND=1 or survival. |
+   | GET_RESOLUTION acceptance | Seed distinct nonzero X1/Y1; headless GET must make **both zero**, with COMMAND=2 and no command warning. Catches `>2` becoming `>1` even after the latch is set. |
+   | COMMAND reads and non-COMMAND writes | Reading COMMAND must not reexecute it; writing values such as 3 to argument/color cells must remain ordinary storage. Catches misplaced dispatch/validation. |
+
+   A concrete headless SET oracle: initially the 640-pixel, 24-bit framebuffer has stride 1920. Seed different bytes at offsets 96 and 1920; SET to 32×32 must move the old offset-1920 byte to offset 96 through the row-copy loop ([src/devices/dev_fb.c:172](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fb.c:172)). Wide+1 must leave the original offset-96 byte intact. Headless GET cannot prove resizing; it always reports zero dimensions.
+
+   Cover accepted commands before and after the warning latch is set, and the supported store widths. Retain liveness, device-signature and instruction-execution controls. Gate complete output, exact counts, unique names and nonzero failure status. Require pre-fix, verbatim-kill reinstatement, repair-nulling and realistic accept-side guard-growth checks; record null-medium coverage separately. These are proposed checks, not measurements performed here.
+
+4. **Keep `fbctrloffkill` separate.** Its witnessed deaths establish eligibility, not mandatory inclusion ([tools/CLAUDE.md:2861](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/CLAUDE.md:2861)). The complete offset repair includes reads, requiring a defined returned value or architectural fault and an oracle for that result. Command-write refusal does not supply that oracle. Shared survival machinery is insufficient: an early return that leaves a read buffer untouched could survive while remaining wrong. The offset round must explicitly preserve the common read tail if choosing zero-returning decline.
+
+5. **The draft disposition is sound; its specification and detector need strengthening.** No existing guest source issuing FILL/COPY was found; the rectangles demo issues SET_RESOLUTION and draws directly into framebuffer memory ([demos/rectangles/rectangles.c:96](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/demos/rectangles/rectangles.c:96)).
+
+   However, “no fill/copy semantics anywhere” would be too broad: [src/devices/dev_fb.c:270](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fb.c:270) documents an internal helper, without defining this controller’s command protocol. Likewise, wide+3 reaches the unimplemented default; it does not perform FILL. The principal detector correction is to test wide aliases of **accepted** commands and observable execution of all three accepted commands.
+
+   Read-only source review; no files written or tests run.

@@ -1,0 +1,89 @@
+#!/usr/bin/env python3
+"""mk_probe_v2.py SRC DST -- #567 probe v2, the pass-2 repairs as exact-anchor edits of v1 (each anchor once):
+  E12 (direction): M1 reads COMMAND and X1 twice;  E13 (accept widths): A:nop by sd, A:set by sh, A:get by sb;
+  E14 (latch x wide): T2's third refusal, sd 0x100000005, with the latch set;  the noset channel (Astra Q5, Grok F1):
+  `nosmall' -> `noset', counting the SET's resolution-change line, shown live by `acc set res';  the exit gap (Astra
+  Q6): `sessions clean', all 22 sessions SURVIVED with exit 0, pinned to the literal 22."""
+import io, sys
+BS, NL = chr(92), chr(10)
+src, dst = sys.argv[1], sys.argv[2]
+t = io.open(src, encoding="utf-8", newline="").read()
+
+
+def rep(old, new, name):
+    global t
+    assert t.count(old) == 1, (name, t.count(old), old[:80])
+    t = t.replace(old, new)
+
+
+# --- code ---------------------------------------------------------------------------------------------------
+rep('UNIMPL_RE = re.compile(r"fbctrl_command: Unimplemented command")' + NL,
+    'UNIMPL_RE = re.compile(r"fbctrl_command: Unimplemented command")' + NL +
+    'RES_RE = re.compile(r"' + BS + '[ dev_fbctrl: changing resolution to ")   # a debug() line: prints while stepping' + NL,
+    "RES_RE")
+rep('    print("  session %-6s %-9s steps=%d/%d exit=%s cmd_once=%d port_once=%d small=%d unimpl=%d" % (' + NL +
+    '        label, status, steps, len(prog), code, len(cmd), len(PORT_RE.findall(buf)), len(SMALL_RE.findall(buf)),' + NL +
+    '        len(UNIMPL_RE.findall(buf))))' + NL,
+    '    print("  session %-6s %-9s steps=%d/%d exit=%s cmd_once=%d port_once=%d small=%d res=%d unimpl=%d" % (' + NL +
+    '        label, status, steps, len(prog), code, len(cmd), len(PORT_RE.findall(buf)), len(SMALL_RE.findall(buf)),' + NL +
+    '        len(RES_RE.findall(buf)), len(UNIMPL_RE.findall(buf))))' + NL,
+    "session line")
+rep('"small": len(SMALL_RE.findall(buf)), "buf": buf}',
+    '"small": len(SMALL_RE.findall(buf)),' + NL + '            "res": len(RES_RE.findall(buf)), "buf": buf}', "session dict")
+rep('def track(S):' + NL + '    if S["badis"]:' + NL,
+    'ALL = []' + NL + NL + NL + 'def track(S):' + NL + '    ALL.append(S)' + NL + '    if S["badis"]:' + NL, "track")
+rep('    row("ref %s nosmall" % name, S["small"], 0, "no resize attempted")' + NL,
+    '    row("ref %s noset" % name, S["res"], 0, "no SET ran: no resolution-change line")' + NL, "noset")
+rep('A0 = track(session("A:nop", SEED + [put("zr")] + READ3,',
+    'A0 = track(session("A:nop", SEED + [put("zr", "sd")] + READ3,', "A0 width")
+rep('"0x0", "NOP is stored: COMMAND reads 0")', '"0x0", "NOP by sd is stored: COMMAND reads 0")', "A0 note")
+rep('A1 = track(session("A:set", [sel("zr"), put("s1"), get("t2")],',
+    'A1 = track(session("A:set", [sel("zr"), put("s1", "sh"), get("t2")],', "A1 width")
+rep('"0x1", "SET_RESOLUTION is stored")', '"0x1", "SET_RESOLUTION by sh is stored")', "A1 note")
+rep('row("acc set ran", A1["small"], 1, "dev_fb_resize() ran: `size too small (0 x 0)` once")' + NL,
+    'row("acc set ran", A1["small"], 1, "dev_fb_resize() ran: `size too small (0 x 0)` once")' + NL +
+    'row("acc set res", A1["res"], 1, "the SET\'s resolution-change line prints while stepping: the noset channel")' + NL,
+    "acc set res")
+rep('sel("zr"), put("s2")] + READ3,', 'sel("zr"), put("s2", "sb")] + READ3,', "A2 width")
+rep('"0x2", "GET_RESOLUTION is stored")', '"0x2", "GET_RESOLUTION by sb is stored")', "A2 note")
+rep('M1 = track(session("M1", [sel("zr"), put("s2"), sel("s1"), put("t5"), sel("zr"), get("t2"), sel("s1"), get("t3")],' + NL +
+    '                   BASE_REGS, ["t2", "t3"], stub))' + NL +
+    'row("rdcmd val", hx(M1["vals"].get("t2")), "0x2", "a read of COMMAND returns it")' + NL +
+    'row("rdcmd noexec", hx(M1["vals"].get("t3")), "0x7b", "and does not execute it (X1 keeps 123)")' + NL,
+    'M1 = track(session("M1", [sel("zr"), put("s2"), sel("s1"), put("t5"), sel("zr"), get("t2"), get("t4"),' + NL +
+    '                          sel("s1"), get("t3"), get("t6")],' + NL +
+    '                   BASE_REGS, ["t2", "t4", "t3", "t6"], stub))' + NL +
+    'row("rdcmd val", hx(M1["vals"].get("t2")), "0x2", "a read of COMMAND returns it")' + NL +
+    'row("rdcmd again", hx(M1["vals"].get("t4")), "0x2", "and a second read still does: a read stores nothing")' + NL +
+    'row("rdcmd noexec", hx(M1["vals"].get("t3")), "0x7b", "and does not execute it (X1 keeps 123)")' + NL +
+    'row("rdx1 again", hx(M1["vals"].get("t6")), "0x7b", "X1 read twice: a read stores nothing")' + NL,
+    "M1")
+rep('T2 = track(session("T2", [sel("zr"), put("s3"), put("s5"), get("t2")], BASE_REGS, ["t2"], stub))' + NL +
+    'row("two once", ",".join(T2["cmd"]) or "-", "0x3", "two refusals, one announce, the first value")' + NL,
+    'T2 = track(session("T2", [sel("zr"), put("s3"), put("s5"), put("s7", "sd"), get("t2")],' + NL +
+    '                   BASE_REGS + [("s7", 0x100000005)], ["t2"], stub))' + NL +
+    'row("two once", ",".join(T2["cmd"]) or "-", "0x3", "3, 5, then sd 0x100000005 with the latch set: one announce")' + NL,
+    "T2")
+rep(NL + 'try:' + NL + '    os.unlink(stub)' + NL,
+    NL + 'row("sessions clean", sum(1 for S in ALL if S["status"] == "SURVIVED" and S["exit"] == 0), 22,' + NL +
+    '    "all 22 sessions ran to the end and exited 0")' + NL + NL + 'try:' + NL + '    os.unlink(stub)' + NL,
+    "sessions clean")
+
+# --- docstring: the session descriptions (the CONTRACT's measured lists are edited after table 2) -------------
+rep("PORT=0, DATA=v, then\n       read COMMAND, X1, Y1.",
+    "PORT=0, DATA=v, then\n       read COMMAND, X1, Y1; no SET's resolution-change line may print.", "doc R")
+rep("  A:n  ACCEPT, latch clear: NOP after COMMAND 2", "  A:n  ACCEPT, latch clear, one width each: NOP by sd after COMMAND 2", "doc A1")
+rep("SET_RESOLUTION with X1 = Y1 = 0\n", "SET_RESOLUTION by sh with X1 = Y1 = 0\n", "doc A2")
+rep("COMMAND reads 1);\n       GET_RESOLUTION after X1 = 123, Y1 = 77",
+    "COMMAND reads 1; and the resolution-change debug() line\n       prints -- the noset rows' channel, shown live);"
+    " GET_RESOLUTION by sb after X1 = 123, Y1 = 77", "doc A3")
+rep("  M1   a READ of COMMAND does not execute it: COMMAND = 2 by a GET, X1 = 123, PORT=0, read DATA (2), PORT=1, read X1\n"
+    "       (still 123: a re-executed GET would zero it).",
+    "  M1   a READ of COMMAND does not execute it: COMMAND = 2 by a GET, X1 = 123, PORT=0, read DATA twice (2, 2), PORT=1,\n"
+    "       read X1 twice (123, 123): a re-executed GET would zero X1, and a read that STORED would zero the second read.",
+    "doc M1")
+rep("  T2   two refusals, 3 then 5: ONE command announce, naming 0x3; COMMAND keeps its power-on 0.",
+    "  T2   three refusals -- 3, 5, then sd 0x100000005 with the latch SET: ONE command announce, naming 0x3; COMMAND\n"
+    "       keeps its power-on 0.", "doc T2")
+io.open(dst, "w", encoding="utf-8", newline="").write(t)
+print("probe v2 written:", dst)

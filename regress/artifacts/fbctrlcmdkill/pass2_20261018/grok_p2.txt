@@ -1,0 +1,68 @@
+I will check the premises against the working tree and the frozen copies, starting with the compare, the writers of COMMAND, and what each access width can actually present.GROK_FBCMD_P2_20261018
+VERDICT: SHIP WITH CHANGES -- the DATA arm is the refusal that was ordered; fix the probe contract's "executes nothing" sentence before the record repeats it.
+FLAG: `ref w1 nosmall`, `ref w1 x1` and `ref w1 y1` stay green on the pre-fix leg while SET runs (`killtable1_20261018/B_gateoff.raw:62-67`, same six lines in `pass2_20261018/legs/HEAD.out`). `sd 0x100000001` is stored as 1 (`ref w1 cmd` got `0x1`) and `fbctrl_command` takes `DEV_FBCTRL_COMMAND_SET_RESOLUTION`. The seed dimensions are 123×77. `dev_fb_resize` (`src/devices/dev_fb.c`, `dev_fb_resize`) fatals only when a side is < 10 or > 16384, so `nosmall` stays 0. The contract line that cites X1/Y1 and `nosmall` as "executes nothing" for every R class is false for this class. `cmd` and `once` are the rows that go red.
+FLAG: `B_gateoff` restores the DATA write arm only. `warned_cmd` in `struct fbctrl_data` and the new `default:` comment stay. Neither is read once the gate is gone. The 95-row identity with the pre-fix leg is the behavioral evidence for clause (b). "Every fixed site" is not true of the diff.
+
+## 1. Premises
+
+The compare sees the full value of every `sb`/`sh`/`sw`/`sd`, and of every other 1-, 2-, 4- or 8-byte access this tree actually issues. `memory_readmax64` (`src/core/memory.c`) starts from 0 and shifts in `len` bytes. That is zero-extension. There is no sign-extension on the store path. `idata` is `uint64_t` and `DEV_FBCTRL_COMMAND_GET_RESOLUTION` is the `int` constant 2, so the comparison is unsigned 64-bit. The only values that fail `idata > 2` are 0, 1 and 2. I enumerated the producer, not the mathematical range: MIPS `sb`/`sh`/`sw`/`sd` and `swl`/`swr`/`sdl`/`sdr` pass length 1, 2, 4 or 8 (`cpu_mips_instr_loadstore.c`, `cpu_mips_instr_unaligned.c`); ARM single stores and STM are 1, 2, 4 or 8 per call; debugger `put` is 1, 2, 4 or 8. `testmips` is big-endian (`machine_test.c`, `MACHINE_SETUP(testmips)`), and the same `cpu->byte_order` is used on the way in and the way out. The fix leg's `ref m1w once` got `0xffffffff`, which is the zero-extended word, so this is measured as well as read.
+
+A bulk `memory_rw` can hand the device more than 8 bytes. DATA sits at offset `0x10` in a `0x20`-byte device, so the longest in-range write is 16 bytes. `memory_readmax64` then keeps only 64 bits (big-endian: the last 8 bytes). Those dropped prefix bytes are also absent from the `int` store, which assigns that same `idata`. They cannot place a command other than 0, 1 or 2 in the cell.
+
+No second writer of `port[DEV_FBCTRL_PORT_COMMAND]`. The whole file has two stores into `port[]`: GET_RESOLUTION writes X1 and Y1 only (`dev_fbctrl.c` cases at the GET arm), and the accept branch assigns `d->port[d->current_port] = idata`. `memset` zeros the struct in `DEVINIT(fbctrl)`. The accept branch runs for a COMMAND write only when `idata` is 0, 1 or 2, and those three survive the narrowing into `int`. `fbctrl_command` is called from that branch only. `default:` does not run on a value this arm can store. The `exit(1)` there is a tripwire.
+
+The read arm is the old statement `odata = d->port[d->current_port]`. A refused write does not assign. A stored 0, 1 or 2 reads back as that value. A negative `int` would sign-extend into `uint64_t` on the way out; D8's `ref m1w cmd` got `0xffffffffffffffff` after storing the word `0xffffffff`. Commands left in the cell after this fix are not negative.
+
+## 2. Smallest edit that still passes
+
+`idata > DEV_FBCTRL_COMMAND_GET_RESOLUTION` changed to `idata > DEV_FBCTRL_COMMAND_GET_RESOLUTION && idata != 6`.
+
+Command 6 is stored as 6 and `default:` calls `exit(1)`. The planted refusal values are 3, 4, 5, `0xffffffff`, `0x100000000`, `0x100000001`, `0x100000002`, `0x100000003` and `0xffffffffffffffff`, plus the byte and halfword forms of 3 and 4. None is 6. `ref 5 alive` stays green. This is the contract's disclosed hole for values off the planted edges, and it is still the smallest edit that brings the host kill back.
+
+The smallest edit that breaks a predicate the suite does exercise: after `warned_cmd` is set, narrow the compare to `(uint32_t)idata`. `two cmd` stays green, because T2's second value is 5 and is still refused. No session writes `0x100000000`, `0x100000001` or `0x100000002` once the latch is set. That is NOT CLAIMED (0), and it passes 95/95.
+
+## 3. Option set
+
+Nothing in this diff reopens FILL or COPY. The header still has a `TODO` over the two constants and no port protocol. The arm refuses both before the store. Member 3 stands.
+
+## 4. Clause (d)
+
+The missing cell is a signed narrowing to the cell's own type, `(int)idata > DEV_FBCTRL_COMMAND_GET_RESOLUTION`.
+
+D1 is `(uint32_t)idata`. `0xffffffff` as `uint32_t` is still greater than 2, so `ref m1w` stays green (the seven red rows are w0/w1/w2's `cmd` and `once`, plus w2's x1/y1). E5 is `(int64_t)idata`. The same word is positive in 64 bits; E5's raw log has exactly `ref m1d`'s five FAIL lines. Cast to `int`, that word is -1, `-1 > 2` is false, the store keeps the low 32 bits, and `default:` calls `exit(1)`. `ref m1w alive` would go red. No mutant in table 1 or 1b is that cast. E5 does not close "the sign axis". It closes signed 64-bit. The record has to say that. The row already exists, so this is a mutant to run, or a sentence in NOT CLAIMED, not a new session.
+
+Direction has rows (M1) and no mutant. The new gate is the `else if` of the read. Turning that `else if` into a plain `if` stores 0 on a read of COMMAND, because `idata` is filled only when `writeflag == MEM_WRITE`. `rdcmd val` would catch it. It was not built.
+
+Latch-suppresses-the-refusal was not built either. An unconditional form dies on T2's 5. The width-conditional form is the edit in section 2.
+
+## 5. Channel
+
+Yes. `ref w1 nosmall` cannot move under `B_gateoff`, which is the reinstated defect, and SET still runs. Same log lines as the flag. `ref w1 x1` and `ref w1 y1` stay green for the same reason: SET reads those ports and does not write them. `ref w1 cmd` and `ref w1 once` are what move.
+
+`ref 3 nosmall` staying green under E1 was predicted: the session dies in `default:` and `small` counts a line that never prints. That one is not a surprise. D4's two NOP `cmd` rows and `ref w2 cmd` under D8 are real, and E2's raw log shows the NOP rows live once the GET in front of them is left alone (`acc nop cmd` got `0x2`, `latch nop cmd` got `0x2`).
+
+## 6. Gate block
+
+On every replayed kill-table log the block goes red, and the FAIL counts add up: 36+59, 15+80, 94+1, 88+7, 64+31, 60+35, 85+10, 93+2, 94+1, 84+11, 55+40. I checked those against the replay text. `FCROW` matches the printed rows; session lines have no `got=`.
+
+The hole in the replay is what it did not feed the block. `fcrc` is injected. The line `fcrc=0; python3 ... || fcrc=$?` never runs, so a dropped `|| fcrc=$?` would still show a red exit check in that output. A trailer of `FBCMD_RESULT=0/0` with no row lines, `FBCMD_CONTROL=OK` and exit 0 fails only the two pins against 95. `rows failed`, `rows emitted`, `ok rows` and `row names are unique` all pass: the first three match the trailer, and uniqueness is vacuously 0. The parse regex allows `0/0`. The replay never used that trailer. The equality pins are what keep the block red, and they are present.
+
+`set -e` is absent from `gate_mips_folds.sh` and `lib.sh`. `grep -c` exiting 1 on a zero FAIL count does not abort the green path. The battery's unique check printed `0`, so this `wc -l` did not pad.
+
+## 7. Census
+
+Its own commit, landed first. `e7fc97e6` put a promptless probe in the tree and left both pins behind, so gate 6 was already going to fail without `#567`. The deriver counts files it can see. Grandfather `sgi_mte_decline_probe.py` and `--write` while `fbctrl_cmd_probe.py` is not yet part of that census, commit that, then add `#567` and write 76 and 26. One commit makes 74→76 look like one cause, and reverting `#567` puts `#564`'s break back. The comment in `gate_hygiene.sh` tells the truth. The history should still be two commits.
+
+## 8. Dispositions
+
+(a) stands. E2 is the single-cell measurement, and the raw log matches the three named rows.
+
+(b) stands for the mutant that was built. D8 stores on every refusal. Ten `ref * cmd` rows plus `two cmd` (got `0x5`) go red. `ref w2 cmd` cannot, because the truncated word is already 2. A store that happens only when the truncated word equals the previous command would slip past those rows. That is narrower than D8, and it is the disclosed alias gap.
+
+(c) stands. Both null logs are `15/95` and `CONTROL=FAILED`, and the block requires `OK` plus equality with 95. I treat that as clause (c) measured at those two logs.
+
+(d) stands. `--write` will not move the pins while that probe is promptless and ungrandfathered. The 2026-09-19 precedent is the rule you already adopted. Converting its fixed waits is the filed follow-up.
+
+(e) is the disposition I do not accept. Gate 16 is the MIPS fold witness. `#549` already put one framebuffer probe in front of the kernel check and filed `gatedevicesplit`. This block adds a second full pty probe and calls the growth recorded. Recording it is how the debt stays. The probe belongs on a device gate. I would still rather have it wired here than unwired: an unwired detector is the `#564` failure mode. The arm can land. The sentence that this placement is fine should not.
+
+The contract sentence in section 1 is the change this pass owes. The `(int)` cell in section 4 has to stay open in the record.

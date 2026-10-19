@@ -1,0 +1,43 @@
+#!/usr/bin/env python3
+"""mk_mutants567c.py <dir> -- #567 kill table 2a's mutants (PRETABLE_ADDENDUM_t2a.out), each an exact-anchor edit of the
+fix <dir>/dev_fbctrl.fix567.c, written to <dir>/mutants_c/<name>.c.  Every anchor must match exactly once."""
+import io, os, sys
+D = sys.argv[1]
+BS, NL, TAB = chr(92), chr(10), chr(9)
+T2, T3, T4 = TAB * 2, TAB * 3, TAB * 4
+fix = io.open(os.path.join(D, "dev_fbctrl.fix567.c"), encoding="utf-8", newline="").read()
+os.makedirs(os.path.join(D, "mutants_c"), exist_ok=True)
+
+CMP = "idata > DEV_FBCTRL_COMMAND_GET_RESOLUTION) {"
+READ = T2 + "if (writeflag == MEM_READ)" + NL + T3 + "odata = d->port[d->current_port];" + NL
+DISPATCH = T3 + "if (d->current_port == DEV_FBCTRL_PORT_COMMAND)" + NL + T4 + "fbctrl_command(cpu, d);" + NL
+STORE = T3 + "d->port[d->current_port] = idata;" + NL
+ARG = ('"the command port is unchanged (once) ]' + BS + 'n",' + NL + T4 + "    (unsigned long long) idata);")
+GATE1 = T2 + "else if (d->current_port == DEV_FBCTRL_PORT_COMMAND &&"
+
+
+def one(t, old, new, name):
+    assert t.count(old) == 1, (name, t.count(old), old[:70])
+    out = t.replace(old, new)
+    assert out != t, name
+    return out
+
+
+M = {
+    "E6_readdisp": one(fix, READ, T2 + "if (writeflag == MEM_READ) {" + NL + T3 + "odata = d->port[d->current_port];" + NL +
+                       T3 + "if (d->current_port == DEV_FBCTRL_PORT_COMMAND)" + NL + T4 + "fbctrl_command(cpu, d);" + NL +
+                       T2 + "}" + NL, "E6"),
+    "E7_anyport": one(fix, DISPATCH, T3 + "fbctrl_command(cpu, d);" + NL, "E7"),
+    "E8_latchpre": one(fix, STORE, STORE + T3 + "d->warned_cmd = 1;" + NL, "E8"),
+    "E9_argtrunc": one(fix, ARG, ARG.replace("(unsigned long long) idata)", "(unsigned long long) (uint32_t) idata)"), "E9"),
+    "E10_operand": one(fix, CMP, "d->port[DEV_FBCTRL_PORT_COMMAND] > DEV_FBCTRL_COMMAND_GET_RESOLUTION) {", "E10"),
+    "E11_intcast": one(fix, CMP, "(int) idata > DEV_FBCTRL_COMMAND_GET_RESOLUTION) {", "E11"),
+    "E12_elseif": one(fix, GATE1, T2 + "if (d->current_port == DEV_FBCTRL_PORT_COMMAND &&", "E12"),
+    "E13_lenne4": one(fix, CMP, "(idata > DEV_FBCTRL_COMMAND_GET_RESOLUTION || len != 4)) {", "E13"),
+    "E14_latchwide": one(fix, CMP, "idata > DEV_FBCTRL_COMMAND_GET_RESOLUTION && (!d->warned_cmd || idata <= 0xffffffffULL)) {", "E14"),
+}
+# E6's READ anchor must not also have matched the PORT arm's read (it reads current_port, not port[]):
+assert fix.count("odata = d->port[d->current_port];") == 1
+for name, text in M.items():
+    io.open(os.path.join(D, "mutants_c", name + ".c"), "w", encoding="utf-8", newline="").write(text)
+print("mutants written:", ", ".join(M))

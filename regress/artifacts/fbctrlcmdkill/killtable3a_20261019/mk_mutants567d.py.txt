@@ -1,0 +1,37 @@
+#!/usr/bin/env python3
+"""mk_mutants567d.py <dir> -- #567 kill table 3a's mutants (PRETABLE_ADDENDUM_t3a.out): the width x bound-edge grid and
+the latch's persistence, each an exact-anchor edit of the fix <dir>/dev_fbctrl.fix567.c, to <dir>/mutants_d/<name>.c."""
+import io, os, sys
+D = sys.argv[1]
+NL, TAB = chr(10), chr(9)
+T2, T3, T4 = TAB * 2, TAB * 3, TAB * 4
+fix = io.open(os.path.join(D, "dev_fbctrl.fix567.c"), encoding="utf-8", newline="").read()
+os.makedirs(os.path.join(D, "mutants_d"), exist_ok=True)
+CMP = "idata > DEV_FBCTRL_COMMAND_GET_RESOLUTION) {"
+GET = "DEV_FBCTRL_COMMAND_GET_RESOLUTION"
+DISPATCH = T3 + "if (d->current_port == DEV_FBCTRL_PORT_COMMAND)" + NL + T4 + "fbctrl_command(cpu, d);" + NL
+STORE = T3 + "d->port[d->current_port] = idata;" + NL
+READ = T2 + "if (writeflag == MEM_READ)" + NL + T3 + "odata = d->port[d->current_port];" + NL
+
+
+def one(t, old, new, name):
+    assert t.count(old) == 1, (name, t.count(old), old[:70])
+    out = t.replace(old, new)
+    assert out != t, name
+    return out
+
+
+M = {
+    "E15_sdnodisp": one(fix, DISPATCH, T3 + "if (d->current_port == DEV_FBCTRL_PORT_COMMAND && len != 8)" + NL +
+                        T4 + "fbctrl_command(cpu, d);" + NL, "E15"),
+    "E16_sdbound0": one(fix, CMP, "idata > (len == 8 ? DEV_FBCTRL_COMMAND_NOP : %s)) {" % GET, "E16"),
+    "E17_shbound1": one(fix, CMP, "idata > (len == 2 ? DEV_FBCTRL_COMMAND_SET_RESOLUTION : %s)) {" % GET, "E17"),
+    "E18_sdbound3": one(fix, CMP, "idata > (len == 8 ? %s + 1 : %s)) {" % (GET, GET), "E18"),
+    "E19_shbound3": one(fix, CMP, "idata > (len == 2 ? %s + 1 : %s)) {" % (GET, GET), "E19"),
+    "E20_latchacc": one(fix, STORE, STORE + T3 + "d->warned_cmd = 0;" + NL, "E20"),
+    "E21_latchread": one(fix, READ, T2 + "if (writeflag == MEM_READ) {" + NL + T3 + "odata = d->port[d->current_port];" + NL +
+                         T3 + "d->warned_cmd = 0;" + NL + T2 + "}" + NL, "E21"),
+}
+for name, text in M.items():
+    io.open(os.path.join(D, "mutants_d", name + ".c"), "w", encoding="utf-8", newline="").write(text)
+print("mutants written:", ", ".join(M))

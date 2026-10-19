@@ -1,0 +1,110 @@
+The enumeration is the thing under test, so I will walk the DATA arm's actual branches and the probe rows against the frozen artifacts before treating the 123-row close as real.The working tree moved past the frozen 123-row packet. I am checking the 125-row gate run and the cells the enumeration claims to hold before writing the verdict.GROK_FBCMD_P3_20261019
+VERDICT: SHIP WITH CHANGES -- the frozen width grid reaches the cells and does not observe a byte refusal storing once the latch is set (W:latch's GETs overwrite COMMAND; D8 leaves every wl row green) or latch persistence except at sw and lw; the tree's NOT CLAIMED (7) discloses that debt, and the gate comment still says the class is fully enumerated.
+
+The product arm is the post-fix DATA arm in the packet. It never reads `len`. I grade the holes below as a breach of the frozen enumeration's class-closure claim, disclosed on the working tree as coverage debt (`fbctrlobsgrid`), not as a floor breach of `dev_fbctrl.c`. Nothing in this round is committed. The tree under review has moved past the frozen 123-row probe: `regress/fbctrl_cmd_probe.py` emits 125 rows, the gate pins 125, and `wiring_20261019/insitu41_20261019/` ran that block. The frozen copy remains `pass3_20261019/frozen/fbctrl_cmd_probe.v4.py.txt` and `killtable4_20261019/PRETABLE_ADDENDUM_t4.out`.
+
+## 1. The enumeration
+
+Walked domain, from what the arm and this guest can actually emit. testmips, big-endian, aligned MIPS: stores `sb/sh/sw/sd` are `len` 1, 2, 4, 8; loads `lb/lh/lw/ld` are the same four. Left/right unaligned ops and `ll/sc` rewrite a full aligned 4 or 8 before the callback, so they add no fifth `len`. `len` 16 is testppc `stvx`/`stvxl`, disclosed as NOT CLAIMED (6). `MEM_DOWNGRADE` is not a device access. The PORT arm stores only a selector in `0..7`, so the DATA selector-range tripwire is an empty cross; the working-tree contract's (5) now says so.
+
+Partitions the fixed DATA arm distinguishes, crossed with those four widths:
+
+| partition | what a row has to see | where it is actually seen |
+|---|---|---|
+| refuse, latch clear, announce + no dispatch | death or the announce, and X1/Y1 kept | all four store widths (R:sb3, R:sh4, the sw R class, the sd wide R rows; W:latch's opening `sd 3` for the plain value 3) |
+| refuse, latch clear, no store | COMMAND read back before another COMMAND write | sb R:sb3 (`D8_store.raw`: `ref sb3 cmd got=0x3`); sh R:sh4; sw R:3; sd the wide R rows. W:latch's own `sd 3` is not this holder: the later GETs store 2 before `wl cmd` |
+| refuse, latch set, silent | one announce, a later refusal quiet | sb/sh/sw W:latch `wl once`; sd R:edges `edge once` and T2 |
+| refuse, latch set, no dispatch | session stays alive, resident GET not re-run | W:latch `wl alive` (E22–E25 die); R:edges `edge x1`/`edge y1` on the 125-row probe |
+| refuse, latch set, no store | COMMAND read back before a later COMMAND write | sh: W:sb, `wb cmd got=0x4` under D8. sw: T2, `two cmd got=0x5` (the following `sd` truncates to 5 as well, so a sw-only store still reddens it). sd: R:edges, `edge cmd got=0x3`, and T2. **sb: no row.** W:latch's `sb 3` is the only byte refusal issued with the latch already set, and three GETs store 2 before `wl cmd` |
+| accept 2, dispatch (X1 zeroed) | a read of X1 after that width's GET | sb A:get and W:latch; sh A:edges and W:latch; sw C `devsig` and L; sd A:edges and W:latch. The seeds' sw GET runs while X1 is already 0, so they reach the cell and do not show dispatch |
+| accept, store, value distinguishable from the previous COMMAND | read back | sb A:get (power-on 0 → 2); sh A:set (0 → 1); sw L's NOP (2 → 0); sd A:nop (2 → 0). A:edges and W:latch read COMMAND once after several stores of 2; the current header says that |
+| latch set by a refusal, tested by a later one | announce count | sb W:sb; sh R:edges; sw T2; sd W:latch. Held for silence |
+| latch not cleared by an accept, a read, or a non-COMMAND store | a refusal after that event announces again | only T2: an sw NOP and an lw of COMMAND, then sw 5. E20 and E21 each redden only `two once` (`got=0x3,0x5`). L's accepts and W:latch's three GETs have no refusal after them |
+| non-COMMAND store | read back | latch clear: sb/sh/sd M3, sw M2. latch set: sb/sh/sd have no read back; L's sw store of X1=123 is zeroed by the following GET before any row reads 123 |
+| read, returns the cell, stores nothing, runs nothing | the loaded value, and X1 kept | COMMAND, latch clear: lb/lh/ld/lw in M3, plus lw in M1. COMMAND, latch set: lw only (T2's unread `t3`, and M1). non-COMMAND: lw of X1 in M1. Y1 is read by lw inside READ3 |
+
+The frozen addendum's grid lists all 16 bound-edge cells as held, including `refuse 3, latch set: sb W:latch` and `accept 2, latch set` at sb/sh/sd. Those sessions reach the cells. They do not observe the store, and they do not observe persistence.
+
+Smallest edit that stays green on the 125-row probe, inside that class:
+
+```c
+if (!d->warned_cmd) {
+    fatal("[ fbctrl: command 0x%llx is not supported; "
+        "the command port is unchanged (once) ]\n",
+        (unsigned long long) idata);
+    d->warned_cmd = 1;
+} else if (len == 1)
+    d->port[d->current_port] = idata;   /* no fbctrl_command() */
+```
+
+Rows that stay green: `wl cmd` (still `0x2`), `wl once` (still `0x3`), `wl alive`, `wb cmd` (still `0x0`; that session's byte refusal is the one that sets the latch), `ref sb3 cmd`, `two cmd`, `edge cmd`, `edge x1`, `edge y1`. No row reads COMMAND after a byte refusal issued while `warned_cmd` is already 1.
+
+A second all-green edit, same class: on the accept branch, `if (len != 4) d->warned_cmd = 0` after the store, or on `MEM_READ`, `if (len != 4) d->warned_cmd = 0`. T2's accept and T2's read are both width 4, so `two once` stays `0x3`. Nothing refuses after L or after W:latch's GETs, so `latch once` and `wl once` stay a single `0x3`.
+
+The working-tree header, lines 57–59 and NOT CLAIMED (7), now says persistence is observed at sw and lw only, and files the overwrite cells as `fbctrlobsgrid`. So on the tree these cells lack a row and have a disclosure. On the frozen enumeration they lack both. (7)'s width list names a latch-set non-COMMAND store at sb, sh and sd. L's sw store of X1 is only inside the same paragraph's "effects a later write overwrites" clause.
+
+A store of one listed value at a width where a different listed value is read back (`idata == 3` at sh with the latch set, while W:sb reads 4 back) stays under NOT CLAIMED (2). The sb × latch-set hole is the whole cell: no byte value in that state is read back.
+
+## 2. Channels for the 17 new rows
+
+Table 4's 17 rows are the nine M3 rows, the six W:latch rows, and the two W:sb rows. `edge x1` and `edge y1` are not among them. None of the 17 is green under every mutant that was built.
+
+Checked against `killtable4_20261019/D8_store.raw` and the E20/E21 logs, with the table-4 scores:
+
+- `wl alive` goes red on E22–E25 because 3 runs FILL and the session dies. The three `wl * get x1` rows and `wl cmd` on those four mutants are `got=-` for that same death. The addendum predicted the dashes. E26 is the alive channel: the three gets `got=0x7b`, `wl cmd got=0x0`, session still clean.
+- `wl once` is red on E22 (death, `-`), E27 (`0x3,0x3`) and E29 (`0x3,0x3,0x3`). E23–E25 leave it green because the opening `sd 3` still announces. That split is the named channel.
+- `wb once` is red on E28 and E29 at `0x3,0x4`.
+- `wb cmd` is red under D8 at `got=0x4`. All six `wl` rows stay `ok` in that same log, and `wb once` stays `0x3`. The kill is real. The addendum's label for it is wrong: see Q4. It is the sh store, not an sb store.
+- `x2 sb/sh/sd` and `m3 quiet` are red on E30 at `0x0` and announce count 1.
+- `rdw x1` is red only on E31 (`0x0`). `rdw lh/ld/lw` are red on E32 and E33; `rdw lb` stays green on E32 and is red on E33. Scores match those row sets (122, 120, 119) with no extra reds.
+
+`edge x1`/`edge y1` are green on the fix (`0x7b`, `0x4d` in `insitu41_20261019/fbctrl_cmd_probe_fix.log`) and red on HEAD as `got=-` because R:edges dies. That is session death, the same shape as every other refusal row on HEAD. They have not been run against a mutant that re-dispatches GET and stays alive. The contract's own sentence says that measurement is owed.
+
+## 3. Clean sweep of the composite that is in the tree
+
+The edit in Q1 is inside the width class the frozen addendum said was closed. On the working tree it sits in NOT CLAIMED (7), so it is disclosed debt rather than an unnamed hole. It is still uncovered by any row, and `gate_mips_folds.sh` line 127 still says the probe enumerates every partition of the arm crossed with width. That comment does not point at (7).
+
+The same disposition covers the persistence edits (`len != 4` clearing `warned_cmd` on an accept or a read). The current header already names those as observed at sw and lw only.
+
+I do not have a further edit, outside this class and outside (0)–(7), that stays green. Selector writes in this probe are all `sw` (`sel` returns `("sw", ...)`). Whether #549's probe holds the PORT arm at another width is not in this packet; I am not settling it.
+
+## 4. Records
+
+Frozen contract and `PRETABLE_ADDENDUM_t4.out`, wrong:
+
+- "every partition above is held at EVERY width" treats a reached session as an observed effect. The sb × latch-set store, and persistence after an accept or a read at any width but sw and lw, have no row.
+- Naming L and W:latch's three GETs as the evidence that an accept does not clear the latch is a claim with no refusal after those accepts. E20 reddens only `two once`. The working tree has replaced that sentence (probe lines 57–59) with "PERSISTENCE is observed at sw and lw only". That rewrite matches the logs.
+- The addendum's channel line for `wb cmd` says D8 at sb/sh with the latch set, COMMAND `0 → 3/4`. `D8_store.raw` line 141 is `wb cmd got=0x4`. The 3 does not appear. W:sb's `sb 3` is the refusal that sets the latch; the read sees the following sh 4. The latch-clear byte holder is `ref sb3 cmd got=0x3` in its own session.
+
+Working tree, still wrong or easy to misread:
+
+- `regress/gate_mips_folds.sh` lines 127–131: "enumerates every partition of the arm crossed with access WIDTH", then "the 125 score 125 on the fix". The numbers 125 / 51 / 17 match `legs41` and the in-situ logs. The sentence says the class is closed, which (7) contradicts, and it is missing a verb.
+- Probe line 110, "the reason v4 has 123 rows", is the history of the pre-pass-3 probe. The next sentence states 125/125, 51/125 and 17/125. The score is not off. The present tense on 123 sits in the same paragraph as 125.
+- The WIDTH bullets still list `refuse 3, latch set: sb W:latch` as a held cell. Lines 64–67 say the grid counts cells reached. (7) then baskets the unread effects. A reader of the bullet alone still takes the sb store as held. (7) does not name "COMMAND after a byte refusal with the latch already set".
+
+Counts that match what I enumerated:
+
+- Explicit `row()` calls in the current probe: 59. The refusal loop adds 11 names × 6 rows = 66. Total 125. The fix log ends `FBCMD_RESULT=125/125`. `sessions clean` is still pinned to 27; the two new rows did not add a session.
+- Gate block: 10 summary checks + 125 named checks = 135. In situ that is the #567 block size.
+- `tools/precommit_check.sh` comment says the pin is 125 rows, and the unquoted checks are `125`. `SCORE_CLAIMS_MANIFEST=36` is the probe count, not the row count. The frozen precommit hunk that says "final 123 rows" is behind the tree.
+- Table 4's compact scores in the brief are the 123-row instrument. I re-opened D8, E20 and E21; I am not re-listing all 44 here. The brief's D8 channel description is the one that does not match `D8_store.raw`.
+- HEAD stays 51 correct rows after the two additions (51/125, not 53/125): both new rows are `FAIL` with `got=-`. The null-media green set stays 17: both new rows are red there too, so they did not join the `noset` / zero-announce absences.
+
+F2's G1 and G2 (width × bound edge, latch persistence) are the findings this repair answered. I am not reopening them. The repair's record then over-claimed the closure. G4 is discharged; see Q5.
+
+## 5. The block in situ
+
+G4 is discharged for the block that is in the tree now, on opened logs in `wiring_20261019/insitu41_20261019/` (2026-10-19 08:07:21–08:08:18).
+
+- `INSITU.log`: fix gate rc 0, gate 16 `PASS (161 checks)`, fbctrl_cmd checks 135 with 0 FAIL. HEAD gate rc 1, `FAIL (77 of 161 checks)`, fbctrl_cmd checks 135 with 77 FAIL. `INSITU_DONE`.
+- `gate16_fix.out` and `gate16_head.out`: `fbctrl_port rows correct 117` on both binaries. HEAD's 77 reds are the #567 block (probe exit, `rows correct` 51, `rows failed` 74, and 74 named rows). 74 + those 3 summary fails = 77. #549's port rows stay green beside this probe.
+- Fix probe: `edge x1 got=0x7b ok`, `edge y1 got=0x4d ok`, `FBCMD_RESULT=125/125`. HEAD probe: both new rows `got=- FAIL`, `FBCMD_RESULT=51/125`.
+- The launch line in the working-tree gate is `python3 -u fbctrl_cmd_probe.py "$PMAX"`, graded by the gate's `check()`, with the exit status becoming the gate rc.
+
+The earlier 123-row run (07:30, 159 checks, 133 in this block, HEAD 75 of 159) was the block F2 reviewed. This re-run is the 125-name block. `INSITU.log` records probe md5 `7c34e8809f11f5d889542be73fb712f6`; `legs41/LEGS41.txt` records `9137235b5ae21129af65fc40580e12d7`. I did not recompute either hash, so I am not asserting those two files are AST-identical. The behavior above is from the logs and from the current source.
+
+## 6. What the enumeration missed
+
+W:latch was counted as four refuse × latch × width cells. It holds silence (`wl once`) and no-execute (`wl alive`). It does not hold no-store. `wl cmd` is read after three GETs have stored 2, and D8 leaves `wl alive`, `wl once`, all three gets, and `wl cmd` green in one log. The tables could not show that: no mutant stores only on the silent byte path, and E20/E21 clear the latch at every width, so T2 kills them and the other widths look closed.
+
+`edge x1` and `edge y1` watch whether R:edges re-runs the resident GET. They do not read COMMAND between the two refusals, and they do not read it after a byte refusal with the latch set. They leave the store cell untouched. (7) then collects the unread effects into one sentence, while the gate comment still says the width class is enumerated.

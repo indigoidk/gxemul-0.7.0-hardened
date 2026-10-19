@@ -1,0 +1,43 @@
+#!/usr/bin/env python3
+"""mk_mutants567b.py <dir> -- #567 kill table 1b's mutants (PRETABLE_ADDENDUM_t1b.out), each an exact-anchor edit of
+the draft fix <dir>/dev_fbctrl.fix567.c, written to <dir>/mutants_b/<name>.c.
+  E1_gt3     the bound moved UP: `> GET_RESOLUTION' -> `> GET_RESOLUTION + 1' (FILL accepted)
+  E2_nopref  the gate also refuses NOP
+  E3_setref  the gate also refuses SET_RESOLUTION
+  E4_hoist   the dispatch hoisted out of the store branch (a refusal re-runs the previous command)
+  E5_signed  the compare made signed: `(int64_t) idata > GET_RESOLUTION'
+Every anchor must match exactly once in the draft; each mutant must differ from it."""
+import io, os, sys
+D = sys.argv[1]
+NL, TAB = chr(10), chr(9)
+T2, T3, T4 = TAB * 2, TAB * 3, TAB * 4
+fix = io.open(os.path.join(D, "dev_fbctrl.fix567.c"), encoding="utf-8", newline="").read()
+os.makedirs(os.path.join(D, "mutants_b"), exist_ok=True)
+
+CMP = "idata > DEV_FBCTRL_COMMAND_GET_RESOLUTION) {"
+STORE = (T2 + "} else {" + NL + T3 + "d->port[d->current_port] = idata;" + NL +
+         T3 + "if (d->current_port == DEV_FBCTRL_PORT_COMMAND)" + NL + T4 + "fbctrl_command(cpu, d);" + NL +
+         T2 + "}" + NL)
+HOIST = (T2 + "} else" + NL + T3 + "d->port[d->current_port] = idata;" + NL +
+         T2 + "if (writeflag == MEM_WRITE &&" + NL + T2 + "    d->current_port == DEV_FBCTRL_PORT_COMMAND)" + NL +
+         T3 + "fbctrl_command(cpu, d);" + NL)
+
+
+def one(t, old, new, name):
+    assert t.count(old) == 1, (name, t.count(old), old[:60])
+    out = t.replace(old, new)
+    assert out != t, name
+    return out
+
+
+M = {
+    "E1_gt3": one(fix, CMP, "idata > DEV_FBCTRL_COMMAND_GET_RESOLUTION + 1) {", "E1"),
+    "E2_nopref": one(fix, CMP, "(idata > DEV_FBCTRL_COMMAND_GET_RESOLUTION || idata == DEV_FBCTRL_COMMAND_NOP)) {", "E2"),
+    "E3_setref": one(fix, CMP, "(idata > DEV_FBCTRL_COMMAND_GET_RESOLUTION || "
+                     "idata == DEV_FBCTRL_COMMAND_SET_RESOLUTION)) {", "E3"),
+    "E4_hoist": one(fix, STORE, HOIST, "E4"),
+    "E5_signed": one(fix, CMP, "(int64_t) idata > DEV_FBCTRL_COMMAND_GET_RESOLUTION) {", "E5"),
+}
+for name, text in M.items():
+    io.open(os.path.join(D, "mutants_b", name + ".c"), "w", encoding="utf-8", newline="").write(text)
+print("mutants written:", ", ".join(M))

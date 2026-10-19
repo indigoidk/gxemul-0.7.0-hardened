@@ -50,6 +50,7 @@ struct fbctrl_data {
 	int		current_port;
 	int		port[DEV_FBCTRL_NPORTS];
 	int		warned_port;	/* #549: the refused-selector announce */
+	int		warned_cmd;	/* #567: the refused-command announce */
 };
 
 
@@ -98,6 +99,9 @@ static void fbctrl_command(struct cpu *cpu, struct fbctrl_data *d)
 
 	/*  TODO: Block copy and fill.  */
 
+	/*  #567: unreachable while the DATA arm refuses every command
+	    other than these three; kept as a tripwire for a later edit
+	    that lets one in, as #549 kept the selector's.  */
 	default:fatal("fbctrl_command: Unimplemented command %i.\n", cmd);
 		exit(1);
 	}
@@ -146,7 +150,24 @@ DEVICE_ACCESS(fbctrl)
 
 		if (writeflag == MEM_READ)
 			odata = d->port[d->current_port];
-		else {
+		else if (d->current_port == DEV_FBCTRL_PORT_COMMAND &&
+		    idata > DEV_FBCTRL_COMMAND_GET_RESOLUTION) {
+			/*  #567: a command other than NOP, SET_RESOLUTION and
+			    GET_RESOLUTION is REFUSED before it is stored: COMMAND
+			    keeps its previous value and nothing executes.  It used
+			    to reach fbctrl_command()'s default: and end the
+			    emulator, FILL (3) and COPY (4) included -- the header
+			    names them under a TODO and gives them no ports.  The
+			    compare is on all 64 bits: the cell is an int, so a
+			    wide 0x100000001 used to be stored as 1 and run
+			    SET_RESOLUTION.  Announced once per device.  */
+			if (!d->warned_cmd) {
+				fatal("[ fbctrl: command 0x%llx is not supported; "
+				    "the command port is unchanged (once) ]\n",
+				    (unsigned long long) idata);
+				d->warned_cmd = 1;
+			}
+		} else {
 			d->port[d->current_port] = idata;
 			if (d->current_port == DEV_FBCTRL_PORT_COMMAND)
 				fbctrl_command(cpu, d);

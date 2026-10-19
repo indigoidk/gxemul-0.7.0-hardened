@@ -1,0 +1,116 @@
+ASTRA_FBCMD_P3_20261019
+VERDICT: SHIP WITH CHANGES -- The row counts and measured kills check out, but the enumeration misses width cells and a refusal-effect escape.
+
+New escapes below are predictions from the frozen programs, not newly measured emulator runs. No project files were written.
+
+1. **The enumeration is incomplete.**
+
+   I checked the producer before enumerating the domain. `memory_readmax64()` assembles unsigned bytes into a zero-initialized `uint64_t`: the scalar write domains are `0..255`, `0..65535`, `0..2^32−1`, and `0..2^64−1`. Narrow stores do not produce sign-extended wide aliases. MIPS unaligned stores use whole 4- or 8-byte callbacks, so they do not introduce lengths 3, 5, 6, or 7. The 16-byte case is already disclosed. See [memory.c](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/memory.c:55) and [the unaligned producer](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips_instr_unaligned.c:131).
+
+   The advertised **16 bound-edge cells are all reached**: `{accept 2, refuse 3} × {latch clear, latch set} × {1,2,4,8 bytes}`. That arithmetic is correct. Reaching those cells does not establish every promised effect.
+
+   The actual read coverage is:
+
+   | Port partition | Incoming latch | Widths reached | Missing widths |
+   |---|---|---|---|
+   | COMMAND | Clear | 1, 2, 4, 8 | None |
+   | COMMAND | Set | 4 | 1, 2, 8 |
+   | Non-COMMAND | Clear | 4 | 1, 2, 8 |
+   | Non-COMMAND | Set | 4 | 1, 2, 8 |
+
+   Thus **7 of 16** port × latch × read-width cells are reached. Non-COMMAND writes reach all four widths with the latch clear, but only width 4 with it set: **5 of 8** cells.
+
+   More decisively, persistence has only **2 of 8 observed cells**: `{accept, read} × {1,2,4,8}`. T2 witnesses persistence through `sw` NOP and `lw`; W:latch has no refusal after its accepted commands. [Frozen sessions](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlcmdkill/pass3_20261019/frozen/fbctrl_cmd_probe.v4.py.txt:437).
+
+   Concrete escaping edits:
+
+   | Missing obligation | Exact edit | Rows expected to remain green |
+   |---|---|---|
+   | Persistence after non-word accepts | After the successful DATA store, add `if (len != 4) d->warned_cmd = 0;` | `wl once`, `two once` |
+   | Persistence after non-word reads | Inside the read branch, after assigning `odata`, add the same conditional clear | All `rdw` rows, `two once` |
+   | COMMAND reads with latch set at widths 1/2/8 | Replace the DATA read predicate with `writeflag == MEM_READ && (!d->warned_cmd || len == 4)` | `rdw lb`, `rdw lh`, `rdw ld` |
+   | Non-COMMAND reads at widths 1/2/8 | Replace its assignment with `odata = (len != 4 && d->current_port != DEV_FBCTRL_PORT_COMMAND) ? 0 : d->port[d->current_port];` | `rdx1 again`, all `rdw` rows |
+   | Non-COMMAND writes with latch set at widths 1/2/8 | In the refusal predicate, replace the port comparison with `(d->current_port == DEV_FBCTRL_PORT_COMMAND || (d->warned_cmd && len != 4))` | `x2 sb`, `x2 sh`, `x2 sd` |
+
+   Each predicts the entire **123/123** staying green. These use the enumerated port, direction, latch and width partitions; they are not unlisted-value carve-outs. The header’s “every partition above … at EVERY width” therefore needs repair. [Frozen contract](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlcmdkill/pass3_20261019/frozen/fbctrl_cmd_probe.v4.py.txt:55).
+
+2. **The 17 new rows have valid measured channels; none is vacuous across the built mutants.**
+
+   Independent parsing of the raw logs confirms:
+
+   | New row | Named direct witness and measured result |
+   |---|---|
+   | `wl alive` | E22–E25: `DIED/1`, expected `alive` |
+   | `wl once` | E27: `0x3,0x3`; E29: three `0x3` announcements |
+   | `wl sb get x1` | E26: `0x7b`, expected `0x0` |
+   | `wl sh get x1` | E26: `0x7b`, expected `0x0` |
+   | `wl sd get x1` | E26: `0x7b`, expected `0x0` |
+   | `wl cmd` | E26: `0x0`, expected `0x2` |
+   | `wb once` | E28/E29: `0x3,0x4`, expected `0x3` |
+   | `wb cmd` | D8: `0x4`, expected `0x0` |
+   | `x2 sb` | E30: `0x0`, expected `0x3` |
+   | `x2 sh` | E30: `0x0`, expected `0x4` |
+   | `x2 sd` | E30: `0x0`, expected `0x5` |
+   | `m3 quiet` | E30: `1`, expected `0` |
+   | `rdw lb` | E33: `0x0`, expected `0x2` |
+   | `rdw lh` | E32/E33: `0x0`, expected `0x2` |
+   | `rdw ld` | E32/E33: `0x0`, expected `0x2` |
+   | `rdw lw` | E32/E33: `0x0`, expected `0x2` |
+   | `rdw x1` | E31: `0x0`, expected `0x7b` |
+
+   E32 correctly leaves `rdw lb` green: it returns 2 before storing zero. E22–E25’s downstream missing values are consequences of death, as disclosed; they do not independently demonstrate broken GET semantics. Every new row nevertheless has its named direct witness. See [D8](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlcmdkill/killtable4_20261019/D8_store.raw:141), [E30](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlcmdkill/killtable4_20261019/E30_portwidth.raw:120), and [E32](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlcmdkill/killtable4_20261019/E32_lbreadstore.raw:124).
+
+3. **Yes: a clean sweep exists inside the existing floor, without adding a width test.**
+
+   Insert this at entry to the COMMAND-refusal branch, immediately before `if (!d->warned_cmd)`:
+
+   ```c
+   if (d->warned_cmd)
+       fbctrl_command(cpu, d);
+   ```
+
+   This wrongly executes the resident command on every subsequent refusal. Enumerating **all seven subsequent-refusal events** explains why the composite stays green:
+
+   | Session | Subsequent refusals | Resident COMMAND |
+   |---|---|---|
+   | R:edges | `sd 3` | GET, 2 |
+   | T2 | `sw 5`, `sd 0x100000005` | NOP, 0 |
+   | W:latch | `sb 3`, `sh 3`, `sw 3` | NOP, 0 |
+   | W:sb | `sh 4` | NOP, 0 |
+
+   Six executions are invisible NOPs. R:edges executes GET and changes X1/Y1 from 123/77 to zero—but **neither value is graded**. Its three rows check only survival, COMMAND and announcement. `edge alive`, `edge cmd`, and `edge once` remain green. [Frozen R:edges](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlcmdkill/pass3_20261019/frozen/fbctrl_cmd_probe.v4.py.txt:388).
+
+   Expected result: **123/123, CONTROL=OK**, and therefore a green gate. This is the existing latch-set refusal/no-execution obligation, not disclosure (0), (2), or (6).
+
+4. **The arithmetic is right; the completeness records are wrong.**
+
+   Independently reconstructed counts:
+
+   | Version | Rows | Sessions | Added rows |
+   |---|---:|---:|---|
+   | v2 | 99 | 22 | — |
+   | v3 | 106 | 24 | R:edges 3 + A:edges 4 |
+   | v4 | 123 | 27 | M3 9 + W:latch 6 + W:sb 2 |
+
+   Table 4 contains **60 raw logs**: 44 mutants + two legs + two null media on v4, plus twelve mutants on v3. Scores, unique row counts and completion trailers reconcile. All twelve new mutants escape v3 and have the predicted v4 failures. The null-media 17 greens are exactly eleven `noset` rows plus six quiet-count rows.
+
+   Required record corrections:
+
+   - **“Whole width class closed” is unsupported**, in the header, F2’s repair description, and the table’s concluding coverage claim.
+   - **“Every accept reads back” is false as written.** A:edges reads COMMAND after both accepts; W:latch reads it after all three. Earlier stores can be masked by later stores. [Frozen accept sequences](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlcmdkill/pass3_20261019/frozen/fbctrl_cmd_probe.v4.py.txt:408).
+   - **“Nothing clears it” crossed with every width is unsupported** by the persistence witnesses.
+   - The new width-only findings fit pre-ship **L1**, with **L4** corrections to the coverage claims. Question 3 additionally exposes a **floor breach of the shipped composite**: its mutation uses the existing latch partition without any added width condition. Pre-ship status does not remove that classification.
+   - Minor wording: W:sb’s byte refusal has the latch **clear**; its following halfword refusal has it set. “v3’s rows unchanged” also needs to except `sessions clean`’s changed expectation, 24→27.
+
+5. **Yes, the in-situ evidence discharges G4.**
+
+   The wrapper invokes the real gate, uses default PMAX for the fix, selects HEAD for the second run, and captures actual exit status. The frozen block launches the probe and performs real grading. Independent counts are **159 green/0 red** on the fix and **84 green/75 red** on HEAD; HEAD’s failures comprise 72 named command rows plus exit, correct-score and failed-row checks. Both neighboring #549 probes score **117/117**. See [the runner](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlcmdkill/wiring_20261019/insitu_20261019/insitu567.sh:25), [frozen launch and grading](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlcmdkill/pass3_20261019/frozen/gate16_block567_v4.txt:44), and [run evidence](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlcmdkill/wiring_20261019/insitu_20261019/INSITU.log:3).
+
+6. **We missed the difference between visiting a cell and observing its effects before they disappear.**
+
+   Two additional examples make that concrete:
+
+   - At refusal entry, add `if (len == 1 && d->warned_cmd) d->port[d->current_port] = idata;`. W:latch’s byte refusal corrupts COMMAND, but its later GET overwrites the corruption before `wl cmd`.
+   - Guard the accepted store with `if (!(len == 2 && d->warned_cmd))`, or the analogous width-8 condition. W:latch already holds COMMAND=2 at those GETs, so skipping their stores preserves both dispatch effects and final readback.
+
+   Both predict all 123 rows green. The repair needs an observation matrix alongside the reachability matrix: grade refusal effects before later commands overwrite them, use distinguishable prior COMMAND values for store witnesses, and place a further refusal after each accept/read used to claim latch persistence. Adding R:edges’ already-collected X1/Y1 assertions closes the strongest no-width escape immediately; completing the width obligation requires the remaining cells above.

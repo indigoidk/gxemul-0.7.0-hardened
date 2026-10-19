@@ -116,6 +116,88 @@ else
              sort | uniq -d | wc -l)" "0"
 fi
 
+#  ---------------------------------------------------------------------------------------
+#  #567 fbctrlcmdkill: the same device's COMMAND port.  Before #567 a DATA write at COMMAND of any
+#  command but NOP (0), SET_RESOLUTION (1) and GET_RESOLUTION (2) -- FILL and COPY among them --
+#  reached fbctrl_command()'s default: and ended the emulator, and a wide value was stored into the
+#  int cell as its low word, so 0x100000001 ran SET_RESOLUTION.  #567 refuses every other 64-bit
+#  value before the store (COMMAND keeps its value, nothing runs) and announces once per device.
+#  regress/fbctrl_cmd_probe.py drives real guest sb/sh/sw/sd and lb/lh/lw/ld on an unmodified
+#  testmips, like the #549 probe above, so it too runs before the pmax-kernel check.  THE CONTRACT is
+#  its header: it holds the bound's edges and the latch at every access WIDTH (the class two review
+#  passes found open), and its NOT CLAIMED (7) names the width x latch cells pass 3 found reached but
+#  not observed (filed as `fbctrlobsgrid`).  Kill table 4 (regress/artifacts/fbctrlcmdkill/
+#  killtable4_20261019/) re-ran all 44 mutants built for this round on v4's 123 rows -- every one
+#  red, the twelve built last having escaped the 106-row v3.  Pass 3 added two rows (`edge x1',
+#  `edge y1'); the 125 rows score 125 on the fix, 51 on HEAD's build, and 17 on a binary that runs
+#  nothing -- absence rows read green there and the record still parses, so this block requires CONTROL=OK, pins the
+#  score by EQUALITY, and checks EVERY row by name (pass 2: a row swapped for an unrelated unique
+#  green one keeps every count).
+#  `gatedevicesplit` (#498) grows by this second device probe in a CPU gate.  That is debt, not a
+#  fit: pass 2 asked that it not be called fine (Grok 4.7), and the STOP is recorded on that row --
+#  a third device probe lands here only with the split or with a pin on this gate's launch count
+#  (GLM 5.3).  Like #549's, the launch below has no timeout: a wedged probe hangs the gate, which is
+#  visible and not a false pass (filed for both blocks as `gate16fence`).
+#  The probe prints a row's status AFTER got/want, unlike the #549 probe, so every row count below
+#  uses one anchored pattern, FCROW.  The v4 block (123 names), replayed on kill table 4's 48 logs,
+#  was green only on the fix (wiring_20261019/GATE16_REPLAY_v4.out); this one adds the two names and
+#  moves the pins, and was run in situ on both builds (wiring_20261019/INSITU.md).
+FCLOG=$LOGDIR/fbctrl_cmd_probe.log
+FCROW='^  [^ ].* got=[^ ]* +want=[^ ]* +'
+FCNAMES=("live" "devsig" "ref 3 alive" "ref 3 cmd" "ref 3 x1" "ref 3 y1" "ref 3 once" "ref 3 noset"
+         "ref 4 alive" "ref 4 cmd" "ref 4 x1" "ref 4 y1" "ref 4 once" "ref 4 noset" "ref sb3 alive"
+         "ref sb3 cmd" "ref sb3 x1" "ref sb3 y1" "ref sb3 once" "ref sb3 noset" "ref sh4 alive" "ref sh4 cmd"
+         "ref sh4 x1" "ref sh4 y1" "ref sh4 once" "ref sh4 noset" "ref 5 alive" "ref 5 cmd" "ref 5 x1"
+         "ref 5 y1" "ref 5 once" "ref 5 noset" "ref m1w alive" "ref m1w cmd" "ref m1w x1" "ref m1w y1"
+         "ref m1w once" "ref m1w noset" "ref w3 alive" "ref w3 cmd" "ref w3 x1" "ref w3 y1" "ref w3 once"
+         "ref w3 noset" "ref w0 alive" "ref w0 cmd" "ref w0 x1" "ref w0 y1" "ref w0 once" "ref w0 noset"
+         "ref w1 alive" "ref w1 cmd" "ref w1 x1" "ref w1 y1" "ref w1 once" "ref w1 noset" "ref w2 alive"
+         "ref w2 cmd" "ref w2 x1" "ref w2 y1" "ref w2 once" "ref w2 noset" "ref m1d alive" "ref m1d cmd"
+         "ref m1d x1" "ref m1d y1" "ref m1d once" "ref m1d noset" "edge alive" "edge cmd" "edge once"
+         "edge x1" "edge y1" "acc nop cmd" "acc nop x1" "acc nop quiet" "acc set cmd" "acc set ran"
+         "acc set res" "acc set quiet" "acc get cmd" "acc get x1" "acc get y1" "acc get quiet" "acc sd get x1"
+         "acc sh get x1" "acc edges cmd" "acc edges quiet" "latch get x1" "latch nop cmd" "latch set cmd"
+         "latch set ran" "latch once" "rdcmd val" "rdcmd again" "rdcmd noexec" "rdx1 again" "x2 three"
+         "x2 quiet" "x2 sb" "x2 sh" "x2 sd" "m3 quiet" "rdw lb" "rdw lh" "rdw ld" "rdw lw" "rdw x1" "two once"
+         "two cmd" "wl alive" "wl once" "wl sb get x1" "wl sh get x1" "wl sd get x1" "wl cmd" "wb once"
+         "wb cmd" "p1 port" "p1 cmd" "p2 cmd" "p2 port" "free alive" "free once" "sessions clean")
+fcrc=0
+python3 -u fbctrl_cmd_probe.py "$PMAX" > "$FCLOG" 2>&1 || fcrc=$?
+if [ "$(grep -cx 'FBCMD_DONE' "$FCLOG")" != "1" ] ||
+   [ "$(grep -c '^FBCMD_RESULT=' "$FCLOG")" != "1" ] ||
+   ! grep -Eq '^FBCMD_RESULT=(0|[1-9][0-9]*)/(0|[1-9][0-9]*)$' "$FCLOG" ||
+   [ "$(grep -c '^FBCMD_CONTROL=' "$FCLOG")" != "1" ] ||
+   ! grep -Eq '^FBCMD_CONTROL=(OK|FAILED)$' "$FCLOG"; then
+    note "fbctrl command probe produced no unique, complete record; last lines follow"
+    tail -5 "$FCLOG" | sed 's/^/       /'
+    check "fbctrl command probe output parses" "no" "yes"
+else
+    check "fbctrl command probe output parses" "yes" "yes"
+    grep -E "${FCROW}FAIL  " "$FCLOG" | sed 's/^/       /'
+    check "fbctrl command probe controls" "$(sed -n 's/^FBCMD_CONTROL=//p' "$FCLOG")" "OK"
+    #  As for #549: the probe exits nonzero on a crash OR a red row, a second catcher of a red score.
+    check "fbctrl command probe exit 0 (nonzero: a crash or a red row)" "$fcrc" "0"
+    fcres=$(sed -n 's/^FBCMD_RESULT=//p' "$FCLOG")
+    #  Pinned UNQUOTED under a one-token stem, so check_score_claims.py sees the pin (as #549's).
+    check "fbctrl_cmd rows run" "${fcres#*/}" 125
+    check "fbctrl_cmd rows correct" "${fcres%/*}" "125"
+    check "fbctrl_cmd rows failed" "$(grep -cE "${FCROW}FAIL  " "$FCLOG")" "0"
+    #  Reconcile the rows printed with the trailer, and require each row name once (#549 F2).
+    check "fbctrl_cmd rows emitted match the trailer total" \
+          "$(grep -cE "${FCROW}(ok|FAIL)  " "$FCLOG")" "${fcres#*/}"
+    check "fbctrl_cmd ok rows match the trailer count" \
+          "$(grep -cE "${FCROW}ok  " "$FCLOG")" "${fcres%/*}"
+    check "fbctrl_cmd row names are unique" \
+          "$(grep -E "${FCROW}(ok|FAIL)  " "$FCLOG" | sed -E 's/^  (.*[^ ]) +got=.*/\1/' |
+             sort | uniq -d | wc -l)" "0"
+    #  And EVERY expected row by NAME, green exactly once: counts and uniqueness cannot tell an expected
+    #  row from an unrelated unique one put in its place (pass 2, GPT-6 Astra).
+    check "fbctrl_cmd named rows" "${#FCNAMES[@]}" 125
+    for v in "${FCNAMES[@]}"; do
+        check "  fbctrl_cmd row: $v" "$(grep -cE "^  ${v} +got=[^ ]* +want=[^ ]* +ok  " "$FCLOG")" "1"
+    done
+fi
+
 if [ ! -f "$PMAX_KERNEL" ]; then gate_skip "no pmax kernel at $PMAX_KERNEL"; fi
 
 FLOG=$LOGDIR/gate_mips_folds.log

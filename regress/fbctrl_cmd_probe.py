@@ -1,0 +1,507 @@
+#!/usr/bin/env python3
+"""#567 fbctrlcmdkill -- the DETECTOR for dev_fbctrl.c's command port, on an UNMODIFIED `-E testmips`.
+
+machine_test.c installs `fbctrl addr=0x12f00000` in testmips's own setup.  t0 = 0xffffffffb2f00000, kseg1 of
+DEV_FBCTRL_ADDRESS; PORT is +0x00, DATA +0x10.  Port 0 is COMMAND; a DATA write there executes the command.  Pre-#567
+any command other than NOP (0), SET_RESOLUTION (1) and GET_RESOLUTION (2) reached fbctrl_command()'s default: and
+ended the emulator, and a WIDE value was stored truncated into the int cell and dispatched as its low word.  #567
+refuses every 64-bit value other than 0, 1 and 2 in the DATA arm BEFORE the store: COMMAND keeps its value, nothing
+executes, and one announce per device names the full value -- `[ fbctrl: command 0x... is not supported; the command
+port is unchanged (once) ]`.
+
+SESSIONS (each on a fresh emulator, every word stepped and compared with the emulator's own step line, unless F):
+  C    controls: PORT=5, DATA=0x2a, read back (LIVENESS); PORT=1, DATA=123, PORT=0, DATA=2 (GET_RESOLUTION, headless:
+       zeroes X1/Y1), PORT=1, read (DEVICE-SIGNATURE: 0 where RAM would keep 123).
+  R:v  one REFUSAL per class, on a device seeded with COMMAND = 2 (by a GET), X1 = 123, Y1 = 77: PORT=0, DATA=v, then
+       read COMMAND, X1, Y1; no SET's resolution-change line may print.  Classes: 3, 4, 5 and 0xffffffff by sw; 3 by sb and 4 by sh (the gate never tests len,
+       so `&& len >= 4' would let a byte or halfword command through --
+       regress/artifacts/fbctrlcmdkill/draft_20261018/PRETABLE.out, section 1); 0x100000003, 0x100000000, 0x100000001,
+       0x100000002 and 0xffffffffffffffff by sd.  The wide aliases of ACCEPTED commands are the width pin: a compare on
+       the stored int would run NOP (COMMAND reads 0), SET_RESOLUTION (COMMAND reads 1) or GET_RESOLUTION (X1/Y1 read 0).
+  A:edges  ACCEPT GET_RESOLUTION -- the at-bound 2 -- by sd and by sh: each dispatch zeroes X1 (123 -> 0), so dispatch
+       at both widths is observable; COMMAND reads 2, no announce.
+  R:edges  REFUSE 3 -- past the bound -- by sh, then by sd, on the seeded device: alive, COMMAND keeps 2, one announce,
+       and X1 and Y1 keep 123 and 77 -- the second refusal is made with the latch SET while a GET sits in COMMAND.
+  A:n  ACCEPT, latch clear, one width each: NOP by sd after COMMAND 2 (COMMAND reads 0, X1 keeps 123); SET_RESOLUTION by sh with X1 = Y1 = 0
+       (dev_fb_resize() prints `size too small (0 x 0); ignored.` -- a fatal() that returns; COMMAND reads 1; and the resolution-change debug() line
+       prints -- the noset rows' channel, shown live); GET_RESOLUTION by sb after X1 = 123, Y1 = 77 (both read 0; COMMAND reads 2).  No command announce in any of them.
+  L    ACCEPT with the latch SET: refuse 3 first, then GET (X1 123 -> 0), NOP (COMMAND 0), SET at 0 x 0 (the resize line
+       once, COMMAND 1) -- one command announce in the whole session.
+  M1   a READ of COMMAND does not execute it: COMMAND = 2 by a GET, X1 = 123, PORT=0, read DATA twice (2, 2), PORT=1,
+       read X1 twice (123, 123): a re-executed GET would zero X1, and a read that STORED would zero the second read.
+  M2   a DATA write of 3 to a NON-COMMAND port (PORT=3, X2) is ordinary storage: reads back 3, no announce.
+  M3   WIDTH at a non-COMMAND port and on the read path: 3, 4 and 5 stored at X2 by sb, sh and sd (each reads
+       back; no announce); then COMMAND = 2 by a GET, X1 = 123, and COMMAND read by lb, lh, ld and lw -- 2 each,
+       so no read stored anything -- and X1 still 123, so no read ran the GET.
+  T2   refuse 3; ACCEPT a NOP; READ COMMAND; refuse 5; refuse sd 0x100000005 -- the latch persists across the accept
+       and the read: ONE command announce, naming 0x3; COMMAND reads 0.
+  W:latch  WIDTH x LATCH at the bound's edges: sd 3 with the latch CLEAR (refused and announced -- an sd refusal
+       sets the latch), then sb, sh and sw 3 with it SET (refused, silent), then GET by sb, sh and sd with it SET
+       (each zeroes X1 again; COMMAND reads 2).
+  W:sb  the latch SET by a byte refusal: sb 3 (announced), then sh 4 (silent); COMMAND keeps 0.
+  P1   selector refused first (PORT=9, #549's announce), then command 4 refused: one announce of each kind.
+  P2   the reverse order: command 4, then selector 9: one of each.
+  F    FREE-RUNNING: PORT=0, DATA=3, then continue to a breakpoint -- the announce must print: under free-running
+       debug() returns at default verbosity while fatal() prints, so this is the one row that sees a demotion.
+Every refusal row rests on `fatal()` printing and RETURNING (src/core/debugmsg.c's fatal(): no early-out, no exit).
+
+CONTRACT (clause e) -- AN ENUMERATION.
+THE FLOOR.  The fixed DATA arm's refusal branch tests the access direction, the port (`current_port == COMMAND`), the
+written value (`idata > DEV_FBCTRL_COMMAND_GET_RESOLUTION`, on all 64 bits memory_readmax64() builds) and the latch
+(`!warned_cmd`); the accept branch stores the value and, at COMMAND, dispatches it.  Every cell of those is held:
+  the value  at the bound, 2 (A:get, A:edges, W:latch, every seed); below it, 1 (A:set) and 0 (A:nop); past it, 3
+             (R:3, R:sb3, R:edges, W:latch, W:sb, L, T2, F -- rule D2's B+1 edge), 4 (R:4, R:sh4, W:sb, P1, P2), 5
+             (R:5, T2), 0xffffffff (R:m1w) and all-ones (R:m1d)
+  the port   COMMAND (every R, A and W session, L, T2, P1, P2, F) and not COMMAND (M2 and M3: 3, 4 and 5 at X2 are data)
+  the latch  clear (the first refusal of every R and W session, L, T2, P1, P2, F) and set -- then crossed with a later
+             refusal (R:edges, W:latch, W:sb, T2), a wide refusal (T2's sd 0x100000005), and an accept and a read that
+             a later refusal follows (T2: an sw NOP and an lw read) -- so its PERSISTENCE is observed at sw and lw only
+             (NOT CLAIMED (7)); the selector's latch apart from it, in both orders (P1, P2)
+  direction  a write (all) and a read (M1: COMMAND and X1 each read twice; M3: COMMAND by lb, lh, ld and lw) -- a read
+             returns the cell, runs nothing and stores nothing.  "Stores nothing" is pinned at COMMAND and X1; Y1 is
+             read once per session
+WIDTH -- the class two consecutive passes found open (pass 2's E13; F2's E15-E19).  The arm never tests len --
+memory_readmax64() consumes it to build idata -- so a cell held at one width only leaves the others unchecked.  HELD AT
+EVERY WIDTH, as enumerated before it was measured (regress/artifacts/fbctrlcmdkill/killtable4_20261019/
+PRETABLE_ADDENDUM_t4.out) and listed below.  Pass 3 (GPT-6 Astra, GLM 5.3) showed that enumeration counts cells REACHED,
+not every effect OBSERVED there; the cells it named are NOT CLAIMED (7):
+  edge x latch   accept 2, latch clear: sb A:get, sh A:edges, sw C and the seeds, sd A:edges
+                 accept 2, latch set:   sb, sh and sd W:latch, sw L
+                 refuse 3, latch clear: sb R:sb3 and W:sb, sh R:edges, sw R:3, L, T2 and F, sd W:latch
+                 refuse 3, latch set:   sb, sh and sw W:latch, sd R:edges (silent and run nothing; that the sb
+                                        refusal STORES nothing is not observed -- NOT CLAIMED (7))
+  the latch SET by a refusal at sb (W:sb), sh (R:edges), sw (T2) and sd (W:latch), each seen by a later refusal staying
+                 silent; TESTED -- a refusal with it set stays silent -- at sb (W:latch), sh (W:latch, W:sb), sw (T2's
+                 5, W:latch) and sd (R:edges, T2)
+  an accept is dispatched -- GET zeroes X1 -- at every width (sb A:get, W:latch; sh A:edges, W:latch; sw C, L; sd
+                 A:edges, W:latch) and stored at every width (sb A:get, sh A:set, sw L, sd A:nop)
+  a non-COMMAND store at every width with the latch clear (sb, sh and sd M3; sw M2 and every seed); a read of
+                 COMMAND at every width with the latch clear (lb, lh and ld M3; lw M1 and M3) -- non-COMMAND cells are
+                 read by lw only
+  wide values exist only at sd -- the width pin: the four whose low word is 0..3 (R:w0..R:w3) are refused, where a
+                 compare on the low word would run NOP, SET or GET
+EFFECTS, each held by the sessions named:
+  a refused command keeps COMMAND's previous value -- 2 (every R class, R:edges), 0 (T2, W:sb)
+  a refused command executes nothing -- no GET (X1 and Y1 kept, with a GET in COMMAND: every R class, and R:edges,
+      whose second refusal is made with the latch set) and no SET (no
+      resolution-change line: every R class's `noset' row; A:set's `acc set res' shows that channel live).  That line
+      is a debug() which prints while STEPPING, so `noset' is a claim about stepped sessions; F free-runs and is not
+      read for it.  A NOP has no observable effect and is not claimed to run.
+  the first refusal announces once, naming the full value -- every R class; R:edges, W:latch and W:sb, whose later
+      refusals stay silent; T2 (0x3, then 5 and a wide value silent across a NOP and a read); P1 and P2 (beside #549's
+      selector announce); F (free-running: fatal() prints where debug() would not)
+  an accepted command is stored -- read back at a value distinguishable from the one before it by A:get, A:set, A:nop
+      and L (A:edges and W:latch read COMMAND once after several accepts) -- and GET_RESOLUTION is seen to RUN (X1 zeroed) at every
+      width, with the latch clear (A:get, A:edges, C) and set (L, W:latch); SET_RESOLUTION is seen to run by sh (A:set)
+      and sw (L: the resize line); a NOP is stored (A:nop by sd, L by sw) and not claimed to run
+  every session survives and exits 0 -- `sessions clean', pinned to the literal 27
+Measured (regress/artifacts/fbctrlcmdkill/): kill table 4 re-ran every mutant built -- 44 -- on v4, this probe less
+pass 3's two `edge' rows, and every one is red (killtable4_20261019/): the gate removed (the pre-#567 arm, HEAD's own score), the compare
+narrowed to 32 bits, to `int' or made signed, its bound moved down by one, two and three or up by one, its operand
+swapped for the resident cell, the gate qualified by width (byte and halfword escaping, or every non-word access
+refused), the latch shared, never set, set by an accept, or bypassed for wide values once set, the announce demoted to
+debug() or its argument truncated, the refused value stored, the port test dropped, a NOP or a SET refused alone, the
+dispatch hoisted out of the store branch, made unconditional on the port, or added to the read path, the read path
+falling into the store branch; and, at one width, the dispatch skipped or the bound moved down or up (E15-E19), the
+latch cleared by an accept or a read (E20, E21), the bound relaxed in one (width, latch) cell or GET refused at three
+widths once the latch is set (E22-E26), the latch set or tested at only some widths (E27-E29), the port test bypassed
+for non-word stores (E30), and a read running the command (ld), storing after it returns (lb) or returning nothing
+(lb) (E31-E33).  The twelve E22-E33 were measured in the same table on the 106-row v3, and every one escaped it whole.
+Earlier tables measured the rest on v1 (95 rows: tables 1, 1b, 2a), v2 (99: 2, 3a) and v3 (106: 3): v1 let three
+escape, v2 seven and v3 twelve -- the reason v4 had 123 rows.  Pass 3 added `edge x1' and `edge y1', grading values
+R:edges already read, and changed no other row: this probe scores 125/125 on the fix, 51/125 on HEAD's build and 17/125
+with CONTROL=FAILED on both null media (killtable4_20261019/legs41/).  The measured check that those two rows catch
+the case pass 3 described is owed, with the rest of its cells (NOT CLAIMED (7)).
+On a dead binary 17 rows read green -- the eleven `noset' rows and six announce counts, which read 0 on a session that
+never started; `acc set res' and `sessions clean' are among the red -- so gate 16 requires FBCMD_CONTROL=OK, pins the
+score by equality and checks every row by name (kill table 4's null media).
+NOT CLAIMED (disclosed).  (0) The latch SET crossed with a wide ALIAS of an accepted command (w0-w2): T2's third
+refusal is a wide non-alias (0x100000005), which pins the latch-set x wide cell; an edit exempting only the aliases of
+0-2 once the latch is set is a value carve-out, (2) -- E14's measured closure does not reach it.  (1) A refusal that
+STORES a value aliasing the previous COMMAND: w2 truncates to 2 and its `cmd' row cannot vary; ten classes, T2 and W:sb
+pin the store (D8).  (2) Values and bits not listed: the compare is relational, so its generating set is its regions,
+held at their edges; single-bit coverage like #549's session B is not claimed, and an edit refusing every listed value
+but exempting one unlisted (`&& idata != 6'), or a listed value at a width no row writes it at (4 by sb), passes --
+only a compare reshaped into an enumeration of the accepted values would close that family.  (3) A second fbctrl instance (#549's fbctrltwoinst,
+filed): warned_cmd is per device and the probe drives one.  (4) The device's other offsets (fbctrloffkill, filed).  (5)
+fbctrl_command()'s default:, kept as a tripwire: unreachable while the arm refuses, so no row reaches it on the fixed
+device; likewise the DATA arm's own selector-range check (#549's tripwire), unreachable while the PORT arm refuses.  (6) A 16-BYTE store: testppc (default_test() installs this device) issues stvx/stvxl, which reach this arm
+with len 16; the callback receives all 16 bytes, but memory_readmax64() builds idata from the low 64, so the prefix is
+dropped before the compare and a 128-bit value whose low half is 0, 1 or 2 is accepted and runs (a low half of 1 runs
+SET_RESOLUTION) -- this round's width defect one width out.  This MIPS probe cannot issue one; filed with #549's PORT
+arm, which shares it, as fbctrlvec128.  (7) The width x latch OBSERVATION cells pass 3 named (GPT-6 Astra, GLM 5.3,
+Grok 4.7): the latch's persistence after a non-word accept, a non-word read or a non-COMMAND store, each followed by a
+refusal; a read with the latch set at lb, lh and ld; a non-COMMAND read at lb, lh and ld; a non-COMMAND store with the
+latch set at sb, sh and sd; COMMAND read after a byte refusal made with the latch already set; and other refusal and
+accept effects that a later write overwrites before any row reads them.  Filed as coverage debt, fbctrlobsgrid.
+FILL (3) and COPY (4) are refused because nothing implements them (the header lists them under a TODO); a round that
+implements one moves its rows from the refusal list to the accept list.
+
+Output: one row per check, then FBCMD_CONTROL=OK|FAILED, FBCMD_RESULT=n/t, FBCMD_DONE.  The exit status is 0 only when
+the controls are OK and every row is green.
+usage: fbctrl_cmd_probe.py <gxemul-binary>
+"""
+import os
+import pty
+import re
+import select
+import signal
+import sys
+import time
+
+BIN = sys.argv[1]
+STUBADDR = 0xffffffff80100000
+CODE = 0xffffffff80100020
+FBCTRL = 0xffffffffb2f00000
+CMD_RE = re.compile(r"\[ fbctrl: command (0x[0-9a-f]+) is not supported; the command port is unchanged \(once\) \]")
+PORT_RE = re.compile(r"\[ fbctrl: port number 0x[0-9a-f]+ is out of range; the selector is unchanged \(once\) \]")
+SMALL_RE = re.compile(r"dev_fb_resize\(\): size too small \(0 x 0\); ignored\.")
+UNIMPL_RE = re.compile(r"fbctrl_command: Unimplemented command")
+RES_RE = re.compile(r"\[ dev_fbctrl: changing resolution to ")   # a debug() line: prints while stepping
+REG = dict(zr=0, t0=8, t1=9, t2=10, t3=11, t4=12, t5=13, t6=14, t7=15, s0=16, s1=17, s2=18, s3=19, s4=20, s5=21,
+           s6=22, s7=23)
+OPS = dict(sb=0x28, sh=0x29, sw=0x2b, sd=0x3f, lw=0x23, lb=0x20, lh=0x21, ld=0x37)
+
+
+def ins(op, rt, off, base="t0"):
+    return (OPS[op] << 26) | (REG[base] << 21) | (REG[rt] << 16) | (off & 0xffff)
+
+
+def text(op, rt, off, base="t0"):
+    return "%s %s,%d(%s)" % (op, rt, off, base)
+
+
+ANCHOR = (0x0f << 26) | (REG["t7"] << 16)                   # lui t7,0 -- the breakpoint anchor, never executed
+assert ins("sw", "t1", 0) == 0xad090000                    # pinned independently of the helper
+assert ins("lw", "t2", 0x10) == 0x8d0a0010
+assert ins("sd", "t5", 0) == 0xfd0d0000
+assert ins("sw", "zr", 0) == 0xad000000
+assert ins("sb", "t1", 0x10) == 0xa1090010
+assert ins("sh", "t1", 0x10) == 0xa5090010
+assert ins("lb", "t6", 0x10) == 0x810e0010
+assert ins("lh", "t7", 0x10) == 0x850f0010
+assert ins("ld", "s0", 0x10) == 0xdd100010
+assert ANCHOR == 0x3c0f0000
+
+#  register plan, the same in every session: s1..s3 = 1..3, s5 = 5, s6 = 9 (a refused selector), t5 = 123, t6 = 77
+BASE_REGS = [("t0", FBCTRL), ("s1", 1), ("s2", 2), ("s3", 3), ("s4", 4), ("s5", 5), ("s6", 9), ("t5", 123), ("t6", 77)]
+
+
+def stub_path():
+    p = "/tmp/gx_fbcmd567_%d.bin" % os.getpid()
+    with open(p, "wb") as f:
+        f.write(b"\x00\x00\x00\x00")
+    return p
+
+
+def session(label, prog, regs, reads, stub, free_run=False):
+    """prog: list of (op, rt, off).  Steps each (or free-runs to an anchor after the last), then prints reads."""
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.execvp(BIN, [BIN, "-V", "-E", "testmips", "-M", "64", "0x%x:%s" % (STUBADDR, stub)])
+        os._exit(127)
+    buf = ""
+    dead = [False]
+
+    def rd(t=0.4):
+        nonlocal buf
+        r, _, _ = select.select([fd], [], [], t)
+        if fd not in r:
+            return True
+        try:
+            d = os.read(fd, 65536)
+        except OSError:
+            dead[0] = True
+            return False
+        if not d:
+            dead[0] = True
+            return False
+        buf += d.decode("latin1", "replace")
+        return True
+
+    def wait(mark=0, echo=None, timeout=60):
+        t = time.time()
+        while time.time() - t < timeout:
+            if not rd():
+                return False
+            resp = buf[mark:]
+            if echo is not None and echo not in resp:
+                continue
+            if len(buf) > mark and resp.rstrip().endswith("GXemul>"):
+                return True
+        return False
+
+    def send(x, timeout=60):
+        b = (x + "\n").encode("latin1")
+        _mark = len(buf)
+        n = 0
+        try:
+            while n < len(b):
+                n += os.write(fd, b[n:])
+        except OSError:
+            dead[0] = True
+            return False
+        return wait(mark=_mark, echo=x if x else None, timeout=timeout)
+
+    words = [ins(op, rt, off) for op, rt, off in prog] + [ANCHOR]
+    status, badis, vals, steps = "?", [], {}, 0
+    if not wait(timeout=120):
+        status = "NO-PROMPT"
+    else:
+        for i, w in enumerate(words):
+            send("put w 0x%x, 0x%08x" % (CODE + 4 * i, w))
+        for name, val in regs:
+            send("%s=0x%x" % (name, val & 0xffffffffffffffff))
+        send("pc=0x%x" % CODE)
+        status = "SURVIVED"
+        if free_run:
+            send("breakpoint add 0x%x" % (CODE + 4 * len(prog)))
+            mark = len(buf)
+            try:
+                os.write(fd, b"continue\n")
+            except OSError:
+                dead[0] = True
+            if not wait(mark=mark, timeout=60) or dead[0]:
+                status = "DIED" if dead[0] else "NO-BREAK"
+            elif ("%016x" % (CODE + 4 * len(prog))) not in buf[mark:] and \
+                    ("%08x" % ((CODE + 4 * len(prog)) & 0xffffffff)) not in buf[mark:]:
+                status = "NO-BREAK"
+            else:
+                steps = len(prog)
+        else:
+            for i, (op, rt, off) in enumerate(prog):
+                mark = len(buf)
+                if not send("step 1", timeout=30) or dead[0]:
+                    status = "DIED"
+                    break
+                steps += 1
+                m = re.search(r"%016x:?\s+%08x\s+([^\r\n<]+)" % (CODE + 4 * i, words[i]), buf[mark:])
+                got = re.sub(r"\s+", " ", m.group(1)).strip() if m else "(no step line)"
+                if not got.startswith(text(op, rt, off)):
+                    badis.append("+0x%02x planted 0x%08x -> %r, expected %r" % (4 * i, words[i], got, text(op, rt, off)))
+        if status == "SURVIVED":
+            for name in reads:
+                got = None
+                for _ in range(2):
+                    mark = len(buf)
+                    if not send("print %s" % name, timeout=30) or dead[0]:
+                        break
+                    m = re.search(r"(?m)^0x([0-9a-fA-F]+)\s*$", buf[mark:])
+                    if m:
+                        got = int(m.group(1), 16)
+                        break
+                vals[name] = got
+    try:
+        os.write(fd, b"quit\n")
+    except OSError:
+        pass
+    t1 = time.time()
+    while time.time() - t1 < 20.0:
+        if not rd(0.1):
+            break
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+    rpid, st = 0, None
+    t1 = time.time()
+    while rpid == 0 and time.time() - t1 < 10.0:
+        try:
+            rpid, st = os.waitpid(pid, os.WNOHANG)
+        except OSError:
+            break
+        if rpid == 0:
+            time.sleep(0.05)
+    if rpid == 0:
+        try:
+            os.kill(pid, signal.SIGKILL)
+            _, st = os.waitpid(pid, 0)
+        except OSError:
+            st = None
+    code = os.WEXITSTATUS(st) if st is not None and os.WIFEXITED(st) else None
+    cmd = CMD_RE.findall(buf)
+    print("  session %-6s %-9s steps=%d/%d exit=%s cmd_once=%d port_once=%d small=%d res=%d unimpl=%d" % (
+        label, status, steps, len(prog), code, len(cmd), len(PORT_RE.findall(buf)), len(SMALL_RE.findall(buf)),
+        len(RES_RE.findall(buf)), len(UNIMPL_RE.findall(buf))))
+    for b in badis:
+        print("      DISASSEMBLY MISMATCH: %s" % b)
+    return {"status": status, "exit": code, "badis": badis, "vals": vals, "cmd": cmd,
+            "port": len(PORT_RE.findall(buf)), "small": len(SMALL_RE.findall(buf)),
+            "res": len(RES_RE.findall(buf)), "buf": buf}
+
+
+RESULTS, CONTROL = [], [True]
+
+
+def row(name, got, want, note=""):
+    ok = got == want
+    RESULTS.append(ok)
+    print("  %-22s got=%-20s want=%-20s %s  %s" % (name, got, want, "ok" if ok else "FAIL", note))
+    return ok
+
+
+def hx(v):
+    return "-" if v is None else "0x%x" % v
+
+
+def alive(S):
+    return "alive" if S["status"] == "SURVIVED" and S["exit"] == 0 else "%s/%s" % (S["status"], S["exit"])
+
+
+ALL = []
+
+
+def track(S):
+    ALL.append(S)
+    if S["badis"]:
+        CONTROL[0] = False
+    return S
+
+
+#  PORT/DATA program fragments
+def sel(reg):
+    return ("sw", reg, 0)
+
+
+def put(reg, op="sw"):
+    return (op, reg, 16)
+
+
+def get(reg, op="lw"):
+    return (op, reg, 16)
+
+
+SEED = [sel("zr"), put("s2"),                     # COMMAND = 2: a GET (headless: X1 = Y1 = 0)
+        sel("s1"), put("t5"), sel("s2"), put("t6"),   # X1 = 123, Y1 = 77
+        sel("zr")]                                # PORT back to COMMAND
+READ3 = [get("t2"), sel("s1"), get("t3"), sel("s2"), get("t4")]   # t2 = COMMAND, t3 = X1, t4 = Y1
+
+stub = stub_path()
+print("fbctrl_cmd_probe -- binary=%s machine=testmips" % BIN)
+
+C = track(session("C", [sel("s5"), ("sw", "t7", 16), get("t2"), sel("s1"), put("t5"), sel("zr"), put("s2"),
+                        sel("s1"), get("t3")], BASE_REGS + [("t7", 0x2a)], ["t2", "t3"], stub))
+CONTROL[0] = CONTROL[0] and C["status"] == "SURVIVED" and C["vals"].get("t2") == 0x2a and C["vals"].get("t3") == 0
+row("live", hx(C["vals"].get("t2")), "0x2a", "a known value returns through PORT/DATA")
+row("devsig", hx(C["vals"].get("t3")), "0x0", "GET_RESOLUTION zeroed X1 (RAM would keep 123)")
+
+REFUSED = [("3", "sw", 3), ("4", "sw", 4), ("sb3", "sb", 3), ("sh4", "sh", 4), ("5", "sw", 5), ("m1w", "sw", 0xffffffff), ("w3", "sd", 0x100000003),
+           ("w0", "sd", 0x100000000), ("w1", "sd", 0x100000001), ("w2", "sd", 0x100000002),
+           ("m1d", "sd", 0xffffffffffffffff)]
+for name, op, v in REFUSED:
+    S = track(session("R:" + name, SEED + [put("t1", op)] + READ3, BASE_REGS + [("t1", v)], ["t2", "t3", "t4"], stub))
+    shown = v & {"sb": 0xff, "sh": 0xffff, "sw": 0xffffffff, "sd": 0xffffffffffffffff}[op]
+    row("ref %s alive" % name, alive(S), "alive", "%s 0x%x at COMMAND" % (op, v))
+    row("ref %s cmd" % name, hx(S["vals"].get("t2")), "0x2", "COMMAND keeps 2 (a NOP would read 0, a SET 1)")
+    row("ref %s x1" % name, hx(S["vals"].get("t3")), "0x7b", "X1 keeps 123 (a GET would zero it)")
+    row("ref %s y1" % name, hx(S["vals"].get("t4")), "0x4d", "Y1 keeps 77")
+    row("ref %s once" % name, ",".join(S["cmd"]) or "-", "0x%x" % shown, "one announce, the full value")
+    row("ref %s noset" % name, S["res"], 0, "no SET ran: no resolution-change line")
+
+RE = track(session("R:edges", SEED + [put("s3", "sh"), put("s3", "sd")] + READ3, BASE_REGS, ["t2", "t3", "t4"], stub))
+row("edge alive", alive(RE), "alive", "sh 3, then sd 3, at COMMAND: the past-bound 3 refused at both widths")
+row("edge cmd", hx(RE["vals"].get("t2")), "0x2", "COMMAND keeps 2")
+row("edge once", ",".join(RE["cmd"]) or "-", "0x3", "one announce, the first value; the latch then set")
+row("edge x1", hx(RE["vals"].get("t3")), "0x7b", "X1 keeps 123: neither refusal ran the resident GET (pass 3)")
+row("edge y1", hx(RE["vals"].get("t4")), "0x4d", "Y1 keeps 77")
+
+A0 = track(session("A:nop", SEED + [put("zr", "sd")] + READ3, BASE_REGS, ["t2", "t3", "t4"], stub))
+row("acc nop cmd", hx(A0["vals"].get("t2")), "0x0", "NOP by sd is stored: COMMAND reads 0")
+row("acc nop x1", hx(A0["vals"].get("t3")), "0x7b", "NOP touches nothing else")
+row("acc nop quiet", len(A0["cmd"]), 0, "no command announce")
+A1 = track(session("A:set", [sel("zr"), put("s1", "sh"), get("t2")], BASE_REGS, ["t2"], stub))
+row("acc set cmd", hx(A1["vals"].get("t2")), "0x1", "SET_RESOLUTION by sh is stored")
+row("acc set ran", A1["small"], 1, "dev_fb_resize() ran: `size too small (0 x 0)` once")
+row("acc set res", A1["res"], 1, "the SET's resolution-change line prints while stepping: the noset channel")
+row("acc set quiet", len(A1["cmd"]), 0, "no command announce")
+A2 = track(session("A:get", [sel("s1"), put("t5"), sel("s2"), put("t6"), sel("zr"), put("s2", "sb")] + READ3,
+                   BASE_REGS, ["t2", "t3", "t4"], stub))
+row("acc get cmd", hx(A2["vals"].get("t2")), "0x2", "GET_RESOLUTION by sb is stored")
+row("acc get x1", hx(A2["vals"].get("t3")), "0x0", "and runs: X1 123 -> 0")
+row("acc get y1", hx(A2["vals"].get("t4")), "0x0", "and Y1 77 -> 0")
+row("acc get quiet", len(A2["cmd"]), 0, "no command announce")
+A3 = track(session("A:edges", [sel("s1"), put("t5"), sel("zr"), put("s2", "sd"), sel("s1"), get("t3"),
+                               put("t5"), sel("zr"), put("s2", "sh"), sel("s1"), get("t4"), sel("zr"), get("t2")],
+                   BASE_REGS, ["t3", "t4", "t2"], stub))
+row("acc sd get x1", hx(A3["vals"].get("t3")), "0x0", "GET_RESOLUTION by sd runs: X1 123 -> 0")
+row("acc sh get x1", hx(A3["vals"].get("t4")), "0x0", "and by sh: X1 123 -> 0 again")
+row("acc edges cmd", hx(A3["vals"].get("t2")), "0x2", "the at-bound 2 accepted by sd and by sh")
+row("acc edges quiet", len(A3["cmd"]), 0, "no command announce")
+
+L = track(session("L", [sel("zr"), put("s3"),                                   # refuse 3: the latch is SET
+                        sel("s1"), put("t5"), sel("zr"), put("s2"),             # GET with X1 = 123
+                        sel("s1"), get("t3"), sel("zr"), put("zr"), get("t2"),  # X1, then NOP -> COMMAND 0
+                        put("s1"), get("t4")],                                  # SET at 0 x 0 -> COMMAND 1
+              BASE_REGS, ["t3", "t2", "t4"], stub))
+row("latch get x1", hx(L["vals"].get("t3")), "0x0", "GET still runs with the latch set")
+row("latch nop cmd", hx(L["vals"].get("t2")), "0x0", "NOP still stored with the latch set")
+row("latch set cmd", hx(L["vals"].get("t4")), "0x1", "SET still stored with the latch set")
+row("latch set ran", L["small"], 1, "and still runs (the resize line once)")
+row("latch once", ",".join(L["cmd"]) or "-", "0x3", "one command announce in the session")
+
+M1 = track(session("M1", [sel("zr"), put("s2"), sel("s1"), put("t5"), sel("zr"), get("t2"), get("t4"),
+                          sel("s1"), get("t3"), get("t6")],
+                   BASE_REGS, ["t2", "t4", "t3", "t6"], stub))
+row("rdcmd val", hx(M1["vals"].get("t2")), "0x2", "a read of COMMAND returns it")
+row("rdcmd again", hx(M1["vals"].get("t4")), "0x2", "and a second read still does: a read stores nothing")
+row("rdcmd noexec", hx(M1["vals"].get("t3")), "0x7b", "and does not execute it (X1 keeps 123)")
+row("rdx1 again", hx(M1["vals"].get("t6")), "0x7b", "X1 read twice: a read stores nothing")
+M2 = track(session("M2", [sel("s3"), put("s3"), get("t2")], BASE_REGS, ["t2"], stub))
+row("x2 three", hx(M2["vals"].get("t2")), "0x3", "3 at X2 is ordinary storage")
+row("x2 quiet", len(M2["cmd"]), 0, "no command announce")
+M3 = track(session("M3", [sel("s3"), put("s3", "sb"), get("t2"), put("s4", "sh"), get("t3"), put("s5", "sd"),
+                          get("t4"), sel("zr"), put("s2"), sel("s1"), put("t5"), sel("zr"),
+                          get("t6", "lb"), get("t7", "lh"), get("s0", "ld"), get("t1"), sel("s1"), get("s7")],
+                   BASE_REGS, ["t2", "t3", "t4", "t6", "t7", "s0", "t1", "s7"], stub))
+row("x2 sb", hx(M3["vals"].get("t2")), "0x3", "3 at X2 by sb is ordinary storage")
+row("x2 sh", hx(M3["vals"].get("t3")), "0x4", "4 by sh")
+row("x2 sd", hx(M3["vals"].get("t4")), "0x5", "5 by sd")
+row("m3 quiet", len(M3["cmd"]), 0, "no command announce")
+row("rdw lb", hx(M3["vals"].get("t6")), "0x2", "COMMAND read by lb")
+row("rdw lh", hx(M3["vals"].get("t7")), "0x2", "by lh")
+row("rdw ld", hx(M3["vals"].get("s0")), "0x2", "by ld")
+row("rdw lw", hx(M3["vals"].get("t1")), "0x2", "and by lw after them: no read stored anything")
+row("rdw x1", hx(M3["vals"].get("s7")), "0x7b", "no read ran GET: X1 keeps 123")
+
+T2 = track(session("T2", [sel("zr"), put("s3"), put("zr"), get("t3"), put("s5"), put("s7", "sd"), get("t2")],
+                   BASE_REGS + [("s7", 0x100000005)], ["t2"], stub))
+row("two once", ",".join(T2["cmd"]) or "-", "0x3", "3; a NOP and a read; 5; sd 0x100000005: one announce")
+row("two cmd", hx(T2["vals"].get("t2")), "0x0", "COMMAND keeps its power-on 0")
+W1 = track(session("W:latch", [sel("zr"), put("s3", "sd"),                    # sd 3, the latch CLEAR: refused, announced
+                               put("s3", "sb"), put("s3", "sh"), put("s3"),   # sb, sh, sw 3, the latch SET: silent
+                               sel("s1"), put("t5"), sel("zr"), put("s2", "sb"), sel("s1"), get("t3"),  # GET by sb
+                               put("t5"), sel("zr"), put("s2", "sh"), sel("s1"), get("t4"),             # GET by sh
+                               put("t5"), sel("zr"), put("s2", "sd"), sel("s1"), get("t6"),             # GET by sd
+                               sel("zr"), get("t2")],
+                   BASE_REGS, ["t3", "t4", "t6", "t2"], stub))
+row("wl alive", alive(W1), "alive", "sd 3, the latch clear; sb, sh, sw 3, the latch set: refused at every width")
+row("wl once", ",".join(W1["cmd"]) or "-", "0x3", "one announce: the sd 3 set the latch; sb, sh, sw 3 silent")
+row("wl sb get x1", hx(W1["vals"].get("t3")), "0x0", "GET by sb with the latch set runs: X1 123 -> 0")
+row("wl sh get x1", hx(W1["vals"].get("t4")), "0x0", "and by sh")
+row("wl sd get x1", hx(W1["vals"].get("t6")), "0x0", "and by sd")
+row("wl cmd", hx(W1["vals"].get("t2")), "0x2", "the last GET is stored")
+W2 = track(session("W:sb", [sel("zr"), put("s3", "sb"), put("s4", "sh"), get("t2")], BASE_REGS, ["t2"], stub))
+row("wb once", ",".join(W2["cmd"]) or "-", "0x3", "sb 3 set the latch: the sh 4 after it stays silent")
+row("wb cmd", hx(W2["vals"].get("t2")), "0x0", "COMMAND keeps its power-on 0")
+P1 = track(session("P1", [sel("s6"), put("s4"), get("t2")], BASE_REGS, ["t2"], stub))
+row("p1 port", P1["port"], 1, "the refused selector announced once")
+row("p1 cmd", ",".join(P1["cmd"]) or "-", "0x4", "and the refused command, on its own latch")
+P2 = track(session("P2", [sel("zr"), put("s4"), sel("s6"), get("t2")], BASE_REGS, ["t2"], stub))
+row("p2 cmd", ",".join(P2["cmd"]) or "-", "0x4", "command first")
+row("p2 port", P2["port"], 1, "then the selector, on its own latch")
+
+F = track(session("F", [sel("zr"), put("s3")], BASE_REGS, [], stub, free_run=True))
+row("free alive", F["status"], "SURVIVED", "free-running past the refusal to the anchor")
+row("free once", ",".join(F["cmd"]) or "-", "0x3", "fatal() prints while free-running (debug() would not)")
+
+row("sessions clean", sum(1 for S in ALL if S["status"] == "SURVIVED" and S["exit"] == 0), 27,
+    "all 27 sessions ran to the end and exited 0")
+
+try:
+    os.unlink(stub)
+except OSError:
+    pass
+print("FBCMD_CONTROL=%s" % ("OK" if CONTROL[0] else "FAILED"))
+print("FBCMD_RESULT=%d/%d" % (sum(RESULTS), len(RESULTS)))
+print("FBCMD_DONE")
+sys.exit(0 if CONTROL[0] and all(RESULTS) else 1)

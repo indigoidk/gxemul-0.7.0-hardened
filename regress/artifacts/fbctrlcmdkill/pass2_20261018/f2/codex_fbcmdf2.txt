@@ -1,0 +1,97 @@
+ASTRA_FBCMD_F2_20261019
+VERDICT: SHIP WITH CHANGES -- The product guard is sound for its converted value, but the width repair still admits clean-sweep mutants and warning-latch persistence remains untested.
+
+FLAG: F2 is incompletely repaired: `A:nop` is the only accepted `sd` command, so eight-byte dispatch has no observable witness. Evidence: [acceptance cases](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_cmd_probe.py:346), `DEV_FBCTRL_COMMAND_NOP`, and the dispatch guard.
+
+FLAG: The once-per-device test misses refusal → acceptance → refusal. A latch reset in the accepted DATA branch passes every existing row. Evidence: `L`, `T2`, `latch once`, and `two once` in [the probe](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_cmd_probe.py:362).
+
+FLAG: Completion evidence remains outstanding: the replay excludes the launch; the census changes remain combined; `fbctrlvec128` has no standalone ledger entry, and `gatedevicesplit` lacks the promised gate-16 stop. Evidence: `g16_extract_v2.sh`, `git diff -- regress/gate_hygiene.sh`, and the corresponding ledger entries.
+
+1. Adjudications:
+
+- **F1 — REFINE:** The 16-byte aliasing is real and source-derived; separate treatment is reasonable, but conversion discards bytes that the device callback actually receives.
+- **F2 — REFINE:** E13 is killed, but `sd 0` cannot establish eight-byte dispatch or acceptance of nonzero commands; the repair is incomplete.
+- **F3 — UPHOLD:** `noset` observes valid-size SET dispatch, and `acc set res` makes a globally silent observation channel fail.
+- **F4 — UPHOLD:** The second COMMAND and X1 reads expose E12’s after-return stores; the repair matches the defect.
+- **F5 — UPHOLD:** E7 is detected through the seeded GET’s effects; no additional repair was needed for that mutant.
+- **F6 — UPHOLD:** All 99 distinct expected names match the baseline; the required space after each name prevents `cmdX` substitution.
+- **F7 — UPHOLD:** All 22 sessions are tracked, and the literal-count row checks both survival and zero exit status.
+- **F8 — REFINE:** T2 closes E14’s broad bypass; it does not close latch-dependent narrowing that admits only wide aliases, which remains explicitly disclosed.
+- **F9 — UPHOLD:** The measured E8/E9/E10 failures substantiate the existing observation channels.
+- **F10 — UPHOLD:** Signed 64-bit comparison and conversion to `int` are distinct mutations; E11 supplies the missing measurement.
+- **F11 — UPHOLD:** Those individual greens are non-discriminating, but other rows kill each mutant; recording that limitation is accurate.
+- **F12 — UPHOLD:** The current hygiene diff is 14 insertions and 6 deletions.
+- **F13 — UPHOLD:** “The one behavioural site” accurately describes B_gateoff; retained inert declarations and comments do not invalidate that comparison.
+- **F14 — REFINE:** The separate census commit is appropriate and the 75/76 arithmetic checks out, but the proposed split has not been completed.
+- **F15 — REFINE:** Temporary placement is acceptable as recorded debt; finish the promised ledger update rather than treating the gate comment as its completion.
+- **F16 — UPHOLD:** The unfenced launch can hang; filing the shared harness issue is reasonable and does not establish a false pass.
+- **F17 — UPHOLD:** Arbitrary unlisted-value exceptions remain possible; the disclosure correctly limits what the finite samples establish.
+- **F18 — REFINE:** The parser rejects the malformed records, but replaying injected `fcrc` does not verify launch and exit-status propagation.
+- **F19 — REFINE:** The comparison receives the full scalar value for the exercised widths through eight bytes; 16-byte conversion truncates before comparison.
+- **F20 — REFINE:** The COMMAND-writer invariant holds, but “two stores into `port[]`” is inaccurate: there are four explicit X1/Y1 assignments plus the dynamic DATA assignment.
+- **D1 — REFINE:** I withdraw requiring the vector repair in this round: aliasing remains, but accepted reduced values are still only 0–2, preserving the switch invariant.
+- **D2 — REFINE:** The added refusal correctly closes E14; describe that measured closure without implying every latch-by-wide behavior is covered.
+- **D3 — UPHOLD:** The first read returns the old value before corruption; only a later observation exposes it, as the measurements confirm.
+- **D5 — REFINE:** Landing here with explicit debt is defensible; the promised stop must also reach the debt record.
+
+2. **F2’s completeness judgment is wrong.**
+
+The repair successfully tests acceptance at each width, but its eight-byte case is an effectless NOP. Consequently, the statement that accepted commands are “stored and run … at every width” exceeds the evidence. This is a defect in my proposed repair’s coverage, not a reason to dispute E13’s measured failure.
+
+Add observable eight-byte GET or SET coverage. Testing accepted boundary value 2 at every width also addresses width-dependent bound regressions. F3, F4, F6 and F7 withstand inspection; their acceptance does not need reversing merely to reduce the number of upheld findings.
+
+3. **Yes. Two independent clean-sweep mutants remain.**
+
+Both are **source-derived predictions, not new emulator measurements**.
+
+**`M_sd_no_dispatch`** — replace the accepted-path guard at [dev_fbctrl.c:172](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c:172):
+
+```c
+if (d->current_port == DEV_FBCTRL_PORT_COMMAND)
+```
+
+with:
+
+```c
+if (d->current_port == DEV_FBCTRL_PORT_COMMAND && len != 8)
+```
+
+Valid eight-byte SET and GET commands are stored but never executed. Every tested nonzero eight-byte command is refused before reaching this guard. The sole accepted eight-byte command is NOP, whose skipped dispatch changes nothing observable.
+
+Expected: **99/99, CONTROL=OK, exit 0**, with every v2 block check green. Specifically, `acc nop cmd`, `acc nop x1`, `acc nop quiet`, and `sessions clean` stay green.
+
+**`M_sd_bound0`** — replace the comparison at [dev_fbctrl.c:154](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c:154):
+
+```c
+idata > DEV_FBCTRL_COMMAND_GET_RESOLUTION
+```
+
+with:
+
+```c
+idata > (len == 8 ? DEV_FBCTRL_COMMAND_NOP :
+    DEV_FBCTRL_COMMAND_GET_RESOLUTION)
+```
+
+This incorrectly refuses `sd 1` and `sd 2`. Every sampled eight-byte input retains its original classification: zero accepted, all others refused.
+
+Expected: **99/99 and all v2 block checks green**, including `acc nop quiet`. This changes the accepted region for an entire width; it is more substantive than exempting an arbitrary unlisted invalid value.
+
+4. **We missed warning-latch persistence across intervening traffic.**
+
+Insert this immediately after the accepted DATA assignment at `dev_fbctrl.c:171`:
+
+```c
+d->warned_cmd = 0;
+```
+
+This also predicts **99/99**. `L` refuses once and then accepts, but never refuses again. `T2` repeatedly refuses without an intervening acceptance. Thus both `latch once` and `two once` remain green although a guest’s bad → good → bad sequence now announces twice.
+
+A small repair is to insert `put("zr")` between T2’s refusals. COMMAND remains zero, existing expectations remain valid, and the extra announcement kills this mutant. Also exercise refusal → read → refusal to test persistence across reads.
+
+Two factual corrections emerged during verification:
+
+- The PPC installation through `default_test()` is at `machine_test.c:154`, not `:337`; the latter is the separate testmips installation.
+- The callback receives all 16 bytes. `memory_readmax64()` loses the prefix before comparison; “the device never sees the rest” misidentifies where information is lost.
+
+Before landing, complete the promised commit/record changes and exercise the actual final gate launch with successful and nonzero-exit cases. I inspected source and existing artifacts only; no project files were written and no new mutants were built.

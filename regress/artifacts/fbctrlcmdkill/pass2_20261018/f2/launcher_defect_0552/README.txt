@@ -1,0 +1,1 @@
+R resolved one level short (regress/, not GXEMUL-SEC/): cxlaunch.sh not found (rc 127), GROK_MODEL and OLLAMA1 read empty from a panel.sh that was not there -- no seat received the packet.  Relaunched with the depth fixed.

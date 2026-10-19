@@ -25055,3 +25055,32 @@ Fable 5.1, GPT-6 Astra, Grok 4.7).  Each row's ledger `state_note` carries its s
   power-source change (gate 3 of 16, no verdict, task result 0x8007042B) and nothing re-ran it; the runner holds no wake
   request.  Re-triggered by hand at 23:19: REGRESS_PASS 16/16 (`_scratchpad/nightly/verdict_20261018_231924.txt`).  The
   remedy -- a wake request for the run's duration, or a DC power-policy change -- is the owner's to choose.
+
+### 2026-10-19 -- `#567`: dev_fbctrl.c refuses every command but 0-2 before the store (`fbctrlcmdkill` held for Fable); three rows filed; gate 16's stop recorded
+
+* **`fbctrlcmdkill` (HIGH) HELD for fable5** -- `#567`: the DATA arm refuses, before the store, any write at COMMAND whose
+  full 64-bit value is above GET_RESOLUTION -- COMMAND kept, nothing run, one `(once)` announce per device.  Witness
+  2/12 on HEAD's binary (`regress/artifacts/fbctrlcmdkill/pass1_20261018/WITNESS_headbin.out`), 12/12 on the fix
+  (`draft_20261018/WITNESS_postfix.out`).  Detector
+  `regress/fbctrl_cmd_probe.py`, 125 rows, gated in gate 16 by name: the fix 125/125, HEAD's build 51/125, null media
+  17/125 with CONTROL=FAILED; gate 16 in situ PASS on the fix, FAIL on HEAD.  Fable 5.1 walled on every pass of the
+  round (HTTP 429), and a row may not close while a stage awaits a seat, so it is held with Fable's questions.
+* **`fbctrlobsgrid` (MED, open)** -- pass 3's coverage debt, filed by the owner's 2026-10-19 ruling: in the 125-row probe
+  several width x latch cells are REACHED but an effect there is not OBSERVED -- the latch's persistence after a
+  non-word accept, a non-word read or a non-COMMAND store, each followed by a refusal; a read with the latch set at
+  lb/lh/ld; a non-COMMAND read at lb/lh/ld; a non-COMMAND store with the latch set at sb/sh/sd; and refusal and accept
+  effects a later write overwrites before any row reads them.  Also owed here: the measured check that the two rows
+  added for pass 3 (`edge x1`, `edge y1`) catch the case it described.  Disclosed as the probe's NOT CLAIMED (7).
+  From GPT-6 Astra and GLM 5.3, pass 3.
+* **`fbctrlvec128` (LOW, open)** -- a 16-byte vector store (testppc's `stvx`/`stvxl`; `default_test()` installs the
+  device) reaches the DATA and PORT arms with `len` 16; the callback receives all 16 bytes and `memory_readmax64()` keeps
+  the low 64, so a 128-bit COMMAND value whose low half is 0-2 is accepted and runs (a low half of 1 runs
+  SET_RESOLUTION) and a 128-bit selector whose low half is 0-7 is accepted -- `#567`'s and `#549`'s width defect one
+  width out.  Owed: a rung-3 witness on testppc at both ports, then one disposition for both arms.  From GPT-6 Astra's
+  pass-2 F1; filed, not repaired, by all three seats at F2.
+* **`gate16fence` (LOW, open)** -- gate 16 launches `#549`'s and `#567`'s device probes with no timeout: a probe that
+  hangs holds gate 16 and the weekly battery with it (visible, not a false pass).  A harness round: `timeout` sized from
+  a measured run, red on exit 124, controlled both ways.  From GLM 5.3's pass-2 Q6, upheld as FILE at F2.
+* **`gatedevicesplit`** -- gate 16 is now the second CPU gate holding device probes (`#549`'s and `#567`'s, both on
+  `-E testmips`).  THE STOP (GLM 5.3, upheld at F2): a third device probe lands in gate 16 only with the split or with a
+  pin on the gate's launch count.  Procedural, not mechanical -- this entry, the row and the gate's own comment carry it.

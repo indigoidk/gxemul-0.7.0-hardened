@@ -1,3 +1,77 @@
+# `#567` (fbctrlcmdkill): the test machines' framebuffer controller ended the emulator on any command but NOP, SET_RESOLUTION and GET_RESOLUTION, and ran a WIDE value as its low word -- every other 64-bit value at COMMAND is refused before the store now, COMMAND kept, one announce per device; with a 125-row rung-3 detector, gated in gate 16; held for Fable
+
+**The defect** (filed by `#549`'s review, `fbctrlcmdkill`, HIGH).  `fbctrl_command()`'s `default:` called `fatal()`
+then `exit(1)` for every command other than NOP (0), SET_RESOLUTION (1) and GET_RESOLUTION (2) -- FILL (3) and COPY (4)
+included, which `dev_fb.h` names under a bare `TODO:` with no port semantics.  A guest reaches it with ONE DATA write
+while COMMAND (port 0, the power-on selector) is selected, on every test machine (`machine_test.c` installs
+`fbctrl addr=0x12f00000`).  And `d->port[]` is `int`, so a wide `sd` was stored as its low word and DISPATCHED:
+`0x100000003` ended the emulator as FILL, and `0x100000001` silently ran SET_RESOLUTION.  Witness, rung 3 on an
+unmodified `-E testmips` with HEAD's binary: 2/12 -- 3, 4, 5, -1 and `sd 0x100000003` each exit 1
+(`regress/artifacts/fbctrlcmdkill/pass1_20261018/WITNESS_headbin.out`); 12/12 on the fix
+(`draft_20261018/WITNESS_postfix.out`).
+
+**What ships.**
+* `src/devices/dev_fbctrl.c` -- the DATA arm refuses, BEFORE the store, any write at COMMAND whose full 64-bit value is
+  above GET_RESOLUTION: COMMAND keeps its previous value, nothing executes, and a new `warned_cmd` latch prints one
+  `[ fbctrl: command 0x... is not supported; the command port is unchanged (once) ]` per device.  `fbctrl_command()`'s
+  `default:` stays, unreachable, as a tripwire (as `#549` kept the selector's).  `est/` byte-identical; `build/`,
+  `build-asan/` and `/tmp/gxsec-build` rebuilt and cleared both parts.
+* `regress/fbctrl_cmd_probe.py` (new, 125 rows, 27 sessions on an unmodified `-E testmips`) -- eleven refusal classes
+  (3, 4, 5 and `0xffffffff` by `sw`; 3 by `sb`, 4 by `sh`; `0x100000003`, the three wide aliases of accepted commands
+  and all-ones by `sd`) on a device seeded with COMMAND = 2, X1 = 123, Y1 = 77; the bound's two edges -- 2 accepted with
+  an observable dispatch, 3 refused -- at every access width, with the latch clear and set; reads and non-COMMAND stores
+  at every width; the latch across an accept and a read; the selector's latch apart from it in both orders; one
+  free-running session for the announce level.  Its CONTRACT is its header -- the floor, the width cells held, the
+  effects, and NOT CLAIMED (0)-(7), (7) being the observation cells pass 3 named and the owner filed as debt.
+* `regress/gate_mips_folds.sh` (gate 16) -- the probe's block beside `#549`'s, before the pmax-kernel check: parse
+  before score; CONTROL `OK`; exit 0; the score pinned by EQUALITY at 125; rows emitted, green rows and unique names
+  reconciled with one anchored pattern (this probe prints a row's status after got/want); and EVERY expected row checked
+  by name, green exactly once.
+* `regress/gate_hygiene.sh` -- `EXPECT_PTY_PROBES` 75 -> 76 and `EXPECT_CONVERTED` 25 -> 26 for this probe (`#564`'s own
+  stranded pin landed alone, in the commit before this one).
+* `tools/precommit_check.sh` -- `SCORE_CLAIMS_MANIFEST` 35 -> 36 (`fbctrl_cmd rows run ... 125`).
+* `tools/pipeline/check_probe_wiring.py` -- the probe's MANIFEST line.
+* `tools/pipeline/ledger.json` -- `fbctrlcmdkill` HELD for fable5 (Fable walled on every pass; a row may not close while
+  a stage awaits a seat); FILES `fbctrlobsgrid` (MED: pass 3's observation cells), `fbctrlvec128` (LOW: a 16-byte vector
+  store is taken as its low 64 bits, at DATA and at `#549`'s PORT) and `gate16fence` (LOW: gate 16 launches both device
+  probes unfenced); `gatedevicesplit` gains the gate-16 stop -- a third device probe lands there only with the split or
+  with a pin on the launch count.
+
+**Measured** (`regress/artifacts/fbctrlcmdkill/`; every table's predictions written first, in a `PRETABLE*` file whose
+mtime is the order proof).
+* The draft (`draft_20261018/`): PRE-FIX 36/95 on HEAD's binary -- exactly the PRETABLE's prediction -- and 95/95 on
+  the fix.
+* Kill tables 1 and 1b (`killtable1_20261018/`, `killtable1b_20261018/`): sixteen mutants on the 95-row v1, all red;
+  clause (b) `B_gateoff` (the arm as HEAD has it) row for row the pre-fix leg; clause (c) measured -- an absent and a
+  non-emulator binary each CONTROL=FAILED.
+* Pass 2's mutants, measured BEFORE any repair (table 2a): three passed v1 whole; probe v2 (99 rows) closed them and
+  table 2 re-ran all 25: every one red.  F2's, measured before any repair (table 3a): seven passed v2 whole; probe v3
+  (106 rows) closed them and table 3 re-ran all 32: every one red, every prediction held.
+* Two consecutive passes had found one class open -- access WIDTH -- so v4 (123 rows) was built from an enumeration
+  written before it ran (`killtable4_20261019/PRETABLE_ADDENDUM_t4.out`).  **Table 4** (06:30-07:03): the twelve
+  newest mutants passed the 106-row v3 whole, and on v4 all 44 are red; legs 123/123 on the fix and 51/123 on HEAD's
+  binary; both null media CONTROL=FAILED; every prediction held row for row (`KILLTABLE4_VS_PRETABLE.out`).
+* Pass 3 found the v4 enumeration counted cells REACHED, not every effect OBSERVED; by the owner's ruling two rows were
+  added from values R:edges already collected (`edge x1`, `edge y1`), and plain regression runs measured the 125-row
+  probe: the fix 125/125, HEAD's build 51/125, both null media 17/125 with CONTROL=FAILED (`killtable4_20261019/legs41/`).
+* Gate 16 run IN SITU (`wiring_20261019/INSITU.md`): on the default binary PASS, 161 checks; on HEAD's binary FAIL, 77 of
+  161, every red check this block's.  The v4 block replayed on all 48 table-4 logs and five broken logs was green only
+  on the fix (`GATE16_REPLAY_v4.out`).
+* The weekly battery of 2026-10-18 (re-run at 23:19 after Modern Standby killed the 18:00 run) passed 16/16 with
+  `#567`'s first, 95-row block in gate 16; the block that ships is the 125-row one, run in situ above.
+
+**Panel.**  Pass 1 (`pass1_20261018/`): GPT-6 Astra, Grok 4.7 and GLM 5.3 chose member 3 (decline + latched announce),
+the full 64-bit compare and a new gated probe; `fbctrloffkill` stays its own row (2-1).  Pass 2 (`pass2_20261018/`): all
+three SHIP WITH CHANGES.  F2 (`pass2_20261018/f2/F2_DISPOSITIONS.md`): all three SHIP WITH CHANGES, converging on width x
+bound edge and the latch's persistence.  Records corrected on the way, each a seat's catch: NOT CLAIMED (6) put the
+16-byte loss in the wrong place (Astra, Grok); testppc's install is `machine_test.c`'s line 154, not 337 (Astra, Grok);
+E8 sets the latch on an accept (GLM); GET_RESOLUTION makes four X1/Y1 assignments (Astra, Grok); v2's bound edges were
+held at `sb` and `sw`.  Pass 3 (`pass3_20261019/F3_DISPOSITIONS.md`): GPT-6 Astra, GLM 5.3 and Grok 4.7 all SHIP WITH CHANGES -- the width enumeration counted cells reached, not every effect observed; by the owner's ruling two rows were added (`edge x1`, `edge y1`), the remaining cells filed as `fbctrlobsgrid`, and the records corrected (the gate comment, the probe's width list and NOT CLAIMED (2), (5) and (7)).  Confirm (GPT-6 Astra, `confirmB_20261019/`): COMMIT WITH CHANGES -- the fix, the two-row update, 125 rows and 27 sessions, the 125/51/17 scores and the 44-mutant table checked against the artifacts; taken: the F2 ledger entry's "closed by v3/v4" narrowed to the measured escapes, and the fixed witness's own path cited.  Its other items read the working tree, where this unit's CHANGELOG, bug file, matrix and queue are not yet written (the unit carries them), and its packet's ledger export had failed on an encoding error (the seat read the ledger itself).
+Fable 5.1 walled (HTTP 429) on passes 1, 2, F2 and 3 -- each a seat failure, held with its question, never agreement;
+the row is held for it.  Opus 5.5, agy, kimi, deepseek and minimax deliberately not fired (the owner's 2026-10-17
+roster).  Twice while preparing a fuller pass-3 repair the main loop's own response was stopped by the safety
+classifier; the owner then ruled the landing above.
+
 # Records, 2026-10-19: `#564` left gate 6's readiness census stranded -- its promptless probe is grandfathered and the pty pin re-derived, in a commit of its own; three rows filed
 
 **The defect.**  `#564` (`e7fc97e6`, 2026-10-18 03:57) committed `regress/sgi_mte_decline_probe.py`, a PROMPTLESS pty

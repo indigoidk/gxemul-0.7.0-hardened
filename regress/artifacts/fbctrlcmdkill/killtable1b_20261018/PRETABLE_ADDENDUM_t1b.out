@@ -1,0 +1,44 @@
+#567 fbctrlcmdkill -- PRE-TABLE ADDENDUM for kill table 1b, written 2026-10-18 ~22:0x BEFORE table 1b runs; this file's
+mtime is the order proof.  Same instrument as table 1 (../killtable1_20261018/probe.frozen.py.txt, 95 rows), same
+baseline (the draft fix), same scratch clone (/tmp/gx567).  Every mutant below is an exact-anchor edit of the fix.
+
+WHY THESE FIVE (L1, pre-ship construction -- no new rows, more mutants on the same instrument):
+  E1 is rule D2's PAST-THE-BOUND edge in the dangerous direction.  Table 1 moved the bound only DOWN (D2-D4, refusing
+     more).  Moving it UP re-opens the host kill, and `ref 3' (B+1) is the row D2 says must pin it.
+  E2/E3 answer table 1's one failed prediction (KILLTABLE1_VS_PRETABLE.out, item 1).  D4 masked the NOP rows by also
+     refusing the GET in their setup.  A ONE-CELL refusal of NOP, and of SET, measures whether those rows are live.
+  E4 is the claim "nothing executes" (PRETABLE section 2) as a realistic edit: the dispatch hoisted out of the store
+     branch, so a refused write re-runs the PREVIOUS command.  Table 1 mapped the claim to rows but built no mutant.
+  E5 is the compare's SIGNEDNESS axis.  Table 1 measured its width (D1, a 32-bit narrowing) but not its sign.  A signed
+     compare accepts every negative 64-bit value.
+
+PREDICTIONS (row names as the probe prints them):
+  E1_gt3   `idata > GET_RESOLUTION' -> `idata > GET_RESOLUTION + 1': FILL (3) is accepted, stored, dispatched, and
+           fbctrl_command()'s default: ends the emulator (exit 1).  Every session whose FIRST command DATA write is 3
+           dies there:
+             R:3, R:sb3 ..... alive (DIED/1), cmd, x1, y1, once ('-')      10 rows; their nosmall rows read 0 (green)
+             L ............... latch get x1, latch nop cmd, latch set cmd ('-'), latch set ran (0), latch once ('-')  5
+             T2 .............. two once, two cmd ('-')                       2
+             F ............... free alive (DIED), free once ('-')            2
+           R:w3 (0x100000003) is still refused (> 3); M2's 3 is written at X2, not COMMAND.  RED: 19 -> 76/95, CONTROL OK.
+  E2_nopref the gate also refuses NOP: `(idata > GET_RESOLUTION || idata == DEV_FBCTRL_COMMAND_NOP)'.  The seed's GET
+           lands (COMMAND 2), then the NOP is refused:
+             acc nop cmd (0x2), acc nop quiet (1), latch nop cmd (0x2)       RED: 3 -> 92/95
+           (the L session's NOP follows a refusal of 3, so the latch is already set and no second announce prints).
+  E3_setref the gate also refuses SET_RESOLUTION: `(... || idata == DEV_FBCTRL_COMMAND_SET_RESOLUTION)':
+             acc set cmd (0x0), acc set ran (0), acc set quiet (1), latch set cmd (0x0), latch set ran (0)
+                                                                             RED: 5 -> 90/95
+  E4_hoist the dispatch moved out of the store branch, as `if (writeflag == MEM_WRITE && current_port == COMMAND)
+           fbctrl_command(cpu, d);' after the if/else.  A refusal then re-runs the PREVIOUS command.  In every R
+           session that is the seed's GET, which zeroes X1 and Y1:
+             ref * x1 (0x0), ref * y1 (0x0) for all 11 classes               RED: 22 -> 73/95
+           Sessions refusing with COMMAND at its power-on 0 (L, T2, P1, P2, F) re-run a NOP: no observable change.
+           M1's read is not a write.
+  E5_signed `(int64_t) idata > GET_RESOLUTION': only negative 64-bit values change.  m1d (sd -1) is accepted, stored as
+           int -1, dispatched, and ends the emulator; m1w (sw 0xffffffff arrives zero-extended, positive) is still
+           refused:
+             ref m1d alive (DIED/1), cmd, x1, y1, once ('-')                 RED: 5 -> 90/95
+
+CHANNEL CHECK (table 1's lesson, applied): E2 and E3 each change ONE cell, and their named rows' sessions were read for
+a setup step the change breaks.  A:nop's and L's GET is untouched by E2.  A:set issues nothing before its SET, and L's
+SET follows an accepted NOP; neither breaks under E3.

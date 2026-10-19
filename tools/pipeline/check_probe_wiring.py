@@ -2849,6 +2849,9 @@ MANIFEST = {
     "sh4_bsc_width_probe.py":      (CLASS_DETECTOR, "#441 BCR2/BCR3 non-16-bit access"),
     "fbpending_drain_probe.py":    (CLASS_DETECTOR, "#442 footbridge pending-tick backlog"),
     "fbctrl_port_probe.py":        (CLASS_DETECTOR, "#549 fbctrl PORT selector refusal"),
+    "fbctrl_cmd_probe.py":         (CLASS_DETECTOR, "#567 fbctrl COMMAND refusal"),
+    "artifacts/fbctrlcmdkill/pass2_20261018/legs/probe.frozen.py":
+        (CLASS_RESEARCH, "#567 the shipped probe's v1 copy run for its in-tree legs, preserved as evidence"),
     "artifacts/fbctrlportkill_20260924/opus549_measured/c3/gen_c3.py":
         (CLASS_RESEARCH, "#549 the Opus measuring seat: the verifying pass's floor-edit generator (edits of the final dev_fbctrl.c not in table 5), preserved as evidence"),
     "artifacts/fbctrlportkill_20260924/opus549_measured/c3/gen_mask.py":

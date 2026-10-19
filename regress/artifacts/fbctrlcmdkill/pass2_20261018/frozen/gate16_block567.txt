@@ -1,0 +1,47 @@
+#  ---------------------------------------------------------------------------------------
+#  #567 fbctrlcmdkill: the same device's COMMAND port.  Before #567 a DATA write at COMMAND of any
+#  command but NOP (0), SET_RESOLUTION (1) and GET_RESOLUTION (2) -- FILL and COPY among them --
+#  reached fbctrl_command()'s default: and ended the emulator, and a wide value was stored into the
+#  int cell as its low word, so 0x100000001 ran SET_RESOLUTION.  #567 refuses every other 64-bit
+#  value before the store (COMMAND keeps its value, nothing runs) and announces once per device.
+#  regress/fbctrl_cmd_probe.py drives real guest sb/sh/sw/sd/lw on an unmodified testmips, like the
+#  #549 probe above, so it too runs before the pmax-kernel check.  THE CONTRACT is its header.
+#  Kill table 1 (regress/artifacts/fbctrlcmdkill/killtable1_20261018/) built eleven edits, each
+#  red, and two null media: on a binary that runs nothing, 15 absence rows read green and the
+#  record still parses -- so this block requires CONTROL=OK and pins the score by EQUALITY.
+#  `gatedevicesplit` (#498) grows by this second device probe in a CPU gate: recorded, not hidden.
+#  The probe prints a row's status AFTER got/want, unlike the #549 probe, so every row count below
+#  uses one anchored pattern, FCROW; it counted 95 rows in each of kill table 1's fourteen logs.
+FCLOG=$LOGDIR/fbctrl_cmd_probe.log
+FCROW='^  [^ ].* got=[^ ]* +want=[^ ]* +'
+fcrc=0
+python3 -u fbctrl_cmd_probe.py "$PMAX" > "$FCLOG" 2>&1 || fcrc=$?
+if [ "$(grep -cx 'FBCMD_DONE' "$FCLOG")" != "1" ] ||
+   [ "$(grep -c '^FBCMD_RESULT=' "$FCLOG")" != "1" ] ||
+   ! grep -Eq '^FBCMD_RESULT=(0|[1-9][0-9]*)/(0|[1-9][0-9]*)$' "$FCLOG" ||
+   [ "$(grep -c '^FBCMD_CONTROL=' "$FCLOG")" != "1" ] ||
+   ! grep -Eq '^FBCMD_CONTROL=(OK|FAILED)$' "$FCLOG"; then
+    note "fbctrl command probe produced no unique, complete record; last lines follow"
+    tail -5 "$FCLOG" | sed 's/^/       /'
+    check "fbctrl command probe output parses" "no" "yes"
+else
+    check "fbctrl command probe output parses" "yes" "yes"
+    grep -E "${FCROW}FAIL  " "$FCLOG" | sed 's/^/       /'
+    check "fbctrl command probe controls" "$(sed -n 's/^FBCMD_CONTROL=//p' "$FCLOG")" "OK"
+    #  As for #549: the probe exits nonzero on a crash OR a red row, a second catcher of a red score.
+    check "fbctrl command probe exit 0 (nonzero: a crash or a red row)" "$fcrc" "0"
+    fcres=$(sed -n 's/^FBCMD_RESULT=//p' "$FCLOG")
+    #  Pinned UNQUOTED under a one-token stem, so check_score_claims.py sees the pin (as #549's).
+    check "fbctrl_cmd rows run" "${fcres#*/}" 95
+    check "fbctrl_cmd rows correct" "${fcres%/*}" "95"
+    check "fbctrl_cmd rows failed" "$(grep -cE "${FCROW}FAIL  " "$FCLOG")" "0"
+    #  Reconcile the rows printed with the trailer, and require each row name once (#549 F2).
+    check "fbctrl_cmd rows emitted match the trailer total" \
+          "$(grep -cE "${FCROW}(ok|FAIL)  " "$FCLOG")" "${fcres#*/}"
+    check "fbctrl_cmd ok rows match the trailer count" \
+          "$(grep -cE "${FCROW}ok  " "$FCLOG")" "${fcres%/*}"
+    check "fbctrl_cmd row names are unique" \
+          "$(grep -E "${FCROW}(ok|FAIL)  " "$FCLOG" | sed -E 's/^  (.*[^ ]) +got=.*/\1/' |
+             sort | uniq -d | wc -l)" "0"
+fi
+

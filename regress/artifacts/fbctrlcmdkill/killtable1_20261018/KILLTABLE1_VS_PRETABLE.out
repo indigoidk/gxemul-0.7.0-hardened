@@ -1,0 +1,77 @@
+#567 fbctrlcmdkill -- KILL TABLE 1 against the predictions of ../draft_20261018/PRETABLE.out (mtime 17:30:58; this
+table ran 21:34:44 -> 21:42:27, SCORES.txt).  Written 2026-10-18 ~21:5x from the logs in this directory.
+
+INSTRUMENT: probe.frozen.py.txt (md5 be58950a..., the 95-row draft measured in ../draft_20261018/PROBE95_*.out).
+BASELINE: the draft fix (../draft_20261018/fix567_draft.diff), in the scratch clone /tmp/gx567: base 95/95 (base.raw).
+MUTANTS: mutants/*.diff (each an exact-anchor edit of the fix by mk_mutants567.py.txt; md5s in mutants/MD5.txt).
+The frozen driver's name says 2136; the table began at 21:34:44 (the name was chosen before launch, by the clock misread).
+RESTORE: part 1 (cmp with the fix) and part 2 (binary newer than the source) both passed; the clone's sentinel cleared.
+Row counts were re-derived with an ANCHORED pattern, `^  [^ ].* got=[^ ]* +want=[^ ]* +(ok|FAIL)  `: it counts 95 rows
+in every log and its ok count equals FBCMD_RESULT's numerator in all fourteen.
+
+RESULT: ALL ELEVEN MUTANTS RED, and both null media red.  Every KILL prediction held.  Four named-row predictions did not
+hold as written.  One failed outright (D4).  One universal claim was wrong for one class (D8).  One null-media
+prediction named the wrong gate row.  Several mutants' blast radius was under-predicted.  Each case is below.
+
+mutant        predicted (PRETABLE section 4)                    measured                      verdict
+------------  ------------------------------------------------  ----------------------------  -----------------------
+B_gateoff     36/95 = the pre-fix leg on the grown instrument   36/95; and row for row        HELD EXACTLY
+ (b)                                                            IDENTICAL to PROBE95_prefix.out
+                                                                (names, got-values, status, all 95)
+C_absent      CONTROL=FAILED, every session NO-PROMPT,          CONTROL=FAILED, 22/22 NO-PROMPT,  RED as predicted;
+C_bintrue     "the gate's parse reds"                           15/95 (same 15 for both)          WRONG GATE ROW named
+ (c)
+D1_u32        w0 cmd (0), w1 cmd (1), w2 x1/y1 (0); w3 refused  88/95: those 4 + w0/w1/w2 once   HELD (+3 once rows)
+D2_gt1        acc get cmd/x1/y1, latch get x1                   64/95, CONTROL=FAILED: those 4    HELD on named rows;
+                                                                + 27                              blast radius missed
+D3_gt0        acc set cmd/ran, latch set cmd/ran + D2's         60/95: D2's 31 + acc set cmd,     HELD (+ acc set quiet)
+                                                                acc set ran, acc set quiet,
+                                                                latch set cmd
+D4_ge0        acc nop cmd, latch nop cmd + D2's/D3's            60/95: THE SAME 35 ROWS AS D3;    NAMED ROWS FAILED
+                                                                both NOP rows GREEN               (masked; see below)
+D5_len4       ref sb3, ref sh4 die                              85/95: exactly their 10 rows      HELD EXACTLY
+D6_shared     p1 cmd, p2 port                                   93/95: exactly those 2            HELD EXACTLY
+D7_debug      free once                                         94/95: exactly that 1             HELD EXACTLY
+D8_store      ref * cmd (COMMAND reads the truncated value)     84/95: 10 of 11 ref * cmd rows    UNIVERSAL CLAIM WRONG
+                                                                + two cmd; `ref w2 cmd' GREEN     FOR ONE CLASS
+D9_anyport    x2 three, x2 quiet                                55/95, CONTROL=FAILED: those 2    HELD on named rows;
+                                                                + 38                              blast radius missed
+D10_nolatch   two once ("0x3,0x5")                              94/95: exactly that, got 0x3,0x5  HELD EXACTLY
+
+THE FOUR THAT DID NOT HOLD AS WRITTEN
+
+1. D4 (`> 2' -> `>= 0': every command refused).  PRETABLE named `acc nop cmd' and `latch nop cmd'.  Both stay GREEN.
+   In A:nop and in L the NOP follows a GET that would have put COMMAND at 2 -- and D4 refuses that GET too, so COMMAND
+   keeps its power-on 0 and a refused NOP reads exactly like an accepted one (0).  A COMPOUND mutant's second component
+   removed the state its first component's rows read.  The rows are not vacuous in general: under a NOP-ONLY refusal
+   the GET lands and both rows read 2.  Nothing in table 1 measured that; addendum E2 (../killtable1b_20261018/) does.
+   D4 itself is killed by its other 35 rows.
+
+2. D8 (the refused value STORED, execution still skipped).  PRETABLE said `ref * cmd' red.  `ref w2 cmd' stays GREEN:
+   w2 = 0x100000002 is stored into the int cell as 2, which IS the previous COMMAND value (the seed's GET).  That one
+   row's channel cannot vary under D8 by construction; the class is pinned by the other ten (and by `two cmd', 0x5,
+   which the prediction did not name).
+
+3. Null media.  PRETABLE said "the gate's parse reds".  It does not: the probe prints a complete, well-formed record on
+   a dead binary (FBCMD_DONE, FBCMD_RESULT=15/95, FBCMD_CONTROL=FAILED), and a parse modelled on gate 16's #549 block
+   accepts FAILED as a well-formed value.  The gate reds on its controls row (FAILED, want OK), its exit row (1, want 0)
+   and its score rows (15, want 95).  The outcome is as predicted; the gate row named was wrong.
+   THE 15 ROWS GREEN ON A DEAD BINARY are absence rows: the eleven `ref * nosmall' (no resize line) and the four
+   announce counts `acc nop quiet', `acc set quiet', `acc get quiet', `x2 quiet' (no announce).  Each reads 0 on a
+   session that never started, so each depends on the controls row and the score pin to be meaningful -- which is
+   why the wiring pins the score by EQUALITY and requires CONTROL=OK (clause (c) by construction, measured here).
+
+4. BLAST RADIUS (D2, D3, D9, and D1's once rows).  Every named row reddened, but D2 and D9 reddened 27 and 38 rows the
+   prediction did not name, because the SEED (a GET, X1 = 123, Y1 = 77) and the C controls (0x2a at PORT 5, a GET) go
+   through the arm under test.  Under D2 the seed's GET is refused, so every R class reads COMMAND 0 and its first
+   announce is 0x2.  Under D9 the X1/Y1 seeds are refused, so every R class reads X1 = Y1 = 0 and its first announce is
+   0x7b.  Both also turn CONTROL to FAILED.  Under-predicting a mutant's reach is harmless for a kill; it is recorded
+   because a row named for one mutant that is ALSO red under another is shared evidence, not independent evidence.
+
+PRETABLE SECTION 5 -- the channel line's hypothesis, as the carrier asks the first mandated application to CHECK it:
+"a row's channel-under-its-mutant is knowable at WRITING time".  Here it HELD for B, D1-D3 and D5-D10: each named row
+reddened, except D8's w2, which a writing-time reading could have caught by asking whether the refused value aliases
+the previous one.  It FAILED for D4.  D4 refuses three accepted cells at once (NOP, SET, GET), and two of its named
+rows sit in sessions whose SETUP issues one of the others (a GET before the NOP).  D3 also refuses two cells (SET, GET)
+and held, because its named rows' sessions issue no GET before the SET.  The lesson worth carrying: for a mutant that
+changes MORE THAN ONE cell of a partition, read each named row's session for a setup step another changed cell breaks.

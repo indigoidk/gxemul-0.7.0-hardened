@@ -1,0 +1,68 @@
+#567 fbctrlcmdkill -- PRE-TABLE ADDENDUM for kill table 4, written 2026-10-19 BEFORE probe v4's legs and BEFORE the table
+runs (this file's mtime is the order proof).  INSTRUMENT: probe v4 (the session scratchpad's fbctrl_cmd_probe.v4.py, md5
+7ab10a31ef08984589a00ef1243e830c, built by mk_probe_v4.py from v3 by exact-anchor edits; frozen into the table's
+directory when it runs).  v3's sessions and rows are UNCHANGED; v4 adds three sessions, 17 rows, and lb/lh/ld to the
+assembler (encodings pinned by hand: lb t6 0x810e0010, lh t7 0x850f0010, ld s0 0xdd100010).
+
+WHY: THE CLASS-CLOSURE AMENDMENT.  Two consecutive passes breached ONE class -- WIDTH: pass 2's E13 (the gate qualified by
+width) and F2's E15-E19 (the dispatch skipped, and the bound moved, at one width).  v3 closed width x bound edge and width x
+dispatch.  Reading the arm for the REST of the class found seven more open cells at the bound's edges alone, where a
+width-and-latch-conditioned bound RESTORES THE HOST KILL (sd 3 with the latch clear; sb, sh, sw 3 with it set) -- the
+cells a third pass would have found one at a time.  So the repair closes the whole class in ONE diff and the contract
+names every cell.
+
+THE ENUMERATION -- the partitions the fixed DATA arm's code distinguishes, crossed with WIDTH (len: the arm never tests
+it; memory_readmax64() consumes it to build idata).  (* = new in v4)
+  bound edge x latch x width:
+                         sb               sh             sw                  sd
+      accept 2, clear    A:get            A:edges        C, every seed       A:edges
+      accept 2, set      W:latch*         W:latch*       L                   W:latch*
+      refuse 3, clear    R:sb3, W:sb*     R:edges        R:3, L, T2, F       W:latch*
+      refuse 3, set      W:latch*         W:latch*       W:latch*            R:edges
+  the latch SET by a refusal at a width (seen by a later refusal staying silent):
+                         W:sb* (sb 3)     R:edges (sh 3) T2, L (sw 3)        W:latch* (sd 3)
+  the latch TESTED by a refusal at a width (silent with it set):
+                         W:latch* (sb 3)  W:latch*, W:sb* (sh)  T2 (sw 5), W:latch* (sw 3)  R:edges, T2 (sd)
+  an accept's dispatch at a width (GET zeroes X1):  sb A:get, W:latch*; sh A:edges, W:latch*; sw C, L; sd A:edges, W:latch*
+  an accept's store at a width (read back):         sb A:get; sh A:set; sw L, T2; sd A:nop, W:latch*
+  a NON-COMMAND port write at a width (stored, not refused):  sb, sh, sd M3*; sw M2 and every seed
+  a READ at a width (returns the cell, stores nothing, runs nothing):  lb, lh, ld M3*; lw M1, M3*
+  wide values (sd only -- the width pin):  R:w0..R:w3, R:m1d, T2 (unchanged)
+DELIBERATELY NOT COVERED (disclosed, unchanged): value carve-outs, including an interior accepted value at one width
+(`&& !(len == 1 && idata == 1)` -- NOT CLAIMED (2)); the latch set x a wide ALIAS (0); a 16-byte store (6).
+
+CHANNEL -- each new row, the mutant it kills, and the observable that differs under it:
+  wl alive       E22-E25 (the bound relaxed in one width x latch cell)   the session dies: 3 runs FILL -> default: exit(1)
+  wl once        E27 (an sd refusal does not set the latch), E29 (the latch not tested at sb/sh)   announce count 1 -> 2+
+  wl sb/sh/sd get x1   E26 (GET refused with the latch set, sb/sh/sd); E22-E25 by death   X1 0 -> 0x7b (or '-')
+  wl cmd         E26   COMMAND 2 -> 0 (nothing stored)
+  wb once        E28 (a byte refusal does not set the latch), E29   announce count 1 -> 2
+  wb cmd         D8 (a refusal stores) at sb/sh with the latch set    COMMAND 0 -> 3/4
+  x2 sb/sh/sd    E30 (the port test bypassed for non-word stores)   X2 3/4/5 -> its old value
+  m3 quiet       E30   announce count 0 -> 1
+  rdw lb         E33 (the read predicate qualified by width: an lb read returns nothing and stores 0)   2 -> 0
+  rdw lh/ld/lw   E32 (an lb read stores 0 after returning -- E12 at one width), E33   2 -> 0
+  rdw x1         E31 (an ld read runs the command)   X1 123 -> 0
+  The channel claim is checkable at writing time for every row above, and this table checks it.
+
+PREDICTIONS
+* legs: FIX 123/123, CONTROL=OK (sessions clean 27).  HEAD's binary 51/123: v3's 42, plus M3's nine rows green (the fix
+  changes neither a non-COMMAND store nor the read path); W:latch and W:sb die at their first write (FILL reaches default:).
+* the twelve NEW mutants, each ESCAPING v3 (106/106, CONTROL=OK -- the cells v3 leaves open) and RED on v4:
+    E22_sdclear3     W:latch dies at its first write: wl alive, wl once ('-'), the three gets, wl cmd; sessions clean 26  -> 116/123
+    E23_sbset3       W:latch dies at sb 3, after the sd 3's announce: wl alive, the gets, wl cmd, sessions clean;
+                     wl once stays green ('0x3' printed first)                                                       -> 117/123
+    E24_shset3       the same, at sh 3                                                                               -> 117/123
+    E25_swset3       the same, at sw 3                                                                               -> 117/123
+    E26_setnarrow    the three gets (0x7b) and wl cmd (0x0)                                                          -> 119/123
+    E27_sdnoset      wl once (0x3,0x3: sb 3 announces, then sets)                                                    -> 122/123
+    E28_sbnoset      wb once (0x3,0x4)                                                                               -> 122/123
+    E29_testnarrow   wl once (0x3,0x3,0x3), wb once (0x3,0x4); R:edges stays green (its sh 3 is its first refusal)   -> 121/123
+    E30_portwidth    x2 sb, x2 sh, x2 sd (X2's old value), m3 quiet (1)                                              -> 119/123
+    E31_ldreaddisp   rdw x1 (0x0)                                                                                    -> 122/123
+    E32_lbreadstore  rdw lh, rdw ld, rdw lw (0x0); rdw lb stays green (it returns 2 before the store)                 -> 120/123
+    E33_lbreadpred   rdw lb, lh, ld, lw (0x0)                                                                        -> 119/123
+* the 32 earlier mutants: every one RED on v4 (v3's rows are unchanged, so each keeps its v3 kills).  B_gateoff 51/123
+  (= HEAD: the refusal gone, W:latch and W:sb die, M3 green).
+* the null media: CONTROL=FAILED, and exactly ONE more green row than table 3's v3 null (`m3 quiet', an announce count that
+  reads 0 on a session that never started) -- 17/123 if table 3 measures 16/106 as PRETABLE_ADDENDUM_t3.out predicts.

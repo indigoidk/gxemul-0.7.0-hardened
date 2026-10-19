@@ -1,0 +1,67 @@
+#567 fbctrlcmdkill -- PRE-TABLE CHECK, written 2026-10-18 ~17:3x BEFORE kill table 1 (which runs after the weekly battery);
+this file's mtime is the order proof.  Instrument: the draft fbctrl_cmd_probe.py (83 rows as measured in PROBE_prefix.out /
+PROBE_postfix.out), plus the two rows this check prescribes (section 1).  Fix: fix567_draft.diff.
+
+1. SIBLING PARITY -- the nearest sibling is #549's PORT-arm refusal in the same file (refuse, keep the previous value,
+   one latched (once) announce naming the full value).  Channel by channel:
+     survival after the refused access ............ #549 yes | #567 yes (ref * alive)
+     state kept (selector / COMMAND) .............. #549 PORT read | #567 COMMAND read at port 0 (ref * cmd)
+     other cells untouched ......................... #549 data cells | #567 X1/Y1 (ref * x1, y1), no resize (nosmall)
+     announce: count, full value ................... both (ref * once; T2)
+     latch interplay in both orders ................ #549 F/P | #567 P1/P2
+     free-running announce (fatal vs debug) ........ both (F)
+     WIDTHS of the refused access .................. #549: sb, sh, sw, sd | #567 draft: sw, sd ONLY  <- ASYMMETRY
+   The gate's predicate never tests `len'; a qualified mutant `&& len >= 4' (or `== 4' / `== 8') is the canonical
+   clause-(d) shape.  `== 8' is killed by the sw rows and `== 4' by the sd rows; `>= 4' escapes every draft row.
+   PRESCRIBED: `ref sb3' (sb 3) and `ref sh4' (sh 4), two more classes in the refusal loop (its six rows each: alive,
+   cmd, x1, y1, once, nosmall), on the seeded device.  The instrument grows 83 -> 95 rows.
+
+2. CLAIM -> ROW -- every sentence the diff ADDS that asserts an observable consequence:
+     "refused before it is stored: COMMAND keeps its previous value" ......... ref * cmd
+     "nothing executes" .................................................... ref * x1, y1, nosmall; ref w0/w1/w2
+     "It used to reach fbctrl_command()'s default: and end the emulator,
+      FILL (3) and COPY (4) included" ....................................... pre-fix leg: R:3, R:4 DIED exit 1
+     "the header names them under a TODO and gives them no ports" ......... a records claim, no row (not observable)
+     "a wide 0x100000001 used to be stored as 1 and run SET_RESOLUTION" .... ref w1 cmd (pre-fix 0x1, measured)
+     "Announced once per device" ........................................... ref * once, T2, L (one per session)
+     default:'s "unreachable while the DATA arm refuses ...; kept as a
+      tripwire" .............................................................. the (b) mutant below re-reaches it
+
+3. GUARD FIELD vs BODY FIELD, with the partition the body induces on each lvalue
+     gate reads: current_port, idata.   refusal body: warned_cmd (read, written), idata (the message).
+     accepted path: d->port[current_port] (written), fbctrl_command() (reads port[COMMAND], X1, Y1, vfb_data).
+     idata ....... `idata > 2' on uint64_t: regions at the bound (2: acc get) and past it (3: ref 3) -- rule D2's two
+                   edges; the HIGH HALF (bits 32-63) by w0/w1/w2 (congruent to an accepted command) and w3, m1d.
+     current_port  {COMMAND, other}: COMMAND by every R row; other by M2 (3 written at X2).
+     warned_cmd .. {clear, set}: clear by R/A; set by L (accepts after a refusal) and T2 (a second refusal).
+     Who else writes warned_cmd?  Nobody: a new field, written only by the refusal arm (contrast: a SHARED bit is the
+     #490 collision -- P1/P2 pin that warned_port and warned_cmd stay apart).
+   EXHAUSTED: idata's body-tested partition {<=2, >2} at both edges, plus the high half; current_port {COMMAND, other};
+   warned_cmd {clear, set}.  Disclosed, not rowed: the joint (latch set) x (wide alias) cell -- the gate does not read
+   the latch.
+
+4. CHANNEL -- per row group, the mutant it kills and the observable that differs under it (predicted; table 1 measures):
+     (b) VERBATIM REINSTATEMENT: the DATA-arm gate removed (old store + dispatch) -- every killing class DIES (alive),
+         wide aliases run their commands (w0/w1 cmd, w2 x1/y1), L/T2/P1/P2/F die.  With the gate gone the DATA arm is
+         HEAD's byte for byte (only the default:'s tripwire comment differs), so (b) scores what the pre-fix leg scores
+         on the grown instrument: 36 of 95 -- the draft's 34 of 83, plus each new session's `nosmall' row, which reads
+         0 resize lines on a dead session and so stays green (the weak row section 4 names); their other ten rows red.
+     (c) NULL MEDIA: an absent binary and /bin/true -- CONTROL=FAILED, every session NO-PROMPT, the gate's parse reds.
+     (d) DEPENDS-ON, each predicted before its build:
+         D1 `idata > 2' -> `(uint32_t) idata > 2' .......... w0 cmd (0), w1 cmd (1), w2 x1/y1 (0) red; w3 still refused
+         D2 `> 2' -> `> 1' (GET refused) .................... acc get cmd/x1/y1, latch get x1 red
+         D3 `> 2' -> `> 0' (SET refused) .................... acc set cmd/ran, latch set cmd/ran red (+ D2's)
+         D4 `> 2' -> `>= 0' (NOP refused) ................... acc nop cmd, latch nop cmd red (+ D2/D3's)
+         D5 the gate qualified `&& len >= 4' ................. ref sb3, ref sh4 die (the prescribed rows; escape without)
+         D6 warned_port used as the command latch ............ p1 cmd, p2 port red
+         D7 the announce demoted to debug() .................. free once red (stepped rows still print: single-step
+                                                               raises debug()'s verbosity)
+         D8 the refused value STORED, execution still skipped  ref * cmd red (COMMAND reads the truncated value)
+         D9 the gate drops `current_port == COMMAND' ......... x2 three, x2 quiet red (3 at X2 refused)
+         D10 the latch never set (announce every time) ....... two once red ("0x3,0x5")
+   A row whose channel cannot vary under its named mutant would be vacuous by construction: none found in this
+   enumeration; `ref * nosmall' is the one row with no mutant of its own here (it pins D8's sibling: a refused value
+   passed to fbctrl_command), recorded as such.
+
+5. THE CHANNEL LINE'S HYPOTHESIS, checked as the carrier asks of a first application: each prediction above names its
+   observable before the run; table 1 will say which held.

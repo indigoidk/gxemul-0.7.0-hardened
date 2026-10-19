@@ -1,0 +1,53 @@
+#!/usr/bin/env python3
+"""mk_mutants567e.py <dir> -- #567 kill table 4's NEW mutants (PRETABLE_ADDENDUM_t4.out): the rest of the WIDTH class --
+width x latch x edge, the latch set and tested at each width, width at a non-COMMAND port and on the read path.  Each
+an exact-anchor edit of the fix <dir>/dev_fbctrl.fix567.c, to <dir>/mutants_e/<name>.c."""
+import io, os, sys
+D = sys.argv[1]
+NL, TAB = chr(10), chr(9)
+T2, T3, T4, T5 = TAB * 2, TAB * 3, TAB * 4, TAB * 5
+fix = io.open(os.path.join(D, "dev_fbctrl.fix567.c"), encoding="utf-8", newline="").read()
+os.makedirs(os.path.join(D, "mutants_e"), exist_ok=True)
+CMP = "idata > DEV_FBCTRL_COMMAND_GET_RESOLUTION) {"
+GET = "DEV_FBCTRL_COMMAND_GET_RESOLUTION"
+SET = "DEV_FBCTRL_COMMAND_SET_RESOLUTION"
+LATCHSET = T4 + "d->warned_cmd = 1;" + NL
+LATCHTEST = T3 + "if (!d->warned_cmd) {" + NL
+GUARD = T2 + "else if (d->current_port == DEV_FBCTRL_PORT_COMMAND &&" + NL
+READ = T2 + "if (writeflag == MEM_READ)" + NL + T3 + "odata = d->port[d->current_port];" + NL
+
+
+def one(t, old, new, name):
+    assert t.count(old) == 1, (name, t.count(old), old[:70])
+    out = t.replace(old, new)
+    assert out != t, name
+    return out
+
+
+M = {
+    # width x latch x edge: the bound relaxed in one (width, latch) cell -- each restores the host kill there
+    "E22_sdclear3": one(fix, CMP, "idata > (len == 8 && !d->warned_cmd ? %s + 1 : %s)) {" % (GET, GET), "E22"),
+    "E23_sbset3": one(fix, CMP, "idata > (d->warned_cmd && len == 1 ? %s + 1 : %s)) {" % (GET, GET), "E23"),
+    "E24_shset3": one(fix, CMP, "idata > (d->warned_cmd && len == 2 ? %s + 1 : %s)) {" % (GET, GET), "E24"),
+    "E25_swset3": one(fix, CMP, "idata > (d->warned_cmd && len == 4 ? %s + 1 : %s)) {" % (GET, GET), "E25"),
+    # ... and tightened: with the latch set, GET (2) refused at every width but sw
+    "E26_setnarrow": one(fix, CMP, "idata > (d->warned_cmd && len != 4 ? %s : %s)) {" % (SET, GET), "E26"),
+    # the latch SET only at some widths, and TESTED only at some
+    "E27_sdnoset": one(fix, LATCHSET, T4 + "if (len != 8)" + NL + T5 + "d->warned_cmd = 1;" + NL, "E27"),
+    "E28_sbnoset": one(fix, LATCHSET, T4 + "if (len != 1)" + NL + T5 + "d->warned_cmd = 1;" + NL, "E28"),
+    "E29_testnarrow": one(fix, LATCHTEST, T3 + "if (!d->warned_cmd || len < 4) {" + NL, "E29"),
+    # width at a non-COMMAND port: the port test bypassed for every non-word store
+    "E30_portwidth": one(fix, GUARD, T2 + "else if ((d->current_port == DEV_FBCTRL_PORT_COMMAND || len != 4) &&" + NL,
+                         "E30"),
+    # width on the read path: an ld read runs the command; an lb read stores after returning (E12 at one width);
+    # the read predicate qualified by width, so an lb read returns nothing and falls into the store
+    "E31_ldreaddisp": one(fix, READ, T2 + "if (writeflag == MEM_READ) {" + NL + T3 + "odata = d->port[d->current_port];" +
+                          NL + T3 + "if (len == 8 && d->current_port == DEV_FBCTRL_PORT_COMMAND)" + NL + T4 +
+                          "fbctrl_command(cpu, d);" + NL + T2 + "}" + NL, "E31"),
+    "E32_lbreadstore": one(fix, READ, READ + T2 + "if (writeflag == MEM_READ && len != 1)" + NL + T3 + ";" + NL, "E32"),
+    "E33_lbreadpred": one(fix, READ, T2 + "if (writeflag == MEM_READ && len != 1)" + NL + T3 +
+                          "odata = d->port[d->current_port];" + NL, "E33"),
+}
+for name, text in M.items():
+    io.open(os.path.join(D, "mutants_e", name + ".c"), "w", encoding="utf-8", newline="").write(text)
+print("mutants written:", ", ".join(M))

@@ -1,0 +1,58 @@
+#!/usr/bin/env python3
+"""mk_mutants567.py <dir> -- #567's kill-table mutants, each an exact-anchor edit of the draft fix
+(<dir>/dev_fbctrl.fix567.c), written to <dir>/mutants/<name>.c.  The names and predictions are PRETABLE.out's (section 4):
+  B_gateoff  (b)  the DATA-arm gate removed -- the old store + dispatch, HEAD's DATA arm byte for byte
+  D1_u32     (d)  the compare narrowed to the low word: (uint32_t) idata > GET_RESOLUTION
+  D2_gt1     (d)  `> GET_RESOLUTION' -> `> SET_RESOLUTION' (GET refused)
+  D3_gt0     (d)  -> `> NOP' (SET and GET refused)
+  D4_ge0     (d)  -> `>= NOP' (every command refused, NOP included)
+  D5_len4    (d)  the gate qualified `&& len >= 4' (byte and halfword commands reach the kill)
+  D6_shared  (d)  the refusal announce latched on warned_port instead of warned_cmd
+  D7_debug   (d)  the announce demoted from fatal() to debug()
+  D8_store   (d)  the refused value STORED into the COMMAND cell, execution still skipped
+  D9_anyport (d)  the gate drops `current_port == COMMAND' (3 written at X2 is refused)
+  D10_nolatch(d)  the latch never set (one announce per refusal)
+Every anchor must match exactly once in the draft; each mutant must differ from it."""
+import io, os, sys
+D = sys.argv[1]
+BS, NL, TAB = chr(92), chr(10), chr(9)
+T2, T3, T4 = TAB * 2, TAB * 3, TAB * 4
+fix = io.open(os.path.join(D, "dev_fbctrl.fix567.c"), encoding="utf-8", newline="").read()
+os.makedirs(os.path.join(D, "mutants"), exist_ok=True)
+
+GATE = T2 + "else if (d->current_port == DEV_FBCTRL_PORT_COMMAND &&" + NL + T2 + "    idata > DEV_FBCTRL_COMMAND_GET_RESOLUTION) {"
+LATCH_SET = T4 + "d->warned_cmd = 1;" + NL
+LATCH_TEST = T3 + "if (!d->warned_cmd) {"
+ANNOUNCE = T4 + 'fatal("[ fbctrl: command 0x%llx is not supported; "'
+
+
+def one(t, old, new, name):
+    assert t.count(old) == 1, (name, t.count(old), old[:60])
+    out = t.replace(old, new)
+    assert out != t, name
+    return out
+
+
+def gate_off(t):
+    """remove the whole refusal arm: `else if (...) { ...refusal... } else {' -> `else {'"""
+    a = t.index(GATE)
+    b = t.index(T2 + "} else {", a)
+    return t[:a] + T2 + "else {" + t[b + len(T2 + "} else {"):]
+
+
+M = {
+    "B_gateoff": gate_off(fix),
+    "D1_u32": one(fix, "idata > DEV_FBCTRL_COMMAND_GET_RESOLUTION) {", "(uint32_t) idata > DEV_FBCTRL_COMMAND_GET_RESOLUTION) {", "D1"),
+    "D2_gt1": one(fix, "idata > DEV_FBCTRL_COMMAND_GET_RESOLUTION) {", "idata > DEV_FBCTRL_COMMAND_SET_RESOLUTION) {", "D2"),
+    "D3_gt0": one(fix, "idata > DEV_FBCTRL_COMMAND_GET_RESOLUTION) {", "idata > DEV_FBCTRL_COMMAND_NOP) {", "D3"),
+    "D4_ge0": one(fix, "idata > DEV_FBCTRL_COMMAND_GET_RESOLUTION) {", "idata >= DEV_FBCTRL_COMMAND_NOP) {", "D4"),
+    "D5_len4": one(fix, "idata > DEV_FBCTRL_COMMAND_GET_RESOLUTION) {", "idata > DEV_FBCTRL_COMMAND_GET_RESOLUTION && len >= 4) {", "D5"),
+    "D6_shared": one(one(fix, LATCH_TEST, T3 + "if (!d->warned_port) {", "D6a"), LATCH_SET, T4 + "d->warned_port = 1;" + NL, "D6b"),
+    "D7_debug": one(fix, ANNOUNCE, T4 + 'debug("[ fbctrl: command 0x%llx is not supported; "', "D7"),
+    "D8_store": one(fix, LATCH_TEST, T3 + "d->port[d->current_port] = idata;" + NL + LATCH_TEST, "D8"),
+    "D9_anyport": one(fix, GATE, T2 + "else if (" + NL + T2 + "    idata > DEV_FBCTRL_COMMAND_GET_RESOLUTION) {", "D9"),
+    "D10_nolatch": one(fix, LATCH_SET, "", "D10"),
+}
+for name, text in M.items():
+    io.open(os.path.join(D, "mutants", name + ".c"), "w", encoding="utf-8", newline="").write(text)
+print("mutants written:", ", ".join(M))

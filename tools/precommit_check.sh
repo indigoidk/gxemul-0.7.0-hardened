@@ -353,7 +353,10 @@ elif out=$(python "$SCORECHK" 2>&1); then
 	#  the stem, and only a docstring at regress/<stem>_probe.py or regress/<stem>.py; no comment line
 	#  names ip30_abort and the probe lives under artifacts/, so for this pin it checks no prose -- only
 	#  the pin is counted.
-	SCORE_CLAIMS_MANIFEST=35
+	#  RAISED 35 -> 36 ON 2026-10-18, DELIBERATELY.  One newly gated probe: fbctrl_cmd_probe.py
+	#  (#567, pinned UNQUOTED in gate_mips_folds.sh at its final 125 rows; 95 when this line was
+	#  first written, before the review passes grew it).
+	SCORE_CLAIMS_MANIFEST=36
 	_spinned=$(printf '%s\n' "$out" | sed -n 's/^SCORE_CLAIMS_PINNED=//p')
 	if [ -z "$_spinned" ]; then
 		bad "check_score_claims printed no SCORE_CLAIMS_PINNED line -- the count cannot be pinned"
