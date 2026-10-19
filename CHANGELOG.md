@@ -1,3 +1,33 @@
+# Records, 2026-10-19: `#564` left gate 6's readiness census stranded -- its promptless probe is grandfathered and the pty pin re-derived, in a commit of its own; three rows filed
+
+**The defect.**  `#564` (`e7fc97e6`, 2026-10-18 03:57) committed `regress/sgi_mte_decline_probe.py`, a PROMPTLESS pty
+probe -- fixed waits (a 1.5 s settle, 0.22 s between commands), no readiness read -- and moved neither of gate 6's
+censuses: `EXPECT_PTY_PROBES` stayed 74 and the probe was in neither the grandfathered list nor the prompt-detecting set.
+Gate 6 (`regress/gate_hygiene.sh`) runs only in the weekly battery, so nothing said so; this week's battery would have
+reddened it.  `#567`, re-deriving its own pins with `tools/derive_hygiene_pins.sh`, found it: the pty census read 76
+against 74 (its own probe and this one), the promptless census 44 against 43, and `--write` refused while the probe stood
+neither grandfathered nor prompt-detecting.
+
+**What this commit does.**  Only `#564`'s half, so that its attribution, and a revert of `#567`, stay separate -- the
+order GPT-6 Astra, Grok 4.7 and GLM 5.3 each asked for in `#567`'s pass 2:
+* `regress/gate_hygiene.sh` -- `sgi_mte_decline_probe.py` is appended to the grandfathered list by
+  `derive_hygiene_pins.sh --grandfather` (the 2026-09-19 precedent: grandfathered, not converted -- converting a probe's
+  readiness is its own round), the list's comment names the fourth block and its provenance, and `EXPECT_PTY_PROBES`
+  moves 74 -> 75.  Derived with `#567`'s probe moved out of the tree: all eight censuses equal their pins.  The comment
+  also corrects "All three are UNTRACKED" -- `crime_width_probe.py` was committed by `7440e129` and `arm_msrmode_probe.py`
+  by `4f908ad5`; `lca_isaphys_probe.py` still lies untracked and is counted as it lies (the 2026-09-23 "count all" ruling).
+* FILES `ptyprobepins` (MED): a commit adding a pty probe can strand these pins with only the weekly battery to notice --
+  another recurrence (examples before it: `#500`'s probe; the 24 of the 2026-09 drift; the gate's own comment records the
+  earlier 37 -> 41 drift and `#498`'s 41 -> 42 repair); the landing spot is a precommit check, and its design
+  question is that a precommit sees the STAGED tree while the pin counts the WORKING tree.
+* FILES `sgimtereadiness` (LOW): convert `sgi_mte_decline_probe.py`'s fixed waits to a readiness read.
+* FILES `batterystandby` (MED): the 2026-10-18 18:00 weekly battery died at ~18:13 when the laptop changed power source
+  and entered Modern Standby (gate 3 of 16; no verdict; the task's last result 0x8007042B), and nothing re-ran it --
+  `tools/nightly_battery.sh` holds no wake request.  Re-triggered by hand at 23:19, it passed: REGRESS_PASS, 16/16,
+  `_scratchpad/nightly/verdict_20261018_231924.txt`.  The remedy is an owner decision about the machine's power policy.
+
+`ledger.json`, `matrix.html`, `fable_queue.md`, `OUTSTANDING_BUGS.md`, `regress/gate_hygiene.sh` and this block only.
+
 # Records, 2026-10-18: `fableheldform` -- seventeen walled Fable entries carry a stage token; nine rows that shut while a stage awaited Fable go back to held; the wider class is filed
 
 **The defect** (filed by `#566`).  The owner's 2026-10-17 directive records a Fable wall as a SEAT FAILURE with a HELD

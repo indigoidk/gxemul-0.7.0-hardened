@@ -25037,3 +25037,21 @@ Fable 5.1, GPT-6 Astra, Grok 4.7).  Each row's ledger `state_note` carries its s
   every counted Fable entry (the keyword census is reconnaissance, not that review), a forward-only structural check
   that reds a NEW untokened non-answer, an owner ruling on how an excluded seat is recorded, and row-by-row correction
   of the history when a round touches it (no sweep).
+
+### 2026-10-19 -- `#564`'s stranded gate-6 census: the promptless probe grandfathered, the pty pin re-derived; three rows filed
+
+* **Gate 6's readiness census, repaired in a commit of its own.**  `#564` (`e7fc97e6`) committed
+  `regress/sgi_mte_decline_probe.py` -- promptless, fixed waits -- and moved neither `EXPECT_PTY_PROBES` nor the
+  grandfathered list, so the next battery's gate 6 would have gone red.  `sgi_mte_decline_probe.py` is grandfathered by
+  `tools/derive_hygiene_pins.sh --grandfather` (the 2026-09-19 precedent) and `EXPECT_PTY_PROBES` is 75, derived with
+  `#567`'s probe moved out of the tree.  Found by `#567`'s pin re-derivation; split out at its pass 2's request (GPT-6
+  Astra, Grok 4.7, GLM 5.3), so that `#564`'s repair does not ride in, or revert with, `#567`.
+* **`ptyprobepins` (MED, open)** -- a commit adding a pty probe can strand gate 6's pins, and only the weekly battery
+  sees it; another recurrence (gate 6's own comment records earlier ones).  Owed: a precommit section that runs the deriver in report mode and refuses a tree that
+  leaves a census off its pin, forward-only and controlled both ways -- and a decision on which tree it judges (the
+  STAGED tree, or the WORKING tree the pin counts under the 2026-09-23 "count all" ruling).
+* **`sgimtereadiness` (LOW, open)** -- `sgi_mte_decline_probe.py`'s fixed waits want a readiness read (its own round).
+* **`batterystandby` (MED, open)** -- the 2026-10-18 weekly battery died at ~18:13 in Modern Standby after a
+  power-source change (gate 3 of 16, no verdict, task result 0x8007042B) and nothing re-ran it; the runner holds no wake
+  request.  Re-triggered by hand at 23:19: REGRESS_PASS 16/16 (`_scratchpad/nightly/verdict_20261018_231924.txt`).  The
+  remedy -- a wake request for the run's duration, or a DC power-policy change -- is the owner's to choose.
