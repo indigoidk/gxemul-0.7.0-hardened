@@ -1,3 +1,7 @@
+# Records, 2026-10-20: `fbctrlcmdkill` names its landing commit 5dbc000e, and 5dbc000e's pass-2 receipt
+
+The landing commit 5dbc000e cannot name itself; this adds it to `fbctrlcmdkill`'s `commits` field (the row stays HELD for fable5) and writes the pass-2 receipt precommit section F requires after a commit that touches `src/`.  Ledger, matrix, this block and `regress/pass2_ledger.tsv` only.
+
 # `#567` (fbctrlcmdkill): the test machines' framebuffer controller ended the emulator on any command but NOP, SET_RESOLUTION and GET_RESOLUTION, and ran a WIDE value as its low word -- every other 64-bit value at COMMAND is refused before the store now, COMMAND kept, one announce per device; with a 125-row rung-3 detector, gated in gate 16; held for Fable
 
 **The defect** (filed by `#549`'s review, `fbctrlcmdkill`, HIGH).  `fbctrl_command()`'s `default:` called `fatal()`
