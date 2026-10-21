@@ -1,3 +1,7 @@
+# Records, 2026-10-21: `vmedefaultkill` names its landing commit 2ca79b90, and 2ca79b90's pass-2 receipt
+
+The landing commit 2ca79b90 cannot name itself; this adds it to `vmedefaultkill`'s `commits` field (the row stays HELD on its two questions) and writes the pass-2 receipt precommit section F requires after a commit that touches `src/`.  It also preserves the two records confirmations the commit was gated on -- GPT-6 Astra's CONFIRM WITH CHANGES (7) and Argon's records check (5 broken, all applied), with the dispositions -- under `regress/artifacts/vmedefaultkill/confirm_20261021/`.  Ledger, matrix, this block, `regress/pass2_ledger.tsv` and that directory only.
+
 # `#568` (vmedefaultkill): the MVME187's VME2 controller model ended the emulator on any offset its switch did not name -- the 26 header-named registers it does not implement now DECLINE with one announce per register, every other unmatched offset FAULTS to the guest; with a 38-row rung-3 detector, gated in gate 14
 
 **The defect** (`vmedefaultkill`, HIGH).  `DEVICE_ACCESS(vme)` named ten offsets of its 4 KiB window; every other offset

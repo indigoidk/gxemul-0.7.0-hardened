@@ -1,0 +1,822 @@
+=== src/devices/dev_vme.c (working tree vs HEAD) ===
+diff --git a/src/devices/dev_vme.c b/src/devices/dev_vme.c
+index b4a6050d..328f6b90 100644
+--- a/src/devices/dev_vme.c
++++ b/src/devices/dev_vme.c
+@@ -51,8 +51,21 @@
+ 
+ struct vme_data {
+ 	uint32_t	reg[VME_LEN / sizeof(uint32_t)];
++
++	/*  #568: one bit per register WORD (relative_addr >> 2) for the
++	    unimplemented-register announce below; the highest such word is
++	    VME2_MISC (0x8c >> 2 == 35).  Zeroed by DEVINIT's memset, so every
++	    instance starts with every announce armed.  */
++	uint64_t	warned_unimpl;
+ };
+ 
++/*  #568: a warned_unimpl narrower than VME2_MISC >> 2 + 1 bits would
++    leave MISC's announce bit outside the field; make that a compile error
++    (dev_pcc2.c's pcc2_w_fits_in_warned shape).  The 1ULL in the shifts
++    below is not checked here.  */
++typedef char vme_warned_fits[(VME2_MISC >> 2) <
++    8 * sizeof(((struct vme_data *)0)->warned_unimpl) ? 1 : -1];
++
+ 
+ DEVICE_ACCESS(vme)
+ {
+@@ -134,13 +147,77 @@ DEVICE_ACCESS(vme)
+ 			d->reg[relative_addr / sizeof(uint32_t)] = idata;
+ 		break;
+ 
++	/*  #568 (vmedefaultkill): registers the header names but this model
++	    does not implement.  Each ended the emulator in default: below.
++	    OpenBSD 2.2's mvme88k driver (sys/arch/mvme88k/dev/vme.c) has
++	    access sites at six of them.  Its attach reaches four:
++	    vme2chip_init() reads MASTERCTL and writes it back and writes
++	    MASTER3, MASTER4 and MASTER4MOD.  The other two, IRQSTAT and
++	    IRQCLR, are in vme2abort(), the ABORT-switch interrupt handler,
++	    and this model raises no VME2 interrupt.  A bus error here
++	    would panic that guest's attach, so these DECLINE: a read is served
++	    the word preloaded above, which is 0 because nothing writes these
++	    words of d->reg[] (odata is deliberately not forced to 0, so a store
++	    added by a later edit would show in a read-back); a write is
++	    dropped; one fatal() per register per device, the first access's
++	    direction deciding its wording (#501's shape in dev_pcc2.c).
++	    Sub-word starts inside these words are not matched here and reach
++	    default: (vmewidthlanes).  */
++	case VME2_SADDR2:
++	case VME2_SLAVELMOD1:
++	case VME2_SLAVELMOD2:
++	case VME2_SLAVECTL:
++	case VME2_MASTER1:
++	case VME2_MASTER2:
++	case VME2_MASTER3:
++	case VME2_MASTER4:
++	case VME2_MASTER4MOD:
++	case VME2_MASTERCTL:
++	case VME2_DMACTL:
++	case VME2_DMAMODE:
++	case VME2_DMALADDR:
++	case VME2_DMAVMEADDR:
++	case VME2_DMACOUNT:
++	case VME2_DMATABLE:
++	case VME2_DMASTAT:
++	case VME2_T2CMP:
++	case VME2_T2COUNT:
++	case VME2_PRESCALE:
++	case VME2_IRQSTAT:
++	case VME2_SETSOFTIRQ:
++	case VME2_IRQCLR:
++	case VME2_IRQL1:
++	case VME2_IRQL2:
++	case VME2_MISC:
++		if (!(d->warned_unimpl & (1ULL << (relative_addr >> 2)))) {
++			d->warned_unimpl |= 1ULL << (relative_addr >> 2);
++			if (writeflag == MEM_WRITE)
++				fatal("[ vme: unimplemented write to register "
++				    "0x%x (len %d): 0x%llx -- declined.  (once) ]\n",
++				    (unsigned) relative_addr, (int) len,
++				    (unsigned long long) idata);
++			else
++				fatal("[ vme: unimplemented read from register "
++				    "0x%x (len %d) -- served 0x%llx.  (once) ]\n",
++				    (unsigned) relative_addr, (int) len,
++				    (unsigned long long) odata);
++		}
++		break;
++
+ 	default:if (writeflag == MEM_READ)
+ 			debug("[ vme: unimplemented READ from offset 0x%x ]"
+ 			    "\n", (int)relative_addr);
+ 		else
+ 			debug("[ vme: unimplemented WRITE to offset 0x%x: "
+ 			    "0x%x ]\n", (int)relative_addr, (int)idata);
+-		exit(1);
++		/*  #568 (vmedefaultkill): an offset this model does not service:
++		    no header-named register, or the inside of one (a sub-word
++		    start).  Refuse the access -- for a guest data load or store,
++		    memory_rw then raises the m88k data-access exception, the bus
++		    error a badaddr() probe expects -- instead of exit(1), which
++		    ended the emulator with no visible reason (debug() is silent
++		    at default verbosity).  */
++		return 0;
+ 	}
+ 
+ 	if (writeflag == MEM_READ)
+
+=== regress/gate_arm.sh (working tree vs HEAD) ===
+diff --git a/regress/gate_arm.sh b/regress/gate_arm.sh
+index 887c3302..23583cae 100644
+--- a/regress/gate_arm.sh
++++ b/regress/gate_arm.sh
+@@ -1884,6 +1884,35 @@ else
+ fi
+ 
+ 
++#  ------------------------------------------------------------ vmedefaultkill (#568)
++#  dev_vme.c's default: ended the emulator (exit(1), announced only by debug() -- silent while
++#  free-running) on any VME2 offset the switch did not name.  Now: the 26 header-named registers
++#  the model does not implement DECLINE (reads served the preloaded word, writes dropped, one
++#  latched fatal() per register); every other unmatched offset returns 0, and for a guest data load
++#  or store memory_rw raises the m88k data-access exception.  The rung-3 witness
++#  (regress/artifacts/vmedefaultkill/witness_20261020/, 7 of 7 guest sites rc 1 on 5dbc000e) is NOT
++#  run here; this is its detector.  Needs only the binary: the probe constructs mvme88k/mvme187 with
++#  -M 64 and a 4-byte dummy image at 0x10000 -- no PROM image.  Kill tables:
++#  regress/artifacts/vmedefaultkill/killtable1_20261020/ (rev 2) and killtable2_20261021/ (rev 3).
++VMEDLOG=$LOGDIR/vme_default.log
++python3 -u vme_default_probe.py "$PMAX" gate > "$VMEDLOG" 2>&1 || true
++if ! grep -q "VME_DEFAULT_PROBE_DONE" "$VMEDLOG"; then
++    check "vme default probe completed" "no" "yes"
++else
++    check "vme default probe completed" "yes" "yes"
++    vres=$(sed -n 's/^VME_DEFAULT_RESULT=//p' "$VMEDLOG")
++    check "vme_default rows run"     "${vres#*/}" 38
++    check "vme_default rows correct" "${vres%/*}" "38"
++    check "vme default controls" "$(grep -c '^VME_DEFAULT_CONTROL=OK$' "$VMEDLOG")" "1"
++    for v in "neg apparatus" "session" "live" "vbr reset" "t1cmp rt" "cased census" "free ctl" "free quiet" "free neg ctl" "tctl rt" "vbr rt" "t1count inc" "cased wr" "p2 rd census" "p2 wr census" "p2 ld widths" "p2 st widths" "p2 ann rd" "p2 ann rd 2" "p2 ann wr" "p2 ann wr 2" "p2 nw rd" "p2 nw wr" "p2 nw rd 2" "p2 nw wr 2" "p2 zero wr" "p1 fault lo" "p1 fault hi" "p1 fault mid" "p1 fault wr" "p1 p2 edge" "p3 interim" "p2 int byte" "p2 int half" "p1 census" "p1 widths" "p1 quiet" "unasm"; do
++        check "vme default row: $v" "$(count "$VMEDLOG" "^$v  .*ok$")" "1"
++    done
++    check "vme default rows emitted" "$(( $(count "$VMEDLOG" " ok$") + $(count "$VMEDLOG" " FAIL$") ))" "38"
++    check "vme default rows green"   "$(count "$VMEDLOG" " ok$")"   "38"
++    check "vme default rows red"     "$(count "$VMEDLOG" " FAIL$")" "0"
++fi
++
++
+ #  ------------------------------------------------------------ hpcmipsctor (#444) + #536
+ #  Three of eight advertised hpcmips subtypes SIGABRTed during construction (#444).  Its rung-2
+ #  detector (~8 s, no rig image) shipped EXEMPT for want of a construction gate; #536 wires it here.
+
+=== regress/gate_hygiene.sh (working tree vs HEAD) ===
+diff --git a/regress/gate_hygiene.sh b/regress/gate_hygiene.sh
+index f71ba52e..a106d082 100644
+--- a/regress/gate_hygiene.sh
++++ b/regress/gate_hygiene.sh
+@@ -385,7 +385,7 @@ check "readiness: no unrecognised endswith spelling" "$unknown" "$EXPECT_UNKNOWN
+ #  and reds THREE rows -- this one, the promptless count and the promptless-names row -- because all three are
+ #  grandfathered names that exist only in the working tree (measured on a copy with them removed: 70/73, 40/43,
+ #  names gone=the three).  Written by `tools/derive_hygiene_pins.sh --write`, never by hand. ***
+-EXPECT_PTY_PROBES=76
++EXPECT_PTY_PROBES=77
+ #  *** AND THE SAME PROBE BROKE A SECOND CENSUS IN THIS FILE, WHICH pass 11's OWN
+ #  REPAIR DID NOT FIX.  Found by the codex seat reviewing that repair. ***
+ #
+@@ -420,8 +420,9 @@ sgi_de_width_probe.py sgi_re_unmapped_probe.py
+ alpha_harness_probe.py alpha_pfnoffset_probe.py alpha_swpctx_v0_probe.py alpha_tbi_probe.py arm_bfx_width_probe.py landisk_aux_probe.py lca_badval_probe.py lca_confbus_probe.py lca_confwidth_probe.py lca_irqstub_probe.py lca_irqstub_uart_probe.py lca_isalane_probe.py lca_widewrite_probe.py maple_dmaaddr_probe.py pcc2_c040_probe.py sgi_mte_fill_probe.py sgi_re_colourdefault_probe.py sgi_re_randompixel_probe.py sgi_re_rgb_probe.py wdc_altdigin_probe.py
+ arm_msrmode_probe.py lca_isaphys_probe.py
+ crime_width_probe.py
+-sgi_mte_decline_probe.py"
+-#  hygienecensus: tools/derive_hygiene_pins.sh --grandfather appended FOUR blocks to the list above; they are
++sgi_mte_decline_probe.py
++vme_default_probe.py"
++#  hygienecensus: tools/derive_hygiene_pins.sh --grandfather appended FIVE blocks to the list above; they are
+ #  named here by their FIRST NAME, never by position, because the next --grandfather appends another.
+ #  The block beginning `alpha_harness_probe.py` (derived 2026-09-19): 20 PROMPTLESS pty probes committed
+ #  between 2026-09-05 and 2026-09-18 that moved NO PIN -- they moved the promptless census (20 -> 40) and the
+@@ -442,7 +443,11 @@ sgi_mte_decline_probe.py"
+ #  waits, no readiness read -- and moved neither census, so this gate would have reddened at the next battery;
+ #  #567, adding its own pty probe, could not re-derive its pins while it stood, because --write refuses a
+ #  promptless probe that is neither grandfathered nor prompt-detecting.  Grandfathered on the 2026-09-19
+-#  precedent; converting its readiness is its own round.
++#  precedent; converting its readiness is its own round.  The block beginning `vme_default_probe.py`
++#  (2026-10-21, #568): its pty driver DOES wait for the prompt -- `PROMPT in buf[0]' and
++#  `buf[0].find(PROMPT, start)' -- a real readiness wait this census cannot see, as with alpha_tbi_probe.py,
++#  because the key is a CODE-level call of the ends-with method.  Grandfathered by name, not converted; the same
++#  --write moved EXPECT_PTY_PROBES 76 -> 77 (75 committed + this probe + lca_isaphys_probe.py, still untracked).
+ #  Re-derive, never hand-edit: `bash tools/derive_hygiene_pins.sh` (report),
+ #  `--grandfather NAME...` / `--release NAME...`, then `--write`.
+ 
+
+=== tools/precommit_check.sh (working tree vs HEAD) ===
+diff --git a/tools/precommit_check.sh b/tools/precommit_check.sh
+index f6aaaade..2d701fd5 100644
+--- a/tools/precommit_check.sh
++++ b/tools/precommit_check.sh
+@@ -356,7 +356,9 @@ elif out=$(python "$SCORECHK" 2>&1); then
+ 	#  RAISED 35 -> 36 ON 2026-10-18, DELIBERATELY.  One newly gated probe: fbctrl_cmd_probe.py
+ 	#  (#567, pinned UNQUOTED in gate_mips_folds.sh at its final 125 rows; 95 when this line was
+ 	#  first written, before the review passes grew it).
+-	SCORE_CLAIMS_MANIFEST=36
++	#  RAISED 36 -> 37 ON 2026-10-21, DELIBERATELY.  One newly gated probe: vme_default_probe.py
++	#  (#568, pinned UNQUOTED in gate_arm.sh at 38 rows under the stem vme_default).
++	SCORE_CLAIMS_MANIFEST=37
+ 	_spinned=$(printf '%s\n' "$out" | sed -n 's/^SCORE_CLAIMS_PINNED=//p')
+ 	if [ -z "$_spinned" ]; then
+ 		bad "check_score_claims printed no SCORE_CLAIMS_PINNED line -- the count cannot be pinned"
+
+=== regress/vme_default_probe.py: NEW FILE, 58576 bytes -- read it in place ===
+
+=== regress/artifacts/vmedefaultkill/codex_design_20260911.err: NEW FILE, 69534 bytes -- read it in place ===
+
+=== regress/artifacts/vmedefaultkill/codex_design_20260911.txt: NEW FILE, 12795 bytes -- read it in place ===
+
+=== regress/artifacts/vmedefaultkill/codex_faultreopen_20260911.err: NEW FILE, 86936 bytes -- read it in place ===
+
+=== regress/artifacts/vmedefaultkill/codex_faultreopen_20260911.txt: NEW FILE, 13858 bytes -- read it in place ===
+
+=== tools/pipeline/check_probe_wiring.py (staged copy C:/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/vme/commit/staged/check_probe_wiring.py vs HEAD) ===
+diff --git a/C:/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/vme/commit/confirm/_head.tmp b/C:/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/vme/commit/staged/check_probe_wiring.py
+index adc4ad9..7d25b9c 100644
+--- a/C:/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/vme/commit/confirm/_head.tmp
++++ b/C:/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/vme/commit/staged/check_probe_wiring.py
+@@ -2854,6 +2854,53 @@ MANIFEST = {
+     "fbpending_drain_probe.py":    (CLASS_DETECTOR, "#442 footbridge pending-tick backlog"),
+     "fbctrl_port_probe.py":        (CLASS_DETECTOR, "#549 fbctrl PORT selector refusal"),
+     "fbctrl_cmd_probe.py":         (CLASS_DETECTOR, "#567 fbctrl COMMAND refusal"),
++    #  #568 vmedefaultkill (dev_vme.c's default: ended the emulator): the gated detector, the rung-3 witness of the
++    #  defect on HEAD 5dbc000e, and the instruments kill tables 1, 1b, the M_IDATA leg, table 2 and its addenda 2b and
++    #  2c ran -- evidence under regress/artifacts/vmedefaultkill/, not tests.  The frozen probe copies and the table
++    #  scripts are RESEARCH by the #471 definition at CLASS_RESEARCH ("the instruments preserved beside a kill table";
++    #  git blame: #471 added that class and its comment together, 0a7c4687); #539/#545 used WITNESS, #530 TOOL.
++    "vme_default_probe.py":
++        (CLASS_DETECTOR, "#568 vmedefaultkill: 38 rows on unmodified -E mvme88k -e mvme187 (rev 3); gated in gate_arm.sh (gate 14) under the stem vme_default, pinned at 38; kill table 2 (artifacts/vmedefaultkill/killtable2_20261021/) BASE 38/38, HEAD 14/38, NULL 5/38 CONTROL=FAIL, 32 of 34 legs killed (M_CAPNARROW by its failed build), the 2 survivors predicted equivalents; addenda 2b/2c/2d: 7 legs, 2 killed, 3 clause-(e) survivors, 2 equivalents"),
++    "artifacts/vmedefaultkill/witness_20261020/vme_sites_probe.py":
++        (CLASS_WITNESS, "#568 the rung-3 witness: 7 of 7 guest access sites end the emulator (rc 1) on HEAD 5dbc000e"),
++    "artifacts/vmedefaultkill/witness_20261020/vme_freerun_companion.py":
++        (CLASS_WITNESS, "#568 the witness's free-running companion: a MASTERCTL read dies with NO `[ vme:' text on HEAD; the T1CMP control reaches its breakpoint"),
++    "artifacts/vmedefaultkill/killtable1_20261020/vme_default_probe.frozen.py":
++        (CLASS_RESEARCH, "#568 the FROZEN rev-2 probe (34 rows, md5 19de15b3) kill tables 1, 1b and the M_IDATA leg ran, preserved as evidence"),
++    "artifacts/vmedefaultkill/killtable1_20261020/mk_legs568.py":
++        (CLASS_RESEARCH, "#568 kill table 1's leg generator (one find/replace per leg on fix568), preserved as evidence"),
++    "artifacts/vmedefaultkill/killtable1_20261020/cmp_table568.py":
++        (CLASS_RESEARCH, "#568 kill table 1's comparator against PRETABLE.out + its addendum, preserved as evidence"),
++    "artifacts/vmedefaultkill/killtable1_20261020/table1b/mk_legs568b.py":
++        (CLASS_RESEARCH, "#568 kill table 1b's leg generator (M_DROPIRQEN, M_T1CMPWRDROP, M_ADD90), preserved as evidence"),
++    "artifacts/vmedefaultkill/killtable1_20261020/table1b/cmp_table568b.py":
++        (CLASS_RESEARCH, "#568 kill table 1b's comparator against PRETABLE1B.txt, preserved as evidence"),
++    "artifacts/vmedefaultkill/killtable1_20261020/idata/mk_leg_idata.py":
++        (CLASS_RESEARCH, "#568 the M_IDATA leg's generator (the pass-2 floor-breach mutant, 34/34 on rev 2), preserved as evidence"),
++    "artifacts/vmedefaultkill/killtable1_20261020/idata/cmp_idata.py":
++        (CLASS_RESEARCH, "#568 the M_IDATA leg's comparator against PRETABLE_IDATA.txt, preserved as evidence"),
++    "artifacts/vmedefaultkill/killtable2_20261021/vme_default_probe.rev3.frozen.py":
++        (CLASS_RESEARCH, "#568 the FROZEN rev-3 probe (38 rows, md5 ddcebfe3) tables 2, 2b and 2c ran -- the shipped regress/vme_default_probe.py differs in docstring and comment text only (the repair-diff pass's records corrections; AST-identical, docstring removed), preserved as evidence"),
++    "artifacts/vmedefaultkill/killtable2_20261021/mk_legs568t2.py":
++        (CLASS_RESEARCH, "#568 table 2's leg generator (27 legs regenerated on fix568b + 7 new), preserved as evidence"),
++    "artifacts/vmedefaultkill/killtable2_20261021/mk_driver_t2.py":
++        (CLASS_RESEARCH, "#568 table 2's driver generator, preserved as evidence"),
++    "artifacts/vmedefaultkill/killtable2_20261021/mk_pretable2.py":
++        (CLASS_RESEARCH, "#568 table 2's PRETABLE2 generator (written before the first build), preserved as evidence"),
++    "artifacts/vmedefaultkill/killtable2_20261021/cmp_table2.py":
++        (CLASS_RESEARCH, "#568 table 2's comparator against PRETABLE2, preserved as evidence"),
++    "artifacts/vmedefaultkill/killtable2_20261021/quickcheck_t2.py":
++        (CLASS_RESEARCH, "#568 table 2's per-leg quick check, preserved as evidence"),
++    "artifacts/vmedefaultkill/killtable2_20261021/obj/norm_objdump.py":
++        (CLASS_RESEARCH, "#568 the objdump normaliser behind OBJDUMP_fix568_vs_fix568b.txt, preserved as evidence"),
++    "artifacts/vmedefaultkill/killtable2_20261021/obj/strref_census.py":
++        (CLASS_RESEARCH, "#568 the string-reference census (keyed on string content) behind the fix568/fix568b object comparison, preserved as evidence"),
++    "artifacts/vmedefaultkill/killtable2_20261021/table2b/mk_leg_idatabit.py":
++        (CLASS_RESEARCH, "#568 table 2b's leg generator (M_IDATABIT1, the clause-(e) store-data leg: 38/38 as predicted), preserved as evidence"),
++    "artifacts/vmedefaultkill/killtable2_20261021/table2c/mk_legs_t2c.py":
++        (CLASS_RESEARCH, "#568 table 2c's leg generator (the repair-diff pass's three GLM legs: M_DFLTIDNZ 29/38, M_DFLTIDZ 36/38, M_DIRODATA equivalent), preserved as evidence"),
++    "artifacts/vmedefaultkill/killtable2_20261021/table2d/mk_legs_t2d.py":
++        (CLASS_RESEARCH, "#568 table 2d's leg generator (the repair-diff pass's three Argon legs, all 38/38 as predicted: M_ZEROSET and M_DFLTFFC clause (e), M_SETODATA equivalent), preserved as evidence"),
+     "artifacts/fbctrlcmdkill/pass2_20261018/legs/probe.frozen.py":
+         (CLASS_RESEARCH, "#567 the shipped probe's v1 copy run for its in-tree legs, preserved as evidence"),
+     "artifacts/fbctrlportkill_20260924/opus549_measured/c3/gen_c3.py":
+
+=== tools/pipeline/ledger.json (staged copy C:/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/vme/commit/staged/ledger.json vs HEAD) ===
+diff --git a/C:/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/vme/commit/confirm/_head.tmp b/C:/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/vme/commit/staged/ledger.json
+index 7317e9c..3e38d5c 100644
+--- a/C:/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/vme/commit/confirm/_head.tmp
++++ b/C:/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/vme/commit/staged/ledger.json
+@@ -46611,11 +46611,11 @@
+   },
+   {
+    "id": "vmedefaultkill",
+-   "state": "open",
++   "state": "held",
+    "sev": "high",
+    "opened": "2026-09-10",
+    "title": "dev_vme.c: the default arm announces with debug() -- INVISIBLE at default verbosity -- and then calls exit(1), so a guest probing an unimplemented VME2 register kills the emulator with NO VISIBLE REASON; M88K, so the FAULT member is available",
+-   "note": "[2026-10-09] QUEUE 7n-4 ANSWERED; OWNER: MEASURE FIRST.  Fable 5.1 (regress/artifacts/fablequeue7n_20261009/fable5_rule7n_4.md): the owner's FAULT ruling binds population 1 (accesses the emulator cannot service) and reaches neither other population.  POPULATION 2 -- the in-tree OpenBSD 2.2 guest's MASTERCTL (r/w), MASTER3, MASTER4, MASTER4MOD at attach and IRQSTAT (r) / IRQCLR (w) in the abort handler -- went back to the owner, with the file's own sibling idiom (DECLINE + announce, the #501 shape) as the default pending re-ruling and BACKED ACCEPT not licensed.  GPT-6 Astra CONFIRM WITH CHANGES (7) (regress/artifacts/fablequeue7n_20261009/astra_7n4/codex_astra.txt): six registers, SEVEN access sites (five initialisation operations, straight-line once the VME2 branch runs; IRQSTAT read when the abort handler runs; IRQCLR written only if the abort-status bit is set); vmematch() reads no VME register, so 'already matched (on offset 0, served)' is false; the guest panic under FAULT is CONDITIONAL on unmeasured CMMU/exception state (DPFSR comes from a memory-mapped CMMU read; panictrap() only when pcb_onfault is 0); the five neighbouring cased registers call debug() on every access -- 'latched' is a proposal, not this file's idiom; and serving IRQSTAT as 0 makes an invoked abort handler return before clearing the interrupt or calling nmihand().  OWNER 2026-10-09 (AskUserQuestion): MEASURE FIRST.  MEASURED THE SAME EVENING (agy, rung 3, unmodified -E mvme88k -e mvme187, regress/artifacts/vmedefaultkill/measure_20261009/): one session per site per binary, each with a cased T1CMP round-trip (0x12345678 back in all three binaries), a liveness `or` and an unassemble check.  HEAD: all SEVEN sites end the emulator (rc 1).  FAULT sketch (the arm returns 0): every site vectors to VBR+0x18 with DMT0/DMD0/DMA0 recorded, but the data CMMU's PFSR and PFAR read 0 through a guest `ld` at 0xfff7f108/0xfff7f10c -- the guest's eh.S stores exactly that word as dpfsr, so trap.c sees neither a guarded bus error (0x3) nor a page/segment fault (0x4/0x5) and reaches panictrap() with pcb_onfault 0: the attach PANICS (read by the main loop in trap.c; a modelled bus error would not save it either, since guarded recovery covers only badaddr()'s window).  DECLINE sketch (odata = 0; break): reads return 0, writes are dropped, liveness green -- attach completes.  The abort handler would read IRQSTAT 0 and return as spurious without nmihand(), but nothing in the model raises the VME2 abort interrupt today.  OWNER 2026-10-09, on that measurement: population 2 -> DECLINE + ANNOUNCE ONCE (reads 0, writes dropped, one fatal() per register with the house '(once)' marker, #501's shape); population 1 keeps the FAULT ruling.  Populations 3 and 4 are filed as vmewidthlanes.  ||  FILED 2026-09-10 from the GPT-6 Astra exit audit, listed among the six E1 predicates. VERIFIED LOCALLY.\n\n*** THIS ONE IS WORSE THAN THE USUAL SHAPE AND THE REASON IS THE DIAGNOSTIC LEVEL. ***  Every other unimplemented-register kill in this queue announces with `fatal()', which this fork has measured CANNOT be silenced by -q (debugmsg.c: fatal() has no early-out and goes straight to va_debug).  This one uses **debug()**, which DOES have an early-out -- `if ((quiet_mode && !ss) || v < 0) return;' -- so at default verbosity the message is not printed at all.  **The emulator therefore dies with no output explaining why.**  A user sees the process vanish; a gate sees a non-zero exit and no diagnostic to grep.  That makes this the hardest member of the class to DIAGNOSE, independent of how hard it is to trigger.\n\nREACHABILITY: machine_mvme88k.c installs it -- `vme addr=0x%x', VME2_BASE -- unconditionally on a machine this project actively boots (the same constructor attaches the PCC2 the recent rounds are about).  Probing a bus controller's register space is exactly what firmware does.\n\nDISPOSITION: member 5 (FAULT) is AVAILABLE -- M88K is one of the two families for which memory_rw.c delivers a failed-device exception -- so `return 0' gives the guest the bus error real VME hardware would.  Member 3 (decline + latched announce) is the alternative and would need the announce PROMOTED from debug() to fatal() to be worth anything, which is a second change the round must make deliberately rather than inherit.\n\nNOT MEASURED, no witness; the rung-3 attempt is owed.\n\n*** DESIGN REVIEW 2026-09-10: DECLINE + LATCHED ANNOUNCE, and the review RATIFIES PROMOTING THE DIAGNOSTIC -- 'including deliberate promotion of its default-arm diagnostics to fatal()'. ***  So the second change this row flagged is not an optional rider; it is part of the disposition.  FAULT is mechanically available on M88K and is ruled OUT for the same reason as [[crimewidthkill]]: this is a PRESENT device refusing an unimplemented register, not an absent one, and a bus error would assert something about the hardware that nothing establishes.\n\nREACHABILITY CONFIRMED AND MADE PRECISE: the registered aperture is 4 KiB while the exact-offset switch recognises only TEN offsets, and the device's own vendored header names further real registers -- the second timer, interrupt status, master mapping controls -- that have NO cases at all.  So both reads and writes reach the default arm through ordinary register access, not through anything exotic.\n\n*** 2026-09-11 HARVEST (codex GPT-6 Astra at max, 12,795 b, COMPLETE).  I FORECLOSED THE FAULT OPTION BY ASSERTION, AND THIS PROJECT'S OWN QUEUE FILE RECOMMENDS THE OPPOSITE. ***\n\n**THE PROCESS FAILURE FIRST, because it is the finding.**  My brief's settled-premises block said *\"a bus fault was ruled OUT\"* -- a PRESENT device refusing an unimplemented register, not an ABSENT one.  The seat obeyed and said so: *\"the caller behaviour is accepted from your adjudication; `memory_rw.c` was outside this review.\"*  **The option was removed before the panel could argue with it.**  That is the option-set rule's own failure mode -- *a brief that lists two options gets a panel arguing about two options* -- committed by the person who wrote the rule into the brief.\n\nTHREE FACTS CUT THE OTHER WAY, each verified by opening the file:\n  1. `OUTSTANDING_BUGS.md:18236-18239`, the row this round is working, says *\"member 5 (FAULT) is **available** ... so `return 0` gives the guest the bus error real VME hardware would.\"*\n  2. `memory_rw.c:595-624` delivers it -- `res == 0` -> `res = -1` -> `m88k_exception(cpu, M88K_EXCEPTION_DATA_ACCESS, 0)`.  **And its comment at `:615-619` is the part that matters: *\"This is enough for OpenBSD/mvme88k's badaddr() implementation.\"*  The guest that runs on this exact machine PROBES WITH BUS FAULTS ON PURPOSE.**\n  3. `machine_mvme88k.c:106, :120, :123` install `dev_unreadable` THREE TIMES in the same MVME187 arm, within ~30 lines of the `vme` attach, and `dev_unreadable.c:41-44` is the whole device: `return 0;`.  **FAULT is that constructor's own idiom for absent hardware.**\n\n*The present/absent distinction may still win -- it is a real argument.  But it must win on the evidence, and it has not been tested against any of the three.*  Re-fired to codex as `codex_faultreopen_20260911` with `memory_rw.c` PERMITTED this time, asking for both sides argued before a ruling.  Also put to the owner.\n\n*** AND THE SHIPPED ANSWER'S OWN SCOPE DISCLOSURE NEVER MADE IT INTO THE ANSWER. ***  The `.err` holds a SECOND, ABANDONED RENDER whose surviving tail (`:1484-1486`) says *\"I did not inspect `memory_rw.c` or independently verify the 'two families' claim\"* -- the sharpest scope statement in the whole exchange, sitting in the file nobody reads.  **Read the `.err` tail, not only the `.txt`.**\n\n=== FINDINGS THAT CHANGE THE EDIT ===\n\n**(A) DELETING `exit(1)` DOES NOT GIVE ZERO READS, AND ONE ALIAS IS NONZERO FROM RESET WITH NO GUEST WRITE AT ALL.**  `dev_vme.c:65-66` loads `odata = d->reg[relative_addr / sizeof(uint32_t)]` **before** the switch, unconditionally on `MEM_READ`; `:161-162` seeds the VBR word to `VME2_SET_VBR0(6)+VME2_SET_VBR1(7)` = **0x67000000** at devinit; `VME2_VBR` is `0x0088`.  **So a byte or halfword read at offset 0x89-0x8b takes `default:` and returns 0x67000000 on a freshly constructed machine.**  Under DECLINE the round must add an explicit `odata = 0;` or consciously keep the alias, and the contract must say which.  **Under FAULT the question dissolves** -- nothing is returned.  *That asymmetry is now part of the disposition question rather than a detail under it.*\n\n**(B) THE KILL IS REACHABLE AT SUB-WORD OFFSETS OF *IMPLEMENTED* REGISTERS.**  The switch compares the RAW BYTE OFFSET while storage indexes by `relative_addr / sizeof(uint32_t)`, so a case does not cover all four bytes of its own backing word.  **A byte access at 0x51 -- inside T1CMP -- falls to `default:` and kills the host today.**  Twelve such byte offsets sit inside the four storing registers.  *This is exactly the shape a detector written from the fix's INTENT will miss.*\n\n**(C) THE CENSUS RESOLVES EXACTLY: 4086 of 4096 byte offsets, 1014 of 1024 word offsets**, and it is SCATTERED, not contiguous -- six runs: `0x004..0x028` (10 words), `0x030..0x048` (7), `0x058..0x05c` (2), `0x064..0x068` (2), `0x070..0x07c` (4), `0x08c..0xffc` (989).  **The very first gap is the word ADJACENT to `case 0:`, the offset the file's own comment says OpenBSD probes.**  *The seat correctly REFUSED to name a number without the header and gave bounds instead; both bounds turned out to be the answer.*\n\n=== FINDINGS THAT CHANGE THE RECORD OR THE ORACLE ===\n\n* **`debug()` is NOT silent during machine CONSTRUCTION.**  `emul_executing` is false (`emul.c:67`) until `emul.c:1044`, so at setup `v = verbose = 0`, the `v < 0` early-out does not fire, and the message PRINTS.  The silence is specific to run-time accesses -- **so a witness must drive the access FROM THE GUEST, or the pre-fix symptom is \"printed, then died\" and the round's headline claim does not reproduce.**\n* **The stdout-flush caveat points the OTHER way for the premise.**  `va_debug()` uses `printf` with no `fflush` -- but the current code calls `exit(1)` immediately and `exit()` flushes stdio, so the pre-fix silence is ENTIRELY the `debug()` early-out with nothing lost to buffering.  That STRENGTHENS the premise.  The caveat lands on the POST-fix code, where no exit forces the flush.\n* **`#261` CANNOT be tripped by promoting to `fatal()`.**  `debugmsg_break_on_error` (`debugmsg.c:102`) is tested at `:159` inside `debugmsg_va()`, reachable only from `debugmsg()`; `fatal()` (`:384-390`) calls `va_debug()` directly and never enters it.  Corroborated by two in-tree comments that already said so (`dev_asc.c:256`, `dev_wdc.c:113-114`).\n* **My \"roughly a dozen\" non-fatal notices was wrong: NINE active across five named offsets** -- GCSRCTL x1, TCR x2, IRQEN x2, IRQL3 x2, IRQL4 x2.  TCTL's is COMMENTED OUT at `:104`.  Twelve textual, nine active.\n* **The file has NO latch of either kind.**  `struct vme_data` (`:52-54`) holds only `reg[]` and `:158` zeroes it, so a new `int` self-initialises.  House form is `dev_wdc.c:75-79, :115-120`.  A function-static would let one instance silence another.\n* **Install site NARROWED: `machine_mvme88k.c:95-96`, inside `case MACHINE_MVME88K_187:` ONLY.**  My \"unconditionally\" was true only within that arm -- MVME188/MVME197 (`:127-135`) are bare `strdup`+TODO and install nothing.  Window `0xfff40000`-`0xfff40fff`.\n\n*** THE VERDICT/BODY CONTRADICTION, and it is this project's own recorded verdict-line hazard: the verdict ratifies (b) while the body's own (b) cell says **\"define the read fallback explicitly\"** and S6 says deleting `exit(1)` alone does not give zero reads.  A reader stopping at the verdict ships an edit the body calls under-specified. ***\n\n**THE HONEST REFUSAL THAT STANDS:** whether a STOCK BOOT actually travels the `default:` arm is NOT established.  The only firmware evidence in the file -- `case 0:`'s *\"Used by OpenBSD/mvme88k when probing\"* -- proves a SUPPORTED probe exists and says nothing about an unmatched offset being touched.  **The round still owes the rung-3 probe attempt.**\n\n*** OWNER RULING 2026-09-11: **FAULT -- `return 0`**.  The disposition I had foreclosed by assertion is the one adopted. ***\n\nThe `default:` arm returns 0, `memory_rw.c:595-624` converts that to `m88k_exception(cpu, M88K_EXCEPTION_DATA_ACCESS, 0)`, and the guest takes the bus error that `badaddr()` probing expects.  **The previously ratified decline-plus-latched-announce is SUPERSEDED**; the promotion of `debug()` to `fatal()` goes with it, because there is no longer an announce to promote.\n\nWHAT THE RULING BUYS, beyond matching the queue file and the `dev_unreadable` idiom used three times in the same machine arm:\n  * **the `odata` aliasing defect DISSOLVES.**  Under DECLINE the round owed an explicit `odata = 0;` because `dev_vme.c:65-66` loads from `d->reg[]` before the switch and `:161-162` seeds the VBR word to `0x67000000`, so a byte read at 0x89-0x8b returned that value from reset with no guest write.  **Under FAULT nothing is returned at all** and the cell cannot leak.\n  * the announce, the latch, the per-instance-vs-function-static question, and the `#261` interaction all become moot.  *Three of the seven questions I put to the panel were about machinery this disposition does not need.*\n\nWHAT IT STILL OWES:\n  1. **The twelve sub-word offsets inside IMPLEMENTED registers.**  The switch compares the raw byte offset while storage indexes by word, so a byte access at 0x51 -- inside T1CMP -- reaches `default:`.  **Under FAULT that now raises a bus error on a register that DOES exist**, which is a different and arguably worse wrong answer than the host kill it replaces.  *This is the one place the ruling makes something harder rather than easier, and it must be decided explicitly rather than inherited.*\n  2. The rung-3 probe attempt -- whether a stock boot travels the arm is still NOT established, and the seat's refusal on that point stands.\n  3. The detector's oracle changes shape entirely: a fault is observed as an EXCEPTION, not as a returned value or a logged announce, so no row from the decline design survives unchanged.\n\n*** 2026-09-11 -- THE REOPENED PANEL AGREES WITH THE OWNER.  **THE SEAT RULED FAULT TOO**, with `memory_rw.c` PERMITTED this time, and it sharpened one argument while honestly refusing another. ***\n\n*VERDICT: \"FAULT (`return 0`) for the unsupported-access fallback; handle register byte lanes separately.\"*  13,858 b, liveness token returned, ends in a finished sentence, sentinel cleared cleanly.\n\n**ALL THREE OF MY NEW FACTS SURVIVED, and one came back STRONGER than I put it.**  I argued that `dev_unreadable` being installed three times in the MVME187 arm shows FAULT is the constructor's idiom for ABSENT hardware.  The seat found the sharper version: **the board description at `machine_mvme88k.c:35` lists Ethernet hardware, and the constructor substitutes `unreadable` for that Ethernet, marked TODO** (`:106`, with `:120` \"VMES (?): TODO\" and `:123` \"VME devices: TODO\").  **So this constructor already uses faults for hardware OMITTED FROM EMULATION, not merely for hardware that is absent from the board.**  That is precisely the case at hand, and it weakens my original categorical present/absent argument further than I had.\n\n**AND IT REFUSED THE HARDWARE CLAIM, which is the right refusal:** *\"It does not establish that real VME hardware would fault at every offset reaching this `default:`.  That hardware claim remains unproved.\"*  Registering a `0x1000` region establishes **the emulator's dispatch aperture, not that physical hardware acknowledges every transaction inside it** -- and the header specifies no legal widths, no reserved-offset responses and no timeout behaviour.  *The disposition is therefore justified as \"an access the emulator cannot service\", NOT as \"this is what the hardware does\".  The round's record must say it that way.*\n\n*** AND IT REFUTED THE PRESENT/ABSENT FRAMING ON ITS OWN TERMS, not just its weight: \"the device is present and the register is not\" DOES NOT DESCRIBE THE WHOLE DEFAULT ARM. ***  The header names `VME2_DMACTL`, `VME2_T2CMP`, `VME2_T2COUNT` and `VME2_PRESCALE` -- **registers whose exact offsets have NO switch case.**  Those are named register definitions lacking emulator handling, not addresses the source identifies as nonexistent.  So the `default:` arm is a MIXTURE of three populations, and I had been reasoning about it as one:\n  1. offsets with no register defined anywhere -- FAULT is honest;\n  2. **named registers the emulator simply does not implement** -- FAULT says \"nothing here\" about something the board documents as present;\n  3. sub-word lanes of registers that ARE implemented -- FAULT is plainly wrong.\n\n**THE SEAT'S OWN CAVEAT CONVERGES WITH THE ONE I FLAGGED TO THE OWNER, reached independently:** *\"Interior offsets need their own access-width decision and corresponding oracle; successful removal of the exit does not close that issue.\"*  **Two parties, two routes, same residual.**\n\nWHAT THE ROUND NOW OWES, consolidated:\n  * a decision on population 3 (the twelve sub-word lanes) that is NOT inherited from the population-1 ruling;\n  * a stated position on population 2 -- whether an unimplemented-but-documented register should fault or be backed;\n  * the rung-3 probe attempt, still outstanding;\n  * *\"probe recovery and an ordinary driver's fault response require integration validation\"* -- the review establishes the dispatch mechanism and **explicitly does not establish continued bootability**.\n\n*The seat also declined to verify the queue-file recommendation, because `OUTSTANDING_BUGS.md` was outside its permitted set, and said so rather than treating my quotation as a checked repository finding.  That is the honest form and is recorded as an answer, not a gap.*",
++   "note": "[2026-10-21] LANDED as #568 (regress/artifacts/vmedefaultkill/; CHANGELOG #568).  Repair 1 (fix568b + probe rev 3, 38 rows) closed pass 2's floor breach (M_IDATA: 34/34 on rev 2, red at `p2 zero wr` on rev 3); kill table 2 and addenda 2b/2c measured the floor; the repair-diff pass closed the chain (Fable, Astra, Grok + an adversarial grok job CLOSE; GLM REPAIR AGAIN on records only, its one floor item refuted by table 2c).  Argon, the second packet-fed lens: pass 1 answered; pass 2 and the repair pass's first send died on transport ('connection lost while generating', extended thinking on) -- re-sent with extended thinking off, it answered REPAIR AGAIN; adjudicated, no floor breach survives: three kill attributions, and three survivors measured in table 2d (clause (e) or equivalent), one of them -- a latch set skipped for a zero store -- a cell no other seat named.  Filed: vmewarnedbit, vmeprobedebt, m88kpsrmxm; vmewidthlanes widened.  ||  [2026-10-20] IN WORK as round #568 (the loop's singular task).  RE-WITNESSED on HEAD 5dbc000e by an Opus 5.5 sub-agent (a measurement, not a panel seat): 7/7 sites rc 1, the free-running read silent, the free-running T1CMP control hit its breakpoint (regress/artifacts/vmedefaultkill/witness_20261020/SUMMARY.md).  PASS 1 (design) FIRED on the owner's 2026-10-20 roster -- GLM 5.3, grok-4.7, GPT-6 Astra, Fable 5.1 -- plus Argon (Gemini web) as a second packet-fed lens: all five PROCEED WITH CHANGES (regress/artifacts/vmedefaultkill/pass1_20261020/ADJUDICATION_p1.md).  Design kept: exact case labels for the 26 header-named registers (Fable dissented for a bound test in default:, recorded); no `odata = 0`; both announce prints become measurements (64-bit write value, served value); a compile-time latch-capacity check; default: returns 0 with corrected wording.  The detector grows the rows the seats found missing (write-side and mixed-direction announce, non-word stores, one session per fault, interior pins at 0x29/0x2a, a free-running negative control).  ||  [2026-10-09] QUEUE 7n-4 ANSWERED; OWNER: MEASURE FIRST.  Fable 5.1 (regress/artifacts/fablequeue7n_20261009/fable5_rule7n_4.md): the owner's FAULT ruling binds population 1 (accesses the emulator cannot service) and reaches neither other population.  POPULATION 2 -- the in-tree OpenBSD 2.2 guest's MASTERCTL (r/w), MASTER3, MASTER4, MASTER4MOD at attach and IRQSTAT (r) / IRQCLR (w) in the abort handler -- went back to the owner, with the file's own sibling idiom (DECLINE + announce, the #501 shape) as the default pending re-ruling and BACKED ACCEPT not licensed.  GPT-6 Astra CONFIRM WITH CHANGES (7) (regress/artifacts/fablequeue7n_20261009/astra_7n4/codex_astra.txt): six registers, SEVEN access sites (five initialisation operations, straight-line once the VME2 branch runs; IRQSTAT read when the abort handler runs; IRQCLR written only if the abort-status bit is set); vmematch() reads no VME register, so 'already matched (on offset 0, served)' is false; the guest panic under FAULT is CONDITIONAL on unmeasured CMMU/exception state (DPFSR comes from a memory-mapped CMMU read; panictrap() only when pcb_onfault is 0); the five neighbouring cased registers call debug() on every access -- 'latched' is a proposal, not this file's idiom; and serving IRQSTAT as 0 makes an invoked abort handler return before clearing the interrupt or calling nmihand().  OWNER 2026-10-09 (AskUserQuestion): MEASURE FIRST.  MEASURED THE SAME EVENING (agy, rung 3, unmodified -E mvme88k -e mvme187, regress/artifacts/vmedefaultkill/measure_20261009/): one session per site per binary, each with a cased T1CMP round-trip (0x12345678 back in all three binaries), a liveness `or` and an unassemble check.  HEAD: all SEVEN sites end the emulator (rc 1).  FAULT sketch (the arm returns 0): every site vectors to VBR+0x18 with DMT0/DMD0/DMA0 recorded, but the data CMMU's PFSR and PFAR read 0 through a guest `ld` at 0xfff7f108/0xfff7f10c -- the guest's eh.S stores exactly that word as dpfsr, so trap.c sees neither a guarded bus error (0x3) nor a page/segment fault (0x4/0x5) and reaches panictrap() with pcb_onfault 0: the attach PANICS (read by the main loop in trap.c; a modelled bus error would not save it either, since guarded recovery covers only badaddr()'s window).  DECLINE sketch (odata = 0; break): reads return 0, writes are dropped, liveness green -- attach completes.  The abort handler would read IRQSTAT 0 and return as spurious without nmihand(), but nothing in the model raises the VME2 abort interrupt today.  OWNER 2026-10-09, on that measurement: population 2 -> DECLINE + ANNOUNCE ONCE (reads 0, writes dropped, one fatal() per register with the house '(once)' marker, #501's shape); population 1 keeps the FAULT ruling.  Populations 3 and 4 are filed as vmewidthlanes.  ||  FILED 2026-09-10 from the GPT-6 Astra exit audit, listed among the six E1 predicates. VERIFIED LOCALLY.\n\n*** THIS ONE IS WORSE THAN THE USUAL SHAPE AND THE REASON IS THE DIAGNOSTIC LEVEL. ***  Every other unimplemented-register kill in this queue announces with `fatal()', which this fork has measured CANNOT be silenced by -q (debugmsg.c: fatal() has no early-out and goes straight to va_debug).  This one uses **debug()**, which DOES have an early-out -- `if ((quiet_mode && !ss) || v < 0) return;' -- so at default verbosity the message is not printed at all.  **The emulator therefore dies with no output explaining why.**  A user sees the process vanish; a gate sees a non-zero exit and no diagnostic to grep.  That makes this the hardest member of the class to DIAGNOSE, independent of how hard it is to trigger.\n\nREACHABILITY: machine_mvme88k.c installs it -- `vme addr=0x%x', VME2_BASE -- unconditionally on a machine this project actively boots (the same constructor attaches the PCC2 the recent rounds are about).  Probing a bus controller's register space is exactly what firmware does.\n\nDISPOSITION: member 5 (FAULT) is AVAILABLE -- M88K is one of the two families for which memory_rw.c delivers a failed-device exception -- so `return 0' gives the guest the bus error real VME hardware would.  Member 3 (decline + latched announce) is the alternative and would need the announce PROMOTED from debug() to fatal() to be worth anything, which is a second change the round must make deliberately rather than inherit.\n\nNOT MEASURED, no witness; the rung-3 attempt is owed.\n\n*** DESIGN REVIEW 2026-09-10: DECLINE + LATCHED ANNOUNCE, and the review RATIFIES PROMOTING THE DIAGNOSTIC -- 'including deliberate promotion of its default-arm diagnostics to fatal()'. ***  So the second change this row flagged is not an optional rider; it is part of the disposition.  FAULT is mechanically available on M88K and is ruled OUT for the same reason as [[crimewidthkill]]: this is a PRESENT device refusing an unimplemented register, not an absent one, and a bus error would assert something about the hardware that nothing establishes.\n\nREACHABILITY CONFIRMED AND MADE PRECISE: the registered aperture is 4 KiB while the exact-offset switch recognises only TEN offsets, and the device's own vendored header names further real registers -- the second timer, interrupt status, master mapping controls -- that have NO cases at all.  So both reads and writes reach the default arm through ordinary register access, not through anything exotic.\n\n*** 2026-09-11 HARVEST (codex GPT-6 Astra at max, 12,795 b, COMPLETE).  I FORECLOSED THE FAULT OPTION BY ASSERTION, AND THIS PROJECT'S OWN QUEUE FILE RECOMMENDS THE OPPOSITE. ***\n\n**THE PROCESS FAILURE FIRST, because it is the finding.**  My brief's settled-premises block said *\"a bus fault was ruled OUT\"* -- a PRESENT device refusing an unimplemented register, not an ABSENT one.  The seat obeyed and said so: *\"the caller behaviour is accepted from your adjudication; `memory_rw.c` was outside this review.\"*  **The option was removed before the panel could argue with it.**  That is the option-set rule's own failure mode -- *a brief that lists two options gets a panel arguing about two options* -- committed by the person who wrote the rule into the brief.\n\nTHREE FACTS CUT THE OTHER WAY, each verified by opening the file:\n  1. `OUTSTANDING_BUGS.md:18236-18239`, the row this round is working, says *\"member 5 (FAULT) is **available** ... so `return 0` gives the guest the bus error real VME hardware would.\"*\n  2. `memory_rw.c:595-624` delivers it -- `res == 0` -> `res = -1` -> `m88k_exception(cpu, M88K_EXCEPTION_DATA_ACCESS, 0)`.  **And its comment at `:615-619` is the part that matters: *\"This is enough for OpenBSD/mvme88k's badaddr() implementation.\"*  The guest that runs on this exact machine PROBES WITH BUS FAULTS ON PURPOSE.**\n  3. `machine_mvme88k.c:106, :120, :123` install `dev_unreadable` THREE TIMES in the same MVME187 arm, within ~30 lines of the `vme` attach, and `dev_unreadable.c:41-44` is the whole device: `return 0;`.  **FAULT is that constructor's own idiom for absent hardware.**\n\n*The present/absent distinction may still win -- it is a real argument.  But it must win on the evidence, and it has not been tested against any of the three.*  Re-fired to codex as `codex_faultreopen_20260911` with `memory_rw.c` PERMITTED this time, asking for both sides argued before a ruling.  Also put to the owner.\n\n*** AND THE SHIPPED ANSWER'S OWN SCOPE DISCLOSURE NEVER MADE IT INTO THE ANSWER. ***  The `.err` holds a SECOND, ABANDONED RENDER whose surviving tail (`:1484-1486`) says *\"I did not inspect `memory_rw.c` or independently verify the 'two families' claim\"* -- the sharpest scope statement in the whole exchange, sitting in the file nobody reads.  **Read the `.err` tail, not only the `.txt`.**\n\n=== FINDINGS THAT CHANGE THE EDIT ===\n\n**(A) DELETING `exit(1)` DOES NOT GIVE ZERO READS, AND ONE ALIAS IS NONZERO FROM RESET WITH NO GUEST WRITE AT ALL.**  `dev_vme.c:65-66` loads `odata = d->reg[relative_addr / sizeof(uint32_t)]` **before** the switch, unconditionally on `MEM_READ`; `:161-162` seeds the VBR word to `VME2_SET_VBR0(6)+VME2_SET_VBR1(7)` = **0x67000000** at devinit; `VME2_VBR` is `0x0088`.  **So a byte or halfword read at offset 0x89-0x8b takes `default:` and returns 0x67000000 on a freshly constructed machine.**  Under DECLINE the round must add an explicit `odata = 0;` or consciously keep the alias, and the contract must say which.  **Under FAULT the question dissolves** -- nothing is returned.  *That asymmetry is now part of the disposition question rather than a detail under it.*\n\n**(B) THE KILL IS REACHABLE AT SUB-WORD OFFSETS OF *IMPLEMENTED* REGISTERS.**  The switch compares the RAW BYTE OFFSET while storage indexes by `relative_addr / sizeof(uint32_t)`, so a case does not cover all four bytes of its own backing word.  **A byte access at 0x51 -- inside T1CMP -- falls to `default:` and kills the host today.**  Twelve such byte offsets sit inside the four storing registers.  *This is exactly the shape a detector written from the fix's INTENT will miss.*\n\n**(C) THE CENSUS RESOLVES EXACTLY: 4086 of 4096 byte offsets, 1014 of 1024 word offsets**, and it is SCATTERED, not contiguous -- six runs: `0x004..0x028` (10 words), `0x030..0x048` (7), `0x058..0x05c` (2), `0x064..0x068` (2), `0x070..0x07c` (4), `0x08c..0xffc` (989).  **The very first gap is the word ADJACENT to `case 0:`, the offset the file's own comment says OpenBSD probes.**  *The seat correctly REFUSED to name a number without the header and gave bounds instead; both bounds turned out to be the answer.*\n\n=== FINDINGS THAT CHANGE THE RECORD OR THE ORACLE ===\n\n* **`debug()` is NOT silent during machine CONSTRUCTION.**  `emul_executing` is false (`emul.c:67`) until `emul.c:1044`, so at setup `v = verbose = 0`, the `v < 0` early-out does not fire, and the message PRINTS.  The silence is specific to run-time accesses -- **so a witness must drive the access FROM THE GUEST, or the pre-fix symptom is \"printed, then died\" and the round's headline claim does not reproduce.**\n* **The stdout-flush caveat points the OTHER way for the premise.**  `va_debug()` uses `printf` with no `fflush` -- but the current code calls `exit(1)` immediately and `exit()` flushes stdio, so the pre-fix silence is ENTIRELY the `debug()` early-out with nothing lost to buffering.  That STRENGTHENS the premise.  The caveat lands on the POST-fix code, where no exit forces the flush.\n* **`#261` CANNOT be tripped by promoting to `fatal()`.**  `debugmsg_break_on_error` (`debugmsg.c:102`) is tested at `:159` inside `debugmsg_va()`, reachable only from `debugmsg()`; `fatal()` (`:384-390`) calls `va_debug()` directly and never enters it.  Corroborated by two in-tree comments that already said so (`dev_asc.c:256`, `dev_wdc.c:113-114`).\n* **My \"roughly a dozen\" non-fatal notices was wrong: NINE active across five named offsets** -- GCSRCTL x1, TCR x2, IRQEN x2, IRQL3 x2, IRQL4 x2.  TCTL's is COMMENTED OUT at `:104`.  Twelve textual, nine active.\n* **The file has NO latch of either kind.**  `struct vme_data` (`:52-54`) holds only `reg[]` and `:158` zeroes it, so a new `int` self-initialises.  House form is `dev_wdc.c:75-79, :115-120`.  A function-static would let one instance silence another.\n* **Install site NARROWED: `machine_mvme88k.c:95-96`, inside `case MACHINE_MVME88K_187:` ONLY.**  My \"unconditionally\" was true only within that arm -- MVME188/MVME197 (`:127-135`) are bare `strdup`+TODO and install nothing.  Window `0xfff40000`-`0xfff40fff`.\n\n*** THE VERDICT/BODY CONTRADICTION, and it is this project's own recorded verdict-line hazard: the verdict ratifies (b) while the body's own (b) cell says **\"define the read fallback explicitly\"** and S6 says deleting `exit(1)` alone does not give zero reads.  A reader stopping at the verdict ships an edit the body calls under-specified. ***\n\n**THE HONEST REFUSAL THAT STANDS:** whether a STOCK BOOT actually travels the `default:` arm is NOT established.  The only firmware evidence in the file -- `case 0:`'s *\"Used by OpenBSD/mvme88k when probing\"* -- proves a SUPPORTED probe exists and says nothing about an unmatched offset being touched.  **The round still owes the rung-3 probe attempt.**\n\n*** OWNER RULING 2026-09-11: **FAULT -- `return 0`**.  The disposition I had foreclosed by assertion is the one adopted. ***\n\nThe `default:` arm returns 0, `memory_rw.c:595-624` converts that to `m88k_exception(cpu, M88K_EXCEPTION_DATA_ACCESS, 0)`, and the guest takes the bus error that `badaddr()` probing expects.  **The previously ratified decline-plus-latched-announce is SUPERSEDED**; the promotion of `debug()` to `fatal()` goes with it, because there is no longer an announce to promote.\n\nWHAT THE RULING BUYS, beyond matching the queue file and the `dev_unreadable` idiom used three times in the same machine arm:\n  * **the `odata` aliasing defect DISSOLVES.**  Under DECLINE the round owed an explicit `odata = 0;` because `dev_vme.c:65-66` loads from `d->reg[]` before the switch and `:161-162` seeds the VBR word to `0x67000000`, so a byte read at 0x89-0x8b returned that value from reset with no guest write.  **Under FAULT nothing is returned at all** and the cell cannot leak.\n  * the announce, the latch, the per-instance-vs-function-static question, and the `#261` interaction all become moot.  *Three of the seven questions I put to the panel were about machinery this disposition does not need.*\n\nWHAT IT STILL OWES:\n  1. **The twelve sub-word offsets inside IMPLEMENTED registers.**  The switch compares the raw byte offset while storage indexes by word, so a byte access at 0x51 -- inside T1CMP -- reaches `default:`.  **Under FAULT that now raises a bus error on a register that DOES exist**, which is a different and arguably worse wrong answer than the host kill it replaces.  *This is the one place the ruling makes something harder rather than easier, and it must be decided explicitly rather than inherited.*\n  2. The rung-3 probe attempt -- whether a stock boot travels the arm is still NOT established, and the seat's refusal on that point stands.\n  3. The detector's oracle changes shape entirely: a fault is observed as an EXCEPTION, not as a returned value or a logged announce, so no row from the decline design survives unchanged.\n\n*** 2026-09-11 -- THE REOPENED PANEL AGREES WITH THE OWNER.  **THE SEAT RULED FAULT TOO**, with `memory_rw.c` PERMITTED this time, and it sharpened one argument while honestly refusing another. ***\n\n*VERDICT: \"FAULT (`return 0`) for the unsupported-access fallback; handle register byte lanes separately.\"*  13,858 b, liveness token returned, ends in a finished sentence, sentinel cleared cleanly.\n\n**ALL THREE OF MY NEW FACTS SURVIVED, and one came back STRONGER than I put it.**  I argued that `dev_unreadable` being installed three times in the MVME187 arm shows FAULT is the constructor's idiom for ABSENT hardware.  The seat found the sharper version: **the board description at `machine_mvme88k.c:35` lists Ethernet hardware, and the constructor substitutes `unreadable` for that Ethernet, marked TODO** (`:106`, with `:120` \"VMES (?): TODO\" and `:123` \"VME devices: TODO\").  **So this constructor already uses faults for hardware OMITTED FROM EMULATION, not merely for hardware that is absent from the board.**  That is precisely the case at hand, and it weakens my original categorical present/absent argument further than I had.\n\n**AND IT REFUSED THE HARDWARE CLAIM, which is the right refusal:** *\"It does not establish that real VME hardware would fault at every offset reaching this `default:`.  That hardware claim remains unproved.\"*  Registering a `0x1000` region establishes **the emulator's dispatch aperture, not that physical hardware acknowledges every transaction inside it** -- and the header specifies no legal widths, no reserved-offset responses and no timeout behaviour.  *The disposition is therefore justified as \"an access the emulator cannot service\", NOT as \"this is what the hardware does\".  The round's record must say it that way.*\n\n*** AND IT REFUTED THE PRESENT/ABSENT FRAMING ON ITS OWN TERMS, not just its weight: \"the device is present and the register is not\" DOES NOT DESCRIBE THE WHOLE DEFAULT ARM. ***  The header names `VME2_DMACTL`, `VME2_T2CMP`, `VME2_T2COUNT` and `VME2_PRESCALE` -- **registers whose exact offsets have NO switch case.**  Those are named register definitions lacking emulator handling, not addresses the source identifies as nonexistent.  So the `default:` arm is a MIXTURE of three populations, and I had been reasoning about it as one:\n  1. offsets with no register defined anywhere -- FAULT is honest;\n  2. **named registers the emulator simply does not implement** -- FAULT says \"nothing here\" about something the board documents as present;\n  3. sub-word lanes of registers that ARE implemented -- FAULT is plainly wrong.\n\n**THE SEAT'S OWN CAVEAT CONVERGES WITH THE ONE I FLAGGED TO THE OWNER, reached independently:** *\"Interior offsets need their own access-width decision and corresponding oracle; successful removal of the exit does not close that issue.\"*  **Two parties, two routes, same residual.**\n\nWHAT THE ROUND NOW OWES, consolidated:\n  * a decision on population 3 (the twelve sub-word lanes) that is NOT inherited from the population-1 ruling;\n  * a stated position on population 2 -- whether an unimplemented-but-documented register should fault or be backed;\n  * the rung-3 probe attempt, still outstanding;\n  * *\"probe recovery and an ordinary driver's fault response require integration validation\"* -- the review establishes the dispatch mechanism and **explicitly does not establish continued bootability**.\n\n*The seat also declined to verify the queue-file recommendation, because `OUTSTANDING_BUGS.md` was outside its permitted set, and said so rather than treating my quotation as a checked repository finding.  That is the honest form and is recorded as an answer, not a gap.*",
+    "entries": [
+     {
+      "seat": "fable5",
+@@ -46643,8 +46643,227 @@
+      "grader": "main loop (Opus 5.5) -- recorded 2026-10-09 from the seat's file (agy gemini-3.8-flash-high, measuring seat; probe and the guest's trap.c READ by the main loop)",
+      "ev": "regress/artifacts/vmedefaultkill/measure_20261009/agy_vme1009.txt; regress/artifacts/vmedefaultkill/measure_20261009/run_HEAD.out; regress/artifacts/vmedefaultkill/measure_20261009/run_FAULT.out; regress/artifacts/vmedefaultkill/measure_20261009/run_DECLINE.out",
+      "note": "VERDICT: MEASURED.  Rung 3, unmodified -E mvme88k -e mvme187, three binaries from git archive 200671b6: HEAD; FAULT (the default: arm's exit(1) -> return 0); DECLINE (-> odata = 0; break).  HEAD: rc 1 at all seven sites (MASTERCTL r/w, MASTER3, MASTER4, MASTER4MOD, IRQSTAT, IRQCLR).  FAULT: PC 0x18 (vector 3, VBR 0), DMT0 0x413d (reads) / 0x403f (writes), DMA0 the register address; data CMMU PFSR = PFAR = 0 through a guest ld.  DECLINE: reads 0, writes dropped, PC 0x10008, liveness 0x1234.  Controls green in every binary (T1CMP round-trip, liveness, unassemble).  FLAG (agy): m88k_exception updates the 88100 data-unit registers but never the 88200 CMMU, so a guest fault handler reading PFSR sees SUCCESS."
++    },
++    {
++     "date": "2026-10-20",
++     "ev": "regress/artifacts/vmedefaultkill/pass1_20261020/codex_vmep1.txt",
++     "grade": null,
++     "grader": null,
++     "note": "#568 PASS 1 (design): PROCEED WITH CHANGES -- GPT-6 Astra (ultra): the census and zero invariant hold; print a st.d value in full; the default: comment must say 'unsupported offsets' (interiors of defined registers land there too); no row sees a read-only or word-only announce, nor a non-word write; pins at 0x29 and 0x2a.",
++     "phase": "research",
++     "seat": "codex"
++    },
++    {
++     "date": "2026-10-20",
++     "ev": "regress/artifacts/vmedefaultkill/pass1_20261020/grok_p1.txt",
++     "grade": null,
++     "grader": null,
++     "note": "#568 PASS 1: PROCEED WITH CHANGES -- Grok 4.7: two population-1 faults in one session without rte make the second an ERROR at PC 0x50 (PSR.SFRZ), so each fault row needs its own session; ld.d/st.d at cased 0x00/0x60/0x88 span a population-2 word (NOT CLAIMED); an interior population-1 exemption and a read-only latch pass every planned row.",
++     "phase": "research",
++     "seat": "grok"
++    },
++    {
++     "date": "2026-10-20",
++     "ev": "regress/artifacts/vmedefaultkill/pass1_20261020/glm_p1.txt",
++     "grade": null,
++     "grader": null,
++     "note": "#568 PASS 1: PROCEED WITH CHANGES -- GLM 5.3 (glm-5.3:cloud, packet-fed): 'always a data-access exception' holds only on the guest path (NO_EXCEPTIONS callers and instruction fetch differ); a per-direction latch passes every planned row; the population-2 sub-word interim needs its own pin.",
++     "phase": "research",
++     "seat": "glm"
++    },
++    {
++     "date": "2026-10-20",
++     "ev": "regress/artifacts/vmedefaultkill/pass1_20261020/fable5_p1.md",
++     "grade": null,
++     "grader": null,
++     "note": "#568 PASS 1: PROCEED WITH CHANGES -- Fable 5.1 (answered; no wall): DMA0 is the word address and DMT0 carries the destination register (the fault rows' oracles); a device-less build leaves the three decline rows green, so the record names which rows the null medium reds; adds a free-running negative control and a mixed read/write-first announce session; leans to a bound test in default: (dissent recorded, labels kept).",
++     "phase": "research",
++     "seat": "fable5"
++    },
++    {
++     "date": "2026-10-20",
++     "ev": null,
++     "grade": null,
++     "grader": null,
++     "note": "[NOT A SEAT ANSWER] #568 pass 1, NOT FIRED as a panel seat: the owner's 2026-10-20 roster names four seats; two Opus 5.5 sub-agents MEASURED instead (the HEAD re-witness and the probe draft), in WSL scratch clones.",
++     "phase": "research",
++     "seat": "opus5"
++    },
++    {
++     "date": "2026-10-20",
++     "ev": null,
++     "grade": null,
++     "grader": null,
++     "note": "[NOT A SEAT ANSWER] #568 pass 1, NOT FIRED: agy is not one of the four seats the 2026-10-20 message names (GLM 5.3, grok, Astra, Fable).",
++     "phase": "research",
++     "seat": "agy"
++    },
++    {
++     "date": "2026-10-20",
++     "ev": null,
++     "grade": null,
++     "grader": null,
++     "note": "[NOT A SEAT ANSWER] #568 pass 1, NOT FIRED: neither kimi transport (CLI, kimi-k3:cloud) is on the 2026-10-20 roster.",
++     "phase": "research",
++     "seat": "kimi"
++    },
++    {
++     "date": "2026-10-20",
++     "ev": null,
++     "grade": null,
++     "grader": null,
++     "note": "[NOT A SEAT ANSWER] #568 pass 1, NOT FIRED: GLM 5.3 is the only Ollama-transport seat the owner named; Argon read the same packet as the second packet-fed lens.",
++     "phase": "research",
++     "seat": "deepseek"
++    },
++    {
++     "date": "2026-10-20",
++     "ev": null,
++     "grade": null,
++     "grader": null,
++     "note": "[NOT A SEAT ANSWER] #568 pass 1, NOT FIRED: minimax-m3 is outside today's four-seat roster.",
++     "phase": "research",
++     "seat": "minimax"
++    },
++    {
++     "date": "2026-10-20",
++     "phase": "review",
++     "seat": "codex",
++     "note": "#568 PASS 2: SHIP WITH CHANGES -- GPT-6 Astra (ultra), F8: THE FLOOR BREACH -- the population-2 arm's `if (writeflag == MEM_WRITE)` read as `if (idata)` passes all 34 rows, every population-2 store being non-zero (MEASURED 34/34 before the repair, killtable1_20261020/idata/); plus the capacity guarantee, the missing MANIFEST registration and records.",
++     "ev": "regress/artifacts/vmedefaultkill/pass2_20261020/codex_vmep2.txt",
++     "d": "✓"
++    },
++    {
++     "date": "2026-10-20",
++     "phase": "review",
++     "seat": "grok",
++     "note": "#568 PASS 2: SHIP WITH CHANGES -- Grok 4.7: the device arm matches the design and the 34 rows measure it; classify the probe in the wiring manifest and replace the docstring banner that still said no kill table existed.",
++     "ev": "regress/artifacts/vmedefaultkill/pass2_20261020/grok_p2.txt",
++     "d": "✓"
++    },
++    {
++     "date": "2026-10-20",
++     "phase": "review",
++     "seat": "glm",
++     "note": "#568 PASS 2: SHIP WITH CHANGES -- GLM 5.3 (packet-fed): two shipped comments wrong (the guest-reach count, the typedef's claim), the read announce's `0x%x` deviation to close one way, no measured gate-14 run in the packet; a lane-0 narrow access at a population-1 word escapes (contract-disclosed).",
++     "ev": "regress/artifacts/vmedefaultkill/pass2_20261020/glm_p2.txt",
++     "d": "✓"
++    },
++    {
++     "date": "2026-10-20",
++     "phase": "review",
++     "seat": "fable5",
++     "note": "#568 PASS 2: SHIP WITH CHANGES -- Fable 5.1 (answered; genuine fable-5-1 per agent_models.py): records owed before the commit (round block, MANIFEST lines, SCORE_CLAIMS 36->37, durable copies of the docstring's cited files), the PSR.MXM row, the ask-again escapes as NOT CLAIMED lines.",
++     "ev": "regress/artifacts/vmedefaultkill/pass2_20261020/fable5_p2.md",
++     "d": "✓"
++    },
++    {
++     "date": "2026-10-21",
++     "phase": "review",
++     "seat": "codex",
++     "note": "#568 F2 (shared findings): PROCEED WITH CHANGES -- GPT-6 Astra: correct the remaining coverage and wiring claims, then rev 3, table 2 and the repair's own pass; its amendments are REV3_SPEC section 6.",
++     "ev": "regress/artifacts/vmedefaultkill/f2_20261021/codex_vmef2.txt",
++     "d": "✓"
++    },
++    {
++     "date": "2026-10-21",
++     "phase": "review",
++     "seat": "grok",
++     "note": "#568 F2: PROCEED WITH CHANGES -- Grok 4.7: the reach count is four; the 36->37 manifest bump needs a `vme_default rows run` pin; neutral wording per site; a want-0 count cannot see a deleted debug() line.",
++     "ev": "regress/artifacts/vmedefaultkill/f2_20261021/grok_f2.txt",
++     "d": "✓"
++    },
++    {
++     "date": "2026-10-21",
++     "phase": "review",
++     "seat": "glm",
++     "note": "#568 F2: PROCEED WITH CHANGES -- GLM 5.3: overturned two of its own positions (D3, D4); `vbr reset` sat wrongly in the CONTROL list; three PRETABLE pins named.",
++     "ev": "regress/artifacts/vmedefaultkill/f2_20261021/glm_f2.txt",
++     "d": "✓"
++    },
++    {
++     "date": "2026-10-21",
++     "phase": "review",
++     "seat": "fable5",
++     "note": "#568 F2: PROCEED WITH CHANGES -- Fable 5.1: the attach reaches FOUR population-2 registers (IRQSTAT and IRQCLR live in vme2abort(), the ABORT-switch handler this model never raises); the lane-0 rows need two legs; copy the build logs before citing them.",
++     "ev": "regress/artifacts/vmedefaultkill/f2_20261021/fable5_f2.md",
++     "d": "✓"
++    },
++    {
++     "date": "2026-10-21",
++     "phase": "review",
++     "seat": "fable5",
++     "note": "#568 REPAIR-DIFF PASS: CLOSE -- Fable 5.1: zero floor breaches over 104 label x direction x latch cells and the operand-swap closure (34 legs measured, the rest read); one L4 (the ORDER DEPENDENCE paragraph stated a prediction as measured), applied; its OWED-OPTIONAL leg measured as table 2b.",
++     "ev": "regress/artifacts/vmedefaultkill/r1_20261021/fable5_r1.md",
++     "d": "✓"
++    },
++    {
++     "date": "2026-10-21",
++     "phase": "review",
++     "seat": "codex",
++     "note": "#568 REPAIR-DIFF PASS: CLOSE -- GPT-6 Astra (ultra): no floor survivor, its own denominator adding selector substitutions; two of the first seat's kill attributions wrong (M_LATCHRDSET, the d->reg[] set); the CONTROL definition contradicted itself; the MANIFEST note's 'byte-identical' false.",
++     "ev": "regress/artifacts/vmedefaultkill/r1_20261021/codex_vmer1.txt",
++     "d": "✓"
++    },
++    {
++     "date": "2026-10-21",
++     "phase": "review",
++     "seat": "grok",
++     "note": "#568 REPAIR-DIFF PASS: CLOSE -- Grok 4.7, and a second ADVERSARIAL grok job on the floor question alone (grokadv_r1.txt), also CLOSE: no one-edit mutant passes 38/38; two latch-index relabels and two default: exemptions named as equivalents or clause (e).",
++     "ev": "regress/artifacts/vmedefaultkill/r1_20261021/grok_r1.txt",
++     "d": "✓"
++    },
++    {
++     "date": "2026-10-21",
++     "phase": "review",
++     "seat": "glm",
++     "note": "#568 REPAIR-DIFF PASS: REPAIR AGAIN on RECORDS ONLY -- GLM 5.3 (packet-fed): the SAMPLED store-data sentence must name its slice (applied); its one floor item, default:'s refusal conditioned on idata, REFUTED by table 2c in both polarities (29/38, 36/38).",
++     "ev": "regress/artifacts/vmedefaultkill/r1_20261021/glm_r1.txt",
++     "d": "✓"
++    },
++    {
++     "date": "2026-10-21",
++     "phase": "review",
++     "seat": "opus5",
++     "note": "[NOT A SEAT ANSWER] #568 passes 2, F2 and the repair pass, NOT FIRED as a review seat: Opus 5.5 was the MEASURING seat -- kill tables 1, 1b, 2, 2b, 2c, the object comparison and the clean-clone gate runs."
++    },
++    {
++     "date": "2026-10-21",
++     "phase": "review",
++     "seat": "agy",
++     "note": "[NOT A SEAT ANSWER] #568 review, NOT FIRED: agy is outside the owner's 2026-10-20 four-seat roster; the Gemini-family reading came from Argon instead (pass 2 failed on transport)."
++    },
++    {
++     "date": "2026-10-21",
++     "phase": "review",
++     "seat": "kimi",
++     "note": "[NOT A SEAT ANSWER] #568 review, NOT FIRED: no packet went to either kimi transport (the CLI or kimi-k3:cloud) under the 2026-10-20 roster."
++    },
++    {
++     "date": "2026-10-21",
++     "phase": "review",
++     "seat": "deepseek",
++     "note": "[NOT A SEAT ANSWER] #568 review, NOT FIRED: GLM 5.3 held the Ollama transport's one roster chair; deepseek-v4-pro stayed idle."
++    },
++    {
++     "date": "2026-10-21",
++     "phase": "review",
++     "seat": "minimax",
++     "note": "[NOT A SEAT ANSWER] #568 review, NOT FIRED: minimax-m3 got no packet for passes 2, F2 or the repair pass."
++    },
++    {
++     "phase": "regress",
++     "seat": "fable5",
++     "date": "2026-10-21",
++     "grade": "UNKNOWN",
++     "grader": "",
++     "ev": "not fired",
++     "note": "[HELD AWAITING SEAT: fable5] vmedefaultkill landed by #568 and owes the REGRESS review, a distinct phase under the regress-is-fable-only directive.  The question is in the row's hold_question."
+     }
+-   ]
++   ],
++   "witness": "probe:regress/artifacts/vmedefaultkill/witness_20261020/vme_sites_probe.py -- rung 3, unmodified -E mvme88k -e mvme187, committed HEAD 5dbc000e: all seven guest sites end the emulator (rc 1); free-running, the MASTERCTL read dies with no `[ vme:` text (regress/artifacts/vmedefaultkill/witness_20261020/SUMMARY.md); first measured 2026-10-09 at 200671b6 (measure_20261009/)",
++   "hold_question": "REGRESS (held 2026-10-21 at #568): does regress/vme_default_probe.py still score 38/38 on the fix, 14/38 on HEAD's build and 5/38 with CONTROL=FAIL on the device-less build (regress/artifacts/vmedefaultkill/killtable2_20261021/), and does gate 14's #568 block pass on the fix and fail on HEAD as regress/artifacts/vmedefaultkill/gate_20261021/ records -- the full gate run there on a clean clone of HEAD, not on build/gxemul?",
++   "state_note": "[2026-10-21, HELD for fable5 by #568] Landed: dev_vme.c's default: no longer ends the emulator -- the 26 header-named registers it does not implement DECLINE with one latched (once) announce per register, every other unmatched offset FAULTS to the guest; the 38-row rung-3 detector in gate 14 (pinned at 38).  Pass 1, pass 2, F2 and the repair-diff pass answered by Fable 5.1, GPT-6 Astra, Grok 4.7 and GLM 5.3; the repair chain closed on the repair pass (r1_20261021/ADJUDICATION_R1.md).  The regress review is FABLE-ONLY and held with its question."
+   },
+   {
+    "id": "fbctrlportkill",
+@@ -63891,7 +64110,8 @@
+    "witness": null,
+    "commits": "",
+    "title": "dev_vme.c: sub-word VME2 accesses -- 40 width/address combinations at 30 offsets inside cased words reach default: (a host kill today), and a cased base accessed at len != 4 is served with word semantics, lane-wrong on big-endian",
+-   "state_note": "filed 2026-10-09 from Fable 5.1's 7n-4 ruling (regress/artifacts/fablequeue7n_20261009/fable5_rule7n_4.md, populations 3 and 4) with GPT-6 Astra's corrections (regress/artifacts/fablequeue7n_20261009/astra_7n4/codex_astra.txt): 40 width/address combinations at 30 distinct offsets (30 byte accesses + 10 aligned halfword accesses; 16 at the four storing words, 24 at the six other cased words).  'Serve the containing word' is REFUTED: big-endian byte lanes +1/+2 come back wrong (+3 and halfword +2 happen to agree), sub-word writes replace the whole backing word, and a T1COUNT read adds 100 and returns the pre-increment value.  Population 4 (Fable's ELSE #1): an access AT a cased base with len != 4 -- st.b at 0x88 rewrites the whole VBR word, ld.b there returns the low byte; Astra: a doubleword reaching the callback as ONE length-8 access is not established by the files read.  The in-tree OpenBSD 2.2 guest makes no sub-word VME2 access (every vme2reg field is u_long), so LOW.  The width row takes both populations; the FAULT round for population 1 discloses it and pins the interim behaviour with one channel row (the crimectllane precedent).  Reading only; nothing measured."
++   "state_note": "filed 2026-10-09 from Fable 5.1's 7n-4 ruling (regress/artifacts/fablequeue7n_20261009/fable5_rule7n_4.md, populations 3 and 4) with GPT-6 Astra's corrections (regress/artifacts/fablequeue7n_20261009/astra_7n4/codex_astra.txt): 40 width/address combinations at 30 distinct offsets (30 byte accesses + 10 aligned halfword accesses; 16 at the four storing words, 24 at the six other cased words).  'Serve the containing word' is REFUTED: big-endian byte lanes +1/+2 come back wrong (+3 and halfword +2 happen to agree), sub-word writes replace the whole backing word, and a T1COUNT read adds 100 and returns the pre-increment value.  Population 4 (Fable's ELSE #1): an access AT a cased base with len != 4 -- st.b at 0x88 rewrites the whole VBR word, ld.b there returns the low byte; Astra: a doubleword reaching the callback as ONE length-8 access is not established by the files read.  The in-tree OpenBSD 2.2 guest makes no sub-word VME2 access (every vme2reg field is u_long), so LOW.  The width row takes both populations; the FAULT round for population 1 discloses it and pins the interim behaviour with one channel row (the crimectllane precedent).  Reading only; nothing measured.",
++   "note": "[2026-10-21] WIDENED by #568: population-2 SUB-WORD starts (vme_default_probe.py pins three interims this row re-derives: `p3 interim` ld.bu 0x51, `p2 int byte` ld.bu 0x29, `p2 int half` ld.hu 0x2a -- all FAULT today) and cased-word ld.d/st.d LANE PLACEMENT at 0x00, 0x60 and 0x88 (a 32-bit register served into, or stored from, the wrong half of an 8-byte access; the device sees ONE access to the cased label).  ||  "
+   },
+   {
+    "id": "pcc2c040assertxor",
+@@ -64910,6 +65130,72 @@
+    "commits": "",
+    "title": "gate 13's rldicl block (regress/gate_ppc.sh, #565) transmits regress/ppc_rldicl_probe.py's ok/FAIL tokens and anchors no value, so an edit to the probe's own comparator in row() -- `ok = True', or `got >= want', under which `rc cr0' reads M_CR0's 0x80000000 as ok -- passes all 30 checks",
+    "state_note": "filed 2026-10-20 by the late-review adjudication (regress/artifacts/argonlate_20261020/adj/; GPT-6 Astra filed it as design debt).  #565 disclosed the comparator escape in the gate block's CONTRACT comment (Grok 4.7's `ok = True', GPT-6 Astra's `>=', #565 pass 2) and added no value anchor.  Argon's reading of #565's F2 packet (F9, regress/artifacts/argonlate_20261020/argon/rldiclf2_gemini_web.out) named the cheap form: anchor `rc cr0''s and `census wrong''s observed GOT values (0x40000000 and 0) on their existing per-row grep lines, which adds no check -- the got column, not the want: M_CR0 prints got=0x80000000 beside the unchanged want=0x40000000, so a want-column anchor leaves the comparator escape open (GPT-6 Astra's 2026-10-20 records confirmation, F3).  LOW: every shipped row is correct, and only an edit to the probe's comparator escapes."
++  },
++  {
++   "id": "vmewarnedbit",
++   "title": "dev_vme.c writes its latch index `1ULL << (relative_addr >> 2)` twice -- in the test and in the set -- so a one-sided index edit is possible and a two-sided relabel is two edits; one shared macro (dev_pcc2.c's shape) closes both",
++   "sev": "LOW",
++   "state": "open",
++   "opened": "2026-10-21",
++   "commits": "",
++   "witness": "",
++   "hold_question": "",
++   "note": "Filed 2026-10-21 by #568 (D5 of its pass-2 adjudication), not built: kill table 2 reds the one-sided index edits it built (M_LATCHONE, M_ONENARROW); the repair-diff pass named the two-sided relabels (`1ULL` -> `2ULL`, `(relative_addr >> 2) ^ 1`) as equivalents.",
++   "entries": [
++    {
++     "phase": "assess",
++     "seat": "fable5",
++     "date": "2026-10-21",
++     "grade": "",
++     "grader": "",
++     "ev": "regress/artifacts/vmedefaultkill/",
++     "note": "[NOT A SEAT ANSWER] Filed by GXEMUL [087a90] (main loop) from #568's panels as `vmewarnedbit` -- the finding and its evidence are in OUTSTANDING_BUGS.md (2026-10-21 section) and regress/artifacts/vmedefaultkill/."
++    }
++   ]
++  },
++  {
++   "id": "vmeprobedebt",
++   "title": "vme_default_probe.py coverage debt: `free quiet`, `vbr rt` and `t1count inc` carry no own-channel kill in kill table 2, and the store-data clause-(e) slice is sampled",
++   "sev": "LOW",
++   "state": "open",
++   "opened": "2026-10-21",
++   "commits": "",
++   "witness": "",
++   "hold_question": "",
++   "note": "Filed 2026-10-21 by #568.  `free quiet`: no leg reds it (its designed mutant, a cased arm's debug() -> fatal() promotion, was never built).  `vbr rt` and `t1count inc`: red only as dependents of M_DROPTCTL (absent legs: a VBR write-path break, a T1COUNT write-path break).  Store data: 28 of 64 bits are clear in every population-2 store value; bit 1 measured 38/38 (table 2b); the sampled zero pins the announce's form, not the latch set (M_ZEROSET 38/38, table 2d).  Interiors: default: serving 0xffd..0xfff passes (M_DFLTFFC 38/38, table 2d).  Coverage debt, ranked below live defects.",
++   "entries": [
++    {
++     "phase": "assess",
++     "seat": "fable5",
++     "date": "2026-10-21",
++     "grade": "",
++     "grader": "",
++     "ev": "regress/artifacts/vmedefaultkill/",
++     "note": "[NOT A SEAT ANSWER] Filed by GXEMUL [087a90] (main loop) from #568's panels as `vmeprobedebt` -- the finding and its evidence are in OUTSTANDING_BUGS.md (2026-10-21 section) and regress/artifacts/vmedefaultkill/."
++    }
++   ]
++  },
++  {
++   "id": "m88kpsrmxm",
++   "title": "cpu_m88k.c: a guest that sets PSR.MXM STOPS THE EMULATED CPU -- the PSR store prints `stcr: TODO: MXM support` and clears cpu->running -- where the MC88100 masks the misaligned-access exception and rounds the address down",
++   "sev": "MED",
++   "state": "open",
++   "opened": "2026-10-21",
++   "commits": "",
++   "witness": "",
++   "hold_question": "",
++   "note": "Filed 2026-10-21 by #568.  Named on its pass 1 (Fable 5.1) as an unmodelled divergence and adjudicated FILE, LOW, before the arm was read; reading it (the M88K_PSR_MXM test in the control-register store) shows a halt, so MED.  Manual: _scratchpad/mc88100.txt:2047-2052 (MXM = misaligned access enable; 1 = no exception) and :9243-9245 (masked: the address is rounded down to a consistent boundary).  Not established: whether any in-tree guest sets MXM -- the reachability question that ranks it.",
++   "entries": [
++    {
++     "phase": "assess",
++     "seat": "fable5",
++     "date": "2026-10-21",
++     "grade": "",
++     "grader": "",
++     "ev": "regress/artifacts/vmedefaultkill/",
++     "note": "[NOT A SEAT ANSWER] Filed by GXEMUL [087a90] (main loop) from #568's panels as `m88kpsrmxm` -- the finding and its evidence are in OUTSTANDING_BUGS.md (2026-10-21 section) and regress/artifacts/vmedefaultkill/."
++    }
++   ]
+   }
+  ],
+  "state_semantics": {
+
+=== tools/pipeline/matrix.html: GENERATED (gen_dashboard.py from the staged ledger), not rendered here ===
+
+=== tools/pipeline/fable_queue.md (staged copy C:/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/vme/commit/staged/fable_queue.md vs HEAD) ===
+diff --git a/C:/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/vme/commit/confirm/_head.tmp b/C:/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/vme/commit/staged/fable_queue.md
+index 50a2382..1f240a3 100644
+--- a/C:/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/vme/commit/confirm/_head.tmp
++++ b/C:/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/vme/commit/staged/fable_queue.md
+@@ -41,7 +41,7 @@ those panels produced had six or seven seats behind it.
+ <!-- BEGIN GENERATED: codex-wall -- edit gen_codex_wall.py, not this block -->
+ ### HELD STAGES -- every row awaiting a seat, derived from the ledger
+ 
+-`alphaswpctxreg` (design:opus5) · `alphatbinegsel` (design:opus5) · `alphavmkill` (research:fable5) · `armbfiwidth` (design:opus5) · `armbfxwidth32` (assess:opus5; review:opus5) · `boilerplateprefix` (regress:fable5) · `carrier` (regress:fable5) · `cxlaunchdaybreak` (regress:fable5) · `cxlaunchquotation` (regress:fable5; review:fable5) · `dashokclass` (regress:fable5; review:fable5) · `es438` (regress:fable5) · `fableheldform` (design:fable5; review:fable5) · `fbctrlcmdkill` (regress:fable5; research:fable5; review:fable5) · `fbwitness` (regress:fable5) · `gdromcondlies` (regress:fable5) · `holdmarkermulti` (regress:fable5) · `ip30abortkill` (review:fable5) · `lcabadval` (assess:opus5) · `lcaconfbus1kill` (review:opus5) · `lcalenzerodrop` (regress:fable5) · `ledgerwitness` (regress:fable5) · `m88kexcdeliver` (regress:fable5) · `m88kexcrrtrapmode` (regress:fable5) · `mapledmaaddr` (regress:fable5; review:fable5) · `nineseatreminder` (regress:fable5) · `ns16550` (regress:fable5) · `pcc2widthkills` (assess:opus5) · `ppcgateimageskip` (regress:fable5; review:fable5) · `ppcrldimimask` (regress:fable5; review:fable5) · `ppcrlwimiwidth` (regress:fable5; review:fable5) · `scorehyphenfp` (regress:fable5) · `sgideprimop` (regress:fable5) · `sgidewidth` (regress:fable5) · `sgimtedepth4dead` (assess:fable5,opus5) · `sgirandomcolour` (regress:fable5; review:fable5) · `sgirekills` (assess:kimi,opus5; regress:fable5; research:fable5; review:fable5) · `sgireunmapped` (regress:fable5) · `sgitexindex` (assess:opus5) · `sh4sci` (regress:fable5) · `smhang` (regress:fable5) · `wdccdbmidxfer` (regress:fable5; research:opus5) · `wdcdataoutdrain` (regress:fable5) · `wiringcliff` (design:fable5; review:fable5) · `xfamscope` (regress:fable5) · `xscaleinten` (regress:fable5; review:fable5)
++`alphaswpctxreg` (design:opus5) · `alphatbinegsel` (design:opus5) · `alphavmkill` (research:fable5) · `armbfiwidth` (design:opus5) · `armbfxwidth32` (assess:opus5; review:opus5) · `boilerplateprefix` (regress:fable5) · `carrier` (regress:fable5) · `cxlaunchdaybreak` (regress:fable5) · `cxlaunchquotation` (regress:fable5; review:fable5) · `dashokclass` (regress:fable5; review:fable5) · `es438` (regress:fable5) · `fableheldform` (design:fable5; review:fable5) · `fbctrlcmdkill` (regress:fable5; research:fable5; review:fable5) · `fbwitness` (regress:fable5) · `gdromcondlies` (regress:fable5) · `holdmarkermulti` (regress:fable5) · `ip30abortkill` (review:fable5) · `lcabadval` (assess:opus5) · `lcaconfbus1kill` (review:opus5) · `lcalenzerodrop` (regress:fable5) · `ledgerwitness` (regress:fable5) · `m88kexcdeliver` (regress:fable5) · `m88kexcrrtrapmode` (regress:fable5) · `mapledmaaddr` (regress:fable5; review:fable5) · `nineseatreminder` (regress:fable5) · `ns16550` (regress:fable5) · `pcc2widthkills` (assess:opus5) · `ppcgateimageskip` (regress:fable5; review:fable5) · `ppcrldimimask` (regress:fable5; review:fable5) · `ppcrlwimiwidth` (regress:fable5; review:fable5) · `scorehyphenfp` (regress:fable5) · `sgideprimop` (regress:fable5) · `sgidewidth` (regress:fable5) · `sgimtedepth4dead` (assess:fable5,opus5) · `sgirandomcolour` (regress:fable5; review:fable5) · `sgirekills` (assess:kimi,opus5; regress:fable5; research:fable5; review:fable5) · `sgireunmapped` (regress:fable5) · `sgitexindex` (assess:opus5) · `sh4sci` (regress:fable5) · `smhang` (regress:fable5) · `vmedefaultkill` (regress:fable5) · `wdccdbmidxfer` (regress:fable5; research:opus5) · `wdcdataoutdrain` (regress:fable5) · `wiringcliff` (design:fable5; review:fable5) · `xfamscope` (regress:fable5) · `xscaleinten` (regress:fable5; review:fable5)
+ 
+ *** TWO DIFFERENT KINDS OF HOLD APPEAR BELOW AND THEY MUST NOT BE READ ALIKE. ***
+ 
+@@ -60,7 +60,7 @@ marker can mask another gap* -- section H cannot see a shortfall that a differen
+ **Neither kind is a blank.** A blank cell and a seat failure must not look alike, and an
+ allocation is a third thing again: recorded by seat name, per row, with the reason.
+ 
+-**This is ONE outage plus one allocation, not 45 decisions, and it is written once rather than once per panel.**
++**This is ONE outage plus one allocation, not 46 decisions, and it is written once rather than once per panel.**
+ **THE CODEX HISTORY, kept because it calibrates what a wall looks like.** Across ten panels it
+ produced the identical signature every time -- the echoed brief followed by the usage-limit
+ error -- in files of 26,992 / 11,180 / 10,036 / 8,323 / 12,414 / 11,938 / 10,726 / 16,694 /
+
+=== CHANGELOG.md (staged copy C:/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/vme/commit/staged/CHANGELOG.md vs HEAD) ===
+diff --git a/C:/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/vme/commit/confirm/_head.tmp b/C:/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/vme/commit/staged/CHANGELOG.md
+index 2dd29ad..a3df1a4 100644
+--- a/C:/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/vme/commit/confirm/_head.tmp
++++ b/C:/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/vme/commit/staged/CHANGELOG.md
+@@ -1,3 +1,139 @@
++# `#568` (vmedefaultkill): the MVME187's VME2 controller model ended the emulator on any offset its switch did not name -- the 26 header-named registers it does not implement now DECLINE with one announce per register, every other unmatched offset FAULTS to the guest; with a 38-row rung-3 detector, gated in gate 14
++
++**The defect** (`vmedefaultkill`, HIGH).  `DEVICE_ACCESS(vme)` named ten offsets of its 4 KiB window; every other offset
++reached `default:`, which printed with `debug()` -- silent at default verbosity while free-running -- and called
++`exit(1)`, so the emulator ended with no visible reason.  The device exists only on `-E mvme88k -e mvme187` (window
++0xfff40000-0xfff40fff).  The OpenBSD 2.2 mvme88k driver's attach reads MASTERCTL and writes MASTERCTL, MASTER3, MASTER4
++and MASTER4MOD -- four of the unimplemented registers -- so on HEAD that guest's attach would end the emulator at its
++first MASTERCTL read (read from the driver source; the witness measures the access sites, not a boot).  Witness, rung 3
++on unmodified `-E mvme88k -e mvme187` at HEAD 5dbc000e: 7 of 7 guest access sites end the emulator (rc 1), and a
++free-running MASTERCTL read dies with no `[ vme:` text (`regress/artifacts/vmedefaultkill/witness_20261020/SUMMARY.md`).
++
++**The rulings it implements.**  Owner, 2026-09-11: population 1 (word starts the header does not name, and every
++sub-word start) FAULTS -- `return 0`, which `memory_rw.c` turns into the m88k data-access exception for a guest data
++load or store.  Owner, 2026-10-09: population 2 (the 26 header-named registers with no case) DECLINE + ANNOUNCE ONCE --
++reads served the preloaded word, writes dropped, one latched `fatal()` per register, `(once)`, `#501`'s shape.
++
++**What ships.**
++* `src/devices/dev_vme.c` -- 26 exact case labels (SADDR2 .. MISC) decline: a read is served `d->reg[]`'s word, which
++  is 0 because nothing writes those words (odata is deliberately not forced to 0, so a store a later edit added would
++  show in a read-back); a write is dropped; a new `uint64_t warned_unimpl` latch (one bit per register word,
++  `relative_addr >> 2`, the highest 35) prints one `[ vme: unimplemented read from register 0x%x (len %d) -- served
++  0x%llx.  (once) ]` or `... write to register 0x%x (len %d): 0x%llx -- declined.  (once) ]` per register per device,
++  the first access's direction deciding the wording.  A compile-time check makes a field narrower than 36 bits an
++  error (the `1ULL` in the shifts is NOT checked there; the probe's announce rows catch a narrowed literal at run time
++  -- measured, leg M_ONENARROW).  `default:` keeps both `debug()` lines and returns 0 instead of `exit(1)`.  `est/`
++  byte-identical; `build/`, `build-asan/` and `/tmp/gxsec-build` rebuilt and cleared both parts.
++* `regress/vme_default_probe.py` (new, 38 rows, rev 3) -- controls (a bogus subtype, the session, a liveness `or`, the
++  DEVINIT VBR seed as the device signature, the free-running proof); the ten cased offsets read and their write paths
++  round-tripped; the 26 population-2 registers read and written (all 0, nothing stored, no fault) at word, sub-word
++  and doubleword widths; the announce in two free-running two-pass sessions covering 26 labels x {read, write} x
++  {latch clear, set}; the non-word first accesses and their second pass in the same process; a first-access ZERO store
++  (`p2 zero wr`); population-1 faults at the edges, an interior sample, both directions, all 988 word starts free-running,
++  eight widths and lanes, and no host text (`p1 quiet`); the interim sub-word pins `vmewidthlanes` will re-derive.
++  CONTROL rows are prerequisites, not causes: a CONTROL=FAIL says a prerequisite failed.  Its CONTRACT and NOT CLAIMED
++  list are its header; the store-data disclosure names its untested slice.  The shipped file differs from the copy kill
++  table 2 ran (`killtable2_20261021/vme_default_probe.rev3.frozen.py`) in docstring and comment text only -- the
++  repair-diff pass's records corrections; AST-identical with the docstring removed.
++* `regress/gate_arm.sh` (gate 14) -- the probe's block after `#536`'s mk48 block: completion sentinel, `vme_default rows
++  run` pinned at 38 (the score-claims pin), CONTROL `OK`, every row by name green exactly once, emitted/green/red pinned
++  at 38/38/0.
++* `regress/gate_hygiene.sh` (gate 6) -- by `tools/derive_hygiene_pins.sh`, never by hand: the probe GRANDFATHERED by name
++  (`--grandfather`) and `EXPECT_PTY_PROBES` 76 -> 77 (`--write`).  The census counts what lies in the tree the weekly
++  battery runs (the 2026-09-23 owner ruling), so 77 = 75 committed + this probe + another session's untracked
++  `lca_isaphys_probe.py`.  The probe is not promptless in substance -- its pty driver waits for `GXemul> ` with `in` and
++  `find` -- but the census keys on a code-level call of the ends-with method and cannot see that, as with
++  `alpha_tbi_probe.py`; the block note says so.
++* `tools/precommit_check.sh` -- `SCORE_CLAIMS_MANIFEST` 36 -> 37 (`vme_default rows run ... 38`).
++* `tools/pipeline/check_probe_wiring.py` -- the probe's MANIFEST line (DETECTOR), the witness's two scripts (WITNESS)
++  and the tables' instruments and frozen copies (RESEARCH, by the `#471` definition at `CLASS_RESEARCH`).
++* `tools/pipeline/ledger.json` -- `vmedefaultkill` HELD for Fable 5.1's regress review (FABLE-ONLY; its question in
++  `hold_question`), with the pass-2, F2 and repair-pass seat entries and the not-fired seats named per phase (the five
++  pass-1 not-fired entries now carry the non-answer token); `vmewidthlanes` widened; `vmewarnedbit`, `vmeprobedebt` and
++  `m88kpsrmxm` filed.  `matrix.html` and `fable_queue.md` re-rendered.
++
++**Measured** (`regress/artifacts/vmedefaultkill/`; every MUTANT leg's prediction written first, in a `PRETABLE*` file
++whose mtime is the order proof -- table 2's three reference runs and the object comparison were built before PRETABLE2,
++which its section 0 discloses).
++* Kill table 1 (`killtable1_20261020/`, rev 2, 34 rows, fix568): 24 legs -- every one red except the two predicted
++  equivalents M_ODATA0 and M_SERVED0 (34/34: no population-2 word is ever non-zero); HEAD 14/34; clause (b) M_EXIT
++  24/34; clause (c): measured at `killtable1_20261020/legs/NULL.raw` (the vme `device_add` removed) 5/34 CONTROL=FAIL;
++  M_CAPNARROW fails to compile.  Eleven prediction misses, every one an incomplete prediction list
++  (`KILLTABLE1_VS_PRETABLE.out`).  Table 1b (`table1b/`): the three legs observation (c) owed, all red as predicted.
++* Pass 2's floor breach, measured BEFORE the repair (`killtable1_20261020/idata/`): M_IDATA -- the population-2 arm's
++  `if (writeflag == MEM_WRITE)` read as `if (idata)` -- 34/34 on the frozen rev 2, because every population-2 store the
++  probe made was non-zero.
++* Kill table 2 (`killtable2_20261021/`, rev 3, 38 rows, fix568b): 34 legs (27 regenerated, 7 new) -- 32 killed
++  (M_CAPNARROW by its failed build), the same 2 predicted survivors; M_IDATA red at `p2 zero wr` 0/1; one prediction
++  miss, M_ONENARROW, killed by four rows instead of two because GCC 15.2.1 -O3 folded the undefined `1u << 35` to 0 at
++  MISC (`obj/M_ONENARROW_codegen.txt`); BASE 38/38, HEAD 14/38, NULL 5/38 CONTROL=FAIL; no timeout red.  Its summary's
++  "first build log 01:16:55" is configure's (the first build is 01:17:37); a correction is appended to the file.
++* Table 2b (`table2b/`, the repair-diff pass's first seat): M_IDATABIT1 -- the direction test qualified by
++  `&& !(idata & 2)` -- 38/38 as predicted: a clause-(e) survivor, every population-2 store value carrying bit 1 clear.
++* Table 2c (`table2c/`, the repair-diff pass's GLM 5.3 seat): `default:`'s refusal conditioned on idata, both polarities
++  -- M_DFLTIDNZ 29/38 and M_DFLTIDZ 36/38, killed as predicted (a read carries idata 0; every population-1 store is
++  non-zero); M_DIRODATA, an odata conjunct on the direction test, 38/38 and compiled to the fix's own binary -- odata is
++  assigned only on a read, so the conjunct is constant-true on the write path: an equivalent mutant, not a sampled slice.
++* Table 2d (`table2d/`, the repair-diff pass's Argon answer): three predicted survivors, all 38/38 -- M_ZEROSET (the
++  latch set skipped for a zero-valued store: `p2 zero wr` pins the announce's form, not the set; clause (e)), M_SETODATA
++  (`!odata` on the set; equivalent under the fix's invariant), M_DFLTFFC (`default:` serving 0xffd..0xfff, which no row
++  touches; clause (e)) -- each now named in the probe's NOT CLAIMED list.
++* fix568b's object code is NOT identical to fix568's beyond the read announce's format: the comment lines moved
++  DEVINIT's `__LINE__` (231 -> 234, via `CHECK_ALLOCATION`) and the `(unsigned long long)` cast changed `-O3`'s layout
++  of the access function (`OBJDUMP_fix568_vs_fix568b.txt`).  Behaviour is what table 2 measured.
++* Gate 14.  Rev 2 (`gate_20261020/`): the block alone FAIL 22 of 39 on a pre-fix binary and PASS 39/39 on the fix; the
++  full gate PASS, 1264 checks -- on `build/gxemul`, which carried another session's uncommitted `dev_pcc2.c`,
++  `mvme_pcctworeg.h`, `dev_lca.c`, `dev_sh4.c` and `cpu_alpha_palcode.c` (`build/` mirrors the working tree; gate 14 has
++  PCC2 blocks), so that run is superseded.  Rev 3 (`gate_20261021/`): a CLEAN clone of HEAD 86114a90 (git archive, no
++  uncommitted edits) built twice -- the block alone FAIL 27 of 45 on HEAD's binary (the 24 red rows are table 2's HEAD
++  set) and PASS 45 on HEAD + fix568b; the FULL gate on that HEAD + fix568b binary PASS, 1270 checks, 0 FAIL, 0 SKIP
++  (04:35:04-06:46:50, run alone; `gate_20261021/GATE14_FULL3.out`, whose first line names the binary, `gate_arm.sh` and
++  the probe by md5 -- the two files this commit ships).
++
++**Panel.**  Pass 1 (`pass1_20261020/`): GPT-6 Astra, Grok 4.7, GLM 5.3 (packet-fed) and Fable 5.1, plus Argon as a second
++packet-fed lens -- all PROCEED WITH CHANGES; Fable's dissent for a bound test in `default:` was later withdrawn (M_ADD94
++and M_ADD90 measured the label form's growth edit caught).  Pass 2 (`pass2_20261020/`): all four SHIP WITH CHANGES;
++GPT-6 Astra's F8 named the floor breach (above).  Argon's pass-2 packet timed out three times while generating (00:08,
++01:03, 01:29; its controls passed) -- a seat failure, recorded so.  The adjudication pass (`f2_20261021/`): Fable 5.1,
++GPT-6 Astra, GLM 5.3 and Grok 4.7 all PROCEED WITH CHANGES; the comment's reach count overturned to FOUR (IRQSTAT and
++IRQCLR live only in `vme2abort()`, the ABORT-switch interrupt handler, which this model never triggers); D1 aligned the
++read announce to `%llx`; Grok 4.7's reading that free-running faults print the CPU's DATA_ACCESS line refuted by
++measurement (`probe_20261020/explore2_FIX.out` (b): 8 faults, no line).  The repair-diff pass (`r1_20261021/`, the
++repair-chain rule; review scoped to the repair diff, the floor question asked of the shipped composite): Fable 5.1,
++GPT-6 Astra and Grok 4.7 -- plus a second, adversarial Grok job -- CLOSE, zero floor breaches, each with its
++denominator; GLM 5.3 REPAIR AGAIN on records only, its one floor item (`default:`'s refusal conditioned on idata)
++refuted by table 2c; Argon's first send died on transport like pass 2's ("connection lost while generating", 02:46),
++and its re-send with extended thinking OFF -- every Argon job since 2026-10-15 that ran without it returned, and both
++#568 jobs with it died at ~25 minutes; recorded as a deviation from the owner's 2026-10-14 "thinking level High" --
++answered REPAIR AGAIN: of its six "broken" items three are kill attributions (another row reds each named edit), and
++three are survivors measured in table 2d and graded clause (e) or equivalent, so no floor breach survives; M_ZEROSET is a
++cell no other seat named.  Its oracle audit of the probe: every row holds.  Two of the first seat's kill attributions were wrong -- M_LATCHRDSET reds `p2 ann
++wr` and `p2 nw wr 2`, not `p2 ann wr 2`; a latch set redirected into `d->reg[]` does not red `p2 rd census` (odata is
++preloaded before the set) -- found by GPT-6 Astra and the adversarial Grok job; no survivor follows.  Opus 5.5 MEASURED
++(tables 1, 1b, 2, 2b, 2c, the object comparison, the clean clone) and was not fired as a review seat; agy, kimi,
++deepseek and minimax deliberately not fired (the owner's 2026-10-20 roster).
++
++**Records corrected on the way.**  The pass-1 adjudication's D5 said the CPU already prints an INFO-level line for a
++free-running fault: false at default verbosity (measured above).  The pass-2 brief's section 3 described another
++unit's `check_probe_wiring.py` lines as this round's.  The repair-diff pass corrected the probe's docstring (no code
++line): the ORDER DEPENDENCE paragraph had stated PRETABLE2's bit-3 prediction as this build's behaviour (table 2
++measured the fold to 0), and its first correction's "a reorder of POP2 could move the kill" was wrong too (a reorder
++changes which register is silenced, not the kill); the CONTROL definition contradicted two of its own CONTROL rows; the
++store-data SAMPLED disclosure now names its untested slice (28 of 64 bits clear in all five store values, bit 1
++measured; the sampled zero pins the announce's form, not the latch set -- M_ZEROSET).  "Object code otherwise identical" (the F2 owed list, the first seat's F2) is superseded by the object
++comparison.  PRETABLE2.out:72's "the 20 population rows die on HEAD" omits the four rev-3 rows (its :236 and the
++machine-readable predictions carry 24); it is not edited -- its mtime is the order proof.  Three seats read
++`check_probe_wiring.py`'s `#471` comment as defining WITNESS; it defines RESEARCH (`git blame`: `#471`, 0a7c4687,
++added `CLASS_RESEARCH` with that comment; `CLASS_WITNESS` dates from 85bc6ab4).
++
++**Filed / recorded, not this round** (OUTSTANDING_BUGS, 2026-10-21).  `vmewidthlanes` widened (population-2 sub-word
++starts; cased-word `ld.d`/`st.d` lane placement); `vmewarnedbit`, the shared latch-index macro (D5); `vmeprobedebt`,
++the probe's coverage debt (`free quiet`, `vbr rt` and `t1count inc` carry no own-channel kill -- the absent legs: a
++cased arm's `debug()` -> `fatal()` promotion, a VBR write-path break, a T1COUNT write-path break -- and the store-data
++clause-(e) slice); `m88kpsrmxm` (MED): a guest that sets PSR.MXM stops the emulated CPU (`cpu_m88k.c`'s PSR store prints
++`stcr: TODO: MXM support` and clears `cpu->running`), where the MC88100 rounds a misaligned address down -- pass 1
++adjudicated it LOW as an unmodelled divergence before the arm was read.
++
+ # Records, 2026-10-20: three late Argon readings adjudicated -- `#565`'s and `#566`'s probe records and `fableheldform`'s records corrected in place, `sgirekills`' assess hold restored, two rows filed and three widened
+ 
+ **What was read.**  Argon (Gemini 4 Argon, web; a packet-fed lens) read the packets of three rounds before they
+
+=== OUTSTANDING_BUGS.md (staged copy C:/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/vme/commit/staged/OUTSTANDING_BUGS.md vs HEAD) ===
+diff --git a/C:/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/vme/commit/confirm/_head.tmp b/C:/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/vme/commit/staged/OUTSTANDING_BUGS.md
+index 862382f..b91d264 100644
+--- a/C:/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/vme/commit/confirm/_head.tmp
++++ b/C:/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/vme/commit/staged/OUTSTANDING_BUGS.md
+@@ -25139,3 +25139,36 @@ Fable 5.1, GPT-6 Astra, Grok 4.7).  Each row's ledger `state_note` carries its s
+   measurement.
+ * **`ppcrldiclbanner` (LOW, open)** -- its first two items done (docstring line 2 and the first banner read DETECTOR; the
+   usage message names `ppc_rldicl_probe.py`); open for the third, `vacuous cell`'s note split across two rows.
++
++
++### 2026-10-21 -- `vmedefaultkill` fixed by `#568`; `vmewidthlanes` widened; three rows filed
++
++* **`vmedefaultkill` (HIGH) -- FIXED by `#568`.**  `dev_vme.c`'s `default:` no longer ends the emulator: the 26
++  header-named VME2 registers the model does not implement DECLINE with one latched announce per register (owner
++  2026-10-09), and every other unmatched offset returns 0, which `memory_rw.c` turns into the m88k data-access exception
++  for a guest data load or store (owner 2026-09-11).  Rung-3 witness `regress/artifacts/vmedefaultkill/witness_20261020/`
++  (7 of 7 guest access sites rc 1 on HEAD 5dbc000e); detector `regress/vme_default_probe.py` (38 rows), gated in gate 14
++  and pinned at 38; kill table 2 and its addenda 2b/2c in `regress/artifacts/vmedefaultkill/killtable2_20261021/`; the
++  repair chain closed on the repair-diff pass (`r1_20261021/`).
++* **`vmewidthlanes` (LOW, open)** -- widened: population-2 SUB-WORD starts (the probe pins three interims --
++  `p3 interim`, `p2 int byte`, `p2 int half` -- that this row will re-derive) and cased-word `ld.d`/`st.d` lane
++  placement (a 32-bit register served into, or stored from, the wrong half of an 8-byte access at 0x00, 0x60, 0x88).
++* **`vmewarnedbit` (LOW, open)** -- new.  `dev_vme.c` writes its latch index `1ULL << (relative_addr >> 2)` twice, in
++  the test and in the set; one shared macro (`dev_pcc2.c`'s shape) would make a one-sided index edit impossible and a
++  two-sided relabel one edit.  D5 of `#568`'s pass-2 adjudication, filed rather than built: kill table 2 reds the
++  one-sided index edits it built (M_LATCHONE, M_ONENARROW), and the two-sided relabels the repair-diff pass named
++  (`1ULL` -> `2ULL`, `(relative_addr >> 2) ^ 1`) are equivalents.
++* **`vmeprobedebt` (LOW, open)** -- new.  Three rows of `regress/vme_default_probe.py` carry no own-channel kill in kill
++  table 2: `free quiet` (no leg reds it), `vbr rt` and `t1count inc` (red only as dependents of M_DROPTCTL).  The absent
++  legs: a cased arm's `debug()` -> `fatal()` promotion; a VBR write-path break; a T1COUNT write-path break.  Also the
++  clause-(e) cells the probe's NOT CLAIMED list names: the store-data slice (28 of 64 bits clear in every store value;
++  bit 1 measured 38/38 in table 2b), the latch set skipped for a zero store (M_ZEROSET, 38/38 in table 2d: the sampled
++  zero pins the announce's form, not the set), and `default:` serving 0xffd..0xfff (M_DFLTFFC, 38/38).  Coverage debt,
++  ranked below live defects.
++* **`m88kpsrmxm` (MED, open)** -- new.  A guest that sets PSR.MXM STOPS THE EMULATED CPU: `src/cpus/cpu_m88k.c`'s PSR
++  write prints `stcr: TODO: MXM support` at ERROR level and sets `cpu->running = false` (the `M88K_PSR_MXM` arm of the
++  control-register store).  The MC88100 manual (`_scratchpad/mc88100.txt:2047-2052`, `:9243-9245`) makes MXM the
++  misaligned-access exception MASK: when set, a misaligned access does not trap and the processor rounds the address
++  down to a consistent boundary.  Named on `#568`'s pass 1 (Fable) as an unmodelled divergence and adjudicated FILE,
++  LOW, before anyone read the arm; the arm halts, so it is filed MED.  Whether an in-tree guest sets MXM is not
++  established -- the reachability question that ranks it.

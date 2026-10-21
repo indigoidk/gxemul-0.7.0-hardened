@@ -1,0 +1,121 @@
+#!/usr/bin/env python3
+"""apply_fixes568.py -- apply the records-confirmation fixes (Argon vmerec; GPT-6 Astra's confirm) to EVERY copy of each
+record: the draft, the staged copy and the working-tree copy.  Each (old -> new) must occur EXACTLY ONCE in every copy it
+targets, or NOTHING is written (exit 5).  Pre-edit copies are saved beside this file as *.prefix568 the first time.
+
+usage:  python -I -B apply_fixes568.py [--dry]
+"""
+import io
+import os
+import shutil
+import sys
+
+C = r"C:\Users\User00\AppData\Local\Temp\claude\C--DocumentNoSnc-cc-GXEMUL\8e474f41-4d47-4c99-bf11-3406a84c4fcd\scratchpad\vme\commit"
+R = r"C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC"
+COPIES = {
+    "CL": [C + r"\changelog_568.md", C + r"\staged\CHANGELOG.md", R + r"\CHANGELOG.md"],
+    "OB": [C + r"\ob_568.md", C + r"\staged\OUTSTANDING_BUGS.md", R + r"\OUTSTANDING_BUGS.md"],
+    "MSG": [C + r"\commit_msg.txt"],
+    "LEDGER": [C + r"\staged\ledger.json", R + r"\tools\pipeline\ledger.json"],
+}
+FIXES = [
+    # --- Argon vmerec ---
+    ("OB", "and pinned at 38; kill table 2 and its addenda 2b/2c in",
+           "and pinned at 38; kill table 2 and its addenda 2b, 2c and 2d in"),
+    ("OB", "D5 of `#568`'s pass-2 adjudication, filed rather than built: kill table 2 reds the\n"
+           "  one-sided index edits it built (M_LATCHONE, M_ONENARROW), and the two-sided relabels the repair-diff pass named\n"
+           "  (`1ULL` -> `2ULL`, `(relative_addr >> 2) ^ 1`) are equivalents.",
+           "D5 of `#568`'s pass-2 adjudication, filed rather than built.  The index edits kill table 2 built are\n"
+           "  TWO-sided -- M_LATCHONE (a constant index in both) and M_ONENARROW (a 32-bit literal in both) -- and die of a\n"
+           "  collision and an overflow; a ONE-sided edit (test and set disagreeing) was not built, only derived to re-announce;\n"
+           "  the two-sided relabels the repair-diff pass named (`1ULL` -> `2ULL`, `(relative_addr >> 2) ^ 1`) are equivalents."),
+    ("CL", "Opus 5.5 MEASURED\n(tables 1, 1b, 2, 2b, 2c, the object comparison, the clean clone)",
+           "Opus 5.5 MEASURED\n(tables 1, 1b, 2, 2b, 2c, 2d, the object comparison, the clean clone)"),
+    ("CL", "Its oracle audit of the probe: every row holds.",
+           "Its oracle audit of the probe: all 38 excerpted row oracles held against shapes (a)-(e); the omitted helper\n"
+           "definitions remained UNSETTLED."),
+    ("MSG", "kill table 2 (rev 3, 34 legs: 32 killed, 2 predicted equivalents;",
+            "kill table 2 (rev 3, 34 legs: 32 killed -- M_CAPNARROW by its failed build, M_ONENARROW by four rows where two\n"
+            "were predicted -- 2 predicted equivalents;"),
+    ("CL", "set) and PASS 45 on HEAD + fix568b; the FULL gate",
+           "set) and PASS 45 on HEAD + fix568b (those two runs used an earlier text of the probe, md5 346c7813 -- docstring\n"
+           "  edits only, AST-identical with the module docstring removed); the FULL gate"),
+    ("LEDGER", "table 2 and addenda 2b/2c measured the floor;", "table 2 and addenda 2b, 2c and 2d measured the floor;"),
+    ("LEDGER", "kill tables 1, 1b, 2, 2b, 2c, the object comparison and the clean-clone gate runs.",
+               "kill tables 1, 1b, 2, 2b, 2c, 2d, the object comparison and the clean-clone gate runs."),
+    ("LEDGER", "kill table 2 reds the one-sided index edits it built (M_LATCHONE, M_ONENARROW); the repair-diff pass named the "
+               "two-sided relabels",
+               "the index edits kill table 2 built are TWO-sided (M_LATCHONE: a constant index in test and set; M_ONENARROW: "
+               "a 32-bit literal in both) and die of a collision and an overflow -- a one-sided edit was not built; the "
+               "repair-diff pass named the two-sided relabels"),
+    # --- GPT-6 Astra's confirmation (confirm/out/codex_vmeconfirm.txt, CONFIRM WITH CHANGES (7)) ---
+    ("CL", "Owner, 2026-09-11: population 1 (word starts the header does not name, and every\n"
+           "sub-word start) FAULTS -- `return 0`, which `memory_rw.c` turns into the m88k data-access exception for a guest data\n"
+           "load or store.",
+           "Owner, 2026-09-11: population 1 (the word starts the header does not name) FAULTS --\n"
+           "`return 0`, which `memory_rw.c` turns into the m88k data-access exception for a guest data load or store.  Sub-word\n"
+           "starts take the same `return 0` only as an INTERIM: that ruling does not reach them (Fable 5.1's 7n-4), and\n"
+           "`vmewidthlanes` decides them."),
+    ("OB", "  for a guest data load or store (owner 2026-09-11).  Rung-3 witness",
+           "  for a guest data load or store (owner 2026-09-11 for the unnamed word starts; sub-word starts the same way only as\n"
+           "  an interim, which `vmewidthlanes` decides).  Rung-3 witness"),
+    ("MSG", "(owner 2026-09-11).  est/ byte-identical;",
+            "(owner 2026-09-11 for the unnamed word starts; sub-word starts the same way only as an interim,\n"
+            "vmewidthlanes).  est/ byte-identical;"),
+    ("CL", "and both\n#568 jobs with it died at ~25 minutes;",
+           "and #568's\npass-2 and repair-pass packets with it died at ~25 minutes (its pass-1 packet with it returned, in 383 s);"),
+    ("CL", "whose first line names the binary, `gate_arm.sh` and\n  the probe by md5 -- the two files this commit ships).",
+           "whose first line names the binary, `gate_arm.sh` and\n"
+           "  the probe by md5: `gate_arm.sh` ships as run; the shipped probe (2cd87fc2) differs from the run's c896d079 only by\n"
+           "  the records confirmation's comment edits -- AST-identical with the module docstring removed -- and the block\n"
+           "  re-run on it PASSES 45, `gate_20261021/mini3_FIX_final.out`)."),
+    ("MSG", "the full gate 14 on that binary PASS, 1270 checks, 0 FAIL\n(gate_20261021/GATE14_FULL3.out).",
+            "the full gate 14 on that binary PASS, 1270 checks, 0 FAIL\n"
+            "(gate_20261021/GATE14_FULL3.out); the block re-run on the shipped probe text PASS 45 (mini3_FIX_final.out)."),
+    ("CL", "`est/`\n  byte-identical; `build/`, `build-asan/` and `/tmp/gxsec-build` rebuilt and cleared both parts.",
+           "`est/`\n  byte-identical; `build/`, `build-asan/` and `/tmp/gxsec-build` rebuilt and cleared both parts\n"
+           "  (`apply_20261021/APPLY568B.out`, kept whole: its failed probe copy and stale probe md5 are the apply script's,\n"
+           "  and the probe was installed by hand after it)."),
+    ("LEDGER", "its amendments are REV3_SPEC section 6.", "its amendments are section 6 of f2_20261021/REV3_SPEC.md."),
+    ("CL", "in docstring and comment text only -- the\n  repair-diff pass's records corrections; AST-identical with the docstring removed.",
+           "in docstring and comment text only -- the\n  repair-diff pass's and the records confirmation's corrections; AST-identical with the module docstring removed."),
+]
+
+
+def rd(p):
+    return io.open(p, encoding="utf-8", newline="").read()
+
+
+def main():
+    dry = "--dry" in sys.argv
+    texts = {}
+    bad = []
+    for key, old, new in FIXES:
+        for p in COPIES[key]:
+            t = texts.setdefault(p, rd(p))
+            crlf = "\r\n" in t
+            o, n = (old.replace("\n", "\r\n"), new.replace("\n", "\r\n")) if crlf else (old, new)
+            c = t.count(o)
+            if c != 1:
+                bad.append("%s: %r occurs %d times" % (os.path.basename(p), old[:60], c))
+                continue
+            texts[p] = t.replace(o, n, 1)
+    if bad:
+        for b in bad:
+            sys.stderr.write("REFUSED: %s\n" % b)
+        sys.stderr.write("NOTHING WRITTEN\n")
+        return 5
+    if dry:
+        print("DRY RUN: %d fixes apply cleanly to %d files" % (len(FIXES), len(texts)))
+        return 0
+    for p, t in texts.items():
+        bk = os.path.join(C, os.path.basename(os.path.dirname(p)) + "__" + os.path.basename(p) + ".prefix568")
+        if not os.path.exists(bk):
+            shutil.copy2(p, bk)
+        io.open(p, "w", encoding="utf-8", newline="").write(t)
+    print("APPLIED %d fixes to %d files" % (len(FIXES), len(texts)))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
