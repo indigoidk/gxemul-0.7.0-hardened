@@ -1,0 +1,117 @@
+ASTRA_VME_P2_20261020
+VERDICT: SHIP WITH CHANGES -- Current device behavior is sound; close the zero-write detector gap and correct the capacity guarantee, missing registration, and records.
+
+**Q1 — Premise audit**
+
+(a) Verified against [mvme88k_vme.h](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/thirdparty/mvme88k_vme.h:46) and the working switch.
+
+- Population 2: `04,08,0c,10,14,18,1c,20,24,28,30,34,38,3c,40,44,48,58,5c,64,68,70,74,78,7c,8c`.
+- Original cased offsets: `00,2c,4c,50,54,60,6c,80,84,88`.
+- Their disjoint union is exactly the 36 word starts `00..8c`. The remaining word starts are `90..ffc`: 988.
+
+(b) The 26 distinct latch indices are:
+
+`1,2,3,4,5,6,7,8,9,10,12,13,14,15,16,17,18,22,23,25,26,28,29,30,31,35`.
+
+The current typedef has size 1. Narrowing the field to 32 bits makes it −1.
+
+**F1 — DEFECT:** The claimed protection against narrowing the *shift operand* is incomplete. Changing `1ULL` at either operational shift to `1U` leaves the separate `sizeof(1ULL)` unchanged; the typedef still has size 1. Changing the literal inside `sizeof` would make it −1. Use a shared mask-operand definition in both shifts and the capacity check, then verify its narrowing fails compilation. [dev_vme.c:62](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:62)
+
+(c) Verified: the register writers use indices `20,21,24,34`; initialization also seeds 34. None belongs to population 2. Reads preload zero, the population-2 arm stores nothing, and its `break` reaches serialization and `return 1`.
+
+**F2 — WRONG RECORD:** Q1(d)’s “exactly” set omits sub-word starts inside unnamed words. The producer checks natural alignment before calling memory, including eight-byte alignment for doubles. Enumeration per direction gives:
+
+| Length | Reachable starts | Original cased | Population 2 | Default |
+|---:|---:|---:|---:|---:|
+| 1 | 4096 | 10 | 26 | 4060 |
+| 2 | 2048 | 10 | 26 | 2012 |
+| 4 | 1024 | 10 | 26 | 988 |
+| 8 | 512 | 5 | 13 | 494 |
+
+The omitted distinct offsets are `4w+{1,2,3}`, for `w=36..1023`: 2964 offsets. Default therefore receives 7554 `(offset,length)` pairs per direction. All previously reached the process-ending default. [Producer alignment check](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_m88k_instr_loadstore.c:168)
+
+**F3 — WRONG RECORD:** S4 incorrectly says population 4 reaches the fault. Byte and halfword accesses at all ten cased bases succeed. Doubles succeed at `00,50,60,80,88`; doubles at the other cased bases fail alignment upstream. The device switch has no width predicate.
+
+(e) The preserved replacements, diffs, manifests, raw headers and BUILD records agree. In-memory reconstruction matched all 24 table-1 mutations, NULL, and the three table-1b mutations. Current device MD5 is `4e3e7fc220062b429f7d9d6e140fec9e`; both probe copies hash to `19de15b3ea69af28e437cdf92e22c97e`.
+
+Fresh builds are supported by the driver’s object/binary removal and timestamp checks plus `fresh=yes` records. M_CAPNARROW intentionally failed compilation. Full build logs and binaries are absent from the preserved project directory, so freshness is corroborated historical evidence, not independently remeasured here. Original build products/logs would settle that remaining provenance limit.
+
+**Q2 — Diff and gate**
+
+(a) The instance latch is zero-initialized. Exact labels implement S3 without storing; default retains both diagnostics and returns failure before the success tail. D1, D3–D6 hold in executable behavior. D7 has F1’s limitation.
+
+**F4 — NIT:** Align the read announcement with D2’s `%llx` and `(unsigned long long) odata`. `%x` is lossless today because the preload is a `uint32_t`, but restoring the agreed form removes unexplained drift and accommodates a future composed 64-bit read. This is not a current returned-value defect.
+
+**F5 — WRONG RECORD:** Two added comment claims need correction:
+
+- “The guest reaches six” overcounts the reachable register set. The six source-referenced registers include IRQCLR, which the zero IRQSTAT response makes unreachable. Executing the described routines reaches at most five distinct population-2 registers: MASTERCTL, MASTER3, MASTER4, MASTER4MOD and IRQSTAT. Say “the guest source references six,” retaining the IRQCLR qualification. [Guest source](C:/DocumentNoSnc/cc/GXEMUL/_guest-src-openbsd22/sys/arch/mvme88k/dev/vme.c:570)
+- Qualify “memory_rw then raises the m88k data-access exception” with “for guest data loads/stores,” in both device and gate commentary. Instruction fetch selects the instruction-access exception. [memory_rw.c:619](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:619)
+
+(d) The gate rejects missing completion, failed controls, missing/duplicate named successes, a wrong row count, and red rows. The successful branch’s constant `check ... yes yes` is not vacuous: the preceding missing-sentinel branch fails. `|| true` does not suppress the subsequent verdict checks.
+
+**F6 — WRONG RECORD:** CONTROL failure cannot establish an apparatus cause. Product mutations demonstrably fail `cased census`, `t1cmp rt`, and `free ctl`. Moreover, CONTROL rows are **already scored**: the probe totals every row, and the gate requires all 34. Move functional expectations into detector classification with separate apparatus controls, or define CONTROL explicitly as prerequisite status without causal attribution.
+
+**F7 — DEFECT:** The promised manifest registration is missing. `check_probe_wiring.py` contains neither `vme_default` nor `vmedefaultkill`; its actual +15 lines belong to other work. The new files currently escape its index-based domain because they are untracked. Once staged, the unregistered Python files trigger `UNCLASSIFIED`. Add the detector and appropriate artifact-script classifications, then verify wiring against the staged file set. Packet §3’s ownership/registration claim also needs correction. [Checker rejection](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_probe_wiring.py:4059)
+
+**Q3 — One escaping edit**
+
+**F8 — FLOOR BREACH:** Replace only the population-2 announcement’s direction condition:
+
+```diff
+- if (writeflag == MEM_WRITE)
++ if (idata)
+```
+
+This should preserve all 34 greens, including `p2 ann wr` and `p2 nw wr`. Every tested population-2 store is nonzero: `a5a5a5a5`, `d4`, `c3d4`, or `1122334455667788`; reads leave `idata` zero.
+
+A guest’s first zero store to a fresh population-2 register would instead produce a **read/served** announcement, violating S3’s first-access direction requirement. Guest register/memory behavior remains unchanged; the observable difference is the diagnostic generated by that guest operation.
+
+Add a first-access zero-write announcement check and measure this mutation. This escape is reasoned from the frozen instrument, not built.
+
+**Q4 — Vacuity floor**
+
+(a) Satisfied by `HEAD.raw`: 14/34, CONTROL=OK.
+
+(b) Satisfied by the verbatim `exit(1)` reinstatement: M_EXIT scores 24/34, CONTROL=OK.
+
+(c): measured at [legs/NULL.raw](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/vmedefaultkill/killtable1_20261020/legs/NULL.raw): 5/34, CONTROL=FAIL. `NULL.diff` removes the VME `device_add` call, so the machine genuinely lacks the device registration.
+
+(d) The actual predicates and dependencies are:
+
+- Population-2 announcement: dispatch to one of the 26 labels → selected latch bit clear → write-direction predicate or its false branch.
+- Default return: dispatch to no named label. The preceding read/write condition selects diagnostic text; it does **not** condition the failure return.
+- Read preload and successful read serialization each depend on `writeflag == MEM_READ`; neither is an enclosing predicate of the announcement.
+- Body-read lvalues: `d->warned_unimpl`, `relative_addr`, `writeflag`, `len`, `idata`, and `odata` derived from `d->reg[word]`. Serialization additionally consumes `cpu` and `data`; `d` comes from instance `extra`.
+- Dispatch-label values also determine the latch bit. The announce sessions exercise every one of the 26 values with both first directions and clear/set latch states at width four.
+
+The missing body-value cell is **WRITE with `idata == 0`**, demonstrated by F8. Nonzero `odata` and multiple-instance isolation are explicitly excluded, rather than falsely measured.
+
+**F9 — WRONG RECORD:** Expand the contract’s limitations to disclose that population-2 non-word offsets, cross-width latch reuse, and store-data patterns are sampled. “26 labels × directions × latch states” describes the word sessions, not the full width/data cross-product. Also disclose that the fault rows do not assert preservation of default’s two debug messages; D5’s text preservation is established by review.
+
+(f) With the probe fixed, uniformly shifting the device map one word makes the original VBR address read the former IRQL4 value. `vbr reset`, `cased census`, and VSIG-guarded product rows fail. The apparatus-only `neg apparatus`, `session`, `live`, and `unasm` rows have no independent device-address sensitivity; that is appropriate for their purpose.
+
+After table 1b, the zero-kill rows are exactly:
+
+`neg apparatus`, `session`, `live`, `vbr reset`, `free quiet`, `free neg ctl`, `unasm`.
+
+All seven are CONTROL. **No non-CONTROL row lacks a measured kill.** F6 addresses classification without discounting those measured detections.
+
+**Q5 — Records**
+
+**F10 — WRONG RECORD:** The proposed docstring repair is correct, with three qualifications:
+
+- Cite **both tables**, identifying the frozen instrument by its full hash.
+- Preserve the original predictions as dated predictions; do not silently replace them with measured outcomes. Eleven table-1 prediction misses remain part of the record.
+- Update “design claim until a kill table measures it” and the false universal statement that every device session opens with `ld r30,r3,0x88`. The control session reads VBR into r5 after an OR; the cased census eventually reads it into r13. Both check the signature, so this wording error does not defeat anchoring. [Frozen docstring](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/vmedefaultkill/killtable1_20261020/vme_default_probe.frozen.py:46)
+
+**F11 — WRONG RECORD:** Change `(FAILED FOR SOME OTHER REASON)` before shipping. The observed prerequisite failure is accurate; its asserted causal exclusion is not. The oracle cannot know the reason is unrelated to the mutation.
+
+Use neutral wording such as:
+
+- `dependent check not exercised: pass 1 did not complete`
+- `dependent check not exercised: pass 1 produced no announce`
+- `unexpected stop pc=0x18 before announce verification`
+
+Keep these outcomes red. This changes executable instrument output and therefore owes a table rerun under a new revision, preserving the existing frozen copy and results.
+
+No files were written, and no builds or probe runs were performed.

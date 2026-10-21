@@ -1,0 +1,118 @@
+ARGON_VMEP1_20261020
+VERDICT: PROCEED WITH CHANGES -- The population-2 decline/population-1 fault C sketch is sound in control flow, but the Section 6 detector plan leaves the `MEM_WRITE` announce path, `MEM_WRITE` fault/width mutations, and single-register latch repeat untested, and the sketch comment misstates `vme2chip_init`/`vme2abort` behavior when `IRQSTAT` reads 0.
+
+### Q1 -- PREMISE AUDIT
+Q1(a)-(b) hold on the inlined text (`10 + 26 + 988 = 1024` words; `d->reg[w] == 0` for all 26 population-2 words), while Q1(a)'s raw header completeness and Q1(c)-(d)'s CPU producer/exception invariants are UNSETTLED from this packet alone[cite: 1, 2].
+
+* **Q1(a) Census (HOLDS on `B:45-90`, `B:159`, `B:177-245`, `V:5-169`; raw header UNSETTLED)**: `VME_LEN = 0x1000` (`B:159`) contains $0x1000 / 4 = 1024$ word starts (`0x000..0xffc`)[cite: 1]. Range `0x00..0x8c` has $(0x8c / 4) + 1 = 36$ word starts[cite: 1, 2]. The switch in `dev_vme.c` (`B:177-245`) cases 10 offsets (`0x00, 0x2c, 0x4c, 0x50, 0x54, 0x60, 0x6c, 0x80, 0x84, 0x88`)[cite: 1]. The remaining $36 - 10 = 26$ word starts in `0x04..0x8c` (`0x04, 0x08, 0x0c, 0x10, 0x14, 0x18, 0x1c, 0x20, 0x24, 0x28, 0x30, 0x34, 0x38, 0x3c, 0x40, 0x44, 0x48, 0x58, 0x5c, 0x64, 0x68, 0x70, 0x74, 0x78, 0x7c, 0x8c`) match `struct vme2reg` in `V:5-169` and the sketch's 26 `case` labels in `B:405-413`[cite: 1, 2]. Range `0x90..0xffc` has $(0xffc - 0x90) / 4 + 1 = 988$ word starts ($1024 - 36 = 988$, `B:84, B:90`)[cite: 1]. Direct inspection of `src/include/thirdparty/mvme88k_vme.h` (including the non-register macros at `0xc0..0x800` noted in `B:81`) is UNSETTLED because `src/include/thirdparty/mvme88k_vme.h` is not inlined[cite: 1].
+* **Q1(b) `d->reg[w]` writers (HOLDS, `B:152-279`)**: `DEVINIT(vme)` zeroes `d` via `memset(d, 0, sizeof(struct vme_data))` (`B:267`) and seeds only `d->reg[VME2_VBR / sizeof(uint32_t)]` (`0x88 / 4 = 34`, `B:270-271`)[cite: 1]. Inside `DEVICE_ACCESS(vme)`, the only writes to `d->reg[]` are at `B:196` (`VME2_T1CMP`, word 20), `B:201` and `B:204` (`VME2_T1COUNT`, word 21, write and read `+= 100`), `B:210` (`VME2_TCTL`, word 24), and `B:243` (`VME2_VBR`, word 34)[cite: 1]. All four are cased registers; `d->reg[w]` remains `0` for all 26 population-2 words (and all 988 population-1 words) for the device's lifetime[cite: 1].
+* **Q1(c) `return 0` -> m88k data-access exception (UNSETTLED, `B:287-331`, `M:32-38`)**: In `src/cpus/memory_rw.c` (`B:299-329`), `res == 0` is converted to `res = -1` (`B:299-300`), and when `res <= 0 && !no_exceptions` (`B:307`), it calls `m88k_exception(cpu, cache == CACHE_INSTRUCTION ? M88K_EXCEPTION_INSTRUCTION_ACCESS : M88K_EXCEPTION_DATA_ACCESS, 0)` (`B:324-326`) and returns `MEMORY_ACCESS_FAILED` (`B:328`)[cite: 1]. If `no_exceptions` is non-zero (e.g. debugger/inspect reads, since `vme` is registered with `DM_DEFAULT` rather than `DM_READS_HAVE_NO_SIDE_EFFECTS` at `B:275, B:288-289`), `mem->devices[i].f` is not called and `B:307` is skipped (`goto do_return_ok` at `B:330`); if `cache == CACHE_INSTRUCTION`, it raises `M88K_EXCEPTION_INSTRUCTION_ACCESS` instead of `M88K_EXCEPTION_DATA_ACCESS` (`B:324-326`)[cite: 1]. While `M:32-38` witnesses that guest `ld`/`st` instructions at the 7 sites take the data-access exception path and populate `DMT0`/`DMD0`/`DMA0`, proving that no guest `ld`/`st` path ever passes `no_exceptions != 0` and seeing where `DMT0`/`DMD0`/`DMA0` get populated (given the `TODO` comment at `B:319-323`) is UNSETTLED without the full `src/cpus/memory_rw.c` and `src/cpus/cpu_m88k_instr_loadstore.c`[cite: 1, 2].
+* **Q1(d) Reachable `(relative_addr, len)` pairs on m88k (UNSETTLED, `B:484-485`)**: The m88k load/store producer is not inlined in this packet; settling whether misaligned `ld.hu`/`ld`/`ld.d` trap before reaching `memory_rw`, whether `ld.d`/`st.d` can reach an offset that is `4 mod 8`, and whether `ld.d`/`st.d` invokes `dev_vme_access` once with `len == 8` or twice with `len == 4` requires `src/cpus/cpu_m88k_instr_loadstore.c` and the lines of `src/cpus/memory_rw.c` above line 583[cite: 1]. Note that if `dev_vme_access` is called with `len == 8` (as `B:461` `ld.d at 0x08` and `B:475` imply), `odata = d->reg[relative_addr / sizeof(uint32_t)]` (`B:175`) only reads one 32-bit `uint32_t`, and an 8-byte access at `0x28` (`MASTERCTL`) or `0x8c` (`MISC`) switches only on the start offset `relative_addr` (`B:177`), spanning into `0x2c` (cased `GCSRCTL`) or `0x90` (population-1 fault) without running the second word's case[cite: 1].
+
+---
+
+### Q2 -- THE SKETCH AGAINST THE FULL FUNCTION
+The C code in the sketch (`B:387-435`) has no out-of-range shifts, no shared bits between distinct registers, no `idata` read on `MEM_READ`, and `return 0` rightly skips `memory_writemax64`, but its comment (`B:400-402`) misstates the guest's `MASTERCTL` and `IRQCLR` behavior (see Angle 2 below)[cite: 1, 2].
+
+* **Preload & common tail (`B:169-175`, `B:255-258`, `B:434`)**: `idata` is only populated on `MEM_WRITE` (`B:171-172`) and only read inside `writeflag == MEM_WRITE` branches (`B:191, B:196, B:201, B:210, B:221, B:229, B:237, B:243, B:251, B:416-419`)[cite: 1]. `return 0` at `B:434` skips `memory_writemax64` (`B:255-256`), leaving the destination register untouched on a read fault (confirmed by `r2 = 0xdeadbeef` in `M:32, M:37`)[cite: 1, 2].
+* **Shift range & bit uniqueness (`B:390-394`, `B:405-415`)**: For the 26 population-2 word starts (`0x04..0x8c`), `relative_addr >> 2` yields 26 distinct integers in `1..35` (`0x04 >> 2 == 1` through `0x8c >> 2 == 35`)[cite: 1]. `1ULL << (relative_addr >> 2)` is well-defined in `uint64_t` (`35 < 63`), and no two registers share a bit[cite: 1].
+* **Angle 2 -- Guest `vme2chip_init` and `vme2abort` trace (`G:4-104`, `G:131-145`, `V:5-169`)**:
+  1. In `vme2chip_init` (`G:4-104`), after cased `vme2_tctl` RMW (`0x60`, `G:11`, `V:87`), the guest touches population-2 registers in this exact order (all `volatile u_long` word accesses, `V:31-34`):
+     - **#1**: `ctl = vme2->vme2_masterctl;` (`0x28`, **READ**, `G:13`, `V:34`)[cite: 2]. (`vme2_master1` at `0x14` and `vme2_master2` at `0x18` in `G:15-25` are inside `#if 0` and compiled out[cite: 2].)
+     - **#2**: `vme2->vme2_master3 = ...;` (`0x1c`, **WRITE**, `G:28-29`, `V:31`)[cite: 2].
+     - **#3**: `vme2->vme2_master4 = ...;` (`0x20`, **WRITE**, `G:41-42`, `V:32`)[cite: 2].
+     - **#4**: `vme2->vme2_master4mod = ...;` (`0x24`, **WRITE**, `G:43-44`, `V:33`)[cite: 2].
+     - **#5**: `vme2->vme2_masterctl = ctl;` (`0x28`, **WRITE**, `G:55`, `V:34`), followed by cased accesses to `vme2_gcsrctl` (`0x2c`, RMW, `G:57-74`), `vme2_irql4` (`0x84`, write, `G:80-83`), and `vme2_irqen` (`0x6c`, write and RMW, `G:88, G:101`)[cite: 2].
+     - **What `vme2chip_init` does with `ctl` read from `MASTERCTL` (`0x28`) at `G:13`**: It clears bits `23:16` (`~(0xff << 16)`, `G:30`, `V:36, V:57`), ORs `(0x0e | 0x80) << 16 = 0x008e0000` (`G:31-32`, `V:39, V:51`), clears bits `31:24` (`~(0xff << 24)`, `G:45`, `V:35, V:57`), ORs `0x0e << 24 = 0x0e000000` (`G:46-47`, `V:51`), writes `ctl` (`0x0e8e0000` when the read returned `0`) to `vme2_masterctl` at `G:55`, and overwrites `ctl = vme2->vme2_gcsrctl` at `G:57`[cite: 2]. No branch depends on `ctl`, so reading `0` from `MASTERCTL` does not change guest control flow in `vme2chip_init`; however, in the emulator, the read at `G:13` sets bit `0x28 >> 2 = 10` in `d->warned_unimpl` (`B:415`), suppressing the write announce at `G:55`[cite: 1, 2].
+  2. In `vme2abort` (`G:131-145`), the guest touches:
+     - **#6**: `if (!(vme2->vme2_irqstat & VME2_IRQ_AB))` (`0x68`, **READ**, `G:137`, `V:91, V:96`)[cite: 2].
+     - **#7**: `vme2->vme2_irqclr = VME2_IRQ_AB;` (`0x74`, **WRITE**, `G:142`, `V:94, V:96`)[cite: 2].
+     - **What `vme2abort` does when `vme2_irqstat` (`0x68`) reads `0`**: Because `VME2_IRQ_AB = 0x40000000` (`V:96`), `!(0 & 0x40000000)` is true (`G:137`), so `vme2abort` prints `"vme2abort irq not set\n"` (`G:138`) and executes `return 0;` (`G:139`)[cite: 2]. Reading `0` from `IRQSTAT` makes `vme2->vme2_irqclr = VME2_IRQ_AB` (`G:142`) and `nmihand(frame)` (`G:143`) unreachable in the guest[cite: 2]. Because `B:475` explicitly places *"the guest's abort-handler consequence"* on the detector's `NOT CLAIMED` list (`S3` ruled `DECLINE` rather than `IMPLEMENT` for `IRQSTAT`), no detector row should demand `IRQSTAT != 0`, but the sketch's code comment at `B:400-402` is inaccurate[cite: 1, 2].
+
+FLAG: B:400-402, G:13, G:55, G:137-142 -- The sketch comment claims `vme2chip_init()` only writes `MASTERCTL` (omitting the prior read at `G:13` that consumes `MASTERCTL`'s latch bit) and claims `vme2abort()` writes `IRQCLR` (whereas serving `0` on `IRQSTAT` at `G:137` forces `vme2abort()` to return `0` at `G:139` without reaching `IRQCLR` at `G:142`).
+
+---
+
+### Q3 -- `odata = 0;` OR NOT
+Omitting `odata = 0;` in the population-2 arm HOLDS (`B:175, B:405-425, B:460, B:491-496`)[cite: 1].
+
+* Because every population-2 `case` label is an exact word start (`0x04..0x8c`) and nothing in `dev_vme.c` ever writes to `d->reg[w]` for those 26 indices (`B:152-279`), the preload `odata = d->reg[relative_addr / sizeof(uint32_t)];` (`B:175`) always loads `0` on `MEM_READ` (and `odata` is initialized to `0` at `B:169`)[cite: 1]. Even on an 8-byte read (`len == 8`), `d->reg[relative_addr / 4]` only reads that single `uint32_t` (`0`) into `uint64_t odata`[cite: 1].
+* Adding `odata = 0;` in the decline arm would mask any future edit that accidentally stored into `d->reg[relative_addr / 4]` on `MEM_WRITE`, rendering `p2 wr census`'s read-back check (`B:460`) unable to fail[cite: 1].
+
+---
+
+### Q4 -- SUB-WORD STARTS INSIDE POPULATION-2 WORDS
+Keep exact word-start labels (`0x04..0x8c`) so sub-word starts inside population-2 words (`+1, +2, +3`, e.g. `0x29`) interim-FAULT like population 3 (`0x51`), disclose this in the contract and `vmewidthlanes`, and add one interim pin row (`ld.bu` at `0x29`) (`B:91-95, B:129-132, B:405-413, B:467, B:498-501`)[cite: 1].
+
+* **Effect on the in-tree guest (`G:7-142`, `V:5-169`)**: None under any option, because every `struct vme2reg` member in `V:5-169` is `volatile u_long` and the guest performs only word-aligned 32-bit accesses[cite: 1, 2].
+* **Effect on the detector (`B:453-468`)**: Decoding the whole switch by `relative_addr & ~3` would route `0x51` to `case VME2_T1CMP:`, breaking `p3 interim` (`B:467`) and `S4` (`B:129-132`)[cite: 1]. Decoding only population 2 by `relative_addr & ~3` would make unimplemented registers (`0x29`) decline while implemented registers (`0x51`) fault[cite: 1]. Exact labels keep `+1..+3` uniform across both populations until `vmewidthlanes`, but Section 6 currently has no row testing a population-2 sub-word start (`0x29`)[cite: 1].
+
+---
+
+### Q5 -- THE ANNOUNCE
+The `uint64_t` latch keyed by `relative_addr >> 2` is well-defined (`1..35`), but sharing one bit per register across `MEM_READ` and `MEM_WRITE` means a read suppresses the first write's announce (as happens on `MASTERCTL` at `G:13, G:55`), and `(int) idata` truncates 64-bit writes (`st.d`, `len == 8`) (`B:169, B:414-424, G:13, G:55`)[cite: 1, 2].
+
+* **Key and width (`B:390-394, B:414-415`)**: `relative_addr >> 2` is `1..35` for `0x04..0x8c`, fitting in `uint64_t`[cite: 1].
+* **Direction sharing (`B:126-127, B:364-379, B:414-424`)**: Matches `#501` (`B:364-365`) and `S3` (*"one `fatal()` per register"*, `B:126-127`), with the consequence that the first access direction wins (`MASTERCTL` read at `G:13` suppresses `MASTERCTL` write at `G:55`)[cite: 1, 2].
+* **Format cast (`B:169, B:418-419`)**: `idata` is `uint64_t` (`B:169`); casting `(int) idata` for `0x%x` matches `#501` (`B:369`) for `len <= 4`, but if `st.d` (`len == 8`) reaches the handler, the upper 32 bits of `idata` are truncated[cite: 1].
+
+---
+
+### Q6 -- POPULATION 1's PATH
+Keeping the two `debug()` lines and replacing `exit(1)` with `return 0` HOLDS (`B:246-253, B:307-326, B:427-435, B:507-509`)[cite: 1].
+
+* `S2` and `S3` (`B:121-127`) rule `FAULT` (`return 0`) without a `fatal()` announce for population 1[cite: 1]. In `memory_rw.c` (`B:307-326`), `return 0` already logs `[ reading from/writing to device 'vme' addr ... failed ]` at `debug()` level (`B:308-311`) and triggers `M88K_EXCEPTION_DATA_ACCESS` (`B:324-326`), which `B:319-321` notes is the path used by `OpenBSD/mvme88k`'s `badaddr()` probe[cite: 1]. Emitting `fatal()` on population 1 would flood stdout during bus probes or require a 988-bit latch not licensed by `S2`/`S3`[cite: 1].
+
+---
+
+### Q7 -- THE DETECTOR (including Angle 1: full row-by-row walk of Section 6 against Section 5)
+`p2 wr census` (`B:460`) is vacuous against write-faulting (`decline conditioned on direction`) as specified, the `(d)` mutants for write-direction and write-width have no row that reds, and four detector checks are missing (`B:453-474, B:511-512`)[cite: 1].
+
+#### Angle 1: Walk of every row in Section 6 (`B:455-467`) and sketch changes that keep every row green
+1. `live` / `unasm` / `neg apparatus` (`B:455`), `vbr reset` (`B:456`), `t1cmp rt` (`B:457`): Apparatus and single-register cased controls (`0x88` read, `0x50` write+read)[cite: 1]. Any edit to population 1, population 2, or the other 8 cased registers keeps these green[cite: 1].
+2. `cased census` (`B:458`): Only performs `ld` (`MEM_READ`) on the 10 cased offsets (`0x00, 0x2c, 0x4c, 0x50, 0x54, 0x60, 0x6c, 0x80, 0x84, 0x88`)[cite: 1]. **Sketch change that stays green**: Breaking `MEM_WRITE` on cased `T1COUNT` (`0x54`, `B:200-201`), `TCTL` (`0x60`, `B:209-210`), or `VBR` (`0x88`, `B:242-243`) — e.g. dropping writes or faulting on `MEM_WRITE` at those cased offsets — keeps `cased census` (and all other rows) green[cite: 1].
+3. `p2 rd census` (`B:459`): Performs 26 word `ld`s (`len == 4`, `MEM_READ`) at `0x04..0x8c`[cite: 1]. **Sketch change that stays green**: Any change confined to `MEM_WRITE`, to `len != 4` (other than `0x28` and `0x08` reads), or to the announce/latch (`B:414-424`)[cite: 1].
+4. `p2 wr census` (`B:460`): Performs 26 word `st`s of `0xa5a5a5a5`, then 26 `ld`s back, checking only `all 26 read back 0` on channel `read-back values` (with no sentinel seeding of destination registers and no `PC`/liveness check in the channel)[cite: 1]. **Sketch changes that stay green**:
+   - **Confined to the WRITE path (`B:414-425`)**: `if (writeflag == MEM_WRITE) return 0;` (making all population-2 writes FAULT!) leaves `d->reg[w] == 0` (and in a single unseeded session vectors to `0x18` on the first `st`, leaving `r4..r29 == 0`), so `read-back values` are still `0`[cite: 1]!
+   - **Confined to the WRITE announce (`B:416-419`)**: Deleting the `if (writeflag == MEM_WRITE) fatal(...);` branch, changing `fatal` to `debug` on write, or corrupting the write announce format/arguments keeps `p2 wr census` green because `host stdout` is not checked[cite: 1].
+5. `p2 width` (`B:461`): Tests only `ld.bu` and `ld.hu` at `0x28` and `ld.d` at `0x08` (`MEM_READ` only)[cite: 1]. **Sketch changes that stay green**:
+   - **Confined to WRITE width (`MEM_WRITE` with `len != 4`)**: `if (writeflag == MEM_WRITE && len != 4) return 0;` (faulting on `st.b`, `st.h`, `st.d`) or storing to `d->reg[]` when `len != 4` keeps `p2 width` and `p2 wr census` (which uses `len == 4` `st`) green[cite: 1].
+   - **Confined to one access WIDTH at the other 24/25 offsets**: Conditioning `len == 1` or `len == 2` on `relative_addr == 0x28` or `len == 8` on `relative_addr == 0x08` keeps `p2 width` green[cite: 1].
+6. `p2 announce` (`B:462`) and `p2 once` (`B:463`): Both run ONLY `the 26 reads` in free-running mode (`B:462-463`)[cite: 1]. **Sketch changes that stay green**:
+   - **Confined to the WRITE path (`B:416-419`)**: Removing the write `fatal()`, changing write `fatal()` to `debug()`, omitting `(once)` on write, or never setting/checking `d->warned_unimpl` on `MEM_WRITE` keeps both rows green[cite: 1].
+   - **Confined to the latch key (`B:414-415`)**: Because `p2 announce` reads all 26 registers (`0x04..0x8c`) once before `p2 once` reads any of them a second time, and no write happens between them, a mutant latch that only latches when `relative_addr == VME2_MISC` (`0x8c`, setting `d->warned_unimpl = ~0ULL` on the 26th register) or a latch that resets `d->warned_unimpl = 0` on any `MEM_WRITE` produces 26 lines in `p2 announce` and 0 lines in `p2 once`, keeping every row green[cite: 1]!
+   - **Confined to the announce text (`B:421-423`)**: Unless `p2 announce` matches the exact full string `[ vme: unimplemented read from register 0x%x (len 4) -- served 0.  (once) ]`, any edit to the wording outside the offset and `(once)` marker (e.g. wrong `len`, wrong `served` value, `offset` vs `register`) keeps `B:462` green[cite: 1].
+7. `p1 fault lo` / `p1 fault hi` (`B:464`), `p1 fault wr` (`B:465`), `p1 p2 edge` (`B:466`): Touch ONLY offsets `0x90` and `0xffc` in population 1 (`B:464-466`)[cite: 1]. **Sketch change that stays green**: Adding extra `case` labels anywhere in `0x94..0xff8` (such as the header's non-register macro values `0xc0, 0xf0, 0x100, 0x200, 0x400, 0x800` from `B:81`) keeps `p1 p2 edge` (`0x8c` vs `0x90`) and `p1 fault lo/hi` (`0x90`, `0xffc`) green[cite: 1].
+8. `p3 interim` (`B:467`): Tests only `ld.bu` at `0x51` (inside cased `T1CMP`)[cite: 1]. **Sketch change that stays green**: Routing sub-word starts inside population-2 words (`0x29`, etc.) to the decline arm instead of `default:` keeps `p3 interim` green[cite: 1].
+
+FLAG: B:416-419, B:460, B:462-463 -- Section 6 never tests the `MEM_WRITE` branch of the population-2 `fatal()` announce or its latch (`p2 announce` at `B:462` and `p2 once` at `B:463` only run the 26 reads; `p2 wr census` at `B:460` only checks `read-back values`).
+FLAG: B:460, B:473-474 -- `p2 wr census` (`wanted: all 26 read back 0`, `channel: read-back values`) is vacuous against `decline conditioned on direction` (`if (writeflag == MEM_WRITE) return 0;`), because faulting writes leave `d->reg[w] == 0` (and in an unseeded single session abort to `0x18` before the `ld`s, leaving `r4..r29 == 0`); `p2 wr census` must seed destination registers and assert `PC` + liveness after the 26 `st`s.
+FLAG: B:461, B:473-474 -- `p2 width` tests only loads (`ld.bu`, `ld.hu` at `0x28`, `ld.d` at `0x08`) and no stores (`st.b`, `st.h`, `st.d`), leaving `the decline conditioned on ... len` (`B:474`) untested on `MEM_WRITE`.
+FLAG: B:414-415, B:462-463 -- Because `p2 announce` reads all 26 registers before `p2 once` repeats any register and neither row performs a write, a broken latch that only sets on `relative_addr == VME2_MISC` (`0x8c`) or clears on `MEM_WRITE` passes both rows.
+
+* **Gate 14 home (`B:449-450, B:512`)**: Fitting `vme_default_probe.py` into gate 14 (`regress/gate_arm.sh`) alongside the other `mvme187` probes (`mk48_nvram_probe.py`, `pcc2_width_probe.py`, `pcc2_c040_probe.py`) matches `B:449-450`, though `regress/gate_arm.sh` itself is not inlined (UNSETTLED)[cite: 1].
+
+---
+
+### Q8 -- SMALLEST EDIT THAT BREAKS RULED BEHAVIOUR AND PASSES SECTION 6
+Deleting or silencing the write announce (`if (writeflag == MEM_WRITE)` -> `if (0)` or `debug(...)` at `B:416-419`), or faulting on writes (`if (writeflag == MEM_WRITE) return 0;` at `B:414`), breaks `S3` (`B:126-127`) while every row in Section 6 stays green (`B:455-467`)[cite: 1].
+
+* **Edit 1 (breaks S3's write announce)**: Change `fatal` to `debug` at `B:417` (or guard `B:414` with `if (writeflag == MEM_READ)`). `p2 announce` (`B:462`), `p2 once` (`B:463`), and `p2 wr census` (`B:460`) all stay green because `B:462-463` only run reads and `B:460` only checks `read-back values`[cite: 1].
+* **Edit 2 (breaks S3's write decline)**: Insert `if (writeflag == MEM_WRITE) return 0;` at `B:414`. `p2 wr census` (`B:460`) stays green under its stated channel (`read-back values`, `all 26 read back 0`) because `d->reg[w]` is never written (and an unseeded session jumps to `0x18` on the first `st` with `r4..r29 == 0`)[cite: 1].
+
+---
+
+### Q9 -- OPTION-SET COMPLETENESS, SCOPED TO THE IMPLEMENTATION
+Within the packet, the explicit 26-case switch for Option 3 (`DECLINE + LATCHED ANNOUNCE`) and `default: return 0;` for Option 5 (`FAULT`) is preferable to range-based decoding in `default:`, while other devices' idioms across the fork are UNSETTLED without the rest of `src/devices/` (`B:405-435, B:517-520`)[cite: 1].
+
+* Because the 10 cased words + 26 population-2 words partition all 36 word-aligned offsets in `0x00..0x8c` with no gaps (`B:45-80`), Option 3 + Option 5 could alternatively be written inside `default:` as `if (relative_addr <= VME2_MISC && (relative_addr & 3) == 0) { ... break; } return 0;`[cite: 1]. However, explicit `case` labels (`B:405-413`) match the existing switch style (`B:177-245`) and make every population-2 macro greppable[cite: 1].
+* A two-bit-per-register latch (separate read and write bits, e.g. `warned_unimpl_r` and `warned_unimpl_w`) would allow both the read at `G:13` and the write at `G:55` on `VME2_MASTERCTL` to announce once, whereas single-bit `warned_unimpl` implements `S3`'s literal *"one `fatal()` per register"* (`B:126-127`) and `#501` (`B:364-365`)[cite: 1, 2].
+* Grepping the rest of the fork (`src/devices/dev_*.c`) for other Option 3 / Option 5 implementations is UNSETTLED from this packet[cite: 1].
+
+---
+
+### What Was NOT Checked
+Because this is a reading-only review confined to `argon_bundle_1.txt` and `argon_bundle_2.txt`, I did not check any files outside the packet: `src/include/thirdparty/mvme88k_vme.h`, `src/devices/dev_vme.c` lines 1-43, `src/cpus/memory_rw.c` outside lines 583-626, `src/cpus/cpu_m88k_instr_loadstore.c`, `src/cpus/cpu_m88k.c`, `regress/gate_arm.sh`, other `src/devices/dev_*.c` files, or `_guest-src-openbsd22/sys/arch/mvme88k/dev/vme.c` outside lines 440-586 (`G:104` notes `vme2chip_init` is declared `int` at `G:3` but falls off the end without a `return` statement; whether its caller inspects the return value is in the un-inlined lines 1-439 of `vme.c`)[cite: 1, 2].
+
+P-VMEP1-648f
+VMEP1: 16 ATTACKS 5 BROKEN 7 HOLDS 4 UNSETTLED DRAFTABLE:NO

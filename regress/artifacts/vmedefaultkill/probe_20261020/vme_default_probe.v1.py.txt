@@ -1,0 +1,745 @@
+#!/usr/bin/env python3
+"""vme_default_probe.py -- DRAFT rung-3 DETECTOR for dev_vme.c's `default:' arm (vmedefaultkill).
+
+STATUS.  A DRAFT, built 2026-10-20 from the round's pass-1 DESIGN brief (section 6, the
+detector plan) against the section-5 implementation SKETCH, which is under panel review.
+Every `want' below is the SKETCH's behaviour, not a ratified fix.
+
+DEFECT (HEAD 5dbc000e; dev_vme.c is byte-identical to the 0.7.0 import).  DEVICE_ACCESS(vme)
+switches on the raw byte offset and names TEN offsets: 0x00, GCSRCTL 0x2c, TCR 0x4c,
+T1CMP 0x50, T1COUNT 0x54, TCTL 0x60, IRQEN 0x6c, IRQL3 0x80, IRQL4 0x84, VBR 0x88.
+Every other offset of the 4 KiB window reaches `default:', which prints with debug() and
+calls exit(1): one guest load or store there ends the emulator, and free-running at default
+verbosity it says nothing first (debug() returns early; fatal() would not).
+
+THE RULED DISPOSITION, as the sketch implements it:
+  population 2 -- the 26 register WORD STARTS the header names that have no case (the
+      header's 36 contiguous words 0x00..0x8c minus the ten): DECLINE + ANNOUNCE ONCE.
+      Exact word-start labels; a read serves d->reg[w] (0: nothing writes those words); a
+      write is dropped; one latched fatal() per register per instance, `(once)' marker.
+  population 1 -- the 988 unnamed word starts 0x90..0xffc, and every offset that is not
+      one of the 36 exact labels: FAULT.  `default:' keeps its two debug() lines and
+      returns 0; memory_rw.c turns that into the m88k data-access exception (vector 3;
+      VBR is 0 at reset, so PC 0x18), recording DMT0/DMD0/DMA0.
+
+RUNG 3: real MC88100 instructions through real address decode and real memory_rw on the
+UNMODIFIED in-tree `-E mvme88k -e mvme187', which already attaches the device
+(machine_mvme88k.c: "vme addr=0x%x", VME2_BASE = 0xfff40000).  Stepped sessions feed the
+debugger on stdin (mk48_nvram_probe.py's shape); FREE-RUNNING sessions drive it through a
+pty, one command at a time, and send nothing while the guest runs -- the debugger reads
+MAIN_CONSOLE, so a queued line could reach the guest's console instead
+(pcc2_width_probe.py's shape).  Only a free-running session can tell fatal() from
+debug(): stepping makes both print.
+
+EXCEPTION MECHANICS this probe relies on (src/cpus/cpu_m88k.c, m88k_exception):
+  * a data-access exception sets PSR.SFRZ; a SECOND one while SFRZ is set is rerouted to
+    ERROR -- so every stepped fault row has a session of its own;
+  * the destination register of a faulting load is NOT written, so a row seeds it with a
+    sentinel and the sentinel must survive;
+  * the vector word at 0x18 is `br' to itself: an all-zero word there is `goto bad' --
+    measured: "cpu: UNIMPLEMENTED instruction at 0x18", "emul: All machines stopped"
+    (explore2_FIX.out) -- which is what left the 2026-10-09 measurement's PC at 0x18;
+  * `rte' restores PSR from EPSR (SFRZ clear) and resumes at SNIP = faulting PC + 4, so a
+    two-instruction handler (addu r1,r1,1 ; rte) COUNTS faults in one free-running
+    session -- that is how `p1 census' covers all 988 words.
+
+ENCODINGS are hand-assembled (op26 per cpu_m88k_instr.c's decoder: ld.hu 0x02, ld.bu 0x03,
+ld.d 0x04, ld 0x05, st 0x09, or 0x16, addu 0x18, br 0x30 with d26 = 0, rte 0xf400fc00).
+EVERY placed word is re-read with the debugger's `unassemble' and compared word, mnemonic
+and operands against an expectation written here independently (row `unasm', count pinned
+by a LITERAL).  The rows that expect 0 have companions that expect a NONZERO value through
+the same base register: `vbr reset' (0x67000000), `t1cmp rt', `cased census' (VBR and
+T1COUNT's +100), and every population-2 session opens with its own VBR read.
+
+ROWS -- the mutant each is aimed at, and the observable that differs under it (CHANNEL).
+*** EVERY MUTANT OUTCOME IN THIS LIST IS PREDICTED BY READING THE SKETCH.  No mutant was built
+for this draft (2026-10-20); only HEAD, the sketch and the null medium were measured
+(run_HEAD.out / run_FIX.out / run_NULL.out).  The kill table owes each prediction. ***
+  session / live / unasm / neg apparatus   apparatus: rc; an or-immediate; the disassembler
+        cross-check; a bogus subtype MUST red the liveness oracle (it is failable)
+  vbr reset      DEVICE SIGNATURE: DEVINIT's VBR seed.  RAM, or a build without the device,
+                 answers 0 (measured: run_NULL.out)
+  t1cmp rt       the accept side of the edited switch: a word stored at cased T1CMP reads back
+  cased census   one ld at each of the ten cased offsets in ONE session, a second T1COUNT read
+                 (+100) and a liveness or: a cased label dropped -> that offset FAULTs (PC
+                 0x18) and every later load keeps its sentinel
+  free ctl       FREE-RUNNING shape control on cased T1CMP: breakpoint reached, word round-trips
+  free quiet     ...and that run prints NO vme text: a cased access announces nothing
+  p2 rd census   26 ld, one per population-2 register, ONE session: any label dropped ->
+                 FAULT (PC 0x18, later registers keep the sentinel); HEAD -> host dies
+  p2 wr census   26 st of 0xa5a5a5a5 then the 26 ld: a decline that STORES (backed accept)
+                 reads back 0xa5a5a5a5 -- visible only because the arm does NOT force
+                 odata = 0; a decline conditioned on direction FAULTs the first store
+  p2 width       ld.bu + ld.hu at 0x28, ld.d at 0x08: a decline conditioned on len == 4
+                 FAULTs the narrower / wider form
+  p2 announce    FREE-RUNNING, the 26 reads: lines/distinct-population-2-offsets named,
+                 want 26/26; a latch shared per device gives 1/1; fatal -> debug gives 0/0
+  p2 once        the same 26 reads again in the SAME session: 0 new lines; a latch never set
+                 gives 26.  Graded only when pass 1 announced, so 0 cannot be vacuous
+  p2 wr announce [ADDED beyond the brief's section 6] FREE-RUNNING, 26 writes then the 26
+                 reads: want 26 write lines naming the 26 offsets and 0 read lines.  The
+                 sketch has TWO fatal() calls; section 6's `fatal -> debug' applied to the
+                 WRITE one left every section-6 row green (p2 announce reads only).  A
+                 per-direction latch gives 26/26/26; a write announce dropped gives 0/0/26.
+                 Kills PREDICTED here, not measured
+  p1 fault lo/hi ld at 0x90 / 0xffc: PC 0x18, DMA0 = the address, host alive.  `return 0'
+                 -> `break' serves the read (PC advances); exit(1) reinstated kills the host
+  p1 fault wr    st at 0x90: PC 0x18 and the DMT0 WRITE form 0x403f
+  p1 p2 edge     ld 0x8c then ld 0x90: 0x8c declines (0), 0x90 faults.  MISC's label
+                 dropped faults at 0x8c instead (DMA0 0xfff4008c); a label added AT 0x90
+                 declines it.  A label added at any OTHER population-1 word is p1 census's
+  p3 interim     ld.bu at 0x51, inside cased T1CMP: FAULT -- 7n-4's interim pin, NAMED as
+                 vmewidthlanes' channel: that round reds this row and re-derives it
+  p1 census      [ADDED beyond the brief's section 6] FREE-RUNNING, all 988 population-1 word
+                 starts, faults counted by the handler: a label added at ANY population-1
+                 word declines it (987); `return 0' -> `break' gives 0; exit(1) kills.  Its
+                 kill of the added-label mutant is PREDICTED here, not measured
+
+CONTRACT (clause e) -- what this instrument is designed to catch is the CHANNEL list above.
+NOT CLAIMED, stated so a later escape is outside the contract rather than an argument:
+  * populations 3 and 4 (sub-word starts inside cased words; a cased base at len != 4):
+    filed as vmewidthlanes; `p3 interim' pins ONE population-3 cell as that round's channel;
+  * sub-word starts inside POPULATION-2 words (e.g. a byte at 0x29): under exact labels they
+    FAULT; no scored row (an INFO line reports it);
+  * population-2 widths other than ld.bu/ld.hu at 0x28 and ld.d at 0x08; any narrow or
+    doubleword STORE; population-1 writes other than 0x90; population-1 narrow/doubleword
+    accesses other than p3's byte;
+  * ld.d / st.d spanning two registers: an 8-byte access at a population-2 base is served as
+    ONE word zero-extended and sets ONE latch bit; nothing here pins which;
+  * the announce text beyond its marker, its direction and the offset it names -- `(len %d)'
+    and the written value are unpinned; announces are counted only for WORD accesses;
+  * per-instance versus process-global latch storage: mvme187 attaches ONE vme device;
+  * what a guest OS does with the declined values (OpenBSD's abort handler reads IRQSTAT 0);
+  * anything about the real VMEchip2 (its register chapter is not on disk).
+
+TEST-FIRST SHAPE: on the committed HEAD every session touching population 1 or 2 ends the
+host (exit 1), so those rows red; the controls stay green.
+
+Sentinel: VME_DEFAULT_PROBE_DONE (plus VME_DEFAULT_RESULT=n/N, VME_DEFAULT_CONTROL=OK|FAIL)
+"""
+
+import os
+import pty
+import re
+import select
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+
+if len(sys.argv) < 2:
+    sys.stderr.write("usage: vme_default_probe.py <gxemul> [label]\n")
+    sys.exit(2)
+
+BIN = sys.argv[1]
+LABEL = sys.argv[2] if len(sys.argv) > 2 else "local"
+#  A private dummy file: a shared /tmp path once let two concurrent runs race on it.
+_TMPDIR = tempfile.mkdtemp(prefix="vme_default_")
+DUMMY = os.path.join(_TMPDIR, "dummy.bin")
+with open(DUMMY, "wb") as _f:
+    _f.write(b"\x00\x00\x00\x00")
+
+VME = 0xfff40000            # VME2_BASE (mvme88k_vme.h)
+CODE = 0x00010000
+CODE2 = 0x00010200          # the second pass of the two-pass free-running session
+CENSUS = 0x00020000         # the population-1 census program
+VEC_DACC = 0x18             # VBR 0 + 8 * M88K_EXCEPTION_DATA_ACCESS (3)
+VEC_MISAL = 0x20            # VBR 0 + 8 * M88K_EXCEPTION_MISALIGNED_ACCESS (4)
+SENT = 0xdeadbeef
+WVAL = 0xa5a5a5a5
+T1VAL = 0x12345678
+VBR_SEED = 0x67000000       # DEVINIT: VME2_SET_VBR0(6) + VME2_SET_VBR1(7) = 6 << 28 | 7 << 24
+LIVE = 0x1234
+T1COUNT_STEP = 100          # the T1COUNT read arm's `+= 100' (after the preload has served)
+
+#  DMT0 for a word store, as cpu_m88k_instr_loadstore.c composes it (m88k_dmt.h): VALID 0x1,
+#  WRITE 0x2, DAS 0x4000 (supervisor), all four byte enables 0xf << 2 -- 0x403f.  (A load
+#  carries DREG << 7 instead of WRITE; no row asserts the load form.)
+DMT_WORD_STORE = 0x1 | 0x2 | 0x4000 | (0xf << 2)
+
+CASED = (0x00, 0x2c, 0x4c, 0x50, 0x54, 0x60, 0x6c, 0x80, 0x84, 0x88)
+POP2 = ((0x04, "SADDR2"), (0x08, "SLAVELMOD1"), (0x0c, "SLAVELMOD2"), (0x10, "SLAVECTL"),
+        (0x14, "MASTER1"), (0x18, "MASTER2"), (0x1c, "MASTER3"), (0x20, "MASTER4"),
+        (0x24, "MASTER4MOD"), (0x28, "MASTERCTL"), (0x30, "DMACTL"), (0x34, "DMAMODE"),
+        (0x38, "DMALADDR"), (0x3c, "DMAVMEADDR"), (0x40, "DMACOUNT"), (0x44, "DMATABLE"),
+        (0x48, "DMASTAT"), (0x58, "T2CMP"), (0x5c, "T2COUNT"), (0x64, "PRESCALE"),
+        (0x68, "IRQSTAT"), (0x70, "SETSOFTIRQ"), (0x74, "IRQCLR"), (0x78, "IRQL1"),
+        (0x7c, "IRQL2"), (0x8c, "MISC"))
+POP2_OFFS = tuple(o for o, _ in POP2)
+POP1 = tuple(range(0x90, 0x1000, 4))
+#  The header's register block is 36 CONTIGUOUS words, 0x00..0x8c: cased + population 2 must
+#  tile it exactly, or a constant above is wrong.
+assert len(CASED) == 10 and len(POP2) == 26 and len(POP1) == 988
+assert sorted(CASED + POP2_OFFS) == list(range(0, 0x90, 4))
+
+PROMPT = "GXemul> "
+ANN_RE = re.compile(r"\[ vme: unimplemented (read from|write to) register (0x[0-9a-f]+) "
+                    r"\(len (\d+)\)[^\n]*\(once\) \]")
+VMETXT_RE = re.compile(r"\[ vme:")
+
+
+# ------------------------------------------------------------------- encodings
+class Ins(object):
+    __slots__ = ("word", "mnem", "ops")
+
+    def __init__(self, word, mnem, ops):
+        self.word, self.mnem, self.ops = word, mnem, ops
+
+
+def enc(op26, rd, rs1, imm):
+    assert 0 <= op26 < 64 and 0 <= rd < 32 and 0 <= rs1 < 32 and 0 <= imm <= 0xffff
+    return (op26 << 26) | (rd << 21) | (rs1 << 16) | imm
+
+
+def _mem(op26, mnem, rd, off, rs1):
+    return Ins(enc(op26, rd, rs1, off), mnem, "r%d,r%d,0x%x" % (rd, rs1, off))
+
+
+def LD(rd, off, rs1=3):
+    return _mem(0x05, "ld", rd, off, rs1)
+
+
+def LD_BU(rd, off, rs1=3):
+    return _mem(0x03, "ld.bu", rd, off, rs1)
+
+
+def LD_HU(rd, off, rs1=3):
+    return _mem(0x02, "ld.hu", rd, off, rs1)
+
+
+def LD_D(rd, off, rs1=3):
+    assert rd != 31
+    return _mem(0x04, "ld.d", rd, off, rs1)
+
+
+def ST(rs, off, rs1=3):
+    return _mem(0x09, "st", rs, off, rs1)
+
+
+def OR_I(rd, rs1, imm):
+    assert rd != 0
+    return Ins(enc(0x16, rd, rs1, imm), "or", "r%d,r%d,0x%x" % (rd, rs1, imm))
+
+
+def ADDU_I(rd, rs1, imm):
+    #  the disassembler prints this immediate in DECIMAL (cpu_m88k.c: "%s\tr%i,r%i,%i")
+    return Ins(enc(0x18, rd, rs1, imm), "addu", "r%d,r%d,%d" % (rd, rs1, imm))
+
+
+def RTE():
+    return Ins(0xf400fc00, "rte", "")
+
+
+def BR_SELF():
+    #  op26 0x30, d26 = 0: the target is the branch itself; the operand is filled in on placement
+    return Ins(0xc0000000, "br", None)
+
+
+# ------------------------------------------------------------------- sessions
+def hx(v):
+    return "absent" if v is None else "0x%x" % v
+
+
+def argv_for(subtype):
+    return [BIN, "-V", "-x", "-E", "mvme88k", "-e", subtype, "-M", "64",
+            "0x%x:%s" % (CODE, DUMMY)]
+
+
+def seeds(pairs):
+    return ["r%d=0x%x" % (r, v) for r, v in pairs]
+
+
+def place(blocks):
+    """blocks: [(addr, [Ins])] -> (debugger commands, [(addr, Ins)]).  Every block is
+       re-read with `unassemble' (end-exclusive) right after it is written."""
+    cmds, placed = [], []
+    for at, insns in blocks:
+        for i, ins in enumerate(insns):
+            a = at + 4 * i
+            if ins.ops is None:
+                ins = Ins(ins.word, ins.mnem, "0x%08x" % a)
+            cmds.append("put w 0x%x, 0x%08x" % (a, ins.word))
+            placed.append((a, ins))
+        cmds.append("unassemble 0x%x 0x%x" % (at, at + 4 * len(insns)))
+    return cmds, placed
+
+
+def run_piped(cmds, subtype="mvme187", timeout=90):
+    inp = ("\n".join(list(cmds) + ["quit"]) + "\n").encode("latin-1")
+    try:
+        p = subprocess.run(argv_for(subtype), input=inp, stdout=subprocess.PIPE,
+                           stderr=subprocess.STDOUT, timeout=timeout)
+    except subprocess.TimeoutExpired as e:
+        return (e.output or b"").decode("latin-1", "replace").replace("\r", ""), "TIMEOUT"
+    rc = p.returncode
+    return (p.stdout.decode("latin-1", "replace").replace("\r", ""),
+            ("sig%d" % -rc) if rc < 0 else ("exit%d" % rc))
+
+
+def run_pty(cmds, t_cmd=10.0, t_run=30.0):
+    """One command at a time through a pty.  An ordinary command waits for the next
+       prompt; `continue' waits for BREAKPOINT and then a prompt after it, and nothing is
+       sent while the guest runs.  -> (transcript, how); how is exitN / sigN, or
+       no-prompt / no-breakpoint (the child is then killed: a guest still running would
+       never read `quit')."""
+    pid, fd = pty.fork()
+    if pid == 0:
+        try:
+            os.execv(BIN, argv_for("mvme187"))
+        finally:
+            os._exit(127)
+    buf = [""]
+
+    def pump(deadline, pred):
+        while True:
+            if pred():
+                return "ok"
+            left = deadline - time.time()
+            if left <= 0:
+                return "timeout"
+            r, _, _ = select.select([fd], [], [], min(left, 0.05))
+            if not r:
+                continue
+            try:
+                d = os.read(fd, 65536)
+            except OSError:
+                return "eof"
+            if not d:
+                return "eof"
+            buf[0] += d.decode("latin-1", "replace")
+
+    state = pump(time.time() + 20.0, lambda: PROMPT in buf[0])
+    failed = None if state == "ok" else ("no-prompt" if state == "timeout" else None)
+    if state == "ok":
+        for c in cmds:
+            start = len(buf[0])
+            try:
+                os.write(fd, (c + "\n").encode("latin-1"))
+            except OSError:
+                state = "eof"
+                break
+            if c == "continue":
+                def pred(start=start):
+                    b = buf[0].find("BREAKPOINT", start)
+                    return b >= 0 and buf[0].find(PROMPT, b) >= 0
+                state = pump(time.time() + t_run, pred)
+                if state == "timeout":
+                    failed = "no-breakpoint"
+            else:
+                state = pump(time.time() + t_cmd,
+                             lambda start=start: buf[0].find(PROMPT, start) >= 0)
+                if state == "timeout":
+                    failed = "no-prompt"
+            if state != "ok":
+                break
+    if state == "ok":
+        try:
+            os.write(fd, b"quit\n")
+        except OSError:
+            pass
+        pump(time.time() + 5.0, lambda: False)
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+    stat, reaped = None, False
+    for attempt in range(2):
+        for _ in range(40):
+            try:
+                p, s = os.waitpid(pid, os.WNOHANG)
+            except OSError:
+                p, s = pid, None
+            if p:
+                stat, reaped = s, True
+                break
+            time.sleep(0.05)
+        if reaped:
+            break
+        try:
+            os.kill(pid, 9)
+        except OSError:
+            pass
+        failed = failed or "killed"
+    if failed:
+        how = failed
+    elif stat is None:
+        how = "unreaped"
+    elif os.WIFSIGNALED(stat):
+        how = "sig%d" % os.WTERMSIG(stat)
+    else:
+        how = "exit%d" % os.WEXITSTATUS(stat)
+    return buf[0].replace("\r", ""), how
+
+
+DIS_RE = re.compile(r"^[su]([0-9a-f]{8}): ([0-9a-f]{8})\s+(?:<-\s+)?(\S+)(?:\t(\S+))?[ \t]*$", re.M)
+GPR_RE = re.compile(r"\br(\d+)\s*=\s*(0x[0-9a-fA-F]+)")
+PC_RE = re.compile(r"cpu\d+:\s+pc\s+=\s+(0x[0-9a-fA-F]+)")
+CR_RE = re.compile(r"\b([A-Z][A-Z0-9]*)=(0x[0-9a-fA-F]+)")
+
+
+class Res(object):
+    pass
+
+
+def analyse(text, how, placed):
+    """Split the transcript at the prompts; parse every unassemble, every reg dump (in
+       order) and the last `reg 0,0'."""
+    r = Res()
+    r.how, r.text, r.placed = how, text, placed
+    r.dis, r.dumps, r.cr, r.conts = {}, [], None, []
+    for part in text.split(PROMPT)[1:]:
+        cmd, _, out = part.partition("\n")
+        cmd = cmd.strip()
+        if cmd.startswith("unassemble"):
+            for m in DIS_RE.finditer(out):
+                r.dis[int(m.group(1), 16)] = (int(m.group(2), 16), m.group(3), m.group(4) or "")
+        elif cmd == "reg":
+            m = PC_RE.search(out)
+            if m:
+                r.dumps.append(({int(g.group(1)): int(g.group(2), 16)
+                                 for g in GPR_RE.finditer(out)}, int(m.group(1), 16)))
+        elif cmd == "reg 0,0":
+            cr = {g.group(1): int(g.group(2), 16) for g in CR_RE.finditer(out)}
+            if cr:
+                r.cr = cr
+        elif cmd == "continue":
+            r.conts.append(out)
+    r.regs, r.pc = r.dumps[-1] if r.dumps else (None, None)
+    return r
+
+
+UNASM = {"ok": 0, "n": 0, "bad": []}
+
+
+def check_unasm(r, scored=True):
+    ok = n = 0
+    for a, ins in r.placed:
+        n += 1
+        d = r.dis.get(a)
+        if d is not None and d == (ins.word, ins.mnem, ins.ops):
+            ok += 1
+        elif scored:
+            UNASM["bad"].append("0x%x:%08x %s %s -> %r" % (a, ins.word, ins.mnem, ins.ops, d))
+    if scored:
+        UNASM["ok"] += ok
+        UNASM["n"] += n
+    return ok, n
+
+
+def stepped(blocks, regs, nsteps, cr=False, scored=True):
+    cmds, placed = place(blocks)
+    cmds = seeds(regs) + cmds + ["pc=0x%x" % CODE, "step %d" % nsteps, "reg"]
+    if cr:
+        cmds.append("reg 0,0")
+    t, how = run_piped(cmds)
+    r = analyse(t, how, placed)
+    check_unasm(r, scored)
+    return r
+
+
+def freerun(blocks, regs, bps, runs):
+    """runs: [start pc] -- each is `pc=<start>', `continue', `reg'.  All code, every
+       unassemble and every breakpoint go in BEFORE the first `continue', so the disassembly
+       cross-check never depends on surviving a run."""
+    cmds, placed = place(blocks)
+    cmds = seeds(regs) + cmds + ["breakpoint add 0x%x" % b for b in bps]
+    for start in runs:
+        cmds += ["pc=0x%x" % start, "continue", "reg"]
+    t, how = run_pty(cmds)
+    r = analyse(t, how, placed)
+    check_unasm(r)
+    return r
+
+
+def died(r):
+    return "died:%s" % r.how
+
+
+def reg(r, n):
+    if r.regs is None:
+        return died(r) if r.how != "exit0" else "absent"
+    return hx(r.regs.get(n))
+
+
+def devsig_bad(r):
+    """None when the session's own opening VBR read saw the device; else the reason."""
+    if r.regs is None:
+        return died(r)
+    if r.regs.get(30) != VBR_SEED:
+        return "nodev r30=%s (FAILED FOR SOME OTHER REASON)" % hx(r.regs.get(30))
+    return None
+
+
+rows = []
+
+
+def row(name, got, want, note=""):
+    assert name not in [n for n, _ in rows], "DUPLICATE ROW NAME %r" % name
+    assert len(name) <= 15, name     # `%-16s ' keeps a gate's `^$v  .*ok$' satisfiable
+    ok = (got == want)
+    rows.append((name, ok))
+    print("%-16s %-30s %-30s %-58s %s" % (name, str(got), str(want), note,
+                                          "ok" if ok else "FAIL"))
+    sys.stdout.flush()
+    return ok
+
+
+print("vmedefaultkill RUNG-3 DETECTOR (DRAFT) -- binary=%s label=%s" % (BIN, LABEL))
+print("machine: -E mvme88k -e mvme187 -M 64 (UNMODIFIED); vme at 0x%08x" % VME)
+t0 = time.time()
+
+# ================================================================ INFO (unscored)
+#  Measured so the panel has the numbers; NOT rows -- no `want', no score, no pin.
+r = stepped([(VEC_DACC, [BR_SELF()]), (CODE, [LD(30, 0x88), LD_BU(4, 0x29), OR_I(5, 0, LIVE), BR_SELF()])],
+            [(3, VME), (4, SENT), (5, SENT), (30, SENT)], 3, cr=True, scored=False)
+print("INFO p2 subword  ld.bu at 0x29 (inside MASTERCTL): how=%s pc=%s r4=%s r5=%s DMA0=%s DMT0=%s unasm=%d/%d"
+      % (r.how, hx(r.pc), reg(r, 4), reg(r, 5), hx((r.cr or {}).get("DMA0")),
+         hx((r.cr or {}).get("DMT0")), *check_unasm(r, scored=False)))
+r = stepped([(VEC_MISAL, [BR_SELF()]), (CODE, [LD(30, 0x88), LD_D(4, 0x0c), OR_I(6, 0, LIVE), BR_SELF()])],
+            [(3, VME), (4, SENT), (5, SENT), (6, SENT), (30, SENT)], 3, cr=True, scored=False)
+print("INFO ld.d 4mod8  ld.d at 0x0c (4 mod 8): how=%s pc=%s r4=%s r5=%s r6=%s vme-text=%d unasm=%d/%d"
+      % (r.how, hx(r.pc), reg(r, 4), reg(r, 5), reg(r, 6), len(VMETXT_RE.findall(r.text)),
+         *check_unasm(r, scored=False)))
+
+print("%-16s %-30s %-30s %-58s %s" % ("row", "got", "want", "note", ""))
+
+# ================================================================ controls
+#  APPARATUS NEGATIVE CONTROL: the liveness oracle must be able to go red.
+cmds, _ = place([(CODE, [OR_I(4, 0, LIVE), BR_SELF()])])
+t, how = run_piped(seeds([(4, SENT)]) + cmds + ["pc=0x%x" % CODE, "step 1", "reg"], subtype="187")
+rn = analyse(t, how, [])
+row("neg apparatus", "%s/%s" % (how, hx(rn.regs.get(4)) if rn.regs else "absent"), "exit1/absent",
+    "bogus subtype `187' -> no machine -> `live' MUST fail")
+
+r = stepped([(CODE, [OR_I(4, 0, LIVE), LD(5, 0x88), ST(2, 0x50), LD(6, 0x50), BR_SELF()])],
+            [(2, T1VAL), (3, VME), (4, SENT), (5, SENT), (6, SENT)], 4)
+row("session", r.how, "exit0", "the control session ran to `quit'")
+row("live", reg(r, 4), hx(LIVE), "or r4,r0,0x1234 -- the guest executes, readback works")
+row("vbr reset", reg(r, 5), hx(VBR_SEED), "DEVICE SIGNATURE: DEVINIT's VBR seed; RAM or no device reads 0")
+row("t1cmp rt", reg(r, 6), hx(T1VAL), "a word stored to CASED T1CMP reads back (accept side)")
+
+#  CASED CENSUS: one load per cased offset, ONE session, distinct sentinel-seeded destinations.
+#  T1COUNT is read twice: its read arm adds 100 AFTER the preload served, so 0 then 0x64.
+CC = [(4, 0x00), (5, 0x2c), (6, 0x4c), (7, 0x50), (8, 0x54), (9, 0x60), (10, 0x6c),
+      (11, 0x80), (12, 0x84), (13, 0x88), (14, 0x54)]
+CC_WANT = {4: 0, 5: 0, 6: 0, 7: 0, 8: 0, 9: 0, 10: 0, 11: 0, 12: 0, 13: VBR_SEED,
+           14: T1COUNT_STEP, 15: LIVE}
+prog = [LD(rr, o) for rr, o in CC] + [OR_I(15, 0, LIVE), BR_SELF()]
+r = stepped([(VEC_DACC, [BR_SELF()]), (CODE, prog)],
+            [(3, VME)] + [(rr, SENT) for rr in CC_WANT], len(prog) - 1)
+if r.regs is None:
+    got = died(r)
+else:
+    got = "%d/%d" % (sum(1 for rr, v in CC_WANT.items() if r.regs.get(rr) == v), len(CC_WANT))
+    if r.pc != CODE + 4 * (len(prog) - 1):
+        got += " pc=%s" % hx(r.pc)
+row("cased census", got, "%d/%d" % (len(CC_WANT), len(CC_WANT)),
+    "ten cased offsets + T1COUNT +100 + liveness, no fault")
+
+#  FREE-RUNNING SHAPE CONTROL on cased T1CMP: breakpoint reached, round trip, and no vme text.
+prog = [ST(2, 0x50), LD(5, 0x50), LD(6, 0x88), OR_I(7, 0, LIVE), BR_SELF()]
+bp = CODE + 4 * (len(prog) - 1)
+r = freerun([(VEC_DACC, [BR_SELF()]), (CODE, prog)],
+            [(2, T1VAL), (3, VME), (5, SENT), (6, SENT), (7, SENT)], [bp, VEC_DACC], [CODE])
+if r.regs is None or not r.conts:
+    got_c = got_q = died(r)
+elif r.pc != bp:
+    got_c = got_q = "stopped pc=%s (FAILED FOR SOME OTHER REASON)" % hx(r.pc)
+else:
+    got_c = "%s/%s/%s" % (hx(r.regs.get(5)), hx(r.regs.get(6)), hx(r.regs.get(7)))
+    got_q = len(VMETXT_RE.findall(r.conts[0]))
+row("free ctl", got_c, "%s/%s/%s" % (hx(T1VAL), hx(VBR_SEED), hx(LIVE)),
+    "FREE-RUNNING to a breakpoint: T1CMP round trip, VBR, liveness")
+row("free quiet", got_q, 0, "...and the run prints NO vme text: a cased access announces nothing")
+
+# ================================================================ population 2
+REGS26 = list(range(4, 30))
+p2rd = [LD(30, 0x88)] + [LD(rr, o) for rr, o in zip(REGS26, POP2_OFFS)] + [OR_I(31, 0, LIVE), BR_SELF()]
+r = stepped([(VEC_DACC, [BR_SELF()]), (CODE, p2rd)],
+            [(3, VME), (30, SENT), (31, SENT)] + [(rr, SENT) for rr in REGS26], len(p2rd) - 1)
+bad = devsig_bad(r)
+if bad:
+    got = bad
+else:
+    got = "%d/26" % sum(1 for rr in REGS26 if r.regs.get(rr) == 0)
+    if r.pc != CODE + 4 * (len(p2rd) - 1) or r.regs.get(31) != LIVE:
+        got += " pc=%s" % hx(r.pc)
+row("p2 rd census", got, "26/26", "26 ld, one per population-2 register: all 0, no fault, runs on")
+
+p2wr = ([LD(30, 0x88)] + [ST(2, o) for o in POP2_OFFS]
+        + [LD(rr, o) for rr, o in zip(REGS26, POP2_OFFS)] + [OR_I(31, 0, LIVE), BR_SELF()])
+r = stepped([(VEC_DACC, [BR_SELF()]), (CODE, p2wr)],
+            [(2, WVAL), (3, VME), (30, SENT), (31, SENT)] + [(rr, SENT) for rr in REGS26],
+            len(p2wr) - 1)
+bad = devsig_bad(r)
+if bad:
+    got = bad
+else:
+    got = "%d/26" % sum(1 for rr in REGS26 if r.regs.get(rr) == 0)
+    if r.pc != CODE + 4 * (len(p2wr) - 1) or r.regs.get(31) != LIVE:
+        got += " pc=%s" % hx(r.pc)
+row("p2 wr census", got, "26/26", "26 st of 0xa5a5a5a5 then 26 ld: every write dropped, reads 0")
+
+p2w = [LD(30, 0x88), LD_BU(4, 0x28), LD_HU(5, 0x28), LD_D(6, 0x08), OR_I(31, 0, LIVE), BR_SELF()]
+r = stepped([(VEC_DACC, [BR_SELF()]), (CODE, p2w)],
+            [(3, VME), (4, SENT), (5, SENT), (6, SENT), (7, SENT), (30, SENT), (31, SENT)],
+            len(p2w) - 1)
+bad = devsig_bad(r)
+if bad:
+    got = bad
+else:
+    got = "%d/4" % sum(1 for rr in (4, 5, 6, 7) if r.regs.get(rr) == 0)
+    if r.pc != CODE + 4 * (len(p2w) - 1) or r.regs.get(31) != LIVE:
+        got += " pc=%s" % hx(r.pc)
+row("p2 width", got, "4/4", "ld.bu + ld.hu at 0x28, ld.d (r6:r7) at 0x08: declined, 0")
+
+#  FREE-RUNNING ANNOUNCE: the same 26 reads twice in ONE session, at two addresses (a second
+#  program at the address the pc already holds is the hazard pcc2_width_probe.py records).
+pass1 = [LD(rr, o) for rr, o in zip(REGS26, POP2_OFFS)] + [BR_SELF()]
+pass2 = [LD(rr, o) for rr, o in zip(REGS26, POP2_OFFS)] + [BR_SELF()]
+bp1, bp2 = CODE + 4 * 26, CODE2 + 4 * 26
+r = freerun([(VEC_DACC, [BR_SELF()]), (CODE, pass1), (CODE2, pass2)],
+            [(3, VME)] + [(rr, SENT) for rr in REGS26], [bp1, bp2, VEC_DACC], [CODE, CODE2])
+pcs = [pc for _, pc in r.dumps]
+if not pcs or not r.conts:
+    got_a = died(r)
+    got_o = "pass 1 not completed (FAILED FOR SOME OTHER REASON)"
+else:
+    lines1 = ANN_RE.findall(r.conts[0])
+    named = set(int(off, 16) for d, off, ln in lines1 if d == "read from") & set(POP2_OFFS)
+    got_a = "%d/%d" % (len(lines1), len(named))
+    if pcs[0] != bp1:
+        got_a += " stopped pc=%s" % hx(pcs[0])
+        got_o = "pass 1 not completed (FAILED FOR SOME OTHER REASON)"
+    elif not lines1:
+        got_o = "pass 1 silent (FAILED FOR SOME OTHER REASON)"
+    elif len(pcs) < 2 or len(r.conts) < 2:
+        got_o = "pass 2 %s" % died(r)
+    elif pcs[1] != bp2:
+        got_o = "%d stopped pc=%s" % (len(ANN_RE.findall(r.conts[1])), hx(pcs[1]))
+    else:
+        got_o = len(ANN_RE.findall(r.conts[1]))
+row("p2 announce", got_a, "26/26", "FREE-RUNNING: 26 `(once)' lines naming the 26 offsets")
+row("p2 once", got_o, 0, "the same 26 reads again, same session: no new line")
+
+#  WRITE-DIRECTION ANNOUNCE (added beyond section 6): the sketch has TWO fatal() calls and
+#  `p2 announce' reaches only the read one.  OpenBSD's attach path WRITES MASTER3, MASTER4
+#  and MASTER4MOD and never reads them, so their only announce is the write one.  26 writes,
+#  then the 26 reads: 26 write lines naming the 26 offsets, and the reads add NONE -- the
+#  latch is per register, not per direction ("one fatal() per register").
+p2wa = ([ST(2, o) for o in POP2_OFFS] + [LD(rr, o) for rr, o in zip(REGS26, POP2_OFFS)]
+        + [BR_SELF()])
+bpw = CODE + 4 * (len(p2wa) - 1)
+r = freerun([(VEC_DACC, [BR_SELF()]), (CODE, p2wa)],
+            [(2, WVAL), (3, VME)] + [(rr, SENT) for rr in REGS26], [bpw, VEC_DACC], [CODE])
+if r.regs is None or not r.conts:
+    got = died(r)
+else:
+    lw = ANN_RE.findall(r.conts[0])
+    wr_lines = [off for d, off, ln in lw if d == "write to"]
+    rd_lines = [off for d, off, ln in lw if d == "read from"]
+    got = "%d/%d/%d" % (len(wr_lines), len(set(int(o, 16) for o in wr_lines) & set(POP2_OFFS)),
+                        len(rd_lines))
+    if r.pc != bpw:
+        got += " stopped pc=%s" % hx(r.pc)
+row("p2 wr announce", got, "26/26/0",
+    "FREE-RUNNING: 26 write lines naming the 26, then the reads add none")
+
+# ================================================================ population 1
+def fault_row(name, access, extra_seeds, field, want, note):
+    prog = [LD(30, 0x88), access, OR_I(5, 0, LIVE), BR_SELF()]
+    r = stepped([(VEC_DACC, [BR_SELF()]), (CODE, prog)],
+                [(3, VME), (4, SENT), (5, SENT), (30, SENT)] + extra_seeds, 3, cr=True)
+    bad = devsig_bad(r)
+    if bad:
+        got = bad
+    else:
+        got = "%s/%s/%s" % (r.how, hx(r.pc), hx((r.cr or {}).get(field)))
+        #  a faulting load writes no register, and the instruction after it never runs
+        for rr in (4, 5):
+            if r.regs.get(rr) != SENT:
+                got += " r%d=%s" % (rr, hx(r.regs.get(rr)))
+    row(name, got, want, note)
+
+
+fault_row("p1 fault lo", LD(4, 0x90), [], "DMA0", "exit0/0x18/0x%x" % (VME + 0x90),
+          "ld at 0x90: data-access exception, PC 0x18, DMA0, host alive")
+fault_row("p1 fault hi", LD(4, 0xffc), [], "DMA0", "exit0/0x18/0x%x" % (VME + 0xffc),
+          "ld at 0xffc (last word): the same")
+fault_row("p1 fault wr", ST(2, 0x90), [(2, WVAL)], "DMT0", "exit0/0x18/0x%x" % DMT_WORD_STORE,
+          "st at 0x90: exception, DMT0 = the WRITE form")
+
+prog = [LD(30, 0x88), LD(4, 0x8c), LD(6, 0x90), OR_I(5, 0, LIVE), BR_SELF()]
+r = stepped([(VEC_DACC, [BR_SELF()]), (CODE, prog)],
+            [(3, VME), (4, SENT), (5, SENT), (6, SENT), (30, SENT)], 4, cr=True)
+bad = devsig_bad(r)
+if bad:
+    got = bad
+else:
+    got = "%s/%s/%s" % (hx(r.regs.get(4)), hx(r.pc), hx((r.cr or {}).get("DMA0")))
+    for rr in (5, 6):
+        if r.regs.get(rr) != SENT:
+            got += " r%d=%s" % (rr, hx(r.regs.get(rr)))
+row("p1 p2 edge", got, "0x0/0x18/0x%x" % (VME + 0x90), "ld 0x8c declines (0), then ld 0x90 faults")
+
+prog = [LD(30, 0x88), LD_BU(4, 0x51), OR_I(5, 0, LIVE), BR_SELF()]
+r = stepped([(VEC_DACC, [BR_SELF()]), (CODE, prog)],
+            [(3, VME), (4, SENT), (5, SENT), (30, SENT)], 3, cr=True)
+bad = devsig_bad(r)
+if bad:
+    got = bad
+else:
+    got = "%s/%s/%s" % (r.how, hx(r.pc), hx((r.cr or {}).get("DMA0")))
+    for rr in (4, 5):
+        if r.regs.get(rr) != SENT:
+            got += " r%d=%s" % (rr, hx(r.regs.get(rr)))
+row("p3 interim", got, "exit0/0x18/0x%x" % (VME + 0x50),
+    "ld.bu 0x51 inside cased T1CMP FAULTS (interim; vmewidthlanes reds this)")
+
+#  POPULATION-1 CENSUS (added beyond section 6): every word start 0x90..0xffc, free-running,
+#  each fault counted by a handler that returns past the faulting load.
+handler = [ADDU_I(1, 1, 1), RTE()]
+cprog = [LD(4, o) for o in POP1] + [BR_SELF()]
+cbp = CENSUS + 4 * len(POP1)
+r = freerun([(VEC_DACC, handler), (CENSUS, cprog)], [(1, 0), (3, VME), (4, SENT)], [cbp], [CENSUS])
+if r.regs is None:
+    got = died(r)
+elif r.pc != cbp:
+    got = "stopped pc=%s (FAILED FOR SOME OTHER REASON)" % hx(r.pc)
+else:
+    got = "%d/%d" % (r.regs.get(1, -1), len(POP1))
+    if r.regs.get(4) != SENT:
+        got += " r4=%s" % hx(r.regs.get(4))
+row("p1 census", got, "988/988", "FREE-RUNNING: all 988 population-1 word starts fault")
+
+# ================================================================ disassembly cross-check
+#  LITERAL want, re-derived by hand per session: ctl 5, cased 14, free ctl 6, p2 rd 30, p2 wr
+#  56, p2 width 7, p2 free 55, p2 wr announce 54, p1 fault lo/hi/wr 5 each, edge 6, p3 5,
+#  census 991 (handler 2 + 988 loads + br) = 1244.  The first hand count (before `p2 wr
+#  announce') said 1186 against a measured 1190 (trial1_FIX.out) -- it left out the
+#  vector-guard word in four sessions.  Computing the want from the session lists would let a
+#  shrunk list pass its own count.
+row("unasm", "%d/%d" % (UNASM["ok"], UNASM["n"]), "1244/1244",
+    "every placed word re-read by the tree's disassembler")
+for b in UNASM["bad"][:8]:
+    print("  unasm mismatch: %s" % b)
+
+# ================================================================ score + done
+npass = sum(1 for _, ok in rows if ok)
+print("SCORE %d/%d" % (npass, len(rows)))
+CONTROL_ROWS = ("session", "live", "unasm", "neg apparatus", "vbr reset", "t1cmp rt",
+                "cased census", "free ctl", "free quiet")
+_status = dict(rows)
+control_ok = all(_status.get(n, False) for n in CONTROL_ROWS)    # a renamed control fails loudly
+print("VME_DEFAULT_RESULT=%d/%d" % (npass, len(rows)))
+print("VME_DEFAULT_CONTROL=%s" % ("OK" if control_ok else "FAIL"))
+print("VME_DEFAULT_LABEL=%s" % LABEL)
+print("VME_DEFAULT_ELAPSED=%.1fs" % (time.time() - t0))
+red = [n for n, ok in rows if not ok]
+if red:
+    print("VME_DEFAULT_RED=%s" % ",".join(red))
+shutil.rmtree(_TMPDIR, ignore_errors=True)
+print("VME_DEFAULT_PROBE_DONE")
+sys.stdout.flush()
+sys.exit(0 if control_ok and npass == len(rows) else 1)

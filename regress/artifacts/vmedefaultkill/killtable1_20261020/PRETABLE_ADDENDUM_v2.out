@@ -1,0 +1,54 @@
+PRETABLE ADDENDUM -- #568, written BEFORE kill table 1 runs, after probe REVISION 2 landed (34 rows, md5 19de15b3...;
+measured by the probe sub-agent: FIX568 34/34 CONTROL=OK, HEAD 14/34 CONTROL=OK with all 20 population rows
+died:exit1, NULL 5/34 CONTROL=FAIL; scratchpad vme/probe/run2_*.out).
+
+== 1. DIFF OF REVISION 2's ROW LIST AGAINST PRETABLE.out's PRESCRIBED ROWS (the #490 rule) ==
+  prescribed and present (28): unasm, live, neg apparatus, vbr reset, free ctl, free quiet, cased census, t1cmp rt,
+    tctl rt, vbr rt, t1count inc, cased wr, p2 rd census, p2 wr census, p2 ld widths, p2 st widths, p2 ann rd,
+    p2 ann wr, p1 fault lo, p1 fault hi, p1 fault wr, p1 census, p1 widths, p1 p2 edge, p2 int byte, p2 int half,
+    p3 interim, and the "second passes" -> p2 ann rd 2, p2 ann wr 2 (named rows now)
+  RENAMED (1 -> 2): `p2 nonword ann` -> `p2 nw rd` (non-word first READS: ld.bu / ld.hu / ld.d, each announcing its own
+    len) + `p2 nw wr` (non-word first WRITES: st.b / st.h / st.d with a 64-bit value whose halves differ).  Every
+    prediction PRETABLE.out made for `p2 nonword ann` now names `p2 nw rd` (M_ANNLEN4) and `p2 nw wr` (M_ANNLEN4,
+    M_TRUNC).
+  ADDED (3): `session` (the control session ran to quit), `free neg ctl` (GCSRCTL's debug line: 1 stepped, 0 free --
+    the stepped half proves the match string is right, so the free-running 0 cannot pass by a misspelling),
+    `p1 fault mid` (a stepped fault at 0x94, the interior sample).
+  DROPPED: none.
+
+== 2. CHANNELS REVISION 2 SAYS CANNOT VARY (recorded before the table, so the table can test the claim) ==
+  (i) The read announce's `served` value: every population-2 word is 0 and the first access sets the latch, so a
+      variant printing a literal 0 (or idata) instead of odata passes all 34 rows.  Added as leg M_SERVED0, predicted
+      to SURVIVE -- an equivalent-today print; disclosed in the contract, beside M_ODATA0.
+  (ii) DMT0 / DMA0 in the fault rows are built by the CPU's load/store path before the device is called: they pin
+      attribution and CPU behaviour, not the fix; no dev_vme.c leg can move them without also moving PC.
+  (iii) Dropping the VBR label reads as CONTROL=FAIL + `nodev` everywhere -- detected, under the device-signature
+      reason rather than its own.  Not a leg here (VBR is the signature row's anchor); recorded.
+
+== 3. MEASURED FACTS THE PREDICTIONS NOW REST ON (from revision 2, not from seats) ==
+  DMT0: 0x423d word read into r4, 0x433d into r6 (the seat's 0x4000|(dreg<<7)|0x3d confirmed), 0x403f word store,
+  0x4211 byte at 1 mod 4, 0x420d halfword at 2 mod 4.  p1 census counts 988/988 with an `addu r1,r1,1; rte` handler.
+
+== 4. THE TABLE, re-keyed to revision 2's names (legs as in PRETABLE.out section 5, plus M_SERVED0) ==
+  BASE (fix568)  all 34 green            NULL  5/34, CONTROL=FAIL (measured)      HEAD  14/34 (measured)
+  M_EXIT         p1 fault lo/hi/mid/wr, p1 census, p1 widths, p1 p2 edge, p3 interim, p2 int byte/half die
+  M_DROPMCTL     p2 rd census, p2 wr census, p2 ann rd, p2 ann wr (+ their 2nd passes not completed)
+  M_DROPMISC     p2 rd census, p2 wr census, p2 ann rd/wr, p1 p2 edge
+  M_ADD94        p1 census (987/988), p1 fault mid
+  M_LATCHONE     p2 ann rd, p2 ann wr (1 line each)
+  M_LATCHNOSET   p2 ann rd, p2 ann wr (52 lines), p2 ann rd 2, p2 ann wr 2
+  M_LATCHRDSET   p2 ann wr (each write-first register re-announces on its read)
+  M_LATCHCLRW    p2 ann rd (each read-first register re-announces on its write)
+  M_WDEBUG       p2 ann wr, p2 nw wr          M_RDEBUG   p2 ann rd, p2 nw rd
+  M_ANNLEN4      p2 nw rd, p2 nw wr           M_TRUNC    p2 nw wr
+  M_WRFAULT      p2 wr census, p2 st widths, p2 ann wr, p2 nw wr
+  M_LENFAULT     p2 ld widths, p2 st widths, p2 nw rd, p2 nw wr
+  M_STORE        p2 wr census
+  M_FLTBREAK     p1 fault lo/hi/mid/wr, p1 census, p1 widths, p1 p2 edge, p3 interim, p2 int byte/half
+  M_FLTLEN       p1 widths, p3 interim, p2 int byte, p2 int half
+  M_FLTWR        p1 fault wr, p1 widths
+  M_NOONCE       p2 ann rd (tail literal)
+  M_DROPTCTL     cased census, tctl rt
+  M_CAPNARROW    BUILD FAILS (the typedef) -- killed by construction
+  M_ODATA0       predicted SURVIVOR (equivalent today)
+  M_SERVED0      predicted SURVIVOR (equivalent today -- section 2 (i))

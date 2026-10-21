@@ -1,0 +1,66 @@
+M_ONENARROW -- what THIS build emitted for the two arm lines (both literals 1ULL -> 1u), recorded AFTER its run.
+HOST Linux 6.18.33.2-microsoft-standard-WSL2 x86_64
+COMPILER cc (Gentoo 15.2.1_p20260214 p5) 15.2.1 20260214
+FLAGS cc -Wshadow -Wcast-align -Wstrict-aliasing -Wall  -Wextra -Wno-unused-parameter -Wno-cast-align -fstrict-aliasing -fomit-frame-pointer -fpeephole -fgnu89-inline -O3 -DNDEBUG  -I/usr/X11R6/include -I../include/   -c -o dev_vme.o dev_vme.c
+SOURCE md5 688c0c1769e5d10f033e09d0e43e0d52 (legs/src/M_ONENARROW.dev_vme.c); OBJECT md5 21e7e9320d7be2912ab98fa793703020 (obj/M_ONENARROW.dev_vme.o, copied out of the clone right after the run)
+
+MEASURED (legs/M_ONENARROW.raw): 34/38 CONTROL=OK; red p2 ann rd 27/26/26, p2 ann rd 2 2, p2 ann wr 27/26/26, p2 ann wr 2 2.
+MECHANISM, read off the object: GCC specialised the MISC case (relative_addr == 0x8c -- the three `cmp $0x8c'
+dispatches below) and CONSTANT-FOLDED the undefined `1u << 35' TO ZERO there: the latch test became always-false
+and the set a no-op.  The MISC read path (0x693) calls the read-form fatal() with no test and no store; the MISC
+write path (0x6b0) reloads warned_unimpl UNCHANGED and jumps past the test into the store-and-announce tail (0x220).
+Every other population-2 register goes through the runtime 32-bit `shl %cl,%edx' (the CPU masks the count mod 32),
+and none has an index >= 32, so none is affected.  MISC therefore NEVER LATCHES: its read and its write both announce
+in pass 1 (27 lines) and again in pass 2 (2 lines) -- the shift-to-zero shape PRETABLE2 section 7 named as the
+alternative.  Its PRIMARY prediction (a runtime-masked shift landing on SLAVELMOD2's bit 3) is what this compiler did
+NOT emit for MISC.  No portable claim: another compiler or flag set may emit either shape, or a 64-bit bit-test that
+would survive.
+
+== the general latch path (runtime 32-bit shift; objdump -d lines 124-146) ==
+ 1f2:	48 85 ca             	test   %rcx,%rdx
+ 1f5:	74 79                	je     270 <dev_vme_access+0x270>
+ 1f7:	48 8b 74 24 40       	mov    0x40(%rsp),%rsi
+ 1fc:	4c 89 d1             	mov    %r10,%rcx
+ 1ff:	ba 01 00 00 00       	mov    $0x1,%edx
+ 204:	48 c1 e9 02          	shr    $0x2,%rcx
+ 208:	48 8b b6 00 10 00 00 	mov    0x1000(%rsi),%rsi
+ 20f:	d3 e2                	shl    %cl,%edx
+ 211:	48 85 d6             	test   %rdx,%rsi
+ 214:	0f 85 e6 fe ff ff    	jne    100 <dev_vme_access+0x100>
+ 21a:	48 09 f2             	or     %rsi,%rdx
+ 21d:	44 89 d6             	mov    %r10d,%esi
+ 220:	48 8b 7c 24 40       	mov    0x40(%rsp),%rdi
+ 225:	48 89 c1             	mov    %rax,%rcx
+ 228:	31 c0                	xor    %eax,%eax
+ 22a:	48 89 97 00 10 00 00 	mov    %rdx,0x1000(%rdi)
+ 231:	44 89 c2             	mov    %r8d,%edx
+ 234:	48 8d 3d 00 00 00 00 	lea    0x0(%rip),%rdi        # 23b <dev_vme_access+0x23b>
+ 23b:	e8 00 00 00 00       	call   240 <dev_vme_access+0x240>
+ 240:	e9 bb fe ff ff       	jmp    100 <dev_vme_access+0x100>
+ 245:	0f 1f 00             	nopl   (%rax)
+ 248:	48 83 fa 2c          	cmp    $0x2c,%rdx
+ 24c:	0f 87 ee 01 00 00    	ja     440 <dev_vme_access+0x440>
+== the MISC dispatches ==
+ 30d:	49 81 fa 8c 00 00 00 	cmp    $0x8c,%r10
+ 4dd:	49 81 fa 8c 00 00 00 	cmp    $0x8c,%r10
+ 5dd:	48 81 fa 8c 00 00 00 	cmp    $0x8c,%rdx
+== the MISC-specialised paths ==
+ 693:	31 c9                	xor    %ecx,%ecx
+ 695:	44 89 c2             	mov    %r8d,%edx
+ 698:	be 8c 00 00 00       	mov    $0x8c,%esi
+ 69d:	31 c0                	xor    %eax,%eax
+ 69f:	48 8d 3d 00 00 00 00 	lea    0x0(%rip),%rdi        # 6a6 <dev_vme_access+0x6a6>
+ 6a6:	e8 00 00 00 00       	call   6ab <dev_vme_access+0x6ab>
+ 6ab:	e9 50 fa ff ff       	jmp    100 <dev_vme_access+0x100>
+ 6b0:	48 8b 74 24 40       	mov    0x40(%rsp),%rsi
+ 6b5:	48 8b 96 00 10 00 00 	mov    0x1000(%rsi),%rdx
+ 6bc:	be 8c 00 00 00       	mov    $0x8c,%esi
+ 6c1:	e9 5a fb ff ff       	jmp    220 <dev_vme_access+0x220>
+== fix568b's MISC path for contrast (rev3/obj/fix568b.objdump-d.txt): a 64-bit bt by IMMEDIATE 0x23 = 35 ==
+ 54c:	48 8b 44 24 40       	mov    0x40(%rsp),%rax
+ 551:	be 23 00 00 00       	mov    $0x23,%esi
+ 556:	48 8b 80 00 10 00 00 	mov    0x1000(%rax),%rax
+ 55d:	48 0f ba e0 23       	bt     $0x23,%rax
+ 562:	0f 83 71 fe ff ff    	jae    3d9 <dev_vme_access+0x3d9>
+ 568:	e9 f3 fb ff ff       	jmp    160 <dev_vme_access+0x160>
+M_ONENARROW_CODEGEN_DONE

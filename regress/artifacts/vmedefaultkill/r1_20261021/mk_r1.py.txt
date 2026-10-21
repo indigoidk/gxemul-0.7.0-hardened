@@ -1,0 +1,303 @@
+#!/usr/bin/env python3
+"""mk_r1.py -- build the #568 repair-diff (R1) packets.
+
+FULL (astra, grok: file-reading): the fix diff, the WHOLE rev2->rev3 probe diff, the gate block, the applied docstring
+correction, kill table 2 in full, table 2b and the clean-clone block check, the rules excerpt, the first seat's Q2
+inline and its whole answer by path.  COMPACT (glm, argon: packet-fed): the same minus the probe diff (the probe's
+row contract instead) and minus the records questions.  Refuses (exit 5, nothing written) if a diff did not inline.
+"""
+import ast
+import difflib
+import hashlib
+import io
+import os
+import re
+import sys
+
+SP = r"C:\Users\User00\AppData\Local\Temp\claude\C--DocumentNoSnc-cc-GXEMUL\8e474f41-4d47-4c99-bf11-3406a84c4fcd\scratchpad\vme"
+REPO = r"C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC"
+ART = REPO + r"\regress\artifacts\vmedefaultkill"
+KT2 = ART + r"\killtable2_20261021"
+OUT = SP + r"\r1\out"
+FENCE = "`" * 3
+
+
+def rd(p):
+    with io.open(p, "r", encoding="utf-8", newline="") as f:
+        return f.read().replace("\r\n", "\n")
+
+
+def section(text, start, stop):
+    """text from the line starting with `start' up to (not including) the line starting with `stop' (or EOF)."""
+    a = text.index(start)
+    b = text.find(stop, a + len(start)) if stop else -1
+    return text[a:b if b >= 0 else len(text)].rstrip() + "\n"
+
+
+def shorten(diff, old, new):
+    lines = diff.split("\n")
+    assert lines[0].startswith("--- ") and lines[1].startswith("+++ "), "not a unified diff header"
+    lines[0], lines[1] = "--- " + old, "+++ " + new
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def main():
+    fixdiff = shorten(rd(SP + r"\r1\pkt\fix568_to_fix568b.diff"), "fix568/src/devices/dev_vme.c",
+                      "fix568b/src/devices/dev_vme.c")
+    probediff = shorten(rd(SP + r"\r1\pkt\rev2_to_rev3.diff"), "rev2/regress/vme_default_probe.py (md5 19de15b3)",
+                        "rev3/regress/vme_default_probe.py (md5 ddcebfe3, as table 2 ran it)")
+    frozen = rd(KT2 + r"\vme_default_probe.rev3.frozen.py")
+    shipped = rd(REPO + r"\regress\vme_default_probe.py")
+    corr = "".join(difflib.unified_diff(frozen.splitlines(True), shipped.splitlines(True),
+                                        fromfile="rev3 as table 2 ran it (md5 ddcebfe3)",
+                                        tofile="rev3 as shipped now (md5 %s)" % hashlib.md5(
+                                            shipped.encode("utf-8")).hexdigest()[:8], n=1))
+    block = rd(SP + r"\gate3\block568_extracted.sh")
+    kt2 = rd(KT2 + r"\KILLTABLE2_VS_PRETABLE2.out")
+    t2b_run = rd(KT2 + r"\table2b\RUNLOG.txt")
+    fable = rd(SP + r"\r1\fable5_r1.md")
+    fable_q2 = section(fable, "## Q2", "## Q3")
+    fable_verdict = [l for l in fable.split("\n") if l.startswith("VERDICT:")][0]
+    contract = section(shipped, "ROWS, each with the mutant", "TEST-FIRST SHAPE:")
+
+    bad = []
+    nfix = len(re.findall(r"^@@ ", fixdiff, re.M))
+    nprobe = len(re.findall(r"^@@ ", probediff, re.M))
+    ncorr = len(re.findall(r"^@@ ", corr, re.M))
+    if nfix != 4:
+        bad.append("fix diff hunks %d (want 4)" % nfix)
+    if nprobe != 13:
+        bad.append("probe diff hunks %d (want 13)" % nprobe)
+    if ncorr < 1:
+        bad.append("docstring-correction diff hunks %d (want >= 1)" % ncorr)
+    #  "comment-only" by construction: the two files' ASTs, module docstring removed, must be identical
+    #  (comments are not in an AST; the docstring is body[0]).
+    def code_ast(src):
+        t = ast.parse(src)
+        if t.body and isinstance(t.body[0], ast.Expr) and isinstance(getattr(t.body[0], "value", None), ast.Constant):
+            t.body = t.body[1:]
+        return ast.dump(t)
+    code_same = code_ast(frozen) == code_ast(shipped)
+    if not code_same:
+        bad.append("the shipped probe's CODE differs from the frozen rev 3 (AST, docstring removed)")
+    if "38/38" not in t2b_run or "RESTORE_OK" not in t2b_run:
+        bad.append("table 2b RUNLOG lacks 38/38 or RESTORE_OK")
+    if bad:
+        for b in bad:
+            sys.stderr.write("REFUSED: %s\n" % b)
+        sys.stderr.write("NOTHING WRITTEN\n")
+        return 5
+
+    head = """# `vmedefaultkill` (#568) -- THE REPAIR-DIFF PASS: review the repair the adjudication ordered, attack the first seat's answer, and ask the floor question of the shipped composite
+
+## READ THIS FIRST -- PLEASE DO NOT SIMPLY RATIFY
+
+Check the premises, not just the derivations.  **THE TREE UNDER REVIEW IS `C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/`'s
+working tree, committed HEAD `86114a90`** (this round is uncommitted there: `src/devices/dev_vme.c`,
+`regress/vme_default_probe.py`, the vme block of `regress/gate_arm.sh`, and `regress/artifacts/vmedefaultkill/`).
+Another session's uncommitted edits sit in the same tree and are NOT part of this round: `src/devices/dev_pcc2.c`,
+`dev_lca.c`, `dev_sh4.c`, `src/cpus/cpu_alpha_palcode.c`, `src/include/thirdparty/mvme_pcctworeg.h`, and several
+`regress/` probes and gate scripts.  Three pristine-2021 copies of GXemul sit under the project root; line numbers off
+by hundreds mean you are reading one.  **If you cannot read files that is expected** -- what you need is inlined; name
+any premise you cannot settle from this packet.  READ-ONLY: write nothing to any project tree.  **VERDICT LINE FIRST.**
+
+## 1. What this pass is, and the rule that stops it
+
+Pass 2 of `#568` found ONE floor breach -- the population-2 announce arm's `if (writeflag == MEM_WRITE)` read as
+`if (idata)` passed every row of the 34-row rev-2 probe, MEASURED 34/34, because every population-2 store the probe
+made was non-zero -- plus records defects.  The adjudication pass (Fable 5.1, GPT-6 Astra, GLM 5.3, Grok 4.7; all
+PROCEED WITH CHANGES) ordered a repair; it is built and measured (section 4).  **This is that repair's own pass (the
+repair-chain rule).**  Review EFFORT is scoped to the repair diff -- settled design is not re-litigated.  The FLOOR
+QUESTION -- does any one-edit mutant inside the fix's DEPENDS-ON enumeration still pass all 38 rows -- is asked of the
+SHIPPED COMPOSITE (fix568b + probe rev 3).  **The chain CLOSES on the first pass that finds zero floor breaches
+surviving adjudication, and the zero must carry its denominator: which predicates, lvalues and mutant shapes you
+swept.**  A bare "no breaches" does not close it.
+
+**One seat has already answered this pass: Fable 5.1, `VERDICT: CLOSE`, zero breaches over a stated denominator
+(section 7).**  You are asked to ATTACK that answer, not to agree with it: a closing zero from one seat closes nothing
+until the rest of the roster has tried to break it.
+
+## 2. Settled (re-inlined)
+
+* Census: 10 cased offsets; 26 population-2 registers (the header's word starts 0x04..0x8c minus the cased); 988
+  population-1 word starts 0x90..0xffc; every sub-word start inside a population-1 or population-2 word faults; a
+  sub-word access at a CASED base is serviced by that arm (population 4, `vmewidthlanes`, filed).
+* The m88k load/store path delivers naturally-aligned accesses only; `ld.d`/`st.d` is ONE len-8 call; the debugger's
+  NO_EXCEPTIONS callers never reach the handler; a second fault while PSR.SFRZ is set becomes ERROR.
+* `fatal()` prints and RETURNS; `debug()` is silent while free-running at verbosity 0.  A free-running population-1 fault
+  prints NO host line at all -- MEASURED (8 faults, 0 `[ vme:`, 0 DATA_ACCESS lines; the stepped run prints 8).
+* M_IDATA measured 34/34 on frozen rev 2 (PRETABLE_IDATA.txt written before the build); 37/38 on rev 3 (section 4).
+
+## 2b. The rules this pass applies (verbatim excerpts, so a seat that cannot read the rule file has them)
+
+* **DEPENDS ON (clause d)** enumerates exactly two things: "(1) the predicates DOMINATING the diff's edited lines,
+  walked up only to the ENCLOSING FUNCTION BOUNDARY -- never into callees or callers; and (2) for operand-swap forms,
+  swaps drawn ONLY from fields the guarded BODY reads."  A (d) mutant keeps the guard and nulls its repair -- a
+  predicate weakened to "the least-restrictive form that still reads like the same check", or an existing guard's
+  operand swapped for a field the guarded body reads.  Not deletion.
+* **Joint cells (2026-09-04):** "DEPENDS-ON enumerates JOINT cells over the guard's operands and the body-read lvalues
+  EXACTLY WHEN THE GUARDED BODY'S OWN CODE DISTINGUISHES THEM ... A value or combination the body never tests as a case
+  (`idata == k`; a byte no conditional distinguishes ...) is DISCLOSED under clause (e)."  And: "At each floor cell,
+  every idata bit the guarded body TESTS is written both clear and set."  **"TESTS" means MASKS OR COMPARES AS A CASE**,
+  not "depends on" (2026-09-25).
+* **Clause (e), the contract:** the probe header names which edits it is designed to catch; an escape outside it is
+  "outside the contract", inside it "a breach".  **EXHAUSTED / SAMPLED** (2026-10-09): "SAMPLED = driven at two or more
+  values, with the untested slices and their derived or measured sweeps named.  A disclosure vocabulary can never
+  demand a row."
+* **A filter can reject or repair a row; it can never demand a new one.**  Rows are owed per enumerated mutant, never
+  per refusing state.
+
+## 3. The repair, verbatim
+
+### 3a. The fix: fix568 -> fix568b (`src/devices/dev_vme.c`, 4 hunks)
+
+""" + FENCE + "diff\n" + fixdiff + FENCE + """
+
+**The object comparison** (`killtable2_20261021/OBJDUMP_fix568_vs_fix568b.txt`, GCC 15.2.1 -O3, x86-64): the objects
+differ BEYOND the read announce's format string -- the added comment lines move DEVINIT's `__LINE__` (231 -> 234, via
+`CHECK_ALLOCATION`'s `FAILURE()`), and the `(unsigned long long)` cast changes `-O3`'s layout of `dev_vme_access`
+(registers, padding, two branches, the read-announce call duplicated; `.text` 1890 -> 1970 bytes).  Behaviour is what
+table 2 measured.  fix568b is NOT "comment-only".
+
+"""
+    full_3b = """### 3b. The probe: rev 2 (34 rows, md5 19de15b3) -> rev 3 (38 rows, md5 ddcebfe3), 13 hunks
+
+""" + FENCE + "diff\n" + probediff + FENCE + "\n\n"
+    compact_3b = """### 3b. The probe, rev 3 (38 rows): its ROW CONTRACT, verbatim from its header
+
+(The rev2 -> rev3 diff is 13 hunks / 38 KB; the file-reading seats get it whole.  You get the contract every row is
+graded against -- each row, the mutant it is designed to catch, and the channel that differs under it.)
+
+""" + FENCE + "text\n" + contract + FENCE + "\n\n"
+    rest = """### 3c. The gate-14 block, verbatim (`regress/gate_arm.sh`)
+
+""" + FENCE + "sh\n" + block + FENCE + """
+
+### 3d. Applied AFTER table 2, comment-only: the first seat's one L4 correction (CHECK IT -- a correction is not safer than what it corrects)
+
+The shipped probe's ORDER DEPENDENCE paragraph stated PRETABLE2's prediction (a bit-3 collision) as this build's
+behaviour, while table 2 measured the other shape (section 4's MISS note).  No code line changed; the frozen copy table 2
+ran keeps the old text because it is the text that ran.
+
+""" + FENCE + "diff\n" + corr + FENCE + """
+
+## 4. Kill table 2, measured (frozen rev 3, fix568b, a fresh clone of `git archive 1a59a47e` -- the same src tree as HEAD 86114a90)
+
+"""
+    kt2_full = FENCE + "text\n" + kt2 + FENCE + "\n"
+    kt2_compact = FENCE + "text\n" + section(kt2, "KILLTABLE2_VS_PRETABLE2", "== RED ROWS BY KIND") + "\n" + \
+        section(kt2, "== SURVIVORS", "== THE FLOOR BREACH") + "\n" + section(kt2, "== PER-ROW KILL CENSUS", "== OBSERVATIONS") + \
+        "\n" + section(kt2, "== COUNTS ==", None) + FENCE + "\n"
+    s4b = """
+## 4b. Measured since table 2
+
+* **Table 2b, ONE clause-(e) leg** (`killtable2_20261021/table2b/`; the prediction `PRETABLE2B.txt` written 02:12:02,
+  the build 02:12:53): M_IDATABIT1 -- in the population-2 arm, `if (writeflag == MEM_WRITE)` ->
+  `if (writeflag == MEM_WRITE && !(idata & 2))` -- scored **38/38, CONTROL=OK, as predicted**: every population-2 store
+  the probe makes carries bit 1 clear (0x0, 0xa5a5a5a5, 0xd4, 0xc3d4, 0x1122334455667788).  The first seat named this
+  leg OWED-OPTIONAL and graded it clause (e); the grading is question 4.  Restore verified: source `cmp`-clean against
+  the working tree, rebuilt binary byte-identical to the fix build.
+* **Gate 14's #568 block alone, both ways, on a CLEAN clone** (`git archive HEAD 86114a90`, built twice in WSL
+  `/tmp/gx568g3`, no other session's uncommitted edits): HEAD's binary **FAIL, 27 of 45 checks** (14/38 rows; the 24 red
+  rows are exactly table 2's HEAD set; CONTROL OK); HEAD + fix568b **PASS, 45 checks** (38/38).  Probe md5 346c7813 (the
+  section-3d text).
+* **A records defect found on the way, and disclosed here rather than buried:** the rev-2 FULL gate-14 run (PASS, 1264
+  checks) used `build/gxemul`, which carries the other session's uncommitted `dev_pcc2.c` and `mvme_pcctworeg.h` -- the
+  PCCchip2 on the same `mvme187` machine, and gate 14 has pcc2 blocks.  The rev-3 full gate will run on the clean
+  clone's binary instead (PMAX override), and the record will say which binary each run used.
+
+"""
+    q_full = """## 5. Questions
+
+1. **The repair against the adjudication.**  Does it implement every ordered change -- F1's zero-store row (own
+   session, `st r0`, the WRITE-FORM literal checked), F10's rows (`p2 nw rd 2`/`p2 nw wr 2` in the SAME process; `p1
+   quiet` over the census AND `p1 widths`' free runs; two lane-0 accesses in `p1 widths`), the CONTROL split and its
+   definition, the per-site neutral wording, the docstring repairs, the comment/typedef changes, D1's `%llx`?  The first
+   seat's Q1 table is in its answer (section 7, by path); say where it is wrong rather than re-deriving where you agree.
+2. **THE FLOOR QUESTION, on the composite -- attack the first seat's zero.**  Its enumeration (104 label x direction x
+   latch cells; operand swaps of the direction and latch tests; `default:`'s {read, write}) and sweep table are in
+   section 7.  Name **a one-edit mutant inside the DEPENDS-ON enumeration (section 2b) that its table misses and that
+   would pass all 38 rows**, or **a row it credits with a kill that would NOT red under the named edit**.  Give your own
+   denominator.  In particular: is the zero-store row enough for the `if (idata)` CLASS, or does another data-dependent
+   swap of the direction test, the latch test or the label dispatch pass 38/38?
+3. **Records.**  Anything in the rev-3 probe header, PRETABLE2, the table-2 summary, the gate comment, or section 3d's
+   correction that is false or stronger than its measurement; and the first seat's records items (its Q3: the CHANGELOG
+   draft at `vme/commit/changelog_568.md` and the MANIFEST block at `vme/commit/cpw_block568.txt`, both in the session
+   scratchpad named in section 7).  Is any place still calling fix568b "comment-only"?
+4. **A grading question, settled by the rules in section 2b.**  M_IDATABIT1 (section 4b) qualifies the direction test by
+   a store-data bit and measured 38/38.  The first seat graded it clause (e): the arm's body tests no bit and no value of
+   idata, so under the joint-cell rule and the "tests means masks or compares as a case" pin it is outside the floor, and
+   the probe already discloses store-data patterns as SAMPLED.  **Is that grading right, or is this a floor breach?**  If
+   (e): must the SAMPLED disclosure name the five sampled values and the low-word bits clear in all of them (the first
+   seat lists 1, 11, 19, 20, 25, 27 -- check that list) so the untested slice is named?
+5. Anything else you found.
+
+"""
+    q_compact = """## 5. Questions (two records questions are put only to the seats that can open the files; you get these three)
+
+2. **THE FLOOR QUESTION, on the composite -- attack the first seat's zero.**  Its enumeration (104 label x direction x
+   latch cells; operand swaps of the direction and latch tests; `default:`'s {read, write}) and sweep table are in
+   section 7.  Using the fix diff (3a), the arm as the diff shows it, and the row contract (3b), name **a one-edit mutant
+   inside the DEPENDS-ON enumeration (section 2b) that its table misses and that would pass all 38 rows**, or **a row it
+   credits with a kill that would NOT red under the named edit**.  Give your own denominator.  In particular: is the
+   zero-store row enough for the `if (idata)` CLASS, or does another data-dependent swap of the direction test, the latch
+   test or the label dispatch pass 38/38?
+4. **A grading question, settled by the rules in section 2b.**  M_IDATABIT1 (section 4b) qualifies the direction test by
+   a store-data bit and measured 38/38.  The first seat graded it clause (e): the arm's body tests no bit and no value of
+   idata, so under the joint-cell rule and the "tests means masks or compares as a case" pin it is outside the floor, and
+   the probe already discloses store-data patterns as SAMPLED.  **Is that grading right, or is this a floor breach?**  If
+   (e): must the SAMPLED disclosure name the five sampled values and the low-word bits clear in all of them (the first
+   seat lists 1, 11, 19, 20, 25, 27 -- check that list against the five values)?
+5. Anything else you found.
+
+"""
+    fmt = """## 6. Answer format
+
+Your token first, then ONE line `VERDICT: CLOSE | REPAIR AGAIN | CANNOT SETTLE -- <one line>`, then your answers by
+number.  Every proposed escaping mutant as a ONE-LINE diff of `dev_vme.c`, marked OWED (it will be built and measured
+before anything is decided).  Facts and flags only.
+
+## 7. The first seat's answer (Fable 5.1, file-reading) -- ATTACK IT
+
+Its verdict line, verbatim:
+
+> """ + fable_verdict + """
+
+"""
+    full_7 = """Its whole answer (Q1 table, Q2 sweep, Q3 records items, Q4) is at
+`C:/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/vme/r1/fable5_r1.md`
+(22 KB); the CHANGELOG draft and MANIFEST block it reviewed are under the same `scratchpad/vme/commit/`.  Its Q2,
+verbatim, because that is the part to break:
+
+""" + fable_q2
+    compact_7 = """Its Q2, verbatim -- the part to break:
+
+""" + fable_q2
+
+    full = head + full_3b + rest + kt2_full + s4b + q_full + fmt + full_7
+    compact = head + compact_3b + rest + kt2_compact + s4b + q_compact + fmt + compact_7
+    os.makedirs(OUT, exist_ok=True)
+    seats = {"ASTRA": full, "GROK": full, "GLM": compact, "ARGON": compact}
+    for seat, body in seats.items():
+        tok = "%s_VME_R1_20261021" % seat
+        txt = body.replace("Your token first", "Your token first (`%s`)" % tok, 1)
+        with io.open(os.path.join(OUT, "packet_%s.md" % seat), "w", encoding="utf-8", newline="\n") as f:
+            f.write(txt)
+        print("packet_%s.md %d bytes  token %s" % (seat, len(txt.encode("utf-8")), tok))
+    ptr = ("ASTRA seat -- the REPAIR-DIFF PASS of an ordinary bounds- and correctness-engineering review (a VME bus-controller\n"
+           "device model in an emulator): a built repair, its measured kill table, and one seat's closing answer to attack.\n"
+           "READ-ONLY: write nothing to any project tree.\n\n"
+           "Read this file and answer it exactly as its Questions section directs:\n\n    "
+           + (OUT + r"\packet_ASTRA.md").replace("\\", "/") + "\n\n"
+           "Open your answer with the token ASTRA_VME_R1_20261021, then ONE line:\n"
+           "VERDICT: CLOSE | REPAIR AGAIN | CANNOT SETTLE -- <one line>\n")
+    with io.open(os.path.join(OUT, "astra_pointer.md"), "w", encoding="utf-8", newline="\n") as f:
+        f.write(ptr)
+    print("hunks: fix %d, probe %d (FULL only), docstring correction %d; frozen vs shipped AST (docstring removed) "
+          "identical: %s" % (nfix, nprobe, ncorr, code_same))
+    print("MK_R1_DONE")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

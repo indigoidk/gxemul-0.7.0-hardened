@@ -1,0 +1,194 @@
+#!/usr/bin/env python3
+"""mk_brief_p2.py <outdir> <killtable_summary> <frozen_probe_copy> -- assemble the vmedefaultkill PASS-2 packets.
+
+Every quoted excerpt is READ at build time from the working tree / git (never hand-copied).  Refuses if:
+the working dev_vme.c is not the fix under review (FIX_MD5), the dev_vme.c diff has fewer than 3 hunks (a brief that
+claims to inline a diff refuses at zero -- the `git show | head` incident), the gate block is not in gate_arm.sh's
+diff, the regress/ probe differs from the frozen copy, or the kill-table summary lacks its completion sentinel.
+"""
+import hashlib, io, os, re, subprocess, sys
+
+ROOT = "C:/DocumentNoSnc/cc/GXEMUL"
+SEC = ROOT + "/GXEMUL-SEC"
+HERE = os.path.dirname(os.path.abspath(__file__))
+OUT, KT, FROZEN = sys.argv[1], sys.argv[2], sys.argv[3]
+FIX_MD5 = os.environ.get("FIX_MD5", "4e3e7fc220062b429f7d9d6e140fec9e")
+KT_SENTINEL = os.environ.get("KT_SENTINEL", "VERDICT: TABLE DONE")
+
+
+def rd(p):
+    return io.open(p, encoding="latin-1", newline="").read().replace("\r\n", "\n")
+
+
+def md5(p):
+    return hashlib.md5(open(p, "rb").read()).hexdigest()
+
+
+def git(*a):
+    r = subprocess.run(["git", "-C", SEC, "--no-optional-locks"] + list(a), capture_output=True)
+    must(r.returncode == 0, "git %s rc=%d: %s" % (" ".join(a), r.returncode, r.stderr.decode("latin-1")[:200]))
+    return r.stdout.decode("latin-1").replace("\r\n", "\n")
+
+
+def must(cond, msg):
+    if not cond:
+        sys.stderr.write("REFUSED: " + msg + "\n")
+        sys.exit(3)
+
+
+vme = SEC + "/src/devices/dev_vme.c"
+must(md5(vme) == FIX_MD5, "working dev_vme.c md5 %s is not the fix under review %s" % (md5(vme), FIX_MD5))
+HEAD = git("rev-parse", "--short=8", "HEAD").strip()
+
+DIFF = git("diff", "--", "src/devices/dev_vme.c").rstrip("\n")
+nh = DIFF.count("\n@@ ") + (1 if DIFF.startswith("@@ ") else 0)
+must(nh == 2, "dev_vme.c diff has %d hunks inlined (want exactly 2: the struct+typedef hunk and the switch hunk)" % nh)
+
+vl = rd(vme).split("\n")
+a = next(i for i, l in enumerate(vl) if l.startswith("struct vme_data {")) + 1
+b = next(i for i, l in enumerate(vl) if l.startswith("DEVINIT(vme)")) + 1
+e = next(i for i in range(b, len(vl)) if vl[i - 1] == "}")
+FUNC = "\n".join("%4d  %s" % (i, vl[i - 1]) for i in range(a, e + 1))
+must("return 1;" in FUNC and "memory_writemax64(cpu, data, len, odata);" in FUNC, "common tail missing from FUNC")
+
+GD = git("diff", "--", "regress/gate_arm.sh").rstrip("\n")
+must("vme_default_probe.py" in GD and "vme default rows red" in GD, "gate_arm.sh diff lacks the vme block")
+GATE = GD
+
+pr = SEC + "/regress/vme_default_probe.py"
+must(os.path.exists(pr), "regress/vme_default_probe.py missing")
+must(md5(pr) == md5(FROZEN), "regress probe %s differs from the frozen copy %s" % (md5(pr), md5(FROZEN)))
+doc = rd(pr)
+ra = doc.index("ROWS, each with the mutant")
+rb = doc.index("TEST-FIRST SHAPE")
+ROWS = doc[ra:rb].rstrip()
+must("CONTRACT (clause e)" in ROWS and "p1 census" in ROWS, "row plan extraction failed")
+PROBEPATH = ("**File-reading seats: read the FROZEN COPY of the measured instrument, not the working file** -- `%s` "
+             "(md5 `%s`, byte-identical to the working `regress/vme_default_probe.py` at brief-writing time, %d lines).  "
+             "Packet-fed seats: its row plan and contract are inlined below." % (FROZEN.replace("\\", "/"), md5(FROZEN),
+                                                                                 doc.count("\n")))
+
+kt = rd(KT)
+must(KT_SENTINEL in kt, "kill-table summary lacks %s" % KT_SENTINEL)
+#  CONDENSED, and labelled so: the per-leg prediction text and the seat-reading field are dropped from each table line,
+#  and observations (a) timing, (d) restore and (f) run hygiene are dropped; every other line is verbatim.
+NL = chr(10)
+
+
+def sections(text):
+    out, cur = {}, None
+    for line in text.split(NL):
+        m = re.match(r"^== (.+?) ==", line)
+        if m:
+            cur = m.group(1).split(" (")[0].split(",")[0]
+            out[cur] = []
+            continue
+        if cur:
+            out[cur].append(line)
+    return out
+
+
+def trim(lines):
+    out = []
+    for l in lines:
+        f = [x.strip() for x in l.split(" | ")]
+        if len(f) >= 5:
+            keep = f[:4] + [x for x in f[4:] if x.startswith(("MATCH", "MISS"))]
+            out.append(" | ".join(keep))
+        elif l.strip():
+            out.append(l)
+    return out
+
+
+def nonblank(lines):
+    return [l for l in lines if l.strip()]
+
+
+secs = sections(kt)
+must(all(k in secs for k in ("REFERENCE RUNS", "THE TABLE", "SURVIVORS", "MISS NOTES", "PER-ROW KILL CENSUS",
+                             "OBSERVATIONS", "COUNTS")), "kill-table sections: %s" % sorted(secs))
+obs, keep = [], False
+for l in secs["OBSERVATIONS"]:
+    m = re.match(r"^\(([a-z])\)", l)
+    if m:
+        keep = m.group(1) in "bce"
+    if keep and l.strip():
+        obs.append(l)
+census = ["== PER-ROW KILL CENSUS, TABLE 1 (legs that red each row; HEAD and NULL excluded) =="] + nonblank(secs["PER-ROW KILL CENSUS"])
+t1b = []
+if len(sys.argv) > 4:
+    kb = rd(sys.argv[4])
+    must("VERDICT: TABLE 1B DONE" in kb, "table 1b summary lacks its sentinel")
+    s1b = sections(kb)
+    must(all(k in s1b for k in ("REFERENCE RUNS", "THE TABLE", "MEASURED GOT-VALUES OF THE RED ROWS", "PER-ROW KILL CENSUS",
+                                "COUNTS")), "table 1b sections: %s" % sorted(s1b))
+    t1b = (["", "######## TABLE 1b -- three legs added after table 1 to close the gaps its observation (c) names (no leg built",
+            "######## \"a cased WRITE path broken\"; no leg added a label AT 0x90).  Same frozen probe, a fresh clone, predictions",
+            "######## written to PRETABLE1B.txt BEFORE the first build.  Source: killtable1_20261020/table1b/KILLTABLE1B.out",
+            "== REFERENCE RUNS =="] + trim(s1b["REFERENCE RUNS"])
+           + ["", "== THE TABLE (LEG | score | CONTROL | measured red rows | vs PRETABLE1B) =="] + trim(s1b["THE TABLE"])
+           + ["", "== MEASURED GOT-VALUES OF THE RED ROWS =="] + nonblank(s1b["MEASURED GOT-VALUES OF THE RED ROWS"])
+           + ["", "== COUNTS =="] + nonblank(s1b["COUNTS"]))
+    census = (["== PER-ROW KILL CENSUS, TABLES 1 + 1b COMBINED (legs that red each row; HEAD and NULL excluded) =="]
+              + nonblank(s1b["PER-ROW KILL CENSUS"]))
+body = (["######## TABLE 1", "== REFERENCE RUNS =="] + trim(secs["REFERENCE RUNS"])
+        + ["", "== THE TABLE (LEG | score | CONTROL | measured red rows | vs the pre-table prediction) =="] + trim(secs["THE TABLE"])
+        + ["", "== SURVIVORS =="] + nonblank(secs["SURVIVORS"])
+        + ["", "== MISS NOTES =="] + nonblank(secs["MISS NOTES"])
+        + ["", "== OBSERVATIONS (b), (c), (e) =="] + obs
+        + ["", "== COUNTS =="] + nonblank(secs["COUNTS"])
+        + t1b + [""] + census)
+head_lines = nonblank(kt.split(NL)[:12])
+KILLTABLE = ("Condensed from `regress/artifacts/vmedefaultkill/killtable1_20261020/KILLTABLE1_VS_PRETABLE.out` and "
+             "`table1b/KILLTABLE1B.out` (the measuring seat's comparisons of every leg against predictions written before "
+             "each table ran): the per-leg prediction text and the seat-reading field are dropped from each table line, "
+             "table 1's own per-row census is replaced by table 1b's COMBINED census, and the apparatus observations "
+             "(timing, restore, run hygiene) and table 1b's provenance header are omitted.  Everything else is verbatim."
+             + NL + NL + "```" + NL + NL.join(head_lines) + NL + NL + NL.join(body) + NL + "```")
+
+ns = git("diff", "--numstat").strip().split("\n")
+mine = {"src/devices/dev_vme.c": "INLINED (section 4 diff + section 5 whole device)",
+        "regress/gate_arm.sh": "INLINED (section 7)",
+        "tools/pipeline/check_probe_wiring.py": "SUMMARIZED -- MANIFEST lines registering the new probe (CLASS_DETECTOR) "
+                                                "and the round's research scripts; carries another unit's hunks too",
+        "tools/precommit_check.sh": "SUMMARIZED -- SCORE_CLAIMS_MANIFEST count bumped for the new gated probe",
+        "regress/hygiene_pins.txt": "SUMMARIZED -- re-derived pty-log hygiene pins (tools/derive_hygiene_pins.sh)"}
+rows = []
+for l in ns:
+    if not l.strip():
+        continue
+    ad, de, path = l.split("\t", 2)
+    if path in mine:
+        rows.append("    %-42s +%-5s -%-5s %s" % (path, ad, de, mine[path]))
+rows.append("    %-42s (new, %d lines)  SUMMARIZED -- row plan + contract inlined (section 6); file-reading seats read "
+            "the frozen copy" % ("regress/vme_default_probe.py", doc.count("\n")))
+rows.append("    %-42s (new)  NOT SHOWN -- records: the pass-1 packets/answers, the HEAD re-witness, the PRETABLE "
+            "files, kill table 1's logs" % "regress/artifacts/vmedefaultkill/*_20261020/")
+rows.append("    %-42s (modified)  NOT SHOWN -- the ledger row and the matrix render" % "tools/pipeline/ledger.json, matrix.html")
+NUMSTAT = ("```\n" + "\n".join(rows) + "\n```\nEvery other modified path in `git status` belongs to another unit or "
+           "another session and is NOT part of this round.")
+
+tmpl = rd(os.path.join(HERE, "brief_tmpl_p2.md"))
+for k, v in (("{HEAD}", HEAD), ("{NUMSTAT}", NUMSTAT), ("{DIFF}", DIFF), ("{FUNC}", FUNC), ("{PROBEPATH}", PROBEPATH),
+             ("{ROWS}", ROWS), ("{GATE}", GATE), ("{KILLTABLE}", KILLTABLE)):
+    must(tmpl.count(k) == 1, "placeholder %s count %d" % (k, tmpl.count(k)))
+    tmpl = tmpl.replace(k, v)
+must(not re.search(r"\{[A-Z]+\}", tmpl), "placeholder left: %s" % re.findall(r"\{[A-Z]+\}", tmpl)[:3])
+
+os.makedirs(OUT, exist_ok=True)
+VERD = "VERDICT: SHIP | SHIP WITH CHANGES | DO NOT SHIP -- <one line>"
+for seat in ("ASTRA", "GROK", "GLM", "FABLE", "ARGON"):
+    hdr = "Open your answer with the token %s_VME_P2_20261020, then ONE line:\n%s\n\n" % (seat, VERD)
+    io.open(os.path.join(OUT, "packet_%s.md" % seat), "w", encoding="utf-8", newline="\n").write(hdr + tmpl)
+io.open(os.path.join(OUT, "brief_body.md"), "w", encoding="utf-8", newline="\n").write(tmpl)
+ptr = ("ASTRA seat -- PASS 2 (diff review) of an ordinary bounds- and correctness-engineering change: a VME bus-controller\n"
+       "device model in an emulator ended the process on any register offset its switch did not name; the owner ruled\n"
+       "what each class of offset should do, the change is now built in the working tree with a 34-row regression probe\n"
+       "and a measured mutation table, and this pass checks the code, the probe and the records against each other.\n\n"
+       "Read this file and answer it exactly as its Questions section directs:\n\n"
+       "    " + OUT.replace("\\", "/") + "/packet_ASTRA.md\n\n"
+       "READ-ONLY: write nothing to any project tree.\n\n"
+       "Open your answer with the token ASTRA_VME_P2_20261020, then ONE line:\n" + VERD + "\n")
+io.open(os.path.join(OUT, "astra_pointer.md"), "w", encoding="utf-8", newline="\n").write(ptr)
+print("BRIEF_BUILT body %d bytes; HEAD %s; dev_vme diff hunks %d; FUNC lines %d-%d; probe md5 %s" %
+      (len(tmpl.encode("utf-8")), HEAD, nh, a, e, md5(pr)))

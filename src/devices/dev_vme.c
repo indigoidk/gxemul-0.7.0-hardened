@@ -51,7 +51,20 @@
 
 struct vme_data {
 	uint32_t	reg[VME_LEN / sizeof(uint32_t)];
+
+	/*  #568: one bit per register WORD (relative_addr >> 2) for the
+	    unimplemented-register announce below; the highest such word is
+	    VME2_MISC (0x8c >> 2 == 35).  Zeroed by DEVINIT's memset, so every
+	    instance starts with every announce armed.  */
+	uint64_t	warned_unimpl;
 };
+
+/*  #568: a warned_unimpl narrower than VME2_MISC >> 2 + 1 bits would
+    leave MISC's announce bit outside the field; make that a compile error
+    (dev_pcc2.c's pcc2_w_fits_in_warned shape).  The 1ULL in the shifts
+    below is not checked here.  */
+typedef char vme_warned_fits[(VME2_MISC >> 2) <
+    8 * sizeof(((struct vme_data *)0)->warned_unimpl) ? 1 : -1];
 
 
 DEVICE_ACCESS(vme)
@@ -134,13 +147,77 @@ DEVICE_ACCESS(vme)
 			d->reg[relative_addr / sizeof(uint32_t)] = idata;
 		break;
 
+	/*  #568 (vmedefaultkill): registers the header names but this model
+	    does not implement.  Each ended the emulator in default: below.
+	    OpenBSD 2.2's mvme88k driver (sys/arch/mvme88k/dev/vme.c) has
+	    access sites at six of them.  Its attach reaches four:
+	    vme2chip_init() reads MASTERCTL and writes it back and writes
+	    MASTER3, MASTER4 and MASTER4MOD.  The other two, IRQSTAT and
+	    IRQCLR, are in vme2abort(), the ABORT-switch interrupt handler,
+	    and this model raises no VME2 interrupt.  A bus error here
+	    would panic that guest's attach, so these DECLINE: a read is served
+	    the word preloaded above, which is 0 because nothing writes these
+	    words of d->reg[] (odata is deliberately not forced to 0, so a store
+	    added by a later edit would show in a read-back); a write is
+	    dropped; one fatal() per register per device, the first access's
+	    direction deciding its wording (#501's shape in dev_pcc2.c).
+	    Sub-word starts inside these words are not matched here and reach
+	    default: (vmewidthlanes).  */
+	case VME2_SADDR2:
+	case VME2_SLAVELMOD1:
+	case VME2_SLAVELMOD2:
+	case VME2_SLAVECTL:
+	case VME2_MASTER1:
+	case VME2_MASTER2:
+	case VME2_MASTER3:
+	case VME2_MASTER4:
+	case VME2_MASTER4MOD:
+	case VME2_MASTERCTL:
+	case VME2_DMACTL:
+	case VME2_DMAMODE:
+	case VME2_DMALADDR:
+	case VME2_DMAVMEADDR:
+	case VME2_DMACOUNT:
+	case VME2_DMATABLE:
+	case VME2_DMASTAT:
+	case VME2_T2CMP:
+	case VME2_T2COUNT:
+	case VME2_PRESCALE:
+	case VME2_IRQSTAT:
+	case VME2_SETSOFTIRQ:
+	case VME2_IRQCLR:
+	case VME2_IRQL1:
+	case VME2_IRQL2:
+	case VME2_MISC:
+		if (!(d->warned_unimpl & (1ULL << (relative_addr >> 2)))) {
+			d->warned_unimpl |= 1ULL << (relative_addr >> 2);
+			if (writeflag == MEM_WRITE)
+				fatal("[ vme: unimplemented write to register "
+				    "0x%x (len %d): 0x%llx -- declined.  (once) ]\n",
+				    (unsigned) relative_addr, (int) len,
+				    (unsigned long long) idata);
+			else
+				fatal("[ vme: unimplemented read from register "
+				    "0x%x (len %d) -- served 0x%llx.  (once) ]\n",
+				    (unsigned) relative_addr, (int) len,
+				    (unsigned long long) odata);
+		}
+		break;
+
 	default:if (writeflag == MEM_READ)
 			debug("[ vme: unimplemented READ from offset 0x%x ]"
 			    "\n", (int)relative_addr);
 		else
 			debug("[ vme: unimplemented WRITE to offset 0x%x: "
 			    "0x%x ]\n", (int)relative_addr, (int)idata);
-		exit(1);
+		/*  #568 (vmedefaultkill): an offset this model does not service:
+		    no header-named register, or the inside of one (a sub-word
+		    start).  Refuse the access -- for a guest data load or store,
+		    memory_rw then raises the m88k data-access exception, the bus
+		    error a badaddr() probe expects -- instead of exit(1), which
+		    ended the emulator with no visible reason (debug() is silent
+		    at default verbosity).  */
+		return 0;
 	}
 
 	if (writeflag == MEM_READ)

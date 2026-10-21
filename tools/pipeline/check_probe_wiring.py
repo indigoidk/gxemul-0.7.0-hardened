@@ -2854,6 +2854,53 @@ MANIFEST = {
     "fbpending_drain_probe.py":    (CLASS_DETECTOR, "#442 footbridge pending-tick backlog"),
     "fbctrl_port_probe.py":        (CLASS_DETECTOR, "#549 fbctrl PORT selector refusal"),
     "fbctrl_cmd_probe.py":         (CLASS_DETECTOR, "#567 fbctrl COMMAND refusal"),
+    #  #568 vmedefaultkill (dev_vme.c's default: ended the emulator): the gated detector, the rung-3 witness of the
+    #  defect on HEAD 5dbc000e, and the instruments kill tables 1, 1b, the M_IDATA leg, table 2 and its addenda 2b and
+    #  2c ran -- evidence under regress/artifacts/vmedefaultkill/, not tests.  The frozen probe copies and the table
+    #  scripts are RESEARCH by the #471 definition at CLASS_RESEARCH ("the instruments preserved beside a kill table";
+    #  git blame: #471 added that class and its comment together, 0a7c4687); #539/#545 used WITNESS, #530 TOOL.
+    "vme_default_probe.py":
+        (CLASS_DETECTOR, "#568 vmedefaultkill: 38 rows on unmodified -E mvme88k -e mvme187 (rev 3); gated in gate_arm.sh (gate 14) under the stem vme_default, pinned at 38; kill table 2 (artifacts/vmedefaultkill/killtable2_20261021/) BASE 38/38, HEAD 14/38, NULL 5/38 CONTROL=FAIL, 32 of 34 legs killed (M_CAPNARROW by its failed build), the 2 survivors predicted equivalents; addenda 2b/2c/2d: 7 legs, 2 killed, 3 clause-(e) survivors, 2 equivalents"),
+    "artifacts/vmedefaultkill/witness_20261020/vme_sites_probe.py":
+        (CLASS_WITNESS, "#568 the rung-3 witness: 7 of 7 guest access sites end the emulator (rc 1) on HEAD 5dbc000e"),
+    "artifacts/vmedefaultkill/witness_20261020/vme_freerun_companion.py":
+        (CLASS_WITNESS, "#568 the witness's free-running companion: a MASTERCTL read dies with NO `[ vme:' text on HEAD; the T1CMP control reaches its breakpoint"),
+    "artifacts/vmedefaultkill/killtable1_20261020/vme_default_probe.frozen.py":
+        (CLASS_RESEARCH, "#568 the FROZEN rev-2 probe (34 rows, md5 19de15b3) kill tables 1, 1b and the M_IDATA leg ran, preserved as evidence"),
+    "artifacts/vmedefaultkill/killtable1_20261020/mk_legs568.py":
+        (CLASS_RESEARCH, "#568 kill table 1's leg generator (one find/replace per leg on fix568), preserved as evidence"),
+    "artifacts/vmedefaultkill/killtable1_20261020/cmp_table568.py":
+        (CLASS_RESEARCH, "#568 kill table 1's comparator against PRETABLE.out + its addendum, preserved as evidence"),
+    "artifacts/vmedefaultkill/killtable1_20261020/table1b/mk_legs568b.py":
+        (CLASS_RESEARCH, "#568 kill table 1b's leg generator (M_DROPIRQEN, M_T1CMPWRDROP, M_ADD90), preserved as evidence"),
+    "artifacts/vmedefaultkill/killtable1_20261020/table1b/cmp_table568b.py":
+        (CLASS_RESEARCH, "#568 kill table 1b's comparator against PRETABLE1B.txt, preserved as evidence"),
+    "artifacts/vmedefaultkill/killtable1_20261020/idata/mk_leg_idata.py":
+        (CLASS_RESEARCH, "#568 the M_IDATA leg's generator (the pass-2 floor-breach mutant, 34/34 on rev 2), preserved as evidence"),
+    "artifacts/vmedefaultkill/killtable1_20261020/idata/cmp_idata.py":
+        (CLASS_RESEARCH, "#568 the M_IDATA leg's comparator against PRETABLE_IDATA.txt, preserved as evidence"),
+    "artifacts/vmedefaultkill/killtable2_20261021/vme_default_probe.rev3.frozen.py":
+        (CLASS_RESEARCH, "#568 the FROZEN rev-3 probe (38 rows, md5 ddcebfe3) tables 2, 2b and 2c ran -- the shipped regress/vme_default_probe.py differs in docstring and comment text only (the repair-diff pass's records corrections; AST-identical, docstring removed), preserved as evidence"),
+    "artifacts/vmedefaultkill/killtable2_20261021/mk_legs568t2.py":
+        (CLASS_RESEARCH, "#568 table 2's leg generator (27 legs regenerated on fix568b + 7 new), preserved as evidence"),
+    "artifacts/vmedefaultkill/killtable2_20261021/mk_driver_t2.py":
+        (CLASS_RESEARCH, "#568 table 2's driver generator, preserved as evidence"),
+    "artifacts/vmedefaultkill/killtable2_20261021/mk_pretable2.py":
+        (CLASS_RESEARCH, "#568 table 2's PRETABLE2 generator (written before the first build), preserved as evidence"),
+    "artifacts/vmedefaultkill/killtable2_20261021/cmp_table2.py":
+        (CLASS_RESEARCH, "#568 table 2's comparator against PRETABLE2, preserved as evidence"),
+    "artifacts/vmedefaultkill/killtable2_20261021/quickcheck_t2.py":
+        (CLASS_RESEARCH, "#568 table 2's per-leg quick check, preserved as evidence"),
+    "artifacts/vmedefaultkill/killtable2_20261021/obj/norm_objdump.py":
+        (CLASS_RESEARCH, "#568 the objdump normaliser behind OBJDUMP_fix568_vs_fix568b.txt, preserved as evidence"),
+    "artifacts/vmedefaultkill/killtable2_20261021/obj/strref_census.py":
+        (CLASS_RESEARCH, "#568 the string-reference census (keyed on string content) behind the fix568/fix568b object comparison, preserved as evidence"),
+    "artifacts/vmedefaultkill/killtable2_20261021/table2b/mk_leg_idatabit.py":
+        (CLASS_RESEARCH, "#568 table 2b's leg generator (M_IDATABIT1, the clause-(e) store-data leg: 38/38 as predicted), preserved as evidence"),
+    "artifacts/vmedefaultkill/killtable2_20261021/table2c/mk_legs_t2c.py":
+        (CLASS_RESEARCH, "#568 table 2c's leg generator (the repair-diff pass's three GLM legs: M_DFLTIDNZ 29/38, M_DFLTIDZ 36/38, M_DIRODATA equivalent), preserved as evidence"),
+    "artifacts/vmedefaultkill/killtable2_20261021/table2d/mk_legs_t2d.py":
+        (CLASS_RESEARCH, "#568 table 2d's leg generator (the repair-diff pass's three Argon legs, all 38/38 as predicted: M_ZEROSET and M_DFLTFFC clause (e), M_SETODATA equivalent), preserved as evidence"),
     "artifacts/fbctrlcmdkill/pass2_20261018/legs/probe.frozen.py":
         (CLASS_RESEARCH, "#567 the shipped probe's v1 copy run for its in-tree legs, preserved as evidence"),
     "artifacts/fbctrlportkill_20260924/opus549_measured/c3/gen_c3.py":

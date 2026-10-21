@@ -1,0 +1,1488 @@
+Reading additional input from stdin...
+OpenAI Codex v0.153.4
+--------
+workdir: C:\Users\User00\AppData\Local\Temp\claude\C--DocumentNoSnc-CC-GXEMUL\8e474f41-4d47-4c99-bf11-3406a84c4fcd\scratchpad
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: max
+reasoning summaries: none
+session id: 01a08f18-acbf-7540-b924-7ebce0b71c8f
+--------
+user
+# VME bus controller: an unimplemented register offset ends the process, and the diagnostic is invisible
+
+VERDICT line first, then the liveness token `CODEX_VME_20260911`.
+
+## READ ONLY THESE FILES. DO NOT LIST OR SEARCH DIRECTORIES.
+
+```
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\src\devices\dev_vme.c
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\src\machines\machine_mvme88k.c
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\src\core\debugmsg.c
+```
+
+Three unrelated 2021-vintage copies of `src/` exist elsewhere and would give line numbers off by
+hundreds.
+
+**Please check the premises rather than confirming them — and where a premise names a file, check it
+in THAT file.** Four times in the last two days I have carried a fact verified in one function or
+device into another that did not share it, and every one was caught by a reader rather than by me.
+**The premises below are therefore written with their sites; tell me if any is about the wrong one.**
+
+## THE SITE
+
+`dev_vme.c`, the `default:` arm of the register handler:
+
+```c
+	default:if (writeflag == MEM_READ)
+			debug("[ vme: unimplemented READ from offset 0x%x ]"
+			    "\n", (int)relative_addr);
+		else
+			debug("[ vme: unimplemented WRITE to offset 0x%x: "
+			    "0x%x ]\n", (int)relative_addr, (int)idata);
+		exit(1);
+```
+
+*** THE DIAGNOSTIC IS `debug()`, NOT `fatal()`, AND THAT IS WHAT MAKES THIS WORSE THAN ITS SIBLINGS.
+*** Every other unimplemented-register termination in this queue announces with `fatal()`, which this
+fork has measured **cannot** be silenced by `-q`. `debug()` has an early-out. **So at default
+verbosity the process ends with no output explaining why** — a user sees it vanish, and a gate sees a
+non-zero exit with no diagnostic to grep.
+
+Note the same file uses `debug()` for roughly a dozen *non-fatal* unimplemented-register notices at
+named offsets (GCSRCTL, TCR, IRQEN, IRQL3, IRQL4 and others), which **do** simply continue.
+
+## SETTLED — each with its site, per the rule above
+
+* The disposition is already adjudicated: **decline + bounded latched announce**, and the review
+  explicitly ratified *"deliberate promotion of its default-arm diagnostics to `fatal()`"* — so the
+  promotion is part of the disposition, not an optional rider.
+* **A bus fault was ruled OUT** even though M88K is one of the two families for which `memory_rw.c`
+  delivers a failed-device exception: this is a **present** device refusing an unimplemented
+  register, not an absent one, and a bus error would assert something about the hardware that nothing
+  establishes.
+* `debugmsg.c`: `fatal()` has **no early-out** and goes straight to `va_debug`; `debug()` returns
+  early when `(quiet_mode && !ss) || v < 0`. **Verify both in the permitted file** — this project has
+  had that pair wrong before and corrected it twice.
+* The house idiom for a guest-drivable announce is **N = 1 per device instance plus an explicit
+  suppression marker in the message text**, with `(once)` the plurality spelling. Do not trust that
+  count from me — it has drifted twice; **re-derive it if you need it.**
+
+## QUESTIONS
+
+1. **Which machines install this device, and at what base and length?** I believe
+   `machine_mvme88k.c` installs it unconditionally on a machine this project actively boots, but I
+   have not cited the line. **Cite it, or correct me.**
+2. **What is the registered aperture, and which offsets fall to `default:`?** I want the set
+   characterised — a count and its derivation, not an example. Are the reachable unimplemented
+   offsets contiguous, or scattered between the named cases?
+3. **Is this reachable by an ordinary access on an unmodified in-tree machine?** Probing a bus
+   controller's register space is what firmware does; I want that checked rather than assumed, and
+   the machine and selector named if so.
+4. *** THE DIAGNOSTIC QUESTION, WHICH I CARE ABOUT MOST. *** After the repair the arm should decline
+   and announce once. **Is promoting `debug()` to `fatal()` sufficient to make it visible at default
+   verbosity, and does it interact with `#261`'s break-on-ERROR behaviour?** A promotion that trips a
+   gate is not an improvement.
+5. **What does the latch attach to?** Per-device-instance storage or a function-static? This tree has
+   a filed row noting that function-static latches let one instance silence another. **Which does
+   this file already use, if any?**
+6. **What is the oracle?** After the change the guest must survive and the announce must appear
+   exactly once across repeated accesses. Name what distinguishes a correct decline from: a handler
+   that declines silently; one that announces every time; one that announces once but for the wrong
+   offset; and a test where the access never happened.
+7. **Here are four candidate dispositions. For each: does it match the ratified one, what does it
+   assert about the hardware, and what does it cost?**
+   * (a) delete `exit(1)`, keep `debug()` as-is;
+   * (b) delete `exit(1)`, promote to `fatal()` with a once-latch;
+   * (c) return 0 from the access function (a bus fault on M88K);
+   * (d) store the write and answer reads from `d->reg[]`, as the named cases do.
+
+Answer in full. Do not write any file; return the whole answer and I will save it.
+
+codex
+I’ll read the three specified files and check each premise at its stated site, including diagnostic visibility and register dispatch.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$vmeLine = 0; Get-Content -LiteralPath '"'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\src\\core\\debugmsg.c' | ForEach-Object { "'$vmeLine++; '"'{0,5}: {1}' -f "'$vmeLine, $_ }' in C:\Users\User00\AppData\Local\Temp\claude\C--DocumentNoSnc-CC-GXEMUL\8e474f41-4d47-4c99-bf11-3406a84c4fcd\scratchpad
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$vmeLine = 0; Get-Content -LiteralPath '"'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\src\\machines\\machine_mvme88k.c' | ForEach-Object { "'$vmeLine++; '"'{0,5}: {1}' -f "'$vmeLine, $_ }' in C:\Users\User00\AppData\Local\Temp\claude\C--DocumentNoSnc-CC-GXEMUL\8e474f41-4d47-4c99-bf11-3406a84c4fcd\scratchpad
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$vmeLine = 0; Get-Content -LiteralPath '"'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\src\\devices\\dev_vme.c' | ForEach-Object { "'$vmeLine++; '"'{0,5}: {1}' -f "'$vmeLine, $_ }' in C:\Users\User00\AppData\Local\Temp\claude\C--DocumentNoSnc-CC-GXEMUL\8e474f41-4d47-4c99-bf11-3406a84c4fcd\scratchpad
+ succeeded in 193ms:
+    1: /*
+    2:  *  Copyright (C) 2007-2009  Anders Gavare.  All rights reserved.
+    3:  *
+    4:  *  Redistribution and use in source and binary forms, with or without
+    5:  *  modification, are permitted provided that the following conditions are met:
+    6:  *
+    7:  *  1. Redistributions of source code must retain the above copyright
+    8:  *     notice, this list of conditions and the following disclaimer.
+    9:  *  2. Redistributions in binary form must reproduce the above copyright  
+   10:  *     notice, this list of conditions and the following disclaimer in the 
+   11:  *     documentation and/or other materials provided with the distribution.
+   12:  *  3. The name of the author may not be used to endorse or promote products
+   13:  *     derived from this software without specific prior written permission.
+   14:  *
+   15:  *  THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+   16:  *  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+   17:  *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+   18:  *  ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE   
+   19:  *  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+   20:  *  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+   21:  *  OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+   22:  *  HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+   23:  *  LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+   24:  *  OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+   25:  *  SUCH DAMAGE.
+   26:  *
+   27:  *
+   28:  *  COMMENT: VME bus
+   29:  *
+   30:  *  TODO: Probably almost everything.
+   31:  */
+   32: 
+   33: #include <stdio.h>
+   34: #include <stdlib.h>
+   35: #include <string.h>
+   36: 
+   37: #include "cpu.h"
+   38: #include "device.h"
+   39: #include "emul.h"
+   40: #include "machine.h"
+   41: #include "memory.h"
+   42: #include "misc.h"
+   43: 
+   44: #include "thirdparty/mvme88k_vme.h"
+   45: 
+   46: 
+   47: /*  #define debug fatal  */
+   48: 
+   49: 
+   50: #define	VME_LEN			0x1000
+   51: 
+   52: struct vme_data {
+   53: 	uint32_t	reg[VME_LEN / sizeof(uint32_t)];
+   54: };
+   55: 
+   56: 
+   57: DEVICE_ACCESS(vme)
+   58: {
+   59: 	struct vme_data *d = (struct vme_data *) extra;
+   60: 	uint64_t idata = 0, odata = 0;
+   61: 
+   62: 	if (writeflag == MEM_WRITE)
+   63: 		idata = memory_readmax64(cpu, data, len);
+   64: 
+   65: 	if (writeflag == MEM_READ)
+   66: 		odata = d->reg[relative_addr / sizeof(uint32_t)];
+   67: 
+   68: 	switch (relative_addr) {
+   69: 
+   70: 	case 0:	/*  Used by OpenBSD/mvme88k when probing...  */
+   71: 		break;
+   72: 
+   73: 	case VME2_GCSRCTL:
+   74: 		debug("[ vme: unimplemented GCSRCTL ]\n");
+   75: 		break;
+   76: 
+   77: 	case VME2_TCR:
+   78: 		if (writeflag == MEM_READ)
+   79: 			debug("[ vme: unimplemented READ from TCR ]\n");
+   80: 		else
+   81: 			debug("[ vme: unimplemented WRITE to TCR: "
+   82: 			    "0x%x ]\n", (int)idata);
+   83: 		break;
+   84: 
+   85: 	case VME2_T1CMP:
+   86: 		if (writeflag == MEM_WRITE)
+   87: 			d->reg[relative_addr / sizeof(uint32_t)] = idata;
+   88: 		break;
+   89: 
+   90: 	case VME2_T1COUNT:
+   91: 		if (writeflag == MEM_WRITE)
+   92: 			d->reg[relative_addr / sizeof(uint32_t)] = idata;
+   93: 		else {
+   94: 			/*  NOTE! This is a quick hack. TODO: Fix!  */
+   95: 			d->reg[relative_addr / sizeof(uint32_t)] += 100;
+   96: 		}
+   97: 		break;
+   98: 
+   99: 	case VME2_TCTL:
+  100: 		if (writeflag == MEM_WRITE)
+  101: 			d->reg[relative_addr / sizeof(uint32_t)] = idata;
+  102: 
+  103: 		/*  TODO  */
+  104: 		/*  debug("[ vme: unimplemented TCTL ]\n");  */
+  105: 		break;
+  106: 
+  107: 	case VME2_IRQEN:
+  108: 		if (writeflag == MEM_READ)
+  109: 			debug("[ vme: unimplemented READ from IRQEN ]\n");
+  110: 		else
+  111: 			debug("[ vme: unimplemented WRITE to IRQEN: "
+  112: 			    "0x%x ]\n", (int)idata);
+  113: 		break;
+  114: 
+  115: 	case VME2_IRQL3:
+  116: 		if (writeflag == MEM_READ)
+  117: 			debug("[ vme: unimplemented READ from IRQL3 ]\n");
+  118: 		else
+  119: 			debug("[ vme: unimplemented WRITE to IRQL3: "
+  120: 			    "0x%x ]\n", (int)idata);
+  121: 		break;
+  122: 
+  123: 	case VME2_IRQL4:
+  124: 		if (writeflag == MEM_READ)
+  125: 			debug("[ vme: unimplemented READ from IRQL4 ]\n");
+  126: 		else
+  127: 			debug("[ vme: unimplemented WRITE to IRQL4: "
+  128: 			    "0x%x ]\n", (int)idata);
+  129: 		break;
+  130: 
+  131: 	case VME2_VBR:
+  132: 		/*  Vector Base Register.  */
+  133: 		if (writeflag == MEM_WRITE)
+  134: 			d->reg[relative_addr / sizeof(uint32_t)] = idata;
+  135: 		break;
+  136: 
+  137: 	default:if (writeflag == MEM_READ)
+  138: 			debug("[ vme: unimplemented READ from offset 0x%x ]"
+  139: 			    "\n", (int)relative_addr);
+  140: 		else
+  141: 			debug("[ vme: unimplemented WRITE to offset 0x%x: "
+  142: 			    "0x%x ]\n", (int)relative_addr, (int)idata);
+  143: 		exit(1);
+  144: 	}
+  145: 
+  146: 	if (writeflag == MEM_READ)
+  147: 		memory_writemax64(cpu, data, len, odata);
+  148: 
+  149: 	return 1;
+  150: }
+  151: 
+  152: 
+  153: DEVINIT(vme)
+  154: {
+  155: 	struct vme_data *d;
+  156: 
+  157: 	CHECK_ALLOCATION(d = (struct vme_data *) malloc(sizeof(struct vme_data)));
+  158: 	memset(d, 0, sizeof(struct vme_data));
+  159: 
+  160: 	/*  According to OpenBSD/mvme88k:  */
+  161: 	d->reg[VME2_VBR / sizeof(uint32_t)] =
+  162: 	    VME2_SET_VBR0(6) + VME2_SET_VBR1(7);
+  163: 
+  164: 	memory_device_register(devinit->machine->memory, devinit->name,
+  165: 	    devinit->addr, VME_LEN, dev_vme_access, (void *)d,
+  166: 	    DM_DEFAULT, NULL);
+  167: 
+  168: 	return 1;
+  169: }
+  170: 
+
+ succeeded in 205ms:
+    1: /*
+    2:  *  Copyright (C) 2007-2021  Anders Gavare.  All rights reserved.
+    3:  *
+    4:  *  Redistribution and use in source and binary forms, with or without
+    5:  *  modification, are permitted provided that the following conditions are met:
+    6:  *
+    7:  *  1. Redistributions of source code must retain the above copyright
+    8:  *     notice, this list of conditions and the following disclaimer.
+    9:  *  2. Redistributions in binary form must reproduce the above copyright  
+   10:  *     notice, this list of conditions and the following disclaimer in the 
+   11:  *     documentation and/or other materials provided with the distribution.
+   12:  *  3. The name of the author may not be used to endorse or promote products
+   13:  *     derived from this software without specific prior written permission.
+   14:  *
+   15:  *  THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+   16:  *  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+   17:  *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+   18:  *  ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE   
+   19:  *  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+   20:  *  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+   21:  *  OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+   22:  *  HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+   23:  *  LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+   24:  *  OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+   25:  *  SUCH DAMAGE.
+   26:  *   
+   27:  *
+   28:  *  COMMENT: MVME88K machines (MVME187)
+   29:  *
+   30:  *  This is for experiments with OpenBSD/mvme88k.
+   31:  *
+   32:  *  MVME187 according to http://mcg.motorola.com/us/products/docs/pdf/187igd.pdf
+   33:  *  ("MVME187 RISC Single Board Computer Installation Guide"):
+   34:  *
+   35:  *	88100 MPU, two MC88200 or MC88204 CMMUs (one for data cache and
+   36:  *		one for instruction cache).
+   37:  *	82596CA LAN Ethernet
+   38:  *	53C710 SCSI
+   39:  *	CD2401 SCC SERIAL IO
+   40:  *	PRINTER PORT
+   41:  *	MK48T08 BBRAM & CLOCK
+   42:  *	EPROM
+   43:  *	VME bus
+   44:  *
+   45:  *  ... and more details from OpenBSD/mvme88k sources:
+   46:  *
+   47:  *	0xff800000 .. 0xffbfffff = BUG PROM
+   48:  *	0xffe00000 .. 0xffe1ffff = BUG SRAM
+   49:  *	0xfff00000               = PCCTWO
+   50:  *	  0xfff40000             = VME bus
+   51:  *	  0xfff43000             = MEMC040 (Memory controller)
+   52:  *	  0xfff45000             = CD2401 SCC SERIAL IO (cl0)
+   53:  *	  0xfff46000             = 82596 Ethernet (ie0)
+   54:  *	  0xfff47000             = 53C710 SCSI (osiop0)
+   55:  *	  0xfffc0000             = MK48T08 (nvram0)
+   56:  *
+   57:  *  Note: It may turn out to be easier to support Lance ethernet (via VME)
+   58:  *  than to support the 82596 ethernet controller.
+   59:  */
+   60: 
+   61: #include <stdio.h>
+   62: #include <stdlib.h>
+   63: #include <string.h>
+   64: 
+   65: #include "cpu.h"
+   66: #include "device.h"
+   67: #include "devices.h"
+   68: #include "machine.h"
+   69: #include "memory.h"
+   70: #include "misc.h"
+   71: 
+   72: #include "thirdparty/mvme187.h"
+   73: #include "thirdparty/mvme88k_vme.h"
+   74: #include "thirdparty/mvme_pcctworeg.h"
+   75: 
+   76: 
+   77: MACHINE_SETUP(mvme88k)
+   78: {
+   79: 	char tmpstr[300];
+   80: 
+   81: 	switch (machine->machine_subtype) {
+   82: 
+   83: 	case MACHINE_MVME88K_187:
+   84: 		machine->machine_name = strdup("MVME187");
+   85: 
+   86: 		/*  The mvme187 device contains 187-specific stuff, such
+   87: 		    as motherboard registers, and the memory controller:  */
+   88: 		device_add(machine, "mvme187");
+   89: 
+   90: 		/*  PCC2 bus at 0xfff00000:  */
+   91: 		snprintf(tmpstr, sizeof(tmpstr), "pcc2 addr=0x%x", PCC2_BASE);
+   92: 		device_add(machine, tmpstr);
+   93: 
+   94: 		/*  VME2 bus at 0xfff40000:  */
+   95: 		snprintf(tmpstr, sizeof(tmpstr), "vme addr=0x%x", VME2_BASE);
+   96: 		device_add(machine, tmpstr);
+   97: 
+   98: 		/*  Cirrus Logic serial console at 0xfff45000:  */
+   99: 		snprintf(tmpstr, sizeof(tmpstr), "clmpcc irq=%s.cpu[%i].pcc2 "
+  100: 		    "addr=0x%08x name2=cl0", machine->path,
+  101: 		    machine->bootstrap_cpu, 0xfff45000);
+  102: 		machine->main_console_handle =
+  103: 		    (size_t) device_add(machine, tmpstr);
+  104: 
+  105: 		/*  ie0 ethernet: TODO  */
+  106: 		device_add(machine, "unreadable addr=0xfff46000 len=0x1000");
+  107: 
+  108: 		/*  53C710 SCSI at 0xfff47000:  */
+  109: 		snprintf(tmpstr, sizeof(tmpstr), "osiop irq=%s.cpu[%i].pcc2.%i "
+  110: 		    "addr=0x%08x", machine->path,
+  111: 		    machine->bootstrap_cpu, PCC2V_SCSI, 0xfff47000);
+  112: 		device_add(machine, tmpstr);
+  113: 
+  114: 		/*  MK48T08 clock/nvram at 0xfffc0000:  */
+  115: 		snprintf(tmpstr, sizeof(tmpstr),
+  116: 		    "mk48txx addr=0x%x", 0xfffc0000);
+  117: 		device_add(machine, tmpstr);
+  118: 
+  119: 		/*  VMES (?): TODO  */
+  120: 		device_add(machine, "unreadable addr=0xff780000 len=0x80000");
+  121: 
+  122: 		/*  VME devices: TODO  */
+  123: 		device_add(machine, "unreadable addr=0xffff0000 len=0x10000");
+  124: 
+  125: 		break;
+  126: 
+  127: 	case MACHINE_MVME88K_188:
+  128: 		machine->machine_name = strdup("MVME188");
+  129: 		/*  TODO  */
+  130: 		break;
+  131: 
+  132: 	case MACHINE_MVME88K_197:
+  133: 		machine->machine_name = strdup("MVME197");
+  134: 		/*  TODO  */
+  135: 		break;
+  136: 
+  137: 	default:fatal("Unimplemented MVME88K machine subtype %i\n",
+  138: 		    machine->machine_subtype);
+  139: 		exit(1);
+  140: 	}
+  141: 
+  142: 	if (!machine->prom_emulation)
+  143: 		return;
+  144: 
+  145: 
+  146: 	mvmeprom_init(machine);
+  147: 
+  148: 	/*
+  149: 	 *  Boot loader args, according to OpenBSD/mvme88k's locore.S:
+  150: 	 *
+  151: 	 *  r2 = boot flags
+  152: 	 *  r3 = boot controller physical address
+  153: 	 *  r4 = esym
+  154: 	 *  r5 = start of miniroot
+  155: 	 *  r6 = end of miniroot
+  156: 	 *  r7 = ((Clun << 8) | Dlun): encoded bootdev
+  157: 	 *  r8 = board type (0x187, 0x188, 0x197)
+  158: 	 */
+  159: 
+  160: 	/*  Some address beyond the loaded kernel:  */
+  161: 	cpu->cd.m88k.r[4] = 6 * 1048576;
+  162: 
+  163: 	switch (machine->machine_subtype) {
+  164: 	case MACHINE_MVME88K_187:  cpu->cd.m88k.r[8] = 0x187; break;
+  165: 	case MACHINE_MVME88K_188:  cpu->cd.m88k.r[8] = 0x188; break;
+  166: 	case MACHINE_MVME88K_197:  cpu->cd.m88k.r[8] = 0x197; break;
+  167: 	}
+  168: 
+  169: 	/*  TODO: r3 and r7 must be set correctly to let
+  170: 	    OpenBSD/mvme88k detect correct boot device.  */
+  171: }
+  172: 
+  173: 
+  174: MACHINE_DEFAULT_CPU(mvme88k)
+  175: {
+  176: 	switch (machine->machine_subtype) {
+  177: 
+  178: 	case MACHINE_MVME88K_187:
+  179: 	case MACHINE_MVME88K_188:
+  180: 		machine->cpu_name = strdup("88100");
+  181: 		break;
+  182: 
+  183: 	case MACHINE_MVME88K_197:
+  184: 		machine->cpu_name = strdup("88110");
+  185: 		break;
+  186: 
+  187: 	default:fatal("Unimplemented MVME88K machine subtype %i\n",
+  188: 		    machine->machine_subtype);
+  189: 		exit(1);
+  190: 	}
+  191: }
+  192: 
+  193: 
+  194: MACHINE_DEFAULT_RAM(mvme88k)
+  195: {
+  196: 	machine->physical_ram_in_mb = 64;
+  197: }
+  198: 
+  199: 
+  200: MACHINE_REGISTER(mvme88k)
+  201: {
+  202: 	MR_DEFAULT(mvme88k, "MVME88K", MACHINE_MVME88K);
+  203: 
+  204: 	machine_entry_add_alias(me, "mvme88k");
+  205: 
+  206: 	machine_entry_add_subtype(me, "MVME187", MACHINE_MVME88K_187,
+  207: 	    "mvme187", NULL);
+  208: 
+  209: 	machine_entry_add_subtype(me, "MVME188", MACHINE_MVME88K_188,
+  210: 	    "mvme188", NULL);
+  211: 
+  212: 	machine_entry_add_subtype(me, "MVME197", MACHINE_MVME88K_197,
+  213: 	    "mvme197", NULL);
+  214: 
+  215: 	me->set_default_ram = machine_default_ram_mvme88k;
+  216: }
+  217: 
+
+ succeeded in 236ms:
+    1: /*
+    2:  *  Copyright (C) 2003-2021  Anders Gavare.  All rights reserved.
+    3:  *
+    4:  *  Redistribution and use in source and binary forms, with or without
+    5:  *  modification, are permitted provided that the following conditions are met:
+    6:  *
+    7:  *  1. Redistributions of source code must retain the above copyright
+    8:  *     notice, this list of conditions and the following disclaimer.
+    9:  *  2. Redistributions in binary form must reproduce the above copyright  
+   10:  *     notice, this list of conditions and the following disclaimer in the 
+   11:  *     documentation and/or other materials provided with the distribution.
+   12:  *  3. The name of the author may not be used to endorse or promote products
+   13:  *     derived from this software without specific prior written permission.
+   14:  *
+   15:  *  THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+   16:  *  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+   17:  *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+   18:  *  ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE   
+   19:  *  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+   20:  *  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+   21:  *  OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+   22:  *  HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+   23:  *  LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+   24:  *  OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+   25:  *  SUCH DAMAGE.
+   26:  *
+   27:  *
+   28:  *  Debug message functionality.
+   29:  *
+   30:  *  To print a debug message, use debugmsg() or debugmsg_cpu(). The _cpu
+   31:  *  variant is if the message comes from a particular CPU. In that case, the
+   32:  *  name of the machine and cpu id may be printed.
+   33:  *
+   34:  *  In addition to the actual message to be printed, a subsystem, a component
+   35:  *  name, and a verbosity level also need to be supplied. The component name
+   36:  *  may be empty.
+   37:  *
+   38:  *  If it is relatively expensive to construct the message, then it would be
+   39:  *  a bad idea to do that every time the debugmsg is called in case it is
+   40:  *  rarely shown anyway (due to verbosity level being higher than the current
+   41:  *  setting). Then, the following construct may be used to quickly check before
+   42:  *  constructing the message that it will be shown:
+   43:  *
+   44:  *	if (ENOUGH_VERBOSITY(SUBSYS_XXX, VERBOSITY_YYY)) {
+   45:  *		char msg[....];
+   46:  *		// Construct msg here...
+   47:  *
+   48:  *		debugmsg(SUBSYS_XXX, "component", VERBOSITY_YYY, "%s", msg);
+   49:  *	}
+   50:  *
+   51:  *
+   52:  *  TODO:
+   53:  *	New debugger commands:
+   54:  *		command for showing debug output in new xterms?
+   55:  *
+   56:  *	Convert existing debug() and fatal() calls to the new debugmsg() call.
+   57:  *
+   58:  *	Make sure that all the hardcoded subsystems are actually used, and/or
+   59:  *	move registering to individual subsystems.
+   60:  */
+   61: 
+   62: #include <stdarg.h>
+   63: #include <stdbool.h>
+   64: #include <stdio.h>
+   65: #include <stdlib.h>
+   66: #include <string.h>
+   67: 
+   68: #include "console.h"
+   69: #include "cpu.h"
+   70: #include "emul.h"
+   71: #include "machine.h"
+   72: #include "misc.h"
+   73: 
+   74: 
+   75: int verbose = 0;
+   76: int quiet_mode = 0;
+   77: 
+   78: extern bool emul_executing;
+   79: extern bool single_step;
+   80: extern bool about_to_enter_single_step;
+   81: 
+   82: size_t debugmsg_nr_of_subsystems = 0;
+   83: static const char **debugmsg_subsystem_name = NULL;
+   84: int *debugmsg_current_verbosity = NULL;
+   85: 
+   86: /*
+   87:  *  Breakpoints on subsystem messages: for each subsystem, the verbosity
+   88:  *  level at which messages trigger entry into the interactive debugger,
+   89:  *  or -1 when no breakpoint is set for that subsystem. (Lower value =
+   90:  *  more severe, so a message triggers when verbosity <= the level.)
+   91:  *  debugmsg_n_breakpoints counts subsystems with a breakpoint set, so
+   92:  *  that the common case (no breakpoints at all) is a single comparison.
+   93:  */
+   94: static int *debugmsg_breakpoint_level = NULL;
+   95: static int debugmsg_n_breakpoints = 0;
+   96: 
+   97: /*
+   98:  *  #261: opt-in, default-OFF global "break on any ERROR-level message".
+   99:  *  Toggled by `breakpoint subsystem all error` / `... all off`, and checked
+  100:  *  in debugmsg_va() alongside the per-subsystem levels. Default 0 = no-op.
+  101:  */
+  102: int debugmsg_break_on_error = 0;
+  103: 
+  104: static const int default_verbosity = VERBOSITY_INFO;
+  105: 
+  106: static size_t debug_indent = 0;
+  107: static bool debug_old_currently_at_start_of_line = true;
+  108: 
+  109: #define	DEBUG_BUFSIZE		2048
+  110: #define	DEBUG_INDENTATION	4
+  111: 
+  112: 
+  113: /*
+  114:  *  va_debug():
+  115:  *
+  116:  *  Used internally by the old debug() and fatal() functions.
+  117:  */
+  118: static void va_debug(va_list argp, const char *fmt)
+  119: {
+  120: 	char buf[DEBUG_BUFSIZE + 1];
+  121: 	buf[0] = buf[DEBUG_BUFSIZE] = 0;
+  122: 	vsnprintf(buf, DEBUG_BUFSIZE, fmt, argp);
+  123: 
+  124: 	char* s = buf;
+  125: 	while (*s) {
+  126: 		if (debug_old_currently_at_start_of_line) {
+  127: 			for (size_t i = 0; i < debug_indent * DEBUG_INDENTATION; i++)
+  128: 				printf(" ");
+  129: 		}
+  130: 
+  131: 		printf("%c", *s);
+  132: 
+  133: 		debug_old_currently_at_start_of_line = false;
+  134: 		if (*s == '\n' || *s == '\r')
+  135: 			debug_old_currently_at_start_of_line = true;
+  136: 		s++;
+  137: 	}
+  138: }
+  139: 
+  140: 
+  141: /*
+  142:  *  debugmsg_va():
+  143:  *
+  144:  *  Used internally by debugmsg().
+  145:  */
+  146: static void debugmsg_va(struct cpu* cpu, int subsystem,
+  147: 	const char *name, int verbosity, va_list argp, const char *fmt)
+  148: {
+  149: 	bool subsystem_breakpoint = false;
+  150: 
+  151: 	/*
+  152: 	 *  #261: opt-in global break on any ERROR-level message (covers every
+  153: 	 *  subsystem, incl. ones registered after a per-subsystem breakpoint
+  154: 	 *  was set). Default off = single false test = no-op.
+  155: 	 */
+  156: 	bool do_bp = (debugmsg_n_breakpoints > 0 &&
+  157: 	    debugmsg_breakpoint_level[subsystem] >= 0 &&
+  158: 	    verbosity <= debugmsg_breakpoint_level[subsystem]);
+  159: 	if (debugmsg_break_on_error && verbosity <= VERBOSITY_ERROR)
+  160: 		do_bp = true;
+  161: 
+  162: 	if (do_bp) {
+  163: 		/*
+  164: 		 *  This message triggers a breakpoint on subsystem messages:
+  165: 		 *  make sure the message itself is shown (even if the current
+  166: 		 *  verbosity setting would have suppressed it), and request
+  167: 		 *  entry into the interactive debugger. The debugger is
+  168: 		 *  entered after the current instruction batch, using the
+  169: 		 *  same mechanism as normal breakpoints.
+  170: 		 */
+  171: 		subsystem_breakpoint = true;
+  172: 
+  173: 		if (!single_step && !about_to_enter_single_step) {
+  174: 			fatal("[ subsystem breakpoint: %s ]\n",
+  175: 			    debugmsg_subsystem_name[subsystem][0] != '\0'
+  176: 			    ? debugmsg_subsystem_name[subsystem] : "(startup)");
+  177: 			about_to_enter_single_step = true;
+  178: 		}
+  179: 	}
+  180: 
+  181: 	if (!subsystem_breakpoint && !single_step &&
+  182: 	    !ENOUGH_VERBOSITY(subsystem, verbosity))
+  183: 		return;
+  184: 
+  185: 	char buf[DEBUG_BUFSIZE];
+  186: 
+  187: 	buf[0] = buf[DEBUG_BUFSIZE - 1] = 0;
+  188: 	vsnprintf(buf, DEBUG_BUFSIZE, fmt, argp);
+  189: 
+  190: 	char* s = buf;
+  191: 	bool ss = single_step || about_to_enter_single_step;
+  192: 	bool debug_currently_at_start_of_line = true;
+  193: 	bool show_decorations = emul_executing && !ss;
+  194: 
+  195: 	if (console_are_slaves_allowed())
+  196: 		show_decorations = false;
+  197: 
+  198: 	while (true) {
+  199: 		if (debug_currently_at_start_of_line) {
+  200: 			if (show_decorations) {
+  201: 				color_normal();
+  202: 				printf("[ ");
+  203: 			} else {
+  204: 				for (size_t i = 0; i < debug_indent * DEBUG_INDENTATION; ++i)
+  205: 					printf(" ");
+  206: 			}
+  207: 
+  208: 			bool print_subsystem_name =
+  209: 			    debugmsg_subsystem_name[subsystem][0] != '\0' &&
+  210: 			    (debug_indent == 0 || (name == NULL || name[0] == '\0'));
+  211: 			bool print_colon = false;
+  212: 
+  213: 			if (cpu != NULL) {
+  214: 				// With multiple machines being emulated in the
+  215: 				// same emulation instance, print both the machine
+  216: 				// name and cpu id. If it is just one machine,
+  217: 				// only print the cpu id if there are multiple
+  218: 				// CPUs in order to not clutter the output
+  219: 				// needlessly.
+  220: 				struct emul* emul = cpu->machine->emul;
+  221: 				if (emul->n_machines > 1) {
+  222: 					printf("machine \"%s\" cpu%i: ",
+  223: 					    cpu->machine->name ? cpu->machine->name : "(no name)",
+  224: 					    cpu->cpu_id);
+  225: 					if (subsystem == SUBSYS_CPU)
+  226: 						print_subsystem_name = false;
+  227: 				} else if (cpu->machine->ncpus > 1) {
+  228: 					printf("cpu%i: ", cpu->cpu_id);
+  229: 					if (subsystem == SUBSYS_CPU)
+  230: 						print_subsystem_name = false;
+  231: 				}
+  232: 			}
+  233: 
+  234: 			if (verbosity == VERBOSITY_ERROR)
+  235: 				color_error(false);
+  236: 			else
+  237: 				color_debugmsg_subsystem();
+  238: 
+  239: 			if (print_subsystem_name) {
+  240: 				printf("%s", debugmsg_subsystem_name[subsystem]);
+  241: 				print_colon = true;
+  242: 			}
+  243: 
+  244: 			if (name != NULL && name[0] != '\0') {
+  245: 				if (print_subsystem_name)
+  246: 					printf(" ");
+  247: 
+  248: 				if (verbosity != VERBOSITY_ERROR)
+  249: 					color_debugmsg_name();
+  250: 
+  251: 				printf("%s", name);
+  252: 
+  253: 				print_colon = true;
+  254: 			}
+  255: 
+  256: 			if (print_colon)
+  257: 				printf(": ");
+  258: 
+  259: 			if (show_decorations) {
+  260: 				for (size_t i = 0; i < debug_indent * DEBUG_INDENTATION; ++i)
+  261: 					printf(" ");
+  262: 			}
+  263: 
+  264: 			if (verbosity == VERBOSITY_ERROR)
+  265: 				color_error(true);
+  266: 			else
+  267: 				color_normal();
+  268: 		}
+  269: 
+  270: 		debug_currently_at_start_of_line = false;
+  271: 
+  272: 		if (!*s)
+  273: 			break;
+  274: 
+  275: 		switch (*s) {
+  276: 		case '\n':
+  277: 			color_normal();
+  278: 			if (show_decorations) {
+  279: 				printf(" ]");
+  280: 			}
+  281: 
+  282: 			debug_currently_at_start_of_line = true;
+  283: 			printf("\n");
+  284: 			break;
+  285: 
+  286: 		default:
+  287: 			printf("%c", *s);
+  288: 		}
+  289: 
+  290: 		s++;
+  291: 	}
+  292: 
+  293: 	color_normal();
+  294: 
+  295: 	if (show_decorations)
+  296: 		printf(" ]");
+  297: 
+  298: 	if (!debug_currently_at_start_of_line)
+  299: 		printf("\n");
+  300: }
+  301: 
+  302: 
+  303: /*
+  304:  *  debugmsg():
+  305:  *
+  306:  *  The main routine to call, when something should be printed.
+  307:  */
+  308: void debugmsg(int subsystem, const char *name,
+  309: 	int verbosity_required, const char *fmt, ...)
+  310: {
+  311: 	va_list argp;
+  312: 
+  313: 	va_start(argp, fmt);
+  314: 	debugmsg_va(NULL, subsystem, name, verbosity_required, argp, fmt);
+  315: 	va_end(argp);
+  316: }
+  317: 
+  318: 
+  319: /*
+  320:  *  debugmsg():
+  321:  *
+  322:  *  The main routine to call, when something should be printed and we are
+  323:  *  in the context of a specific CPU.
+  324:  */
+  325: void debugmsg_cpu(struct cpu* cpu, int subsystem, const char *name,
+  326: 	int verbosity_required, const char *fmt, ...)
+  327: {
+  328: 	va_list argp;
+  329: 
+  330: 	va_start(argp, fmt);
+  331: 	debugmsg_va(cpu, subsystem, name, verbosity_required, argp, fmt);
+  332: 	va_end(argp);
+  333: }
+  334: 
+  335: 
+  336: /*
+  337:  *  debug_indentation():
+  338:  *
+  339:  *  Modify the debug indentation. diff should be +1 to increase, and -1 to
+  340:  *  decrease after printing something.
+  341:  *
+  342:  *  This affects both the older debug() and fatal() functions, and the new
+  343:  *  debugmsg/debugmsg_cpu() functions.
+  344:  */
+  345: void debug_indentation(int diff)
+  346: {
+  347: 	debug_indent += diff;
+  348: 
+  349: 	if ((ssize_t)debug_indent < 0) {
+  350: 		fprintf(stderr, "WARNING: debug_indent too low!\n");
+  351: 		debug_indent = 0;
+  352: 	}
+  353: }
+  354: 
+  355: 
+  356: /*
+  357:  *  debug() and fatal():
+  358:  *
+  359:  *  These are here because of all the legacy code that uses them. Basically,
+  360:  *  debug() is mapped to something that is only displayed with verbosity
+  361:  *  at the default level, and fatal() is used to always print stuff. With some
+  362:  *  hacks to make it work reasonable with -q and when executing normally or
+  363:  *  when executing single-stepping.
+  364:  */
+  365: void debug(const char *fmt, ...)
+  366: {
+  367: 	va_list argp;
+  368: 	bool ss = single_step || about_to_enter_single_step;
+  369: 	int v = verbose;
+  370: 	if (emul_executing)
+  371: 		v--;
+  372: 	if (ss)
+  373: 		v++;
+  374: 
+  375: 	if ((quiet_mode && !ss) || v < 0)
+  376: 		return;
+  377: 
+  378: 	va_start(argp, fmt);
+  379: 	va_debug(argp, fmt);
+  380: 	va_end(argp);
+  381: }
+  382: 
+  383: 
+  384: void fatal(const char *fmt, ...)
+  385: {
+  386: 	va_list argp;
+  387: 
+  388: 	va_start(argp, fmt);
+  389: 	va_debug(argp, fmt);
+  390: 	va_end(argp);
+  391: }
+  392: 
+  393: 
+  394: void debugmsg_set_verbosity_level(int subsystem, int verbosity)
+  395: {
+  396: 	if (subsystem != SUBSYS_ALL)
+  397: 		debugmsg_current_verbosity[subsystem] = verbosity;
+  398: 	else
+  399: 		for (size_t i = 0; i < debugmsg_nr_of_subsystems; ++i)
+  400: 			debugmsg_current_verbosity[i] = verbosity;
+  401: }
+  402: 
+  403: 
+  404: void debugmsg_add_verbosity_level(int subsystem, int verbosity_delta)
+  405: {
+  406: 	if (subsystem != SUBSYS_ALL)
+  407: 		debugmsg_current_verbosity[subsystem] += verbosity_delta;
+  408: 	else
+  409: 		for (size_t i = 0; i < debugmsg_nr_of_subsystems; ++i)
+  410: 			debugmsg_current_verbosity[i] += verbosity_delta;
+  411: 
+  412: 	for (size_t i = 0; i < debugmsg_nr_of_subsystems; ++i)
+  413: 		if (debugmsg_current_verbosity[i] < 0)
+  414: 			debugmsg_current_verbosity[i] = 0;
+  415: }
+  416: 
+  417: 
+  418: /*
+  419:  *  debugmsg_register_subsystem():
+  420:  *
+  421:  *  Registers a new subsystem.
+  422:  */
+  423: int debugmsg_register_subsystem(const char* name)
+  424: {
+  425: 	// TODO: Another way would be to support multiple names with e.g.
+  426: 	// a suffix. Such as "le0", "le1", "le2" for the name "le".
+  427: 	// But for now, simply return the same subsystem for all of them.
+  428: 	ssize_t subsys = -1;
+  429: 	for (size_t i = 0; i < debugmsg_nr_of_subsystems; ++i)
+  430: 		if (strcmp(name, debugmsg_subsystem_name[i]) == 0)
+  431: 			subsys = i;
+  432: 
+  433: 	if (subsys >= 0)
+  434: 		return subsys;
+  435: 	
+  436: 	subsys = debugmsg_nr_of_subsystems;
+  437: 
+  438: 	debugmsg_nr_of_subsystems ++;
+  439: 	debugmsg_subsystem_name = realloc(debugmsg_subsystem_name,
+  440: 	    sizeof(char*) * debugmsg_nr_of_subsystems);
+  441: 	debugmsg_current_verbosity = realloc(debugmsg_current_verbosity,
+  442: 	    sizeof(int) * debugmsg_nr_of_subsystems);;
+  443: 	debugmsg_breakpoint_level = realloc(debugmsg_breakpoint_level,
+  444: 	    sizeof(int) * debugmsg_nr_of_subsystems);
+  445: 
+  446: 	debugmsg_subsystem_name[subsys] = strdup(name);
+  447: 	debugmsg_breakpoint_level[subsys] = -1;
+  448: 	debugmsg_set_verbosity_level(subsys, default_verbosity);
+  449: 
+  450: 	return subsys;
+  451: }
+  452: 
+  453: 
+  454: /*
+  455:  *  debugmsg_change_settings():
+  456:  *
+  457:  *  Changes the current verbosity level settings for a given setting name.
+  458:  */
+  459: void debugmsg_change_settings(char *subsystem_name, char *n)
+  460: {
+  461: 	int ns = 0;
+  462: 
+  463: 	for (size_t i = 0; i < debugmsg_nr_of_subsystems; ++i) {
+  464: 		if (strcasecmp("ALL", subsystem_name) != 0) {
+  465: 			if (strcmp(subsystem_name, debugmsg_subsystem_name[i]) != 0)
+  466: 				continue;
+  467: 		}
+  468: 
+  469: 		int v = atoi(n);
+  470: 
+  471: 		switch (*n) {
+  472: 		case 'e':
+  473: 		case 'E':
+  474: 			v = 0;
+  475: 			break;
+  476: 		case 'w':
+  477: 		case 'W':
+  478: 			v = 1;
+  479: 			break;
+  480: 		case 'i':
+  481: 		case 'I':
+  482: 			v = 2;
+  483: 			break;
+  484: 		case 'd':
+  485: 		case 'D':
+  486: 			v = 3;
+  487: 			break;
+  488: 		}
+  489: 		
+  490: 		debugmsg_current_verbosity[i] = v;
+  491: 
+  492: 		++ns;
+  493: 	}
+  494: 
+  495: 	if (ns == 0)
+  496: 		printf("Unknown debugmsg subsystem name '%s'\n", subsystem_name);
+  497: 	else
+  498: 		debugmsg_print_settings(subsystem_name);
+  499: }
+  500: 
+  501: 
+  502: /*
+  503:  *  debugmsg_print_settings():
+  504:  *
+  505:  *  Prints the current verbosity level settings.
+  506:  */
+  507: void debugmsg_print_settings(const char *subsystem_name)
+  508: {
+  509: 	int n = 0;
+  510: 
+  511: 	for (size_t i = 0; i < debugmsg_nr_of_subsystems; ++i) {
+  512: 		if (subsystem_name != NULL && subsystem_name[0] != '\0' &&
+  513: 		    strcasecmp("ALL", subsystem_name) != 0) {
+  514: 			if (strcmp(subsystem_name, debugmsg_subsystem_name[i]) != 0)
+  515: 				continue;
+  516: 		}
+  517: 
+  518: 		const char* name = debugmsg_subsystem_name[i];
+  519: 		if (i == SUBSYS_STARTUP)
+  520: 			name = "(startup related)";
+  521: 
+  522: 		char buf[100];
+  523: 		switch (debugmsg_current_verbosity[i]) {
+  524: 		case VERBOSITY_ERROR:
+  525: 			snprintf(buf, sizeof(buf), "0: ERROR");
+  526: 			break;
+  527: 		case VERBOSITY_WARNING:
+  528: 			snprintf(buf, sizeof(buf), "1: WARNING");
+  529: 			break;
+  530: 		case VERBOSITY_INFO:
+  531: 			snprintf(buf, sizeof(buf), "2: INFO");
+  532: 			break;
+  533: 		case VERBOSITY_DEBUG:
+  534: 			snprintf(buf, sizeof(buf), "3: DEBUG");
+  535: 			break;
+  536: 		default:
+  537: 			snprintf(buf, sizeof(buf), "%i", debugmsg_current_verbosity[i]);
+  538: 			break;
+  539: 		}
+  540: 
+  541: 		if (n == 0)
+  542: 			printf("Subsystem:          Level:\n");
+  543: 
+  544: 		printf("%17s   %s\n", name, buf);
+  545: 
+  546: 		++n;
+  547: 	}
+  548: 
+  549: 	if (n == 0)
+  550: 		printf("Unknown debugmsg subsystem name '%s'\n", subsystem_name);
+  551: }
+  552: 
+  553: 
+  554: /*
+  555:  *  debugmsg_set_breakpoint():
+  556:  *
+  557:  *  Sets (level = VERBOSITY_ERROR .. VERBOSITY_DEBUG) or clears (level < 0)
+  558:  *  a breakpoint on messages from a subsystem. When a message which is at
+  559:  *  least as severe as the given level is printed for that subsystem, the
+  560:  *  emulator enters the interactive debugger. E.g. level = VERBOSITY_WARNING
+  561:  *  breaks on warnings and errors, but not on info/debug messages.
+  562:  *
+  563:  *  The subsystem name "ALL" (case insensitive) affects all subsystems.
+  564:  *
+  565:  *  Returns 1 if the subsystem name matched, 0 otherwise.
+  566:  */
+  567: int debugmsg_set_breakpoint(const char *subsystem_name, int level)
+  568: {
+  569: 	int n = 0;
+  570: 
+  571: 	if (level < 0)
+  572: 		level = -1;
+  573: 
+  574: 	/*
+  575: 	 *  #261: the "ALL" pseudo-subsystem also (dis)arms the global
+  576: 	 *  break-on-ERROR toggle: `... all error` arms it, `... all off`
+  577: 	 *  (level < 0) clears it. Only ERROR arms; warning/info/debug do not.
+  578: 	 */
+  579: 	if (strcasecmp("ALL", subsystem_name) == 0)
+  580: 		debugmsg_break_on_error = (level == VERBOSITY_ERROR) ? 1 : 0;
+  581: 
+  582: 	for (size_t i = 0; i < debugmsg_nr_of_subsystems; ++i) {
+  583: 		if (strcasecmp("ALL", subsystem_name) != 0) {
+  584: 			if (strcmp(subsystem_name, debugmsg_subsystem_name[i]) != 0)
+  585: 				continue;
+  586: 		}
+  587: 
+  588: 		if (debugmsg_breakpoint_level[i] < 0 && level >= 0)
+  589: 			debugmsg_n_breakpoints ++;
+  590: 		if (debugmsg_breakpoint_level[i] >= 0 && level < 0)
+  591: 			debugmsg_n_breakpoints --;
+  592: 
+  593: 		debugmsg_breakpoint_level[i] = level;
+  594: 
+  595: 		++n;
+  596: 	}
+  597: 
+  598: 	return n > 0;
+  599: }
+  600: 
+  601: 
+  602: /*
+  603:  *  debugmsg_print_breakpoints():
+  604:  *
+  605:  *  Prints all subsystems which have a breakpoint on messages set.
+  606:  */
+  607: void debugmsg_print_breakpoints(void)
+  608: {
+  609: 	int n = 0;
+  610: 
+  611: 	for (size_t i = 0; i < debugmsg_nr_of_subsystems; ++i) {
+  612: 		if (debugmsg_breakpoint_level[i] < 0)
+  613: 			continue;
+  614: 
+  615: 		const char* name = debugmsg_subsystem_name[i];
+  616: 		if (i == SUBSYS_STARTUP)
+  617: 			name = "(startup related)";
+  618: 
+  619: 		char buf[100];
+  620: 		switch (debugmsg_breakpoint_level[i]) {
+  621: 		case VERBOSITY_ERROR:
+  622: 			snprintf(buf, sizeof(buf), "0: ERROR");
+  623: 			break;
+  624: 		case VERBOSITY_WARNING:
+  625: 			snprintf(buf, sizeof(buf), "1: WARNING");
+  626: 			break;
+  627: 		case VERBOSITY_INFO:
+  628: 			snprintf(buf, sizeof(buf), "2: INFO");
+  629: 			break;
+  630: 		case VERBOSITY_DEBUG:
+  631: 			snprintf(buf, sizeof(buf), "3: DEBUG");
+  632: 			break;
+  633: 		default:
+  634: 			snprintf(buf, sizeof(buf), "%i",
+  635: 			    debugmsg_breakpoint_level[i]);
+  636: 			break;
+  637: 		}
+  638: 
+  639: 		if (n == 0)
+  640: 			printf("Subsystem:          Break on messages at level:\n");
+  641: 
+  642: 		printf("%17s   %s\n", name, buf);
+  643: 
+  644: 		++n;
+  645: 	}
+  646: 
+  647: 	/*
+  648: 	 *  #270: the #261 global break-on-ERROR toggle is state SEPARATE from
+  649: 	 *  the per-subsystem levels above: `breakpoint subsystem all error`
+  650: 	 *  arms it, and a later `breakpoint subsystem <name> off` clears only
+  651: 	 *  that subsystem's level, NOT the global. Without this line the
+  652: 	 *  listing shows such a subsystem as unarmed while an ERROR-level
+  653: 	 *  message from it still enters the debugger. Display only -- the
+  654: 	 *  override itself is unchanged, and is now stated rather than hidden.
+  655: 	 */
+  656: 	if (debugmsg_break_on_error)
+  657: 		printf("Also breaking on ERROR-level messages from ALL"
+  658: 		    " subsystems, including subsystems with no breakpoint of"
+  659: 		    " their own. (Armed by \"breakpoint subsystem all error\","
+  660: 		    " cleared by \"breakpoint subsystem all off\".)\n");
+  661: 
+  662: 	if (n == 0 && !debugmsg_break_on_error)
+  663: 		printf("No breakpoints on subsystem messages set.\n");
+  664: }
+  665: 
+  666: 
+  667: /*
+  668:  *  debugmsg_init():
+  669:  *
+  670:  *  Initializes the debugmsg functionality.
+  671:  */
+  672: void debugmsg_init()
+  673: {
+  674: 	debugmsg_nr_of_subsystems = 11;
+  675: 	debugmsg_subsystem_name = malloc(sizeof(char*) * debugmsg_nr_of_subsystems);
+  676: 	debugmsg_current_verbosity = malloc(sizeof(int) * debugmsg_nr_of_subsystems);;
+  677: 	debugmsg_breakpoint_level = malloc(sizeof(int) * debugmsg_nr_of_subsystems);
+  678: 
+  679: 	// No breakpoints on subsystem messages initially.
+  680: 	for (size_t i = 0; i < debugmsg_nr_of_subsystems; ++i)
+  681: 		debugmsg_breakpoint_level[i] = -1;
+  682: 
+  683: 	debugmsg_subsystem_name[SUBSYS_STARTUP]   = "";
+  684: 	debugmsg_subsystem_name[SUBSYS_EMUL]      = "emul";
+  685: 	debugmsg_subsystem_name[SUBSYS_DISK]      = "disk";
+  686: 	debugmsg_subsystem_name[SUBSYS_NET]       = "net";
+  687: 	debugmsg_subsystem_name[SUBSYS_MACHINE]   = "machine";
+  688: 	debugmsg_subsystem_name[SUBSYS_DEVICE]    = "device";
+  689: 	debugmsg_subsystem_name[SUBSYS_CPU]       = "cpu";
+  690: 	debugmsg_subsystem_name[SUBSYS_MEMORY]    = "memory";
+  691: 	debugmsg_subsystem_name[SUBSYS_EXCEPTION] = "exception";
+  692: 	debugmsg_subsystem_exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -- 'va_debug|\\bonce\\b|\\bstatic\\b|#define\\s+(VME2_|VME_LEN)|case\\s+(0|VME2_)|debugmsg_break_on_error' 'C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c' 'C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_mvme88k.c' 'C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c'" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$lineNumber = 0; Get-Content -LiteralPath '"'C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c' | ForEach-Object { "'$lineNumber++; if ($lineNumber -ge 75 -and $lineNumber -le 190) { '"'{0,5}: {1}' -f "'$lineNumber, $_ } }' in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 131ms:
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:50:#define	VME_LEN			0x1000
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:70:	case 0:	/*  Used by OpenBSD/mvme88k when probing...  */
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:73:	case VME2_GCSRCTL:
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:77:	case VME2_TCR:
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:85:	case VME2_T1CMP:
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:90:	case VME2_T1COUNT:
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:99:	case VME2_TCTL:
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:107:	case VME2_IRQEN:
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:115:	case VME2_IRQL3:
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:123:	case VME2_IRQL4:
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:131:	case VME2_VBR:
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:83:static const char **debugmsg_subsystem_name = NULL;
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:94:static int *debugmsg_breakpoint_level = NULL;
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:95:static int debugmsg_n_breakpoints = 0;
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:102:int debugmsg_break_on_error = 0;
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:104:static const int default_verbosity = VERBOSITY_INFO;
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:106:static size_t debug_indent = 0;
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:107:static bool debug_old_currently_at_start_of_line = true;
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:114: *  va_debug():
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:118:static void va_debug(va_list argp, const char *fmt)
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:146:static void debugmsg_va(struct cpu* cpu, int subsystem,
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:159:	if (debugmsg_break_on_error && verbosity <= VERBOSITY_ERROR)
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:379:	va_debug(argp, fmt);
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:389:	va_debug(argp, fmt);
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:580:		debugmsg_break_on_error = (level == VERBOSITY_ERROR) ? 1 : 0;
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:656:	if (debugmsg_break_on_error)
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:662:	if (n == 0 && !debugmsg_break_on_error)
+
+ succeeded in 201ms:
+   75: int verbose = 0;
+   76: int quiet_mode = 0;
+   77: 
+   78: extern bool emul_executing;
+   79: extern bool single_step;
+   80: extern bool about_to_enter_single_step;
+   81: 
+   82: size_t debugmsg_nr_of_subsystems = 0;
+   83: static const char **debugmsg_subsystem_name = NULL;
+   84: int *debugmsg_current_verbosity = NULL;
+   85: 
+   86: /*
+   87:  *  Breakpoints on subsystem messages: for each subsystem, the verbosity
+   88:  *  level at which messages trigger entry into the interactive debugger,
+   89:  *  or -1 when no breakpoint is set for that subsystem. (Lower value =
+   90:  *  more severe, so a message triggers when verbosity <= the level.)
+   91:  *  debugmsg_n_breakpoints counts subsystems with a breakpoint set, so
+   92:  *  that the common case (no breakpoints at all) is a single comparison.
+   93:  */
+   94: static int *debugmsg_breakpoint_level = NULL;
+   95: static int debugmsg_n_breakpoints = 0;
+   96: 
+   97: /*
+   98:  *  #261: opt-in, default-OFF global "break on any ERROR-level message".
+   99:  *  Toggled by `breakpoint subsystem all error` / `... all off`, and checked
+  100:  *  in debugmsg_va() alongside the per-subsystem levels. Default 0 = no-op.
+  101:  */
+  102: int debugmsg_break_on_error = 0;
+  103: 
+  104: static const int default_verbosity = VERBOSITY_INFO;
+  105: 
+  106: static size_t debug_indent = 0;
+  107: static bool debug_old_currently_at_start_of_line = true;
+  108: 
+  109: #define	DEBUG_BUFSIZE		2048
+  110: #define	DEBUG_INDENTATION	4
+  111: 
+  112: 
+  113: /*
+  114:  *  va_debug():
+  115:  *
+  116:  *  Used internally by the old debug() and fatal() functions.
+  117:  */
+  118: static void va_debug(va_list argp, const char *fmt)
+  119: {
+  120: 	char buf[DEBUG_BUFSIZE + 1];
+  121: 	buf[0] = buf[DEBUG_BUFSIZE] = 0;
+  122: 	vsnprintf(buf, DEBUG_BUFSIZE, fmt, argp);
+  123: 
+  124: 	char* s = buf;
+  125: 	while (*s) {
+  126: 		if (debug_old_currently_at_start_of_line) {
+  127: 			for (size_t i = 0; i < debug_indent * DEBUG_INDENTATION; i++)
+  128: 				printf(" ");
+  129: 		}
+  130: 
+  131: 		printf("%c", *s);
+  132: 
+  133: 		debug_old_currently_at_start_of_line = false;
+  134: 		if (*s == '\n' || *s == '\r')
+  135: 			debug_old_currently_at_start_of_line = true;
+  136: 		s++;
+  137: 	}
+  138: }
+  139: 
+  140: 
+  141: /*
+  142:  *  debugmsg_va():
+  143:  *
+  144:  *  Used internally by debugmsg().
+  145:  */
+  146: static void debugmsg_va(struct cpu* cpu, int subsystem,
+  147: 	const char *name, int verbosity, va_list argp, const char *fmt)
+  148: {
+  149: 	bool subsystem_breakpoint = false;
+  150: 
+  151: 	/*
+  152: 	 *  #261: opt-in global break on any ERROR-level message (covers every
+  153: 	 *  subsystem, incl. ones registered after a per-subsystem breakpoint
+  154: 	 *  was set). Default off = single false test = no-op.
+  155: 	 */
+  156: 	bool do_bp = (debugmsg_n_breakpoints > 0 &&
+  157: 	    debugmsg_breakpoint_level[subsystem] >= 0 &&
+  158: 	    verbosity <= debugmsg_breakpoint_level[subsystem]);
+  159: 	if (debugmsg_break_on_error && verbosity <= VERBOSITY_ERROR)
+  160: 		do_bp = true;
+  161: 
+  162: 	if (do_bp) {
+  163: 		/*
+  164: 		 *  This message triggers a breakpoint on subsystem messages:
+  165: 		 *  make sure the message itself is shown (even if the current
+  166: 		 *  verbosity setting would have suppressed it), and request
+  167: 		 *  entry into the interactive debugger. The debugger is
+  168: 		 *  entered after the current instruction batch, using the
+  169: 		 *  same mechanism as normal breakpoints.
+  170: 		 */
+  171: 		subsystem_breakpoint = true;
+  172: 
+  173: 		if (!single_step && !about_to_enter_single_step) {
+  174: 			fatal("[ subsystem breakpoint: %s ]\n",
+  175: 			    debugmsg_subsystem_name[subsystem][0] != '\0'
+  176: 			    ? debugmsg_subsystem_name[subsystem] : "(startup)");
+  177: 			about_to_enter_single_step = true;
+  178: 		}
+  179: 	}
+  180: 
+  181: 	if (!subsystem_breakpoint && !single_step &&
+  182: 	    !ENOUGH_VERBOSITY(subsystem, verbosity))
+  183: 		return;
+  184: 
+  185: 	char buf[DEBUG_BUFSIZE];
+  186: 
+  187: 	buf[0] = buf[DEBUG_BUFSIZE - 1] = 0;
+  188: 	vsnprintf(buf, DEBUG_BUFSIZE, fmt, argp);
+  189: 
+  190: 	char* s = buf;
+
+codex
+The silent termination is confirmed during normal execution at default verbosity. In this file, `fatal()` always writes through `va_debug()` and bypasses the separate `#261` breakpoint path.
+
+Two premises need correction: installation is unconditional only for MVME187, and `dev_vme.c` has no latch. The permitted files also omit the register constants’ numeric definitions, which limits the numeric offset count I can certify.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$vmeLines = Get-Content -LiteralPath '"'C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c'; "'$vmeCases = @($vmeLines | Select-String -Pattern '"'"'^'"\\s*case\\s+(["'^:]+):'"'); "'$namedDebugCalls = @($vmeLines[69..135] | Select-String -Pattern '"'"'^'"\\s*debug\\('); "'$allDebugCalls = @($vmeLines | Select-String -Pattern '"'\\bdebug\\('); [pscustomobject]@{ CaseLabels = "'$vmeCases.Count; NamedCaseDebugCallSites = $namedDebugCalls.Count; AllDebugTextualCallSitesIncludingComments = $allDebugCalls.Count; CandidateByteStarts = 0x1000; ConditionalDefaultByteStarts = 0x1000 - $vmeCases.Count; NaturallyAlignedWordStarts = 0x1000 / 4; ConditionalDefaultAlignedWordStarts = (0x1000 / 4) - $vmeCases.Count } | Format-List' in C:\DocumentNoSnc\CC\GXEMUL
+ exited 1 in 196ms:
+Cannot convert value to type "System.Management.Automation.LanguagePrimitives+InternalPSCustomObject". Only core types 
+are supported in this language mode.
+At line:2 char:323
++ ... bdebug\('); [pscustomobject]@{ CaseLabels = $vmeCases.Count; NamedCas ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidArgument: (:) [], RuntimeException
+    + FullyQualifiedErrorId : ConversionSupportedOnlyToCoreTypes
+ 
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$vmeLines = Get-Content -LiteralPath '"'C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c'; "'$vmeCases = @($vmeLines | Select-String -Pattern '"'"'^'"\\s*case\\s+(["'^:]+):'"'); "'$namedDebugCalls = @($vmeLines[69..135] | Select-String -Pattern '"'"'^'"\\s*debug\\('); "'$allDebugCalls = @($vmeLines | Select-String -Pattern '"'\\bdebug\\('); 'Case labels: {0}' -f "'$vmeCases.Count; '"'Active debug call sites at named cases: {0}' -f "'$namedDebugCalls.Count; '"'All textual debug call sites, including comments: {0}' -f "'$allDebugCalls.Count; '"'Byte starts: {0}; conditional default count: {1}' -f 0x1000, (0x1000 - "'$vmeCases.Count); '"'Aligned 32-bit starts: {0}; conditional default count: {1}' -f (0x1000 / 4), ((0x1000 / 4) - "'$vmeCases.Count)' in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 168ms:
+Case labels: 10
+Active debug call sites at named cases: 9
+All textual debug call sites, including comments: 12
+Byte starts: 4096; conditional default count: 4086
+Aligned 32-bit starts: 1024; conditional default count: 1014
+
+codex
+The explicit OpenBSD probe in `dev_vme.c` uses offset zero, which is already handled; it does not prove that a stock boot reaches `default:`. Also, simply removing `exit(1)` preserves the read from `d->reg[]` made before the switch, so a zero-read decline needs an explicit override.
+
+The logging count is nine active nonfatal calls across five named offsets. The `(once)` house-style prevalence cannot be re-derived from these three files.
+codex
+VERDICT: Confirmed silent host-process termination during normal execution at default verbosity. Disposition (b) matches the ratified repair; legacy `fatal()` does not trigger `#261`.
+CODEX_VME_20260911
+
+I read only the three permitted files. No files were changed and no guest was run. Some broader premises cannot be verified within that scope.
+
+1. **MVME187 installs this device unconditionally within its subtype setup.**
+
+   The installation is at [machine_mvme88k.c:94](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_mvme88k.c:94): it constructs `"vme addr=0x%x"` using `VME2_BASE`, then calls `device_add`. This precedes the `prom_emulation` guard at [line 142](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_mvme88k.c:142), so disabling PROM emulation does not remove the device.
+
+   The adjacent comment identifies the base as **`0xfff40000`**. Strictly, the executable expression is `VME2_BASE`; its numeric definition is outside the permitted files. The registered length is **`0x1000` bytes**, as established below.
+
+   This is not unconditional installation across the MVME88K family: the MVME188 and MVME197 branches contain only their names and TODOs at [line 127](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_mvme88k.c:127). These files establish MVME187 attachment, but cannot establish tree-wide exclusivity or that the project currently boots it successfully.
+
+2. **The aperture contains 4,096 byte offsets; `default:` is the complement of ten exact case values.**
+
+   [`VME_LEN`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:50) is `0x1000`, and [registration](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:164) passes that length and `dev_vme_access`. Thus relative offsets occupy `[0, 0x1000)`. Using the documented base, the physical window is `0xfff40000` through `0xfff40fff`.
+
+   The [switch](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:68) has exactly these ten labels:
+
+   ```text
+   C = { 0,
+         VME2_GCSRCTL, VME2_TCR, VME2_T1CMP, VME2_T1COUNT,
+         VME2_TCTL, VME2_IRQEN, VME2_IRQL3, VME2_IRQL4, VME2_VBR }
+   ```
+
+   Let `A` be the aperture’s byte offsets. The exact default set is **`A \ C`**, with cardinality **`4096 − |A ∩ C|`**.
+
+   The important qualification is that none of the nine `VME2_*` values is defined in the permitted files. Consequently:
+
+   | Access-start domain | Available starts | Default count if all ten cases belong to that domain | Bounds established without the missing definitions |
+   |---|---:|---:|---:|
+   | Every byte offset | 4,096 | **4,086 = 4,096 − 10** | 4,086–4,095 |
+   | Naturally aligned 32-bit starts | 1,024 | **1,014 = 1,024 − 10** | 1,014–1,023 |
+
+   These count starting offsets, not hardware registers. The switch compares the **raw byte offset**, although backing storage indexes by `relative_addr / sizeof(uint32_t)`. A case therefore does not automatically handle all four bytes of its backing word.
+
+   The dispatch excludes individual named addresses wherever they lie; it is not a check for “beyond the last implemented register.” Any gaps between case values also take `default:`. However, the exact numeric intervals—and an unconditional assertion that they are scattered—require the missing constants. If those constants are in-range and word-aligned, the byte-offset defaults are indeed scattered between named starts. I would not present either that condition or the exact 4,086 count as independently verified here.
+
+3. **Source-level reachability exists on an unmodified MVME187 configuration; stock-boot execution of this arm is not established.**
+
+   The registered family alias is **`mvme88k`**, and its MVME187 subtype selector is **`mvme187`**, at [machine_mvme88k.c:204](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_mvme88k.c:204). No extra device attachment is needed.
+
+   Once an ordinary mapped access reaches the [handler](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:57), there is no additional feature or operating-mode guard before dispatch. Even restricting consideration to aligned word starts, ten case labels cannot cover the aperture.
+
+   But the explicit firmware-related evidence needs care: [offset zero](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:70) is documented as used by OpenBSD probing, and **that offset is handled successfully**. That comment proves a supported probe exists; it does not prove that an unmodified boot image accesses an unmatched offset.
+
+4. **Promoting the default-arm calls to legacy `fatal()` removes verbosity suppression and does not activate `#261`.**
+
+   Both premises are correct at their specified site:
+
+   - [`debug()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:365) starts with `v = verbose`, subtracts one during emulation, adds one when stepping or about to step, then returns when `(quiet_mode && !ss) || v < 0`.
+   - [`fatal()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:384) has no filtering early-out and calls `va_debug` directly.
+
+   With the initialized `verbose = 0`, normal execution and no stepping produce `v = -1`. Thus `debug()` suppresses the message even without quiet mode, before the [default arm’s `exit(1)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:137) ends the process. “Invisible at default verbosity” is therefore correct **during normal execution**; startup and debugger contexts can behave differently.
+
+   [`va_debug()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:118) formats and prints directly. It neither terminates the process nor routes through structured subsystem logging.
+
+   The `#261` check instead resides in [`debugmsg_va()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:146), where the global toggle and message severity determine whether to request debugger entry. Legacy `fatal()` supplies no structured ERROR severity and bypasses this path entirely—even when the toggle is armed. The `fatal()` call inside the breakpoint branch merely prints its announcement; the surrounding branch sets `about_to_enter_single_step`.
+
+   **One gate-relevant qualification:** `va_debug()` uses `printf`, so its destination is **stdout**, and it performs no explicit flush. Promotion ensures the message is not filtered; it does not guarantee immediate delivery through a buffered pipe. A gate must capture stdout and account for flushing. Immediate delivery before guest completion would require a separate flushing guarantee.
+
+   Also, the named-offset premise is slightly overstated: there are **nine active nonfatal diagnostic calls across five named offsets**—GCSRCTL, TCR, IRQEN, IRQL3 and IRQL4. The TCTL notice is commented out at [dev_vme.c:103](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:103). Counting that comment and the two default-arm calls produces twelve textual calls, not twelve active nonfatal named-offset notices.
+
+5. **The latch belongs in `struct vme_data`; this file currently has no announce latch of either kind.**
+
+   The [structure](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:52) contains only `reg[]`. Each initialization separately allocates and zeroes the entire structure at [line 157](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:157), and registration passes that instance as the handler’s `extra`.
+
+   Add one instance field, shared by both default-arm directions and every unmatched offset. Its meaning should be “this instance has announced an unsupported register.” Existing whole-structure zeroing initializes it. Named cases must not consume it.
+
+   That implements **one announcement total per instance lifetime**, with `(once)` explicitly present in the message. Separate read/write latches would permit two announcements; per-offset latches would permit many; a function-static latch would let one instance suppress another.
+
+   There is no applicable latch population in these three files from which to re-derive the tree-wide spelling plurality. Here, **N = 1 and `(once)` are your stated disposition requirements**, not independently verified repository statistics.
+
+6. **The oracle needs independent evidence of access, guest continuation, and exact diagnostic identity and count.**
+
+   First make the decline’s data behavior explicit. With bus faults excluded, “decline” means refusing to implement the register while completing through the normal [successful return](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:146). A concrete conservative fallback is ignored writes and zero reads, documented as emulator behavior rather than verified hardware semantics.
+
+   **Deleting `exit(1)` alone does not guarantee zero reads.** The handler has already loaded `odata` from `d->reg[]` at [line 65](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:65). An unmatched byte offset can share a backing slot with a named offset. A zero-read fallback therefore needs an explicit default-arm override.
+
+   For post-repair validation, record independent handler/default-branch coverage, including the first actual offset and direction. Require subsequent guest progress after repeated completed accesses, the chosen read result, and unchanged register state for declined writes. A successful boot banner or exit status alone is insufficient.
+
+   | Outcome | Distinguishing evidence |
+   |---|---|
+   | Correct decline | Repeated default-arm access is independently observed; guest continues; exactly one default-arm announcement per instance contains `(once)` and identifies the first actual access correctly. |
+   | Silent decline | Access and continuation are established, but the announcement count is zero. |
+   | Announcement every time | More than one default-arm announcement occurs for the same instance. |
+   | One announcement for the wrong offset | Total count is one, but its offset or direction disagrees with the independently recorded first default access. |
+   | Access never happened | Default-arm coverage is absent, regardless of apparent guest success or unrelated output. |
+
+   For writes, also check the diagnostic’s reported write data against the tested register-width value. Count **all** default-arm announcements, not merely lines matching the expected offset.
+
+   Cover fresh instances with read-first and write-first activity, mixed directions and offsets, and two device instances in the same process. Named accesses before the first default access must leave the allowance available. Verify default verbosity and quiet mode, with `#261` both disabled and armed; the promoted announcement must not request debugger entry. A separate structured-ERROR positive control can establish that the armed gate actually works.
+
+   These are validation requirements, not results from a test performed here.
+
+7. **Only (b) matches the ratified disposition.**
+
+   | Candidate | Matches? | Hardware meaning and cost |
+   |---|---|---|
+   | **(a) Delete `exit(1)`, retain `debug()`** | **No.** | Allows completion without implementing the register. Writes remain ignored and reads retain the preloaded backing value. The edit is tiny, but default-execution silence remains; visible diagnostics can repeat without bound. |
+   | **(b) Delete `exit(1)`, promote to `fatal()` with an instance latch** | **Yes**, including `(once)` and successful completion. | Makes incomplete emulation observable without asserting a bus fault or inventing writable-register semantics. Costs one state field, a guard on default accesses, and at most one announcement per instance. Define the read fallback explicitly. Legacy `fatal()` does not activate `#261`. |
+   | **(c) Return zero from the access function** | **No; explicitly ruled out.** | Under your settled M88K caller behavior, reports a failed transaction and produces a guest bus exception. That asserts a hardware failure response unsupported here and can divert or stop the guest’s execution. The caller behavior is accepted from your adjudication; `memory_rw.c` was outside this review. |
+   | **(d) Store writes and read back `d->reg[]`** | **No.** | Invents persistent, RAM-like register semantics. Firmware can then rely on fabricated state while actual controller behavior remains absent. The array already exists, so the primary cost is semantic and maintenance burden rather than a new register allocation. |
+
+   Finally, “as the named cases do” needs narrowing: only **T1CMP, T1COUNT, TCTL and VBR** explicitly store writes. The five named diagnostic cases do not. Moreover, [T1COUNT](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:90) advances its stored count by 100 on reads, so even those named cases do not share one uniform read/write-storage behavior.
+tokens used
+49,312
+ed cases do not establish a uniform RAM-like register contract. See [dev_vme.c:85](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:85).
+
+   I have treated the M88K bus-exception consequence in (c) as your supplied premise. I did not inspect `memory_rw.c` or independently verify the “two families” claim.
+tokens used
+42,449

@@ -1,0 +1,83 @@
+VERDICT: FAULT (`return 0`) for the unsupported-access fallback; handle register byte lanes separately.  
+CODEX_VMEFAULT_20260911
+
+FAULT is available on this machine, and the permitted source supports using it to represent an access the emulator cannot service. **It does not establish that real VME hardware would fault at every offset reaching this `default:`.** That hardware claim remains unproved.
+
+I read only the five permitted files. No directories were listed or searched, no files were changed, and no runtime tests were performed.
+
+Your three new facts withstand review as follows:
+
+1. **The queue recommendation cannot be independently verified within the permitted set.** `OUTSTANDING_BUGS.md` is outside that set. I therefore treat its quotation as supplied evidence, not as a checked repository finding. Its M88K-availability claim is independently supported below; its “real VME hardware would” claim is not established by these five files.
+
+2. **The M88K failure path and `badaddr()` comment are confirmed.** After invoking a device callback, `memory_rw.c` converts a zero result to `-1`. With exceptions enabled, a nonpositive result invokes `m88k_exception()` with `M88K_EXCEPTION_DATA_ACCESS` or `M88K_EXCEPTION_INSTRUCTION_ACCESS`, then returns `MEMORY_ACCESS_FAILED`. The comment explicitly names OpenBSD/mvme88k’s `badaddr()`. It also acknowledges that fault-address reporting is incomplete. [memory_rw.c:583](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:583)
+
+3. **All three `unreadable` attachments are confirmed in the MVME187 arm.** They are Ethernet at line 106, “VMES (?): TODO” at line 120, and “VME devices: TODO” at line 123; the VME attachment is at lines 94–96. The unreadable access function consists solely of `return 0;`. [machine_mvme88k.c:94](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_mvme88k.c:94), [dev_unreadable.c:41](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_unreadable.c:41)
+
+The third finding has a stronger implication than “FAULT represents absent hardware.” The machine’s own board description lists Ethernet hardware, while its constructor substitutes `unreadable` for Ethernet marked TODO. **This constructor also uses faults for hardware omitted from emulation.** That weakens the original categorical present/absent argument. [machine_mvme88k.c:35](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_mvme88k.c:35)
+
+The present/absent distinction still matters when making claims about real hardware. However, “the device is present and the register is not” does not accurately describe the entire default arm. The header names registers such as `VME2_DMACTL`, `VME2_T2CMP`, `VME2_T2COUNT`, and `VME2_PRESCALE` whose exact offsets have no switch cases. These are named register definitions lacking emulator handling, rather than addresses the source identifies as nonexistent. [mvme88k_vme.h:58](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/mvme88k_vme.h:58)
+
+Nor does registering a `0x1000`-byte device region prove that physical hardware acknowledges every transaction within that region. It establishes the emulator’s dispatch aperture. The header warns of unusual chip access rules but does not specify legal widths, reserved-offset responses, or timeout behavior. The VME2 controller-register attachment and the separately installed unreadable VME regions also cannot automatically be assigned identical hardware behavior. **These sources cannot answer whether a particular unsupported controller-register access would receive a response or time out on real hardware.** [dev_vme.c:50](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:50), [mvme88k_vme.h:40](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/mvme88k_vme.h:40)
+
+There is a related distinction in the return contract. You are correct that **`return 0` is not DECLINE**: it enters an explicit failure path. But the permitted caller describes that result as a failed device access; it contains no reason code asserting physical absence. A guest probe can interpret the failure as absence. That interpretation does not prove that nothing exists at the corresponding address on real hardware.
+
+The strongest case for **FAULT** is therefore an explicit failed-transaction contract. The emulator has no implemented operation for the access. Returning success with a fabricated value, or acknowledging a write that performs nothing, can let the guest infer working hardware behavior that the model cannot provide. FAULT exposes that limitation through a mechanism this CPU supports and this machine constructor already uses for omitted functionality.
+
+For a probe of an unsupported address, that failure can be useful: the guest can reject functionality the emulator cannot service. For a driver operating outside a probe, the cost is substantially greater. The exception can abort an operation or, depending on the guest’s handling, stop the guest. It is architecturally louder than a logged anomaly, regardless of how much diagnostic text appears. Nevertheless, it locates the failure at the unsupported transaction instead of allowing a synthetic successful result to influence later execution.
+
+That is an honest statement about the **emulated operation’s failure**. It would become an unjustified statement if described as proof of the real controller’s bus-error behavior.
+
+The strongest case for **DECLINE with a bounded announce** is that the default arm catches missing emulator implementation, including named registers and interior register offsets. A legitimate driver operation could therefore receive an exception solely because this emulator is incomplete. Successful zero reads and ignored writes, accompanied by an explicit diagnostic, can preserve useful guest execution while exposing that incompleteness to the operator.
+
+There is local precedent for that approach too. Several explicit VME cases already announce unimplemented behavior and return success. More importantly, offset zero is explicitly identified as an OpenBSD/mvme88k probing access and succeeds. Thus, the generic `badaddr()` comment proves useful fault machinery exists; **it does not prove that this guest expects a fault from every currently defaulted VME access**. [dev_vme.c:70](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:70)
+
+DECLINE also avoids depending on the incomplete fault-address reporting acknowledged by the M88K caller. Its weakness is that it still makes a guest-visible assertion: the transaction succeeded. A bounded host diagnostic cannot undo that assertion. Zero can resemble a legitimate register value, and an ignored write can conceal a missing operation. Guest continuity is a benefit, not a guarantee of correct execution.
+
+The aliasing premise needs a precise correction. The source confirms all of these steps:
+
+- Reads preload `odata` from the containing word before the switch.
+- The VBR initializer evaluates to `0x67000000`.
+- Offsets `0x89`–`0x8b` select that same storage word and miss the exact `VME2_VBR` case.
+
+However, **the current code returns no read data from those accesses: it calls `exit(1)` before reaching `memory_writemax64()`**. Under a hypothetical change from `exit(1)` to `break`, `0x67000000` would be the internal value passed to that helper. A one-byte output cannot carry the complete 32-bit quantity. The helper’s definition is outside the permitted files, so this review cannot establish the exact serialized byte from its implementation. [dev_vme.c:65](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:65), [dev_vme.c:137](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:137), [mvme88k_vme.h:257](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/mvme88k_vme.h:257)
+
+The internal alias is real; the claimed full-value byte-read result is overstated.
+
+For DECLINE, **`odata = 0;` must execute in the default path after the preload**. Its initialization to zero at function entry is insufficient because the preload overwrites it. Defaulted writes should leave register storage unchanged. Keeping the aliased value would require an explicit behavioral decision; it is not a neutral consequence of removing the exit.
+
+For FAULT, the handler returns before serialization, so that internal alias supplies no successful read result. There is nevertheless still a caller buffer: `memory_rw.c` zeroes it before device dispatch. Consequently, “nothing is returned” means **no successful read payload**, not that the C buffer is untouched throughout the caller path. [memory_rw.c:485](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:485)
+
+This asymmetry simplifies FAULT’s implementation, but it does not settle the semantic choice. DECLINE can eliminate the alias with an explicit assignment.
+
+The twelve interior byte offsets are also confirmed:
+
+| Storing register | Interior byte offsets reaching `default:` |
+|---|---|
+| T1CMP | `0x51`–`0x53` |
+| T1COUNT | `0x55`–`0x57` |
+| TCTL | `0x61`–`0x63` |
+| VBR | `0x89`–`0x8b` |
+
+**Neither blanket disposition implements byte-lane semantics.** FAULT rejects these accesses; zero-valued DECLINE discards their relationship to the containing register. Neither outcome establishes hardware correctness.
+
+They need a separate answer based on permitted access widths and register behavior. Where sub-word accesses are supported, handling must account for byte order, lane selection, partial-write preservation, and read side effects. Simply rounding the switch address down would be insufficient: current storing cases assign whole words, and T1COUNT has a read side effect. Exact register-base accesses also lack width-specific handling, so the issue extends beyond the twelve interior offsets. [dev_vme.c:85](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:85)
+
+The header does not establish that all twelve byte operations are legal hardware accesses. They should be recorded as unresolved access-shape handling, rather than certified as absent registers or declared correctly implemented by either fallback.
+
+Availability does not block FAULT here. The MVME187 constructor selects an `88100` by default, and the permitted memory code contains the M88K exception dispatch. Nothing in this machine setup establishes an exception-disabling exception to that behavior. The same failure block contains MIPS exception dispatch and **no Alpha exception dispatch**; Alpha still reaches the generic failure return when that block executes. This confirms the narrower limitation in this caller, without claiming to have inspected every Alpha facility elsewhere. [machine_mvme88k.c:174](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_mvme88k.c:174), [memory_rw.c:603](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:603)
+
+One qualification is essential: `NO_EXCEPTIONS` suppresses this device-failure exception path. It can also suppress callback invocation unless the device has the relevant side-effect flag; this dispatch path then falls through to success. An access performed with those flags cannot serve as the ordinary guest-fault oracle. The `badaddr()` comment establishes intended compatibility, not a runtime demonstration performed in this review.
+
+After weighing both sides, **I choose FAULT because explicit failure better represents an unsupported emulated transaction than successful synthetic behavior**. The constructor’s treatment of omitted Ethernet emulation supplies concrete local precedent. The original “present device, therefore fault forbidden” veto does not survive. Its narrower objection—do not claim undocumented real-hardware behavior—does survive, and should remain in the ruling.
+
+For a FAULT round, the remaining obligations are:
+
+1. **Change the oracle to failed access plus architectural exception.** For ordinary M88K data reads and writes reaching the fallback, require callback failure, `MEMORY_ACCESS_FAILED` from the memory path, and dispatch of `M88K_EXCEPTION_DATA_ACCESS`. Instruction access has its separate exception selection. Removing the host exit alone is insufficient.
+
+2. **Pin the caller behavior that a decline detector would not need.** Exercise or otherwise verify the M88K dispatch with exceptions enabled, the expected exception selection, and failure propagation. A zero-filled read buffer proves neither FAULT nor DECLINE. Checking only the callback’s return value proves less than checking its architectural consequence.
+
+3. **Keep the announce as a bounded diagnostic.** I would retain one notice per device instance identifying an unimplemented VME access and its guest fault. The latch must gate only the notice: every subsequent unsupported access must still fail. The existing per-access default messages should not remain alongside it. However, `memory_rw.c` itself emits a debug message on every device failure, so a detector must distinguish a bounded VME announcement from a claim that *all* fault diagnostics are bounded. [memory_rw.c:604](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:604)
+
+4. **Preserve the supported behavior and own the byte-lane gap explicitly.** Failed accesses must not mutate register storage or serialize aliased `odata`. Existing explicit cases—including the successful offset-zero probe—must retain their intended behavior. Interior offsets need their own access-width decision and corresponding oracle; successful removal of the exit does not close that issue.
+
+5. **Validate guest consequences separately from source-level availability.** Probe recovery and an ordinary driver’s fault response require integration validation. This review establishes the dispatch mechanism and its limitations; it does not establish continued bootability, complete exception metadata, or real-hardware equivalence.

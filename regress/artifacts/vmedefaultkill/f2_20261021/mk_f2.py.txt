@@ -1,0 +1,74 @@
+#!/usr/bin/env python3
+"""mk_f2.py <outdir> [argon_section.md] -- assemble the vmedefaultkill ADJUDICATION (F2) packets.
+
+Fills f2_body_tmpl.md with findings.md / disputes.md / owed.md (hand-written), the dev_vme.c diff and the whole device
+(read from the working tree at build time), and the probe's population-2 store lines (grepped from the working probe).
+Refuses if the working dev_vme.c is not the fix under review, if the diff has != 2 hunks, or if a placeholder is left."""
+import hashlib, io, os, re, subprocess, sys
+
+SEC = "C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC"
+HERE = os.path.dirname(os.path.abspath(__file__))
+OUT = sys.argv[1]
+ARG = sys.argv[2] if len(sys.argv) > 2 else None
+NL = chr(10)
+FIX_MD5 = "4e3e7fc220062b429f7d9d6e140fec9e"
+
+
+def rd(p):
+    return io.open(p, encoding="utf-8", errors="replace", newline="").read().replace("\r\n", NL)
+
+
+def must(c, m):
+    if not c:
+        sys.stderr.write("REFUSED: " + m + NL)
+        sys.exit(3)
+
+
+vme = SEC + "/src/devices/dev_vme.c"
+must(hashlib.md5(open(vme, "rb").read()).hexdigest() == FIX_MD5, "dev_vme.c is not the fix under review")
+r = subprocess.run(["git", "-C", SEC, "--no-optional-locks", "diff", "--", "src/devices/dev_vme.c"], capture_output=True)
+DIFF = r.stdout.decode("latin-1").replace("\r\n", NL).rstrip(NL)
+must(DIFF.count(NL + "@@ ") + DIFF.startswith("@@ ") == 2, "dev_vme.c diff is not 2 hunks")
+vl = rd(vme).split(NL)
+a = next(i for i, l in enumerate(vl) if l.startswith("struct vme_data {")) + 1
+b = next(i for i, l in enumerate(vl) if l.startswith("DEVINIT(vme)")) + 1
+e = next(i for i in range(b, len(vl)) if vl[i - 1] == "}")
+FUNC = NL.join("%4d  %s" % (i, vl[i - 1]) for i in range(a, e + 1))
+pl = rd(SEC + "/regress/vme_default_probe.py").split(NL)
+pick = [i for i, l in enumerate(pl, 1) if re.search(r"^(WVAL|NARROW|DHI, DLO)\s*=|ST(_B|_H|_D)?\(\d+, (o|0x[0-9a-f]+)\)|NW_WR|^r = (stepped|freerun)\(\[GUARD", l)]
+STORES = NL.join("%4d  %s" % (i, pl[i - 1]) for i in pick)
+must("WVAL" in STORES and "NW_WR" in STORES, "store-line extraction failed")
+
+fnd = rd(os.path.join(HERE, "findings.md"))
+argon = rd(ARG) if ARG else ("**Argon (AR)** -- its pass-2 answer had not landed when this packet was built; it is "
+                             "added to the record when it does.")
+fnd = fnd.replace("{ARGON}", argon)
+nf = len(re.findall(r"^\*\*F\d+ ", fnd, re.M))
+t = rd(os.path.join(HERE, "f2_body_tmpl.md"))
+ff = os.path.join(HERE, "fable_f2_summary.md")
+FABLEF2 = rd(ff) if os.path.exists(ff) else "(none yet -- this is the first firing of the adjudication pass)"
+rep = {"{FINDINGS}": fnd, "{DISPUTES}": rd(os.path.join(HERE, "disputes.md")), "{OWED}": rd(os.path.join(HERE, "owed.md")),
+       "{FABLEF2}": FABLEF2,
+       "{DIFF}": DIFF, "{FUNC}": FUNC, "{STORES}": STORES, "{NF}": str(nf), "{ND}": "5",
+       "{NACC}": os.environ.get("NACC", "14"), "{NREF}": os.environ.get("NREF", "2")}
+for k, v in rep.items():
+    must(k in t, "placeholder %s missing" % k)
+    t = t.replace(k, v)
+must(not re.search(r"\{[A-Z]+\}", t), "placeholder left: %s" % re.findall(r"\{[A-Z]+\}", t)[:3])
+os.makedirs(OUT, exist_ok=True)
+VERD = "VERDICT: PROCEED AS DISPOSED | PROCEED WITH CHANGES | DO NOT PROCEED -- <one line>"
+for seat, own in (("ASTRA", "AX"), ("GROK", "GK"), ("GLM", "GL"), ("FABLE", "FB"), ("ARGON", "AR")):
+    hdr = ("Open your answer with the token %s_VME_F2_20261020, then ONE line:\n%s\n\nYou are seat **%s** in this packet's "
+           "seat key: your own pass-2 findings are the ones attributed to %s -- SELF-REVIEW, so be harder on them, and "
+           "on every disposition that adopts your position.\n\n" % (seat, VERD, own, own))
+    io.open(os.path.join(OUT, "packet_%s.md" % seat), "w", encoding="utf-8", newline=NL).write(hdr + t)
+io.open(os.path.join(OUT, "brief_body.md"), "w", encoding="utf-8", newline=NL).write(t)
+ptr = ("ASTRA seat -- the ADJUDICATION PASS of an ordinary bounds- and correctness-engineering review (a VME bus-controller\n"
+       "device model in an emulator): five seats reviewed a built change; this packet consolidates every finding with the\n"
+       "coordinator's disposition and the disputes, and asks the seats to adjudicate them.  READ-ONLY: write nothing to any\n"
+       "project tree.\n\nRead this file and answer it exactly as its Questions section directs:\n\n    "
+       + OUT.replace("\\", "/") + "/packet_ASTRA.md\n\nOpen your answer with the token ASTRA_VME_F2_20261020, then ONE line:\n"
+       + VERD + "\n")
+io.open(os.path.join(OUT, "astra_pointer.md"), "w", encoding="utf-8", newline=NL).write(ptr)
+print("F2_BUILT body %d bytes; findings %d; diff hunks 2; FUNC %d-%d; store lines %d" %
+      (len(t.encode("utf-8")), nf, a, e, len(pick)))

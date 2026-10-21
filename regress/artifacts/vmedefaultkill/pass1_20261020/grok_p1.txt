@@ -1,0 +1,86 @@
+I'll audit the sketch against the tree at `5dbc000e`, starting with the access function, the header offsets, and the m88k load/store path that actually produces `relative_addr` and `len`.The header's register block and the access function match the packet. Next I will enumerate the m88k producer of `(relative_addr, len)` and how a handler `return 0` is consumed.GROK_VME_P1_20261020
+VERDICT: PROCEED WITH CHANGES -- the sketch implements both rulings on exact word starts; the detector still passes a write-silent latch and a population-1 exemption at any word other than 0x90 and 0xffc, and the population-2 interior fault needs a named pin.
+
+Read `src/` at `5dbc000e` (`dev_vme.c` is only `39748e3c`). Line numbers match the packet. The archive trees were not used.
+
+## Q1
+The census is 10 / 26 / 988; every population-2 word stays 0 for the device's life; a guest `ld`/`st` that gets `return 0` takes a data-access exception; a misaligned half, word, or double never reaches the handler, and `ld.d` cannot start at 4 mod 8.
+
+**(a)** Re-counted from `src/include/thirdparty/mvme88k_vme.h:46-81`, not from the pasted deriver. The register block is 36 names, `0x00` through `0x8c` step 4, one name per value. The switch names ten of them: `0x00` (`case 0:`), `0x2c`, `0x4c`, `0x50`, `0x54`, `0x60`, `0x6c`, `0x80`, `0x84`, `0x88` (`dev_vme.c:70-135`). The other 26 are the sketch's labels. The window has `0x1000/4 = 1024` word starts. Unnamed word starts: `1024 - 36 = 988`, which is `(0xffc - 0x90)/4 + 1 = 988`. Masks that share a numeric value (`VME2_SLAVECTL_SNP_NO` and the shift counts at 0, `VME2_GCSRCTL_ROMSIZE` at `0xc0`, `VME2_TCTL1_OVF` at `0xf0`) are not register names. Nothing in that header names a register at `0x90` or above.
+
+**(b)** Every assignment of `d->reg[` in `dev_vme.c` is one of these indices: 20 (`0x50` T1CMP, line 87), 21 (`0x54` T1COUNT, lines 92 and 95), 24 (`0x60` TCTL, line 101), 34 (`0x88` VBR, lines 134 and 161). Population-2 indices are 1–10, 12–18, 22, 23, 25, 26, 28–31, 35. Those sets are disjoint. `DEVINIT` zeroes the struct (line 158) and then writes only index 34. There is no timer callback and no other writer in the file.
+
+**(c)** `MEM_READ` is 0 and `MEM_WRITE` is 1 (`memory.h:117-118`). Guest `ld`/`st` call `memory_rw` with `CACHE_DATA` or `CACHE_DATA|MEMORY_USER_ACCESS` (`cpu_m88k_instr_loadstore.c:60-63`). `no_exceptions` is `misc_flags & NO_EXCEPTIONS` (`memory_rw.c:241`), so it is clear on that path. The handler runs (`memory_rw.c:584-589`; the device is `DM_DEFAULT`, `dev_vme.c:166`). `return 0` becomes `res = -1` (`memory_rw.c:595-596`) and, because the cache flag is data, `m88k_exception(..., M88K_EXCEPTION_DATA_ACCESS, 0)` (`memory_rw.c:620-622`). That vector is 3 (`cpu_m88k.h:203`), so with VBR 0 the PC is `0x18` (`cpu_m88k.c:863`). The load writes the destination only after `memory_rw` returns success (`cpu_m88k_instr_loadstore.c:189-217`). `cpu->running` is left set (`cpu_m88k.c:908-921`). Two other callers do not do this. `NO_EXCEPTIONS` (the disassembler's instruction fetch, `cpu_m88k.c:1117-1120` and `1180-1183`) skips a `DM_DEFAULT` handler entirely and returns success on the zeroes `memory_rw.c:491-492` already wrote. `CACHE_INSTRUCTION` raises vector 2, instruction access. A second fault in the same session, with `PSR.SFRZ` already set, is rewritten to ERROR (`cpu_m88k.c:811-818`).
+
+**(d)** The alignment check is `addr & (LS_SIZE-1)` and it runs before `memory_rw`, and only for sizes other than 1 (`cpu_m88k_instr_loadstore.c:167-185`). Bytes have no check. The fast path is not used: a `DM_DEFAULT` page has a NULL host pointer, so the generic function runs (`cpu_m88k_instr_loadstore.c:279-290`). `m88k_translate_v2p` is always installed (`cpu_m88k.c:125`), and the 1024-byte splitter therefore runs (`memory_rw.c:104`, `186-188`). It never splits a legal access: for `L` in {1, 2, 4, 8} the last `L`-aligned start in a granule leaves exactly `L` bytes, and `L > L` is false. End-of-device truncation (`memory_rw.c:495`) also does not fire: the last legal starts are `0xfff`, `0xffe`, `0xffc`, and `0xff8`, and each fits in `0x1000`. Pairs that reach `dev_vme_access`:
+
+| len | starts that arrive | count | what never arrives |
+|---|---|---|---|
+| 1 | `0x000..0xfff` | 4096 | nothing |
+| 2 | even, `0x000..0xffe` | 2048 | odd addresses (misaligned exception first) |
+| 4 | `0 mod 4`, `0x000..0xffc` | 1024 | `1, 2, 3 mod 4` |
+| 8 | `0 mod 8`, `0x000..0xff8` | 512 | `4 mod 8`, including every `0x04, 0x0c, ...` |
+
+`xmem` / `xmem.bu` are a load call then a store call of len 4 or 1 (`cpu_m88k_instr.c:2375-2426`). A faulting load changes PC, and the store is skipped. Cold supervisor state does reach the window: data-CMMU `BATC8` (`dev_mvme187.c:152`, value `0xfff7ffb5`, `m8820x.h:176`) is valid and supervisor, covers `0xfff00000-0xfff7ffff`, and translates `0xfff40000+off` to itself (`(0x7ff80<<13) | (vaddr & 0x7ffff)`).
+
+The OpenBSD file is not in this tree. The seven sites and `volatile u_long` are the packet's, unchecked here.
+
+## Q2
+For every exact case label the sketch is the right control flow: preload, one arm, then either the common tail or `return 0`. The shift cannot exceed 63, and no two of the 26 registers share a bit.
+
+Walk, with the sketch applied. A write loads `idata` (`dev_vme.c:62-63`); a read snapshots `odata = d->reg[relative_addr/4]` (lines 65-66) before any arm runs. `case 0`, GCSRCTL, TCR, IRQEN, IRQL3, and IRQL4 break and serve that snapshot; their words have no writer, so the snapshot is 0. T1CMP, TCTL, and VBR store only on write. T1COUNT's read does `+= 100` after the snapshot, so the value served is the pre-increment word. The 26 new labels break without storing and without touching `odata`. The tail (lines 146-149) then writes `len` bytes of that snapshot on a read and returns 1. `default` returns 0 and skips the tail, so a failed read does not `memory_writemax64`. The destination register stays unchanged because the instruction commits it only after success. The read arm of the decline block does not use `idata`.
+
+Latch keys for those labels, `relative_addr >> 2`: 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16, 17, 18, 22, 23, 25, 26, 28, 29, 30, 31, 35. Twenty-six distinct values, maximum 35. `1ULL << n` is defined. `DEVINIT`'s `memset` of the enlarged struct zeroes `warned_unimpl` (lines 157-158) before the VBR seed.
+
+An 8-byte access is classified only by its start. Three legal `ld.d`/`st.d` starts are cased bases whose next word is population 2, so the decline arm never runs for that next word: `0x00` covers SADDR2, `0x60` (TCTL) covers PRESCALE, `0x88` (VBR) covers MISC. On a big-endian `ld.d`, `memory_writemax64` (`memory.c:104-108`) places the cased `uint32` in the second half of the 8-byte buffer. Name these three pairs in the NOT CLAIMED list. They are outside the 26 labels, and the sketch does not make them worse.
+
+## Q3
+Omit `odata = 0`. No population-2 word-start read is served a non-zero value today, and writing the constant would hide a later backed store from `p2 wr census`.
+
+The decline arm is entered only when `relative_addr` equals that register's own word start, so the preload index is that register. The six writers in Q1(b) do not touch it, and the struct is zeroed. A later load in `p2 wr census` preloads whatever a write stored; forcing `odata = 0` would keep the read-back at 0 after a store. The snapshot is taken before the switch, so a store performed inside the read arm would also be invisible to that same read. The census is a later load, which sees it.
+
+## Q4
+Keep the exact labels, so a byte or half inside a population-2 word faults, and add one named pin row. Do not fold to the containing word in this round.
+
+Reachable interiors, from Q1(d): for each of the 26 bases, bytes at `+1,+2,+3` (78) and a halfword at `+2` only (`+1` and `+3` are odd and die at the alignment check). `0x29` is among them. `0x51` is not; T1CMP stays cased, which is the population-3 pin. A global `relative_addr &= ~3` would send `0x51` into the T1CMP arm and break S4. The in-tree guest, as the packet describes it, issues only word accesses, so either choice leaves those seven sites alone. Folding would decline a population the owner did not rule. S4's discipline for this interim is one named row, not a NOT CLAIMED line alone. Add `ld.bu` at `0x29`, named as a `vmewidthlanes` channel next to `p3 interim`.
+
+## Q5
+The key, the width, and the `(once)` spelling are right. `(int)idata` with `%x` is right for a 1-, 2-, or 4-byte access and prints the wrong half of a `st.d`.
+
+Bits 1..35 fit in `uint64_t`, one bit per register, zeroed per instance. `fatal()` only prints (`debugmsg.c:384-390`); it does not clear `cpu->running` or exit, so the announce does not undo the decline. The first access's direction owns the text, which is the `#501` shape (`dev_pcc2.c:764-778`) and matches "one per register". Hardcoding `served 0` matches the tail today. Printing `odata` would track a future store; the constant will not. For `len <= 4`, `idata` fits in 32 bits. For a big-endian `st.d`, `memory_readmax64` (`memory.c:66-69`) builds a 64-bit value whose low 32 bits are the second word, and `(int)idata` prints that half against the first register's offset. Thirteen population-2 bases are `0 mod 8` and can take that `st.d` (`0x08, 0x10, 0x18, 0x20, 0x28, 0x30, 0x38, 0x40, 0x48, 0x58, 0x68, 0x70, 0x78`). Keep the `#501` cast for the word path the ruling is about, and state in the contract that the announced value is not claimed for `len == 8`.
+
+## Q6
+No host-visible trace is owed for a population-1 access. Leave the two `debug()` lines, and do not add a `fatal()`.
+
+S2 is fault, not announce. At default `verbose == 0` (`debugmsg.c:75`), free-running execution decrements it to -1 and `debug()` returns (`debugmsg.c:365-376`). The same is true of `memory_rw.c:604-607`. `continue` clears `single_step` (`debugger.c:849`), so a free-running guest sees neither line. Under `step`, or with `-v`, those lines print on every population-1 access; `exit(1)` used to cap that at one. The cased arms already print that way (TCR, IRQEN, IRQL3, IRQL4). That is an accepted consequence of keeping them, not a second announce.
+
+## Q7
+`p3 interim` has no mutant. The (d) list's write-side latch and the `len != 4` store have no row that goes red. Gate 14 is the right home. `p1 fault lo` and `p1 fault hi` have to be separate sessions.
+
+Rows that do vary under the mutant they name, if built as specified: a dropped population-2 label faults `p2 rd census`; a shared latch and `fatal` swapped for `debug` change `p2 announce` (0 or 1 line, not 26); a latch that is never set changes `p2 once`; a word store that sticks changes `p2 wr census`; `return 0` replaced by `break` changes the population-1 rows; `ld.bu` at `0x28` reds a decline that requires `len == 4`. `p2 announce` is free-running only if the 26 loads run under `continue` with the breakpoint on a later instruction. The breakpoint sets `single_step = true` before that instruction executes (`cpu_dyntrans.c:1833-1848`). `step` makes `fatal` versus `debug` invisible, which is the limit already written at the top of `pcc2_default_probe.py`.
+
+What does not vary:
+
+- A latch that is set and printed only on reads. Writes stay dropped, so `p2 wr census` still reads back 0, and `p2 announce` / `p2 once` only read.
+- A store when `len != 4` at an exact population-2 base. `p2 width` reads `0x28` and `0x08`. It never stores a byte, half, or double.
+- `return 0` skipped at any population-1 word other than `0x90` and `0xffc`. `p1 p2 edge` only separates `0x8c` from `0x90`.
+- The read-announce value `served 0`. Every population-2 word is 0, so the text cannot come apart from `p2 rd census`. Disclose it, as `#501` disclosed its zero word reads.
+- `p3 interim`, aimed at none. It is still a useful pin: it goes red if `0x51` stops faulting. It is not a (d)-list row.
+
+Missing rows: write-then-read announce (the guest's order: the packet's attach writes MASTER3, MASTER4, MASTER4MOD, MASTERCTL, then a later read must be silent); one `st.b` at a population-2 base; one population-1 word that is neither endpoint (a full 988-word read in one session is the `#501` shape); the `0x29` pin from Q4. Two population-1 faults in one session without `rte` make the second an ERROR at PC `0x50`, with the SFRZ `fatal()`, so `p1 fault hi`'s `PC 0x18` is false on a correct binary if it shares `p1 fault lo`'s session. `p1 p2 edge` is safe: `0x8c` does not fault, and `0x90` is the first exception.
+
+Gate 14 already runs the mvme187 device probes, including `pcc2_default_probe.py` (`gate_arm.sh:1819-1884`). Hang the new probe on that same sentinel-first, per-name pattern. The ARM title on the gate is older than those blocks.
+
+`vbr reset` expecting `0x67000000` is `(6<<28)+(7<<24)` (`mvme88k_vme.h:257-260`, `dev_vme.c:161-162`). I did not build a device-less binary. Above `physical_max` a read is zero-filled and returns success (`memory_rw.c:676-712`), which would miss `0x67000000`. That still wants a measurement, as the plan says.
+
+## Q8
+The smallest edit is `if (relative_addr == 0x94) break;` immediately before `return 0`. `p1 fault lo`, `p1 fault hi`, `p1 fault wr`, and `p1 p2 edge` stay green.
+
+`0x94` is an unnamed word start, so S2 requires a fault. None of the section 6 rows touch it. The population-2 hole of the same size is wrapping the latch and the `fatal()` in `if (writeflag == MEM_READ)` while still not storing: S3's one announce per register fails for the write-first registers, and `p2 wr census` stays green.
+
+## Q9
+The sketch is the `#501` implementation of member 3, and `return 0` is the right implementation of member 5. No other idiom in `src/devices` should replace either.
+
+Grep of `warned_unimpl` and `(once)`: `dev_pcc2.c:764` is the per-offset bit, the `(once)` marker, and a print that describes the access that actually happened. `dev_wdc.c:1157` is one flag for a whole command, which is the shared latch this plan already rejects. gdrom, footbridge, lca, and fbctrl are single-site `(once)` prints. Calling `m88k_exception` from the device would skip `memory_rw`'s `res <= 0` bookkeeping or deliver the exception twice. Clearing `cpu->running` hits `memory_rw.c:591-592` and returns failure without vector 3. `return 0` and `return -1` are the same once `memory_rw.c:595` rewrites 0. Exact case labels, rather than a range bitmap, are what make "one label dropped" a fault the census can see.
+
+Not checked: the OpenBSD sources (path absent); the 2026-10-09 logs and the in-flight `5dbc000e` re-measure; a device-less build; the VMEchip2 register chapter.

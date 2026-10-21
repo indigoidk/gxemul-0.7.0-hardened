@@ -1,0 +1,221 @@
+OBJDUMP COMPARISON -- dev_vme.o built from fix568 vs fix568b (#568 REPAIR 1, section 0 step 2), 2026-10-21.
+Measured, not asserted: both objects built in ONE scratch clone (/tmp/gxkt568dev, git archive 1a59a47e, configure,
+make -j4), dev_vme.o removed before each build and checked newer than its source after it (rev3/dev/DEVLOG.txt).
+
+HOST Linux 6.18.33.2-microsoft-standard-WSL2 x86_64
+COMPILER cc (Gentoo 15.2.1_p20260214 p5) 15.2.1 20260214
+OBJDUMP GNU objdump (Gentoo 2.46.0 p1) 2.46.0
+FLAGS fix568:  cc -Wshadow -Wcast-align -Wstrict-aliasing -Wall  -Wextra -Wno-unused-parameter -Wno-cast-align -fstrict-aliasing -fomit-frame-pointer -fpeephole -fgnu89-inline -O3 -DNDEBUG  -I/usr/X11R6/include -I../include/   -c -o dev_vme.o dev_vme.c
+FLAGS fix568b: cc -Wshadow -Wcast-align -Wstrict-aliasing -Wall  -Wextra -Wno-unused-parameter -Wno-cast-align -fstrict-aliasing -fomit-frame-pointer -fpeephole -fgnu89-inline -O3 -DNDEBUG  -I/usr/X11R6/include -I../include/   -c -o dev_vme.o dev_vme.c
+SOURCES  fix568  4e3e7fc220062b429f7d9d6e140fec9e   fix568b beb120eae1be112b682bd528f103191c
+OBJECTS  fix568  74a9e7d1538312c87022183960842a2d (6344 bytes)   fix568b 9cf1869b6df2efe1d7a3ecd06303c6aa (6472 bytes)
+SECTIONS (size -A): .text 1890 -> 1970 bytes
+INSTRUCTIONS (objdump -d, normalised): 409 -> 427
+
+VERDICT: the objects are NOT identical apart from the read announce.  The only SOURCE-semantic change is D1 -- the
+read announce's format (`0x%x' -> `0x%llx') and cast (`(unsigned)' -> `(unsigned long long)' odata) -- and the
+object differs in THREE further ways:
+  (1) devinit_vme: `push $0xe7' -> `push $0xea' -- __LINE__ 231 -> 234.  DEVINIT's CHECK_ALLOCATION expands to
+      FAILURE(), which passes __FILE__, __LINE__ and __func__ (src/include/misc.h); fix568b's comment rewrites add three
+      lines above it (reach comment +2, default: comment +1).  A COMMENT-ONLY edit changes this object.
+  (2) dev_vme_access: the cast makes odata a 64-bit argument (`mov %r14,%rcx' into the read announce's fatal()),
+      and GCC's register allocation, block layout and tail duplication change with it: temporaries swap rdi<->rsi,
+      alignment nops differ, two branches flip polarity, and the read-announce call path is DUPLICATED (fatal() call
+      sites 2 -> 3 and read-announce format references 1 -> 2, counted by string content) -- .text 1890 -> 1970 bytes.
+  (3) .rodata.str1.x: the read format string itself, and the string pool's ORDER (the default: arm's two debug()
+      strings now follow the two announce strings).
+  (2) and (3) are compiler consequences of D1; (1) is a consequence of comment line counts.  No other source change
+  exists (rev3/dev_vme.fix568b.c vs fix568: the typedef rewrite, three comment rewrites, the format and the cast).
+
+== normalised instruction diff (addresses, raw bytes and branch offsets stripped; norm_objdump.py) ==
+15,16c15,16
+< dev_vme_access: mov (%rax,%rdx,4),%r14d
+< dev_vme_access: mov %r14,%rsi
+---
+> dev_vme_access: mov (%rax,%rdx,4),%eax
+> dev_vme_access: mov %rax,%r14
+39c39
+< dev_vme_access: nopl 0x0(%rax,%rax,1)
+---
+> dev_vme_access: nopw 0x0(%rax,%rax,1)
+170c170
+< dev_vme_access: mov 0x40(%rsp),%rdi
+---
+> dev_vme_access: mov 0x40(%rsp),%rsi
+173c173
+< dev_vme_access: mov 0x1000(%rdi),%rdx
+---
+> dev_vme_access: mov 0x1000(%rsi),%rdx
+177c177
+< dev_vme_access: mov %r10d,%esi
+---
+> dev_vme_access: lea 0x0(%rip),%rdi # <dev_vme_access+*>
+180c180
+< dev_vme_access: mov %rdx,0x1000(%rdi)
+---
+> dev_vme_access: mov %rdx,0x1000(%rsi)
+182c182
+< dev_vme_access: lea 0x0(%rip),%rdi # <dev_vme_access+*>
+---
+> dev_vme_access: mov %r10d,%esi
+209,210d208
+< dev_vme_access: nopl 0x0(%rax)
+< dev_vme_access: data16 cs nopw 0x0(%rax,%rax,1)
+212c210
+< dev_vme_access: mov %edx,%edi
+---
+> dev_vme_access: mov %edx,%esi
+216,218c214,215
+< dev_vme_access: bts %rdi,%rax
+< dev_vme_access: mov 0x40(%rsp),%rdi
+< dev_vme_access: mov %esi,%ecx
+---
+> dev_vme_access: bts %rsi,%rax
+> dev_vme_access: mov 0x40(%rsp),%rsi
+220c217,218
+< dev_vme_access: mov %r10d,%esi
+---
+> dev_vme_access: mov %r14,%rcx
+> dev_vme_access: lea 0x0(%rip),%rdi # <dev_vme_access+*>
+222c220
+< dev_vme_access: mov %rax,0x1000(%rdi)
+---
+> dev_vme_access: mov %rax,0x1000(%rsi)
+224c222
+< dev_vme_access: lea 0x0(%rip),%rdi # <dev_vme_access+*>
+---
+> dev_vme_access: mov %r10d,%esi
+234c232
+< dev_vme_access: nopl 0x0(%rax,%rax,1)
+---
+> dev_vme_access: nopw 0x0(%rax,%rax,1)
+241a240
+> dev_vme_access: mov 0x40(%rsp),%rax
+244c243
+< dev_vme_access: nopl 0x0(%rax)
+---
+> dev_vme_access: xchg %ax,%ax
+283,284c282,283
+< dev_vme_access: mov 0x40(%rsp),%rdi
+< dev_vme_access: mov %eax,0x54(%rdi)
+---
+> dev_vme_access: mov 0x40(%rsp),%rsi
+> dev_vme_access: mov %eax,0x54(%rsi)
+291c290
+< dev_vme_access: mov %ecx,%edi
+---
+> dev_vme_access: mov %ecx,%esi
+296,297c295
+< dev_vme_access: jne <dev_vme_access+*>
+< dev_vme_access: xor %esi,%esi
+---
+> dev_vme_access: je <dev_vme_access+*>
+298a297,298
+> dev_vme_access: mov 0x40(%rsp),%rax
+> dev_vme_access: mov $0x23,%esi
+301,302c301
+< dev_vme_access: jb <dev_vme_access+*>
+< dev_vme_access: mov $0x23,%edi
+---
+> dev_vme_access: jae <dev_vme_access+*>
+304c303
+< dev_vme_access: nopw 0x0(%rax,%rax,1)
+---
+> dev_vme_access: nopl (%rax)
+321,322c320,321
+< dev_vme_access: mov 0x40(%rsp),%rdi
+< dev_vme_access: mov %eax,0x50(%rdi)
+---
+> dev_vme_access: mov 0x40(%rsp),%rsi
+> dev_vme_access: mov %eax,0x50(%rsi)
+340,341c339,358
+< dev_vme_access: mov 0x40(%rsp),%rdi
+< dev_vme_access: mov %eax,0x88(%rdi)
+---
+> dev_vme_access: mov 0x40(%rsp),%rsi
+> dev_vme_access: mov %eax,0x88(%rsi)
+> dev_vme_access: jmp <dev_vme_access+*>
+> dev_vme_access: mov 0x40(%rsp),%rax
+> dev_vme_access: mov 0x1000(%rax),%rax
+> dev_vme_access: bt %rdx,%rax
+> dev_vme_access: jb <dev_vme_access+*>
+> dev_vme_access: mov 0x40(%rsp),%rsi
+> dev_vme_access: bts %rdx,%rax
+> dev_vme_access: mov %r14,%rcx
+> dev_vme_access: mov %r8d,%edx
+> dev_vme_access: lea 0x0(%rip),%rdi # <dev_vme_access+*>
+> dev_vme_access: mov %r11,0x10(%rsp)
+> dev_vme_access: mov %rax,0x1000(%rsi)
+> dev_vme_access: mov %r10d,%esi
+> dev_vme_access: xor %eax,%eax
+> dev_vme_access: mov %r8,0x8(%rsp)
+> dev_vme_access: call <dev_vme_access+*>
+> dev_vme_access: mov 0x8(%rsp),%r8
+> dev_vme_access: mov 0x10(%rsp),%r11
+342a360
+> dev_vme_access: cs nopw 0x0(%rax,%rax,1)
+354,355c372,373
+< dev_vme_access: mov 0x40(%rsp),%rdi
+< dev_vme_access: mov %eax,0x60(%rdi)
+---
+> dev_vme_access: mov 0x40(%rsp),%rsi
+> dev_vme_access: mov %eax,0x60(%rsi)
+398c416
+< devinit_vme: push $0xe7
+---
+> devinit_vme: push $0xea
+
+== string-reference census, keyed by STRING CONTENT (strref_census.py; obj/fix568.strref.txt, obj/fix568b.strref.txt) ==
+A census keyed by .LCn LABEL (my first form, discarded) is WRONG evidence here: label numbers are not stable across
+the two compiles -- .LC2 is the default: arm's READ debug string in fix568 (.rodata.str1.8+0x58) and the read
+announce in fix568b (+0x78) -- so a label count compares different strings.  By content:
+16c16
+<  1  [ vme: unimplemented read from register 0x%x (len %d) -- served 0x%x.  (once) ]
+---
+>  2  [ vme: unimplemented read from register 0x%x (len %d) -- served 0x%llx.  (once) ]
+19c19
+< fatal() call relocations: 2
+---
+> fatal() call relocations: 3
+
+== .rodata.str1.x diff (objdump -s) ==
+6,22c6,22
+<  0030 6e746564 20575249 54452074 6f206f66  nted WRITE to of
+<  0040 66736574 20307825 783a2030 78257820  fset 0x%x: 0x%x 
+<  0050 5d0a0000 00000000 5b20766d 653a2075  ].......[ vme: u
+<  0060 6e696d70 6c656d65 6e746564 20524541  nimplemented REA
+<  0070 44206672 6f6d206f 66667365 74203078  D from offset 0x
+<  0080 2578205d 0a000000 5b20766d 653a2075  %x ]....[ vme: u
+<  0090 6e696d70 6c656d65 6e746564 20777269  nimplemented wri
+<  00a0 74652074 6f207265 67697374 65722030  te to register 0
+<  00b0 78257820 286c656e 20256429 3a203078  x%x (len %d): 0x
+<  00c0 256c6c78 202d2d20 6465636c 696e6564  %llx -- declined
+<  00d0 2e202028 6f6e6365 29205d0a 00000000  .  (once) ].....
+<  00e0 5b20766d 653a2075 6e696d70 6c656d65  [ vme: unimpleme
+<  00f0 6e746564 20726561 64206672 6f6d2072  nted read from r
+<  0100 65676973 74657220 30782578 20286c65  egister 0x%x (le
+<  0110 6e202564 29202d2d 20736572 76656420  n %d) -- served 
+<  0120 30782578 2e202028 6f6e6365 29205d0a  0x%x.  (once) ].
+<  0130 00000000 00000000 5b20766d 653a2075  ........[ vme: u
+---
+>  0030 6e746564 20777269 74652074 6f207265  nted write to re
+>  0040 67697374 65722030 78257820 286c656e  gister 0x%x (len
+>  0050 20256429 3a203078 256c6c78 202d2d20   %d): 0x%llx -- 
+>  0060 6465636c 696e6564 2e202028 6f6e6365  declined.  (once
+>  0070 29205d0a 00000000 5b20766d 653a2075  ) ].....[ vme: u
+>  0080 6e696d70 6c656d65 6e746564 20726561  nimplemented rea
+>  0090 64206672 6f6d2072 65676973 74657220  d from register 
+>  00a0 30782578 20286c65 6e202564 29202d2d  0x%x (len %d) --
+>  00b0 20736572 76656420 3078256c 6c782e20   served 0x%llx. 
+>  00c0 20286f6e 63652920 5d0a0000 00000000   (once) ].......
+>  00d0 5b20766d 653a2075 6e696d70 6c656d65  [ vme: unimpleme
+>  00e0 6e746564 20575249 54452074 6f206f66  nted WRITE to of
+>  00f0 66736574 20307825 783a2030 78257820  fset 0x%x: 0x%x 
+>  0100 5d0a0000 00000000 5b20766d 653a2075  ].......[ vme: u
+>  0110 6e696d70 6c656d65 6e746564 20524541  nimplemented REA
+>  0120 44206672 6f6d206f 66667365 74203078  D from offset 0x
+>  0130 2578205d 0a000000 5b20766d 653a2075  %x ]....[ vme: u
+
+Raw objdump -d outputs: obj/fix568.objdump-d.txt, obj/fix568b.objdump-d.txt; their raw diff (every address after the
+first change moves): obj/objdump-d.raw.diff (619 lines).
+OBJDUMP_COMPARISON_DONE

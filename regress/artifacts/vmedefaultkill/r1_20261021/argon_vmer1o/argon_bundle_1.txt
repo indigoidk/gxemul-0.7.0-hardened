@@ -1,0 +1,830 @@
+LEGEND: one regression probe, `regress/vme_default_probe.py' (38 rows, 1047 lines), for an emulator's VME bus-controller model.  C = its row contract (each row, the mutant it is designed to catch, the channel that differs).  K = its constants.  M = its session machinery and every row's code, to the end of the file.  Labels carry the PROBE's own line numbers, so `M:886' is probe line 886.  Left out: lines 1-75 (history), the instruction encoders (each placed word is re-read by the disassembler, row `unasm').
+
+==== FILE C = row contract (probe lines 76-159) ====
+C:76  ROWS, each with the mutant it is DESIGNED to catch and the channel that differs under it.  The rev-2 descriptions
+C:77  are DATED PREDICTIONS (2026-10-20); tables 1 and 1b measured them on the 34-row rev 2 and table 2 measures rev 3.
+C:78    CONTROL rows -- DEFINITION: a row whose UNIQUE role is an apparatus or medium proof; a row a product edit can red
+C:79    is scored, never CONTROL.  CONTROL=FAIL means a PREREQUISITE of the scored rows failed and claims NO cause:
+C:80    `vbr reset' and `free neg ctl' also depend on product behaviour, and an edit to DEVINIT's VBR seed reds `vbr reset'.
+C:81      neg apparatus  a bogus subtype: the liveness oracle MUST go red (it is failable)
+C:82      session / live the control session runs to `quit'; an or-immediate reads back
+C:83      vbr reset      DEVICE SIGNATURE: DEVINIT's VBR seed (RAM or a device-less build answers 0)
+C:84      free neg ctl   GCSRCTL's debug() line: PRESENT in the stepped cased census, ABSENT in the free run -- the
+C:85                     run was free at verbose 0, so the fatal-vs-debug channel of the announce rows can vary
+C:86      unasm          every placed word re-read by the disassembler
+C:87    cased rows (scored: product edits red them -- M_DROPTCTL, M_DROPIRQEN and M_T1CMPWRDROP in tables 1 and 1b)
+C:88      t1cmp rt       cased T1CMP stores and reads back (and is the null medium's second discriminator)
+C:89      cased census   one ld at each of the ten cased offsets, ONE session, sentinel-seeded, PC + liveness after:
+C:90                     a cased label dropped FAULTs that offset and every later load keeps its sentinel
+C:91      free ctl       FREE-RUNNING T1CMP round trip to a breakpoint
+C:92      free quiet     ...that run prints NO vme text at all (a cased access never announces)
+C:93      tctl rt        TCTL stores a word and reads it back
+C:94      vbr rt         VBR stores a word and reads it back, then is restored to the seed and read back again
+C:95      t1count inc    T1COUNT stores a word; two reads give it and it + 100 (the read arm's `+= 100')
+C:96      cased wr       a word store to each of the six NON-storing cased arms (0x00, GCSRCTL, TCR, IRQEN, IRQL3,
+C:97                     IRQL4): no fault, PC + liveness after
+C:98      (`tctl rt', `vbr rt' and `t1count inc' share ONE stepped session: a fault at its first store reds all three --
+C:99      table 1's M_DROPTCTL -- so two of those reds are DEPENDENT, not own-channel kills.)
+C:100    population 2 (decline)
+C:101      p2 rd census   26 ld: all 0, no fault, PC + liveness after; a label dropped FAULTs (HEAD: the host dies)
+C:102      p2 wr census   26 st of 0xa5a5a5a5, a liveness or (checked: a FAULTING store stops it), then the 26 ld:
+C:103                     all 0.  A decline that STORES reads back non-zero -- visible because the fix does NOT force
+C:104                     odata = 0; a decline conditioned on direction FAULTs
+C:105      p2 ld widths   ld.bu + ld.hu at 0x28, ld.d at 0x08 (BOTH r6 and r7): 0, no fault -- a decline conditioned
+C:106                     on len FAULTs one of them
+C:107      p2 st widths   st.b + st.h at 0x28, st.d at 0x08, a liveness or, then read 0x28, 0x08, 0x0c back: all 0
+C:108    announce (FREE-RUNNING; full tail literals; every offset exactly once)
+C:109      p2 ann rd      each of the 26 READ then immediately WRITTEN: exactly 26 read-form lines, 0 write-form
+C:110      p2 ann rd 2    the same pairs again in the same session: 0 lines, PC at the breakpoint, liveness proof
+C:111      p2 ann wr      each WRITTEN then immediately READ: exactly 26 write-form lines `(len 4): 0xa5a5a5a5'
+C:112      p2 ann wr 2    the same pairs again: 0 lines, PC at the breakpoint, liveness proof
+C:113                     -- together 26 labels x {read, write} x {latch clear, set}.  Rev 2's dated predictions, and what
+C:114                     table 1 MEASURED for each: read- or write-branch fatal -> debug (0 lines: M_RDEBUG, M_WDEBUG), a
+C:115                     shared latch (1 line: M_LATCHONE), a never-set latch (52 lines: M_LATCHNOSET), a latch cleared
+C:116                     by a write (pass 2 re-announces, 26 lines: M_LATCHCLRW and M_LATCHCLRW_POST), a dropped `(once)'
+C:117                     (no exact match: M_NOONCE).  NEVER BUILT: a per-direction latch (52), a latch set at one
+C:118                     constant bit (51).
+C:119      p2 nw rd       pass 1, FIRST access to three untouched registers by ld.bu / ld.hu / ld.d: `(len 1)',
+C:120                     `(len 2)', `(len 8) -- served 0x0.' -- an announce that fires only for 4-byte accesses gives 0
+C:121      p2 nw wr       pass 1, FIRST access by st.b / st.h / st.d: `(len 1): 0xd4', `(len 2): 0xc3d4',
+C:122                     `(len 8): 0x1122334455667788' -- a 32-bit truncation of the 64-bit value fails the match
+C:123      p2 nw rd 2     NEW.  Pass 2 IN THE SAME PROCESS (a new gxemul memsets the latch, so a separate process would be
+C:124                     green): the three non-word reads again -> 0 read-form lines.  Kills M_LATCHLEN4 (the latch SET
+C:125                     conditioned on len == 4: non-word accesses announce but never latch, so pass 2 re-announces 3).
+C:126                     A zero is accepted only from a pass that reached its breakpoint with its liveness proof, and only
+C:127                     when pass 1 announced reads at all (`pass 1 silent' otherwise)
+C:128      p2 nw wr 2     NEW.  The same for the three non-word stores -> 0 write-form lines (M_LATCHLEN4: 3)
+C:129      p2 zero wr     NEW.  Its OWN free-running session (inside the announce pair it would change a 26-count literal):
+C:130                     `st r0,r3,0x30' -- a ZERO-valued first store to an untouched register (DMACTL); nothing is
+C:131                     seeded into r0 (the m88k core stops the CPU when r0 holds a non-zero value).  Wants the exact
+C:132                     WRITE-FORM literal `(len 4): 0x0 -- declined.' and one `[ vme:' line.  Kills M_IDATA (the
+C:133                     direction test swapped for `if (idata)': a zero store takes the READ form).  A count of `[ vme:'
+C:134                     lines alone would accept the read-form line, so the literal is the oracle.  One width is enough:
+C:135                     the swapped test reads idata's zero-ness and the body tests nothing on len
+C:136    population 1 (fault)
+C:137      p1 fault lo / hi / mid   ld at 0x90 / 0xffc / 0x94: PC 0x18, DMA0, DMT0 (word load into r4), host alive;
+C:138                     `return 0' -> `break' serves the read (PC advances); exit(1) reinstated kills the host
+C:139      p1 fault wr    st at 0x90: PC 0x18, DMA0, DMT0 (the word-store form)
+C:140      p1 p2 edge     ld 0x8c declines (0), then ld 0x90 faults: the label set's last member dropped faults at
+C:141                     0x8c instead; a label added AT 0x90 declines it
+C:142      p1 census      FREE-RUNNING: all 988 population-1 word starts, faults counted: a label added at ANY of them
+C:143                     gives 987; `return 0' -> `break' gives 0
+C:144      p1 widths      FREE-RUNNING: ld.bu 0x93, ld.hu 0x96, ld.d 0x98, st.b 0x9d, st.h 0xa2, st.d 0xa8, and NEW the
+C:145                     two LANE-0 accesses ld.hu 0xb0 (into r8, sentinel-seeded) and st.b 0xb4 -- eight faults: a FAULT
+C:146                     narrowed to word accesses (or to one direction) declines some of them; `if (len == 2 &&
+C:147                     (relative_addr & 3) == 0) break;' (M_LANE0H) declines the ld.hu (seven faults, r8 loses its
+C:148                     sentinel) and its `len == 1' twin (M_LANE0B) the st.b (seven faults) -- two legs, two accesses
+C:149      p1 quiet       NEW.  `[ vme:' lines in the continue text of the free-running p1 census run AND the p1 widths
+C:150                     run, each wanting 0: `default:''s debug() is silent free-running and fatal() is not, so a
+C:151                     debug -> fatal PROMOTION prints -- read side (M_DFATAL) 988 census lines, write side
+C:152                     (M_DFATALW) four widths lines (the census stores nothing).  Free-running at verbose 0 is what
+C:153                     lets it vary: in a stepped session it would be red on the fix itself
+C:154    interims -- NAMED channels of `vmewidthlanes': that round reds these and re-derives them
+C:155      p3 interim     ld.bu 0x51 (inside cased T1CMP): fault, DMA0 0xfff40050 -- also `if (len != 4) break;' in
+C:156                     `default:' (Fable) declines it
+C:157      p2 int byte    ld.bu 0x29 (inside population-2 MASTERCTL): fault, DMA0 0xfff40028
+C:158      p2 int half    ld.hu 0x2a (inside MASTERCTL): fault, DMA0 0xfff40028
+C:159  
+
+==== FILE K = constants (probe lines 231-289) ====
+K:231  VME = 0xfff40000            # VME2_BASE (mvme88k_vme.h)
+K:232  CODE = 0x00010000
+K:233  CODE2 = 0x00010200          # the second pass of a two-pass free-running session
+K:234  CENSUS = 0x00020000         # the population-1 census program
+K:235  VEC_DACC = 0x18             # VBR 0 + 8 * M88K_EXCEPTION_DATA_ACCESS (3)
+K:236  VEC_MISAL = 0x20            # VBR 0 + 8 * M88K_EXCEPTION_MISALIGNED_ACCESS (4)
+K:237  SENT = 0xdeadbeef
+K:238  WVAL = 0xa5a5a5a5
+K:239  T1VAL = 0x12345678
+K:240  TCTLVAL = 0x13572468
+K:241  VBRVAL = 0x89abcdef
+K:242  T1CVAL = 0x00001000
+K:243  NARROW = 0xa1b2c3d4         # st.b / st.h source: distinct bytes, so a lane mix-up is visible
+K:244  DHI, DLO = 0x11223344, 0x55667788   # st.d source pair: HIGH word != low word, so a 32-bit truncation shows
+K:245  VBR_SEED = 0x67000000       # DEVINIT: VME2_SET_VBR0(6) + VME2_SET_VBR1(7) = 6 << 28 | 7 << 24
+K:246  LIVE = 0x1234
+K:247  LIVE2 = 0x5678              # the second-pass liveness proof
+K:248  STLIVE = 0x5a5a             # the after-the-stores liveness proof
+K:249  T1COUNT_STEP = 100          # the T1COUNT read arm's `+= 100' (after the preload has served)
+K:250  ZERO_OFF = 0x30             # `p2 zero wr': DMACTL -- its own session; not MISC (0x8c) and not SLAVELMOD2 (0x0c),
+K:251                              # the pair a 32-bit latch shift could collide (undefined; see ORDER DEPENDENCE), and no
+K:252                              # non-census session touches it
+K:253  LANE0_HU = 0xb0             # `p1 widths': a word-aligned (lane-0) halfword start no other access there uses
+K:254  LANE0_B = 0xb4              # ...and a word-aligned byte start
+K:255  
+K:256  CASED = (0x00, 0x2c, 0x4c, 0x50, 0x54, 0x60, 0x6c, 0x80, 0x84, 0x88)
+K:257  POP2 = ((0x04, "SADDR2"), (0x08, "SLAVELMOD1"), (0x0c, "SLAVELMOD2"), (0x10, "SLAVECTL"),
+K:258          (0x14, "MASTER1"), (0x18, "MASTER2"), (0x1c, "MASTER3"), (0x20, "MASTER4"),
+K:259          (0x24, "MASTER4MOD"), (0x28, "MASTERCTL"), (0x30, "DMACTL"), (0x34, "DMAMODE"),
+K:260          (0x38, "DMALADDR"), (0x3c, "DMAVMEADDR"), (0x40, "DMACOUNT"), (0x44, "DMATABLE"),
+K:261          (0x48, "DMASTAT"), (0x58, "T2CMP"), (0x5c, "T2COUNT"), (0x64, "PRESCALE"),
+K:262          (0x68, "IRQSTAT"), (0x70, "SETSOFTIRQ"), (0x74, "IRQCLR"), (0x78, "IRQL1"),
+K:263          (0x7c, "IRQL2"), (0x8c, "MISC"))
+K:264  POP2_OFFS = tuple(o for o, _ in POP2)
+K:265  POP1 = tuple(range(0x90, 0x1000, 4))
+K:266  #  The header's register block is 36 CONTIGUOUS words, 0x00..0x8c: cased + population 2 must tile it exactly.
+K:267  assert len(CASED) == 10 and len(POP2) == 26 and len(POP1) == 988
+K:268  assert sorted(CASED + POP2_OFFS) == list(range(0, 0x90, 4))
+K:269  
+K:270  #  DMT0 PREDICTIONS (written before the first run, from cpu_m88k_instr_loadstore.c: VALID 0x1, DAS 0x4000,
+K:271  #  byte enables << 2 -- word 0xf, byte 1 << (3 - (addr & 3)), half 3 << (2 - (addr & 2)) -- and DREG << 7 on a
+K:272  #  load or WRITE 0x2 on a store).  The rows pin what the measurement says.
+K:273  def dmt_load(dreg, en):
+K:274      return 0x1 | 0x4000 | (dreg << 7) | (en << 2)
+K:275  
+K:276  
+K:277  DMT_ST_WORD = 0x1 | 0x2 | 0x4000 | (0xf << 2)          # 0x403f
+K:278  DMT_LD_WORD_R4 = dmt_load(4, 0xf)                      # 0x423d
+K:279  DMT_LD_WORD_R6 = dmt_load(6, 0xf)                      # 0x433d
+K:280  DMT_LD_BYTE1_R4 = dmt_load(4, 1 << (3 - 1))            # 0x4211  (a byte at addr & 3 == 1)
+K:281  DMT_LD_HALF2_R4 = dmt_load(4, 3 << (2 - 2))            # 0x420d  (a halfword at addr & 2 == 2)
+K:282  
+K:283  PROMPT = "GXemul> "
+K:284  RD_LINE = "[ vme: unimplemented read from register 0x%x (len %d) -- served 0x%x.  (once) ]"
+K:285  WR_LINE = "[ vme: unimplemented write to register 0x%x (len %d): 0x%x -- declined.  (once) ]"
+K:286  GCS_LINE = "[ vme: unimplemented GCSRCTL ]"
+K:287  VMETXT = "[ vme:"
+K:288  
+K:289  
+
+==== FILE M = session machinery + rows (probe lines 369-1048) ====
+M:369  # ------------------------------------------------------------------- sessions
+M:370  def hx(v):
+M:371      return "absent" if v is None else "0x%x" % v
+M:372  
+M:373  
+M:374  def argv_for(subtype):
+M:375      return [BIN, "-V", "-x", "-E", "mvme88k", "-e", subtype, "-M", "64",
+M:376              "0x%x:%s" % (CODE, DUMMY)]
+M:377  
+M:378  
+M:379  def seeds(pairs):
+M:380      return ["r%d=0x%x" % (r, v) for r, v in pairs]
+M:381  
+M:382  
+M:383  def place(blocks):
+M:384      """blocks: [(addr, [Ins])] -> (debugger commands, [(addr, Ins)]).  Every block is re-read with
+M:385         `unassemble' (end-exclusive) right after it is written."""
+M:386      cmds, placed = [], []
+M:387      for at, insns in blocks:
+M:388          for i, ins in enumerate(insns):
+M:389              a = at + 4 * i
+M:390              if ins.ops is None:
+M:391                  ins = Ins(ins.word, ins.mnem, "0x%08x" % a)
+M:392              cmds.append("put w 0x%x, 0x%08x" % (a, ins.word))
+M:393              placed.append((a, ins))
+M:394          cmds.append("unassemble 0x%x 0x%x" % (at, at + 4 * len(insns)))
+M:395      return cmds, placed
+M:396  
+M:397  
+M:398  def run_piped(cmds, subtype="mvme187", timeout=90):
+M:399      inp = ("\n".join(list(cmds) + ["quit"]) + "\n").encode("latin-1")
+M:400      try:
+M:401          p = subprocess.run(argv_for(subtype), input=inp, stdout=subprocess.PIPE,
+M:402                             stderr=subprocess.STDOUT, timeout=timeout)
+M:403      except subprocess.TimeoutExpired as e:
+M:404          return (e.output or b"").decode("latin-1", "replace").replace("\r", ""), "TIMEOUT"
+M:405      rc = p.returncode
+M:406      return (p.stdout.decode("latin-1", "replace").replace("\r", ""),
+M:407              ("sig%d" % -rc) if rc < 0 else ("exit%d" % rc))
+M:408  
+M:409  
+M:410  def run_pty(cmds, t_cmd=10.0, t_run=30.0):
+M:411      """One command at a time through a pty.  An ordinary command waits for the next prompt; `continue' waits
+M:412         for BREAKPOINT and then a prompt after it, and nothing is sent while the guest runs.  -> (transcript,
+M:413         how); how is exitN / sigN, or no-prompt / no-breakpoint (the child is then killed: a guest still running
+M:414         would never read `quit')."""
+M:415      pid, fd = pty.fork()
+M:416      if pid == 0:
+M:417          try:
+M:418              os.execv(BIN, argv_for("mvme187"))
+M:419          finally:
+M:420              os._exit(127)
+M:421      buf = [""]
+M:422  
+M:423      def pump(deadline, pred):
+M:424          while True:
+M:425              if pred():
+M:426                  return "ok"
+M:427              left = deadline - time.time()
+M:428              if left <= 0:
+M:429                  return "timeout"
+M:430              r, _, _ = select.select([fd], [], [], min(left, 0.05))
+M:431              if not r:
+M:432                  continue
+M:433              try:
+M:434                  d = os.read(fd, 65536)
+M:435              except OSError:
+M:436                  return "eof"
+M:437              if not d:
+M:438                  return "eof"
+M:439              buf[0] += d.decode("latin-1", "replace")
+M:440  
+M:441      state = pump(time.time() + 20.0, lambda: PROMPT in buf[0])
+M:442      failed = None if state == "ok" else ("no-prompt" if state == "timeout" else None)
+M:443      if state == "ok":
+M:444          for c in cmds:
+M:445              start = len(buf[0])
+M:446              try:
+M:447                  os.write(fd, (c + "\n").encode("latin-1"))
+M:448              except OSError:
+M:449                  state = "eof"
+M:450                  break
+M:451              if c == "continue":
+M:452                  def pred(start=start):
+M:453                      b = buf[0].find("BREAKPOINT", start)
+M:454                      return b >= 0 and buf[0].find(PROMPT, b) >= 0
+M:455                  state = pump(time.time() + t_run, pred)
+M:456                  if state == "timeout":
+M:457                      failed = "no-breakpoint"
+M:458              else:
+M:459                  state = pump(time.time() + t_cmd,
+M:460                               lambda start=start: buf[0].find(PROMPT, start) >= 0)
+M:461                  if state == "timeout":
+M:462                      failed = "no-prompt"
+M:463              if state != "ok":
+M:464                  break
+M:465      if state == "ok":
+M:466          try:
+M:467              os.write(fd, b"quit\n")
+M:468          except OSError:
+M:469              pass
+M:470          pump(time.time() + 5.0, lambda: False)
+M:471      try:
+M:472          os.close(fd)
+M:473      except OSError:
+M:474          pass
+M:475      stat, reaped = None, False
+M:476      for attempt in range(2):
+M:477          for _ in range(40):
+M:478              try:
+M:479                  p, s = os.waitpid(pid, os.WNOHANG)
+M:480              except OSError:
+M:481                  p, s = pid, None
+M:482              if p:
+M:483                  stat, reaped = s, True
+M:484                  break
+M:485              time.sleep(0.05)
+M:486          if reaped:
+M:487              break
+M:488          try:
+M:489              os.kill(pid, 9)
+M:490          except OSError:
+M:491              pass
+M:492          failed = failed or "killed"
+M:493      if failed:
+M:494          how = failed
+M:495      elif stat is None:
+M:496          how = "unreaped"
+M:497      elif os.WIFSIGNALED(stat):
+M:498          how = "sig%d" % os.WTERMSIG(stat)
+M:499      else:
+M:500          how = "exit%d" % os.WEXITSTATUS(stat)
+M:501      return buf[0].replace("\r", ""), how
+M:502  
+M:503  
+M:504  DIS_RE = re.compile(r"^[su]([0-9a-f]{8}): ([0-9a-f]{8})\s+(?:<-\s+)?(\S+)(?:\t(\S+))?[ \t]*$", re.M)
+M:505  GPR_RE = re.compile(r"\br(\d+)\s*=\s*(0x[0-9a-fA-F]+)")
+M:506  PC_RE = re.compile(r"cpu\d+:\s+pc\s+=\s+(0x[0-9a-fA-F]+)")
+M:507  CR_RE = re.compile(r"\b([A-Z][A-Z0-9]*)=(0x[0-9a-fA-F]+)")
+M:508  
+M:509  
+M:510  class Res(object):
+M:511      pass
+M:512  
+M:513  
+M:514  def analyse(text, how, placed):
+M:515      """Split the transcript at the prompts; parse every unassemble, every reg dump (in order), the last
+M:516         `reg 0,0', and the text of every `continue'."""
+M:517      r = Res()
+M:518      r.how, r.text, r.placed = how, text, placed
+M:519      r.dis, r.dumps, r.cr, r.conts = {}, [], None, []
+M:520      for part in text.split(PROMPT)[1:]:
+M:521          cmd, _, out = part.partition("\n")
+M:522          cmd = cmd.strip()
+M:523          if cmd.startswith("unassemble"):
+M:524              for m in DIS_RE.finditer(out):
+M:525                  r.dis[int(m.group(1), 16)] = (int(m.group(2), 16), m.group(3), m.group(4) or "")
+M:526          elif cmd == "reg":
+M:527              m = PC_RE.search(out)
+M:528              if m:
+M:529                  r.dumps.append(({int(g.group(1)): int(g.group(2), 16)
+M:530                                   for g in GPR_RE.finditer(out)}, int(m.group(1), 16)))
+M:531          elif cmd == "reg 0,0":
+M:532              cr = {g.group(1): int(g.group(2), 16) for g in CR_RE.finditer(out)}
+M:533              if cr:
+M:534                  r.cr = cr
+M:535          elif cmd == "continue":
+M:536              r.conts.append(out)
+M:537      r.regs, r.pc = r.dumps[-1] if r.dumps else (None, None)
+M:538      return r
+M:539  
+M:540  
+M:541  UNASM = {"ok": 0, "n": 0, "bad": []}
+M:542  
+M:543  
+M:544  def check_unasm(r, scored=True):
+M:545      ok = n = 0
+M:546      for a, ins in r.placed:
+M:547          n += 1
+M:548          d = r.dis.get(a)
+M:549          if d is not None and d == (ins.word, ins.mnem, ins.ops):
+M:550              ok += 1
+M:551          elif scored:
+M:552              UNASM["bad"].append("0x%x:%08x %s %s -> %r" % (a, ins.word, ins.mnem, ins.ops, d))
+M:553      if scored:
+M:554          UNASM["ok"] += ok
+M:555          UNASM["n"] += n
+M:556      return ok, n
+M:557  
+M:558  
+M:559  def stepped(blocks, regs, nsteps, cr=False, scored=True):
+M:560      cmds, placed = place(blocks)
+M:561      cmds = seeds([(3, VME)] + regs) + cmds + ["pc=0x%x" % CODE, "step %d" % nsteps, "reg"]
+M:562      if cr:
+M:563          cmds.append("reg 0,0")
+M:564      t, how = run_piped(cmds)
+M:565      r = analyse(t, how, placed)
+M:566      check_unasm(r, scored)
+M:567      return r
+M:568  
+M:569  
+M:570  def freerun(blocks, regs, bps, runs):
+M:571      """runs: [start pc] -- each is `pc=<start>', `continue', `reg'.  All code, every unassemble and every
+M:572         breakpoint go in BEFORE the first `continue', so the disassembly cross-check never depends on surviving
+M:573         a run."""
+M:574      cmds, placed = place(blocks)
+M:575      cmds = seeds([(3, VME)] + regs) + cmds + ["breakpoint add 0x%x" % b for b in bps]
+M:576      for start in runs:
+M:577          cmds += ["pc=0x%x" % start, "continue", "reg"]
+M:578      t, how = run_pty(cmds)
+M:579      r = analyse(t, how, placed)
+M:580      check_unasm(r)
+M:581      return r
+M:582  
+M:583  
+M:584  #  A TIMEOUT is named as one, distinctly from a process death (`died:exit1') and from an assertion mismatch, so a
+M:585  #  load-induced red is never read as a product kill (rev 3; GLM, F2).  run_pty reports no-prompt / no-breakpoint,
+M:586  #  run_piped TIMEOUT.
+M:587  TIMEOUTS = ("no-prompt", "no-breakpoint", "TIMEOUT")
+M:588  
+M:589  
+M:590  def died(r):
+M:591      return ("timeout:%s" if r.how in TIMEOUTS else "died:%s") % r.how
+M:592  
+M:593  
+M:594  def reg(r, n):
+M:595      if r.regs is None:
+M:596          return died(r) if r.how != "exit0" else "absent"
+M:597      return hx(r.regs.get(n))
+M:598  
+M:599  
+M:600  def devsig_bad(r):
+M:601      """None when the session's opening VBR read saw the device; else the reason."""
+M:602      if r.regs is None:
+M:603          return died(r)
+M:604      if r.regs.get(30) != VBR_SEED:
+M:605          return NODEV % hx(r.regs.get(30))
+M:606      return None
+M:607  
+M:608  
+M:609  #  Cause-free stop wording (rev 3; AX's F9 text, refined per site by grok): each row stays RED, and none claims to
+M:610  #  know whether the stop is the mutation under test.
+M:611  NODEV = "nodev r30=%s: device signature absent, check not made"
+M:612  STOPPED = "unexpected stop pc=%s before the row's check"
+M:613  NOT_EXERCISED = "dependent check not exercised: pass 1 did not complete"
+M:614  SILENT = "pass 1 silent"
+M:615  
+M:616  
+M:617  def end_of(prog, at=CODE):
+M:618      return at + 4 * (len(prog) - 1)
+M:619  
+M:620  
+M:621  def tail(r, pc_want, live_reg=31, live_want=LIVE):
+M:622      """'' when the stepped run ended at the program's br with its liveness register set; else a suffix."""
+M:623      s = ""
+M:624      if r.pc != pc_want:
+M:625          s += " pc=%s" % hx(r.pc)
+M:626      if r.regs.get(live_reg) != live_want:
+M:627          s += " r%d=%s" % (live_reg, hx(r.regs.get(live_reg)))
+M:628      return s
+M:629  
+M:630  
+M:631  def lines(seg):
+M:632      return [ln.rstrip() for ln in seg.split("\n")]
+M:633  
+M:634  
+M:635  rows = []
+M:636  
+M:637  
+M:638  def row(name, got, want, note=""):
+M:639      assert name not in [n for n, _ in rows], "DUPLICATE ROW NAME %r" % name
+M:640      assert len(name) <= 15, name     # `%-16s ' keeps a gate's `^$v  .*ok$' satisfiable
+M:641      ok = (got == want)
+M:642      rows.append((name, ok))
+M:643      print("%-16s %-34s %-34s %-60s %s" % (name, str(got), str(want), note, "ok" if ok else "FAIL"))
+M:644      sys.stdout.flush()
+M:645      return ok
+M:646  
+M:647  
+M:648  print("vmedefaultkill RUNG-3 DETECTOR (revision 3, fix568b) -- binary=%s label=%s" % (BIN, LABEL))
+M:649  print("machine: -E mvme88k -e mvme187 -M 64 (UNMODIFIED); vme at 0x%08x" % VME)
+M:650  t0 = time.time()
+M:651  
+M:652  # ================================================================ INFO (unscored)
+M:653  #  Measured so the panel has the number; NOT a row -- no want, no score, no pin.  (LD_D refuses a 4-mod-8
+M:654  #  offset, so this one word is built by hand.)
+M:655  cmds, placed = place([(VEC_MISAL, [BR_SELF()]), (CODE, [VSIG(), Ins(enc(0x04, 4, 3, 0x0c), "ld.d", "r4,r3,0xc"),
+M:656                                                          OR_I(6, 0, LIVE), BR_SELF()])])
+M:657  t, how = run_piped(seeds([(3, VME), (4, SENT), (5, SENT), (6, SENT), (30, SENT)]) + cmds
+M:658                     + ["pc=0x%x" % CODE, "step 3", "reg"])
+M:659  ri = analyse(t, how, placed)
+M:660  print("INFO ld.d 4mod8  ld.d at 0x0c (4 mod 8): how=%s pc=%s r4=%s r5=%s r6=%s vme-text=%d unasm=%d/%d"
+M:661        % (ri.how, hx(ri.pc), reg(ri, 4), reg(ri, 5), reg(ri, 6), ri.text.count(VMETXT),
+M:662           *check_unasm(ri, scored=False)))
+M:663  
+M:664  print("%-16s %-34s %-34s %-60s %s" % ("row", "got", "want", "note", ""))
+M:665  
+M:666  # ================================================================ apparatus
+M:667  #  APPARATUS NEGATIVE CONTROL: the liveness oracle must be able to go red.
+M:668  cmds, _ = place([(CODE, [OR_I(4, 0, LIVE), BR_SELF()])])
+M:669  t, how = run_piped(seeds([(4, SENT)]) + cmds + ["pc=0x%x" % CODE, "step 1", "reg"], subtype="187")
+M:670  rn = analyse(t, how, [])
+M:671  row("neg apparatus", "%s/%s" % (how, hx(rn.regs.get(4)) if rn.regs else "absent"), "exit1/absent",
+M:672      "bogus subtype `187' -> no machine -> `live' MUST fail")
+M:673  
+M:674  prog = [OR_I(4, 0, LIVE), LD(5, 0x88), ST(2, 0x50), LD(6, 0x50), BR_SELF()]
+M:675  r = stepped([GUARD, (CODE, prog)], [(2, T1VAL), (4, SENT), (5, SENT), (6, SENT)], 4)
+M:676  row("session", r.how, "exit0", "the control session ran to `quit'")
+M:677  row("live", reg(r, 4), hx(LIVE), "or r4,r0,0x1234 -- the guest executes, readback works")
+M:678  row("vbr reset", reg(r, 5), hx(VBR_SEED), "DEVICE SIGNATURE: DEVINIT's VBR seed; RAM or no device reads 0")
+M:679  row("t1cmp rt", reg(r, 6), hx(T1VAL), "a word stored to CASED T1CMP reads back")
+M:680  
+M:681  #  CASED CENSUS: one load per cased offset, ONE session, sentinel-seeded, then liveness.  Stepped, so the GCSRCTL
+M:682  #  load's debug() line PRINTS here -- the positive half of `free neg ctl'.
+M:683  CC = [(4, 0x00), (5, 0x2c), (6, 0x4c), (7, 0x50), (8, 0x54), (9, 0x60), (10, 0x6c), (11, 0x80), (12, 0x84),
+M:684        (13, 0x88)]
+M:685  CC_WANT = {4: 0, 5: 0, 6: 0, 7: 0, 8: 0, 9: 0, 10: 0, 11: 0, 12: 0, 13: VBR_SEED, 15: LIVE}
+M:686  prog = [LD(rr, o) for rr, o in CC] + [OR_I(15, 0, LIVE), BR_SELF()]
+M:687  r = stepped([GUARD, (CODE, prog)], [(rr, SENT) for rr in CC_WANT], len(prog) - 1)
+M:688  gcs_stepped = lines(r.text).count(GCS_LINE)
+M:689  if r.regs is None:
+M:690      got = died(r)
+M:691  else:
+M:692      got = "%d/%d" % (sum(1 for rr, v in CC_WANT.items() if r.regs.get(rr) == v), len(CC_WANT))
+M:693      if r.pc != end_of(prog):
+M:694          got += " pc=%s" % hx(r.pc)
+M:695  row("cased census", got, "11/11", "ten cased offsets read (VBR 0x67000000, the rest 0) + liveness")
+M:696  
+M:697  #  FREE-RUNNING SHAPE CONTROL: T1CMP round trip and a GCSRCTL read, to a breakpoint.
+M:698  prog = [VSIG(), ST(2, 0x50), LD(5, 0x50), LD(8, 0x2c), OR_I(7, 0, LIVE), BR_SELF()]
+M:699  bp = end_of(prog)
+M:700  r = freerun([GUARD, (CODE, prog)], [(2, T1VAL), (5, SENT), (7, SENT), (8, SENT), (30, SENT)],
+M:701              [bp, VEC_DACC], [CODE])
+M:702  if r.regs is None or not r.conts:
+M:703      got_c = got_q = got_n = died(r)
+M:704  elif r.pc != bp:
+M:705      got_c = got_q = got_n = STOPPED % hx(r.pc)
+M:706  else:
+M:707      got_c = "%s/%s/%s" % (hx(r.regs.get(5)), hx(r.regs.get(30)), hx(r.regs.get(7)))
+M:708      got_q = r.conts[0].count(VMETXT)
+M:709      got_n = "%d/%d" % (gcs_stepped, lines(r.conts[0]).count(GCS_LINE))
+M:710  row("free ctl", got_c, "%s/%s/%s" % (hx(T1VAL), hx(VBR_SEED), hx(LIVE)),
+M:711      "FREE-RUNNING to a breakpoint: T1CMP round trip, VBR, liveness")
+M:712  row("free quiet", got_q, 0, "...and that run prints NO vme text at all")
+M:713  row("free neg ctl", got_n, "1/0", "GCSRCTL's debug() line: 1 stepped (cased census), 0 free-running")
+M:714  
+M:715  # ================================================================ cased accept side (write paths)
+M:716  prog = [VSIG(), ST(2, 0x60), LD(4, 0x60), ST(7, 0x88), LD(5, 0x88), ST(11, 0x88), LD(12, 0x88),
+M:717          ST(8, 0x54), LD(9, 0x54), LD(10, 0x54), OR_I(31, 0, LIVE), BR_SELF()]
+M:718  r = stepped([GUARD, (CODE, prog)],
+M:719              [(2, TCTLVAL), (7, VBRVAL), (8, T1CVAL), (11, VBR_SEED), (4, SENT), (5, SENT), (9, SENT),
+M:720               (10, SENT), (12, SENT), (30, SENT), (31, SENT)], len(prog) - 1)
+M:721  bad = devsig_bad(r)
+M:722  if bad:
+M:723      g_t = g_v = g_c = bad
+M:724  else:
+M:725      sfx = tail(r, end_of(prog))
+M:726      g_t = hx(r.regs.get(4)) + sfx
+M:727      g_v = "%s/%s" % (hx(r.regs.get(5)), hx(r.regs.get(12))) + sfx
+M:728      g_c = "%s/%s" % (hx(r.regs.get(9)), hx(r.regs.get(10))) + sfx
+M:729  row("tctl rt", g_t, hx(TCTLVAL), "TCTL stores a word and reads it back")
+M:730  row("vbr rt", g_v, "%s/%s" % (hx(VBRVAL), hx(VBR_SEED)), "VBR stores, reads back; restored to the seed, reads back")
+M:731  row("t1count inc", g_c, "%s/%s" % (hx(T1CVAL), hx(T1CVAL + T1COUNT_STEP)),
+M:732      "T1COUNT stores; two reads give it, then it + 100")
+M:733  
+M:734  prog = [VSIG()] + [ST(2, o) for o in (0x00, 0x2c, 0x4c, 0x6c, 0x80, 0x84)] + [OR_I(31, 0, LIVE), BR_SELF()]
+M:735  r = stepped([GUARD, (CODE, prog)], [(2, WVAL), (30, SENT), (31, SENT)], len(prog) - 1)
+M:736  bad = devsig_bad(r)
+M:737  row("cased wr", bad if bad else "%s/%s" % (hx(r.pc), hx(r.regs.get(31))),
+M:738      "%s/%s" % (hx(end_of(prog)), hx(LIVE)), "a word store to 0x00/GCSRCTL/TCR/IRQEN/IRQL3/IRQL4: no fault")
+M:739  
+M:740  # ================================================================ population 2 (decline)
+M:741  REGS26 = list(range(4, 30))
+M:742  prog = [VSIG()] + [LD(rr, o) for rr, o in zip(REGS26, POP2_OFFS)] + [OR_I(31, 0, LIVE), BR_SELF()]
+M:743  r = stepped([GUARD, (CODE, prog)], [(30, SENT), (31, SENT)] + [(rr, SENT) for rr in REGS26], len(prog) - 1)
+M:744  bad = devsig_bad(r)
+M:745  row("p2 rd census", bad if bad else "%d/26" % sum(1 for rr in REGS26 if r.regs.get(rr) == 0) + tail(r, end_of(prog)),
+M:746      "26/26", "26 ld, one per population-2 register: all 0, no fault, runs on")
+M:747  
+M:748  prog = ([VSIG()] + [ST(2, o) for o in POP2_OFFS] + [OR_I(1, 0, STLIVE)]
+M:749          + [LD(rr, o) for rr, o in zip(REGS26, POP2_OFFS)] + [OR_I(31, 0, LIVE), BR_SELF()])
+M:750  r = stepped([GUARD, (CODE, prog)], [(2, WVAL), (1, SENT), (30, SENT), (31, SENT)] + [(rr, SENT) for rr in REGS26],
+M:751              len(prog) - 1)
+M:752  bad = devsig_bad(r)
+M:753  if bad:
+M:754      got = bad
+M:755  else:
+M:756      got = "%d/26" % sum(1 for rr in REGS26 if r.regs.get(rr) == 0) + tail(r, end_of(prog))
+M:757      if r.regs.get(1) != STLIVE:
+M:758          got += " after-st r1=%s" % hx(r.regs.get(1))
+M:759  row("p2 wr census", got, "26/26", "26 st 0xa5a5a5a5, liveness AFTER the stores, 26 ld: all 0")
+M:760  
+M:761  prog = [VSIG(), LD_BU(4, 0x28), LD_HU(5, 0x28), LD_D(6, 0x08), OR_I(31, 0, LIVE), BR_SELF()]
+M:762  r = stepped([GUARD, (CODE, prog)], [(4, SENT), (5, SENT), (6, SENT), (7, SENT), (30, SENT), (31, SENT)],
+M:763              len(prog) - 1)
+M:764  bad = devsig_bad(r)
+M:765  row("p2 ld widths", bad if bad else "%d/4" % sum(1 for rr in (4, 5, 6, 7) if r.regs.get(rr) == 0)
+M:766      + tail(r, end_of(prog)), "4/4", "ld.bu + ld.hu at 0x28, ld.d at 0x08 (r6 AND r7): 0, no fault")
+M:767  
+M:768  prog = [VSIG(), ST_B(12, 0x28), ST_H(12, 0x28), ST_D(10, 0x08), OR_I(1, 0, STLIVE),
+M:769          LD(4, 0x28), LD(5, 0x08), LD(6, 0x0c), OR_I(31, 0, LIVE), BR_SELF()]
+M:770  r = stepped([GUARD, (CODE, prog)], [(12, NARROW), (10, DHI), (11, DLO), (1, SENT), (4, SENT), (5, SENT),
+M:771                                      (6, SENT), (30, SENT), (31, SENT)], len(prog) - 1)
+M:772  bad = devsig_bad(r)
+M:773  if bad:
+M:774      got = bad
+M:775  else:
+M:776      got = "%d/3" % sum(1 for rr in (4, 5, 6) if r.regs.get(rr) == 0) + tail(r, end_of(prog))
+M:777      if r.regs.get(1) != STLIVE:
+M:778          got += " after-st r1=%s" % hx(r.regs.get(1))
+M:779  row("p2 st widths", got, "3/3", "st.b + st.h at 0x28, st.d at 0x08: no fault; 0x28/0x08/0x0c read back 0")
+M:780  
+M:781  
+M:782  # ================================================================ announce (free-running)
+M:783  def announce_pair(rows_names, first, second, want_line, want_form):
+M:784      """Two passes in ONE free-running session.  Pass 1 and pass 2 each access every population-2 register twice
+M:785         in a row, `first' then `second'.  Pass 1 must print exactly the 26 `want_line' lines (one per offset, full
+M:786         literal) and no other vme text; pass 2 must print nothing, end at its breakpoint, and set its liveness."""
+M:787      def pairs():
+M:788          out = []
+M:789          for o in POP2_OFFS:
+M:790              out += [first(o), second(o)]
+M:791          return out
+M:792      pass1 = [VSIG()] + pairs() + [BR_SELF()]
+M:793      pass2 = pairs() + [OR_I(31, 0, LIVE2), BR_SELF()]
+M:794      bp1, bp2 = end_of(pass1), end_of(pass2, CODE2)
+M:795      r = freerun([GUARD, (CODE, pass1), (CODE2, pass2)], [(2, WVAL), (4, SENT), (30, SENT), (31, SENT)],
+M:796                  [bp1, bp2, VEC_DACC], [CODE, CODE2])
+M:797      pcs = [pc for _, pc in r.dumps]
+M:798      n1, n2 = rows_names
+M:799      note1 = "pass 1: vme lines / exact %s lines / offsets exactly once" % want_form
+M:800      note2 = "pass 2, same pairs again: no vme text; breakpoint + r31=0x5678"
+M:801      if not pcs or not r.conts:
+M:802          row(n1, died(r), "26/26/26", note1)
+M:803          row(n2, NOT_EXERCISED, 0, note2)
+M:804          return
+M:805      bad = None
+M:806      if r.dumps[0][0].get(30) != VBR_SEED:
+M:807          bad = NODEV % hx(r.dumps[0][0].get(30))
+M:808      l1 = lines(r.conts[0])
+M:809      exact = [o for o in POP2_OFFS if l1.count(want_line(o)) == 1]
+M:810      nvme = r.conts[0].count(VMETXT)
+M:811      g1 = bad if bad else "%d/%d/%d" % (nvme, sum(l1.count(want_line(o)) for o in POP2_OFFS), len(exact))
+M:812      if pcs[0] != bp1 and not bad:
+M:813          g1 += " stopped pc=%s" % hx(pcs[0])
+M:814      row(n1, g1, "26/26/26", note1)
+M:815      #  pass 2's zero is accepted only from a pass that ran to its breakpoint with its liveness proof (Astra, F2),
+M:816      #  and only after pass 1 announced at all -- a silent pass 1 is reported as such (it IS the announce channel)
+M:817      if bad or pcs[0] != bp1:
+M:818          g2 = NOT_EXERCISED
+M:819      elif nvme == 0:
+M:820          g2 = SILENT
+M:821      elif len(pcs) < 2 or len(r.conts) < 2:
+M:822          g2 = "pass 2 %s" % died(r)
+M:823      elif pcs[1] != bp2 or r.dumps[1][0].get(31) != LIVE2:
+M:824          g2 = "%d stopped pc=%s r31=%s" % (r.conts[1].count(VMETXT), hx(pcs[1]), hx(r.dumps[1][0].get(31)))
+M:825      else:
+M:826          g2 = r.conts[1].count(VMETXT)
+M:827      row(n2, g2, 0, note2)
+M:828  
+M:829  
+M:830  announce_pair(("p2 ann rd", "p2 ann rd 2"), lambda o: LD(4, o), lambda o: ST(2, o),
+M:831                lambda o: RD_LINE % (o, 4, 0), "read-form")
+M:832  announce_pair(("p2 ann wr", "p2 ann wr 2"), lambda o: ST(2, o), lambda o: LD(4, o),
+M:833                lambda o: WR_LINE % (o, 4, WVAL), "write-form")
+M:834  
+M:835  #  NON-WORD ACCESSES, free-running, TWO passes in ONE process (rev 3).  Pass 1 reaches each of six untouched registers
+M:836  #  FIRST at its own width; pass 2 (CODE2, own breakpoint, LIVE2) repeats the same six accesses and must print nothing.
+M:837  #  The second pass MUST share the process: a new gxemul memsets the latch, so a separate process would be green under
+M:838  #  a latch SET conditioned on len == 4 (M_LATCHLEN4; grok, F2).
+M:839  NW_RD = [(LD_BU(4, 0x04), RD_LINE % (0x04, 1, 0)), (LD_HU(5, 0x0c), RD_LINE % (0x0c, 2, 0)),
+M:840           (LD_D(6, 0x10), RD_LINE % (0x10, 8, 0))]
+M:841  NW_WR = [(ST_B(12, 0x14), WR_LINE % (0x14, 1, NARROW & 0xff)),
+M:842           (ST_H(12, 0x1c), WR_LINE % (0x1c, 2, NARROW & 0xffff)),
+M:843           (ST_D(10, 0x20), WR_LINE % (0x20, 8, (DHI << 32) | DLO))]
+M:844  RD_HEAD = "[ vme: unimplemented read from register"
+M:845  WR_HEAD = "[ vme: unimplemented write to register"
+M:846  nw1 = [VSIG()] + [i for i, _ in NW_RD + NW_WR] + [OR_I(31, 0, LIVE), BR_SELF()]
+M:847  nw2 = [i for i, _ in NW_RD + NW_WR] + [OR_I(31, 0, LIVE2), BR_SELF()]
+M:848  bp1, bp2 = end_of(nw1), end_of(nw2, CODE2)
+M:849  r = freerun([GUARD, (CODE, nw1), (CODE2, nw2)], [(12, NARROW), (10, DHI), (11, DLO), (4, SENT), (5, SENT), (6, SENT),
+M:850                                                   (7, SENT), (30, SENT), (31, SENT)], [bp1, bp2, VEC_DACC], [CODE, CODE2])
+M:851  pcs = [pc for _, pc in r.dumps]
+M:852  if not pcs or not r.conts:
+M:853      bad = died(r)
+M:854  elif r.dumps[0][0].get(30) != VBR_SEED:
+M:855      bad = NODEV % hx(r.dumps[0][0].get(30))
+M:856  elif pcs[0] != bp1:
+M:857      bad = STOPPED % hx(pcs[0])
+M:858  else:
+M:859      bad = None
+M:860  if bad:
+M:861      g_r = g_w = bad
+M:862      g_r2 = g_w2 = NOT_EXERCISED
+M:863  else:
+M:864      l = lines(r.conts[0])
+M:865      nrd = sum(1 for x in l if x.startswith(RD_HEAD))
+M:866      nwr = sum(1 for x in l if x.startswith(WR_HEAD))
+M:867      g_r = "%d/%d" % (sum(1 for _, w in NW_RD if l.count(w) == 1), nrd)
+M:868      g_w = "%d/%d" % (sum(1 for _, w in NW_WR if l.count(w) == 1), nwr)
+M:869      if r.dumps[0][0].get(31) != LIVE:
+M:870          g_r += " r31=%s" % hx(r.dumps[0][0].get(31))
+M:871          g_w += " r31=%s" % hx(r.dumps[0][0].get(31))
+M:872      #  pass 2: a zero is accepted only from a pass that ran to its breakpoint with its liveness proof (Astra, F2),
+M:873      #  and only when pass 1 announced that direction at all (`pass 1 silent' otherwise: it IS the channel)
+M:874      if len(pcs) < 2 or len(r.conts) < 2:
+M:875          g_r2 = g_w2 = "pass 2 %s" % died(r)
+M:876      elif pcs[1] != bp2 or r.dumps[1][0].get(31) != LIVE2:
+M:877          l2 = lines(r.conts[1])
+M:878          tail2 = " stopped pc=%s r31=%s" % (hx(pcs[1]), hx(r.dumps[1][0].get(31)))
+M:879          g_r2 = "%d%s" % (sum(1 for x in l2 if x.startswith(RD_HEAD)), tail2)
+M:880          g_w2 = "%d%s" % (sum(1 for x in l2 if x.startswith(WR_HEAD)), tail2)
+M:881      else:
+M:882          l2 = lines(r.conts[1])
+M:883          g_r2 = SILENT if nrd == 0 else sum(1 for x in l2 if x.startswith(RD_HEAD))
+M:884          g_w2 = SILENT if nwr == 0 else sum(1 for x in l2 if x.startswith(WR_HEAD))
+M:885  row("p2 nw rd", g_r, "3/3", "FREE: first ld.bu/ld.hu/ld.d -> (len 1)/(len 2)/(len 8) served 0x0")
+M:886  row("p2 nw wr", g_w, "3/3", "FREE: first st.b/st.h/st.d -> 0xd4/0xc3d4/0x1122334455667788")
+M:887  row("p2 nw rd 2", g_r2, 0, "pass 2, SAME process: the three non-word reads again -> 0 read-form lines")
+M:888  row("p2 nw wr 2", g_w2, 0, "pass 2, SAME process: the three non-word stores again -> 0 write-form lines")
+M:889  
+M:890  #  ZERO-VALUED FIRST STORE, free-running, its OWN session (rev 3; inside announce_pair it would change a 26-count
+M:891  #  literal).  `st r0' stores the hardwired zero register: NOTHING is seeded into r0 (the m88k core stops the CPU when
+M:892  #  r0 holds a non-zero value).  The oracle is the exact WRITE-FORM literal, never a count of `[ vme:' lines -- the
+M:893  #  read form that M_IDATA (`if (writeflag == MEM_WRITE)' -> `if (idata)') prints for a zero store would satisfy a
+M:894  #  count (grok, F2).
+M:895  prog = [VSIG(), ST(0, ZERO_OFF), OR_I(31, 0, LIVE), BR_SELF()]
+M:896  bp = end_of(prog)
+M:897  r = freerun([GUARD, (CODE, prog)], [(30, SENT), (31, SENT)], [bp, VEC_DACC], [CODE])
+M:898  bad = devsig_bad(r)
+M:899  if not bad and (r.pc != bp or not r.conts):
+M:900      bad = STOPPED % hx(r.pc)
+M:901  if bad:
+M:902      got = bad
+M:903  else:
+M:904      got = "%d/%d" % (lines(r.conts[0]).count(WR_LINE % (ZERO_OFF, 4, 0)), r.conts[0].count(VMETXT))
+M:905      if r.regs.get(31) != LIVE:
+M:906          got += " r31=%s" % hx(r.regs.get(31))
+M:907  row("p2 zero wr", got, "1/1", "FREE: first st r0 at 0x30 -> the write form `(len 4): 0x0 -- declined', one line")
+M:908  
+M:909  
+M:910  # ================================================================ population 1 (fault) + interims
+M:911  def fault_row(name, access, extra_seeds, dma_want, dmt_want, note):
+M:912      """Stepped, ONE fault per session: VSIG, the access, an or, br; three steps put PC on the vector's br."""
+M:913      prog = [VSIG(), access, OR_I(5, 0, LIVE), BR_SELF()]
+M:914      r = stepped([GUARD, (CODE, prog)], [(4, SENT), (5, SENT), (30, SENT)] + extra_seeds, 3, cr=True)
+M:915      bad = devsig_bad(r)
+M:916      if bad:
+M:917          got = bad
+M:918      else:
+M:919          cr = r.cr or {}
+M:920          got = "%s/%s/%s/%s" % (r.how, hx(r.pc), hx(cr.get("DMA0")), hx(cr.get("DMT0")))
+M:921          for rr in (4, 5):        # a faulting load writes no register; the instruction after it never runs
+M:922              if r.regs.get(rr) != SENT:
+M:923                  got += " r%d=%s" % (rr, hx(r.regs.get(rr)))
+M:924      row(name, got, "exit0/0x18/%s/%s" % (hx(VME + dma_want), hx(dmt_want)), note)
+M:925  
+M:926  
+M:927  fault_row("p1 fault lo", LD(4, 0x90), [], 0x90, DMT_LD_WORD_R4, "ld r4 at 0x90: PC 0x18, DMA0, DMT0, host alive")
+M:928  fault_row("p1 fault hi", LD(4, 0xffc), [], 0xffc, DMT_LD_WORD_R4, "ld r4 at 0xffc (the last word)")
+M:929  fault_row("p1 fault mid", LD(4, 0x94), [], 0x94, DMT_LD_WORD_R4, "ld r4 at 0x94 (an interior sample)")
+M:930  fault_row("p1 fault wr", ST(2, 0x90), [(2, WVAL)], 0x90, DMT_ST_WORD, "st at 0x90: the word-store DMT0")
+M:931  
+M:932  prog = [VSIG(), LD(4, 0x8c), LD(6, 0x90), OR_I(5, 0, LIVE), BR_SELF()]
+M:933  r = stepped([GUARD, (CODE, prog)], [(4, SENT), (5, SENT), (6, SENT), (30, SENT)], 4, cr=True)
+M:934  bad = devsig_bad(r)
+M:935  if bad:
+M:936      got = bad
+M:937  else:
+M:938      cr = r.cr or {}
+M:939      got = "%s/%s/%s/%s" % (hx(r.regs.get(4)), hx(r.pc), hx(cr.get("DMA0")), hx(cr.get("DMT0")))
+M:940      for rr in (5, 6):
+M:941          if r.regs.get(rr) != SENT:
+M:942              got += " r%d=%s" % (rr, hx(r.regs.get(rr)))
+M:943  row("p1 p2 edge", got, "0x0/0x18/%s/%s" % (hx(VME + 0x90), hx(DMT_LD_WORD_R6)),
+M:944      "ld 0x8c declines (0), then ld r6 at 0x90 faults")
+M:945  
+M:946  fault_row("p3 interim", LD_BU(4, 0x51), [], 0x50, DMT_LD_BYTE1_R4,
+M:947            "ld.bu 0x51 inside cased T1CMP faults; DMA0 = the WORD address")
+M:948  fault_row("p2 int byte", LD_BU(4, 0x29), [], 0x28, DMT_LD_BYTE1_R4, "ld.bu 0x29 inside population-2 MASTERCTL faults")
+M:949  fault_row("p2 int half", LD_HU(4, 0x2a), [], 0x28, DMT_LD_HALF2_R4, "ld.hu 0x2a inside MASTERCTL faults")
+M:950  
+M:951  #  POPULATION-1 CENSUS: every word start 0x90..0xffc, free-running, each fault counted by the handler.
+M:952  cprog = [VSIG()] + [LD(4, o) for o in POP1] + [BR_SELF()]
+M:953  cbp = end_of(cprog, CENSUS)
+M:954  r = freerun([HANDLER, (CENSUS, cprog)], [(1, 0), (4, SENT), (30, SENT)], [cbp], [CENSUS])
+M:955  r_census = r
+M:956  bad = devsig_bad(r)
+M:957  if bad:
+M:958      got = bad
+M:959  elif r.pc != cbp:
+M:960      got = STOPPED % hx(r.pc)
+M:961  else:
+M:962      got = "%d/%d" % (r.regs.get(1, -1), len(POP1))
+M:963      if r.regs.get(4) != SENT:
+M:964          got += " r4=%s" % hx(r.regs.get(4))
+M:965  row("p1 census", got, "988/988", "FREE-RUNNING: all 988 population-1 word starts fault")
+M:966  
+M:967  #  POPULATION-1 WIDTHS: eight non-word accesses, free-running, faults counted; every load destination keeps its
+M:968  #  sentinel and the closing or runs.  Rev 3 adds the two LANE-0 accesses (word-aligned starts): ld.hu at LANE0_HU
+M:969  #  into r8 and st.b at LANE0_B -- a refusal narrowed to `len == 2 && (relative_addr & 3) == 0' (M_LANE0H) or its
+M:970  #  `len == 1' twin (M_LANE0B) declines exactly one of them, which the existing ld.hu 0x96 / st.b 0x9d (lanes 2 and
+M:971  #  1) cannot see.
+M:972  prog = [VSIG(), LD_BU(4, 0x93), LD_HU(5, 0x96), LD_D(6, 0x98), ST_B(12, 0x9d), ST_H(12, 0xa2), ST_D(10, 0xa8),
+M:973          LD_HU(8, LANE0_HU), ST_B(12, LANE0_B), OR_I(31, 0, LIVE), BR_SELF()]
+M:974  wbp = end_of(prog)
+M:975  r = freerun([HANDLER, (CODE, prog)], [(1, 0), (12, NARROW), (10, DHI), (11, DLO), (4, SENT), (5, SENT), (6, SENT),
+M:976                                        (7, SENT), (8, SENT), (30, SENT), (31, SENT)], [wbp], [CODE])
+M:977  r_widths = r
+M:978  bad = devsig_bad(r)
+M:979  if bad:
+M:980      got = bad
+M:981  elif r.pc != wbp:
+M:982      got = STOPPED % hx(r.pc)
+M:983  else:
+M:984      got = "%d/8" % r.regs.get(1, -1)
+M:985      for rr in (4, 5, 6, 7, 8):
+M:986          if r.regs.get(rr) != SENT:
+M:987              got += " r%d=%s" % (rr, hx(r.regs.get(rr)))
+M:988      if r.regs.get(31) != LIVE:
+M:989          got += " r31=%s" % hx(r.regs.get(31))
+M:990  row("p1 widths", got, "8/8", "FREE: ld.bu/ld.hu/ld.d/st.b/st.h/st.d + lane-0 ld.hu/st.b at population 1: 8 faults")
+M:991  
+M:992  
+M:993  #  `[ vme:' lines in the continue text of the two free-running population-1 runs (rev 3).  Both runs are FREE at
+M:994  #  verbose 0, so `default:''s debug() prints nothing and a fatal() would print: the census holds 988 READ faults
+M:995  #  (read-side promotion, M_DFATAL), the widths run four reads and four STORES (write-side promotion, M_DFATALW --
+M:996  #  the census stores nothing).  A DELETED debug() also prints 0, so deletion is NOT CLAIMED.  Never move this count
+M:997  #  into a stepped session: stepping makes debug() print, and the row would be red on the fix itself.
+M:998  def quiet_count(r, bp):
+M:999      bad = devsig_bad(r)
+M:1000      if bad:
+M:1001          return bad
+M:1002      if r.pc != bp or not r.conts:
+M:1003          return STOPPED % hx(r.pc)
+M:1004      return r.conts[0].count(VMETXT)
+M:1005  
+M:1006  
+M:1007  q_c, q_w = quiet_count(r_census, cbp), quiet_count(r_widths, wbp)
+M:1008  if isinstance(q_c, int) and isinstance(q_w, int):
+M:1009      got = "%d/%d" % (q_c, q_w)
+M:1010  else:
+M:1011      got = "census %s; widths %s" % (q_c, q_w)
+M:1012  row("p1 quiet", got, "0/0", "FREE: no `[ vme:' text in the p1 census run, nor in the p1 widths run")
+M:1013  
+M:1014  # ================================================================ disassembly cross-check
+M:1015  #  LITERAL want, derived by hand per session BEFORE the first run: ctl 6, cased 13, rt 13, cased wr 10, free ctl
+M:1016  #  7, p2 rd 30, p2 wr 57, p2 ld widths 7, p2 st widths 11, ann rd 109, ann wr 109, nonword 10, four p1 fault
+M:1017  #  rows 5 each, edge 6, three interim rows 5 each, census 992 (handler 2 + VSIG + 988 + br), p1 widths 11 = 1426
+M:1018  #  (rev 2).  REV 3, re-derived by hand the same way: nonword 18 (guard 1 + pass 1 nine: VSIG, six accesses, or, br
+M:1019  #  + pass 2 eight: six accesses, or, br) = +8; zero wr 5 (guard 1 + VSIG, st r0, or, br) = +5; p1 widths 13
+M:1020  #  (handler 2 + VSIG, eight accesses, or, br) = +2; p1 quiet places nothing.  1426 + 8 + 5 + 2 = 1441.
+M:1021  #  Computing it from the session lists would let a shrunk list pass its own count.
+M:1022  row("unasm", "%d/%d" % (UNASM["ok"], UNASM["n"]), "1441/1441", "every placed word re-read by the disassembler")
+M:1023  for b in UNASM["bad"][:8]:
+M:1024      print("  unasm mismatch: %s" % b)
+M:1025  
+M:1026  # ================================================================ score + done
+M:1027  npass = sum(1 for _, ok in rows if ok)
+M:1028  print("SCORE %d/%d" % (npass, len(rows)))
+M:1029  #  CONTROL rows (rev 3; F8 with GPT-6 Astra's amendment, and GLM's on `vbr reset').  DEFINITION: a row whose UNIQUE
+M:1030  #  role is an apparatus or medium proof; a row a product edit can red is SCORED, never CONTROL -- so `cased census',
+M:1031  #  `t1cmp rt', `free ctl' and `free quiet' are scored now.  CONTROL=FAIL means a PREREQUISITE of the scored rows
+M:1032  #  failed; it claims NO cause: `vbr reset' (DEVINIT's VBR seed) and `free neg ctl' (GCSRCTL's debug() line) also
+M:1033  #  depend on product behaviour, and an edit to the DEVINIT seed reds `vbr reset'.
+M:1034  CONTROL_ROWS = ("session", "live", "neg apparatus", "unasm", "vbr reset", "free neg ctl")
+M:1035  _status = dict(rows)
+M:1036  control_ok = all(_status.get(n, False) for n in CONTROL_ROWS)    # a renamed control fails loudly
+M:1037  print("VME_DEFAULT_RESULT=%d/%d" % (npass, len(rows)))
+M:1038  print("VME_DEFAULT_CONTROL=%s" % ("OK" if control_ok else "FAIL"))
+M:1039  print("VME_DEFAULT_LABEL=%s" % LABEL)
+M:1040  print("VME_DEFAULT_ELAPSED=%.1fs" % (time.time() - t0))
+M:1041  red = [n for n, ok in rows if not ok]
+M:1042  if red:
+M:1043      print("VME_DEFAULT_RED=%s" % ",".join(red))
+M:1044  shutil.rmtree(_TMPDIR, ignore_errors=True)
+M:1045  print("VME_DEFAULT_PROBE_DONE")
+M:1046  sys.stdout.flush()
+M:1047  sys.exit(0 if control_ok and npass == len(rows) else 1)
+M:1048  

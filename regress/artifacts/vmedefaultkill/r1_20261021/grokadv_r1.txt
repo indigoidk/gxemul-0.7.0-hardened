@@ -1,0 +1,29 @@
+I'll attack the first seat's closing zero on question 2 only: read the shipped arm and the 38-row probe, then look for one DEPENDS-ON mutant that still passes every row, or a credited kill that would not go red.GROKADV_VME_R1_20261021
+VERDICT: CLOSE -- no one-edit DEPENDS-ON mutant passes 38/38; the first seat's credit is false: under "the set runs only on reads" (writes never latch) `p2 ann wr 2` stays green, measured M_LATCHRDSET `0` ok. That edit reds `p2 ann wr` at 52/26/26 and `p2 nw wr 2`.
+
+## Q2
+
+The credited row does not red. In `dev_vme_access` the population-2 set is one statement. Conditioning it on `writeflag == MEM_READ` is the measured leg `legs/M_LATCHRDSET.diff`:
+
+```c
+if (writeflag == MEM_READ)
+    d->warned_unimpl |= 1ULL << (relative_addr >> 2);
+```
+
+`killtable2_20261021/legs/M_LATCHRDSET.raw` lines 23–30: `p2 ann wr` is `52/26/26` FAIL, `p2 ann wr 2` is `0` ok, `p2 nw wr 2` is `3` FAIL, `p2 zero wr` is `1/1` ok. Red set is exactly `p2 ann wr,p2 nw wr 2` (result line 49). The first seat's sweep maps "non-zero writes never latch" onto `p2 ann wr 2` and cites RDSET as the measurement. Pass 2 stays silent because `p2 ann wr` is store-then-load of the same register: the store does not latch, the load does, and pass 2 finds the bit set. The 52 comes from pass 1 announcing both. `p2 nw wr 2` reds because those three stores are the only accesses to 0x14, 0x1c and 0x20, so nothing else latches them.
+
+The unread twin, set only on `writeflag == MEM_WRITE`, is the same pair order read the other way. `p2 ann rd` is load-then-store, so pass 1 goes 52/26/26 and `p2 ann rd 2` stays 0. Their arrow "reads never latch → `p2 ann rd 2` 26" names the row that stays green. That twin is not an escape and is not a new owed leg: the measured sibling already shows the pass-2 credit is the wrong row.
+
+Same table, second bad credit, also not an escape. Swapping only the set's field to `d->reg[...] |= 1ULL << (relative_addr >> 2)` never latches `warned_unimpl`, so `p2 ann rd 2` does red. It does not red `p2 rd census`. The load captures `odata` before the `|=`, and that census is loads only, so every served word is still 0. The dirty words show up on the load-after-store rows, `p2 wr census` and `p2 st widths`.
+
+The `if (idata)` class, inside the floor: `p2 zero wr` is enough for the operand swap and for `&& (idata & M)` with `M != 0`. A zero store makes `idata & M` zero, the conjunction fails, and the read form fails the write-form literal (`0/1`). A qualification that stays true for every store the probe actually does (`&& !(idata & 2)`, measured 38/38 as M_IDATABIT1) is outside this floor: the arm prints `idata` and never masks or compares it, so that joint cell is clause (e). No one-edit data-dependent label dispatch exists. A `case` label is a constant, and dropping any of the 26 reds `p2 rd census` on the same fault path (measured for 0x28 and 0x8c).
+
+Denominator swept, fix568b as shipped, probe rev 3, read against `dev_vme_access` only:
+
+- 104 cells, 26 labels × {read, write} × {latch clear, set}. The announce pairs row them. A missed set on either direction of a pair reds that pair's pass 1 at 52, which is the correction above. No cell passes.
+- P3 operand swaps and weakenings that the body can distinguish: `if (idata)`, `if (!idata)`, `writeflag == MEM_READ`, `odata` either polarity (always 0 in this arm), `len == 4` and `len != 4`, any `relative_addr` test (both directions hit every label), the latch bit after the set (either polarity), `&& len == 4` and `&& len != 4`, `&& (idata & M)` for every `M != 0`. Each reds `p2 ann rd`, `p2 ann wr`, `p2 nw wr`, or `p2 zero wr`. `if (writeflag)` and `writeflag != MEM_READ` match `== MEM_WRITE` on {0, 1} and are equivalents.
+- P2: polarity drop (first access silent, `p2 ann rd` 0/0/0); constant index (measured LATCHONE); `1u` (measured ONENARROW, four rows); `>> 3`, `>> 1`, `& 31`, and a one-sided change of only the test or only the set (collision, UB at bit ≥ 64, or test/set mismatch — pass 1 count or pass 2 re-announce); set skipped (measured NOSET); set only on `len == 4` (measured LATCHLEN4); clear-before and clear-after on write (measured CLRW, CLRW_POST); set only on one direction (above); set gated on `odata` (always 0, same as never set); one label never latched (pass 1 count 27 and pass 2 ≥ 1). Field swap of the set onto `reg[]`, `odata`, or `idata` always re-announces.
+- Preamble and tail, as they enumerated them: `idata` load dropped or held to `len == 4` reds `p2 nw wr`; `odata` load dropped reds `t1cmp rt` and `vbr reset`; `return 1` changed to `return 0` faults `p2 rd census`. Forcing `odata = 0` and a literal 0 in the read announce are the measured 38/38 equivalents.
+- `default:`'s `return 0`: `break` and `exit(1)` measured; writeflag either way (`p1 fault wr` / `p1 widths`, or `p1 fault lo` / `p1 census`); a len or lane test that hits one of the eight width accesses or the three interims; idata either sampled polarity (`p1 fault lo` for serve-on-zero, `p1 fault wr` plus `p1 widths` for serve-on-nonzero).
+
+Excluded as not floor, and not counted as breaches: idata-bit exemptions the body does not test; lane-0 `ld.bu` and lane-0 `st.h`; `case 0x91:`; a neutered typedef; `memory_writemax64` skipped for `len != 4` (served population-2 value is already 0).

@@ -1,0 +1,37 @@
+PRETABLE2C -- #568 (vmedefaultkill) kill table 2, ADDENDUM 2: THREE legs from the repair-diff pass's GLM 5.3 answer
+(vme/r1/out/glm_r1.txt), written 2026-10-21 BEFORE their builds.  The R1 packet promised that every proposed escaping
+mutant would be built and measured before anything is decided.
+
+WHY.  GLM named ONE "conditional escape" it could not settle from its packet: `default:''s `return 0;' read as
+`if (idata != 0) return 0;', whose kill it said "requires at least one probe-driven population-1 store to be non-zero".
+The coordinator's READING refutes it in both polarities, and the legs measure that reading:
+  * dev_vme.c:73 declares `uint64_t idata = 0, odata = 0;' and :76 assigns idata only for a write, so on every READ
+    idata is 0 -- `if (idata != 0)' therefore SERVICES every population-1 load instead of faulting it;
+  * every population-1 store the probe makes is non-zero: `p1 fault wr' stores r2 = WVAL 0xa5a5a5a5
+    (vme_default_probe.py, the fault_row("p1 fault wr", ...) call); `p1 widths' stores r12 = NARROW 0xa1b2c3d4 by
+    st.b/st.h (0xd4, 0xc3d4) and r10:r11 = DHI:DLO by st.d -- so `if (idata == 0)' services every one of them.
+GLM's OWED-OPTIONAL odata twin is built too (the clause-(e) family's odata half).
+
+LEGS (each ONE exact find/replace on fix568b md5 beb120eae1be112b682bd528f103191c; mk_legs_t2c.py refuses otherwise):
+  M_DFLTIDNZ   default:  `return 0;'  ->  `if (idata != 0) return 0;'
+  M_DFLTIDZ    default:  `return 0;'  ->  `if (idata == 0) return 0;'
+  M_DIRODATA   population-2 arm: `if (writeflag == MEM_WRITE)'  ->  `if (writeflag == MEM_WRITE && !(odata & 2))'
+
+INSTRUMENT AND MEDIUM: as table 2b -- the frozen rev 3 (vme_default_probe.rev3.frozen.py, md5 ddcebfe3) on the clean
+clone /tmp/gx568g3 (git archive HEAD 86114a90 + fix568b), one leg at a time, objects removed before each build.
+
+PREDICTIONS (written before any build):
+  M_DFLTIDNZ   29/38 CONTROL=OK -- red 9: p1 fault lo, p1 fault hi, p1 fault mid, p1 p2 edge, p3 interim, p2 int byte,
+               p2 int half, p1 census, p1 widths.  Every population-1 and sub-word LOAD is serviced (PC advances, the
+               sentinel is overwritten with 0); the population-1 STORES (non-zero) are still refused, so `p1 fault wr'
+               stays green and `p1 widths' counts 4 faults of 8; `p1 quiet' stays green (debug() is silent
+               free-running, as under table 2's M_FLTBREAK, whose red set is these 9 plus `p1 fault wr').
+  M_DFLTIDZ    36/38 CONTROL=OK -- red 2: p1 fault wr, p1 widths.  Loads are refused as before; the four non-word
+               population-1 stores and the word store at 0x90 are serviced -- the same red set as table 2's M_FLTWR.
+  M_DIRODATA   38/38 CONTROL=OK -- red none.  odata is d->reg[w] at every population-2 access and nothing writes those
+               words, so `!(odata & 2)' is true everywhere the probe goes: equivalent on the sample (clause (e)).
+
+DISPOSITION BY OUTCOME, fixed now: M_DFLTIDNZ or M_DFLTIDZ at 38/38 -> a FLOOR BREACH (an operand swap of the guard
+`default:' introduces, drawn from a body-read lvalue) and the repair chain does NOT close; red as predicted -> GLM's
+conditional escape is refuted by measurement.  M_DIRODATA at 38/38 -> the odata half of the SAMPLED disclosure becomes a
+measured sweep (clause e, filed); a red -> the equivalence claim is wrong and the contract sentence is corrected.

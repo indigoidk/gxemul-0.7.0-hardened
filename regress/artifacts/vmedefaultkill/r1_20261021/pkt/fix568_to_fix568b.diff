@@ -1,0 +1,66 @@
+--- /c/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/vme/fix/dev_vme.fix568.c	2026-10-20 19:43:04.724271600 -0500
++++ /c/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/vme/rev3/dev_vme.fix568b.c	2026-10-21 00:56:55.620213200 -0500
+@@ -59,12 +59,12 @@
+ 	uint64_t	warned_unimpl;
+ };
+ 
+-/*  #568: narrowing warned_unimpl, or the 1ULL below, would shift past bit
+-    VME2_MISC >> 2; make that a compile error (dev_pcc2.c's
+-    pcc2_w_fits_in_warned shape).  */
+-typedef char vme_warned_fits[((VME2_MISC >> 2) <
+-    8 * sizeof(((struct vme_data *)0)->warned_unimpl)
+-    && (VME2_MISC >> 2) < 8 * sizeof(1ULL)) ? 1 : -1];
++/*  #568: a warned_unimpl narrower than VME2_MISC >> 2 + 1 bits would
++    leave MISC's announce bit outside the field; make that a compile error
++    (dev_pcc2.c's pcc2_w_fits_in_warned shape).  The 1ULL in the shifts
++    below is not checked here.  */
++typedef char vme_warned_fits[(VME2_MISC >> 2) <
++    8 * sizeof(((struct vme_data *)0)->warned_unimpl) ? 1 : -1];
+ 
+ 
+ DEVICE_ACCESS(vme)
+@@ -149,10 +149,12 @@
+ 
+ 	/*  #568 (vmedefaultkill): registers the header names but this model
+ 	    does not implement.  Each ended the emulator in default: below.
+-	    The in-tree OpenBSD 2.2 guest reaches six of them: vme2chip_init()
+-	    reads MASTERCTL and writes it back and writes MASTER3, MASTER4 and
+-	    MASTER4MOD; vme2abort() reads IRQSTAT (served 0, it reports "irq
+-	    not set" and returns before writing IRQCLR).  A bus error here
++	    OpenBSD 2.2's mvme88k driver (sys/arch/mvme88k/dev/vme.c) has
++	    access sites at six of them.  Its attach reaches four:
++	    vme2chip_init() reads MASTERCTL and writes it back and writes
++	    MASTER3, MASTER4 and MASTER4MOD.  The other two, IRQSTAT and
++	    IRQCLR, are in vme2abort(), the ABORT-switch interrupt handler,
++	    and this model raises no VME2 interrupt.  A bus error here
+ 	    would panic that guest's attach, so these DECLINE: a read is served
+ 	    the word preloaded above, which is 0 because nothing writes these
+ 	    words of d->reg[] (odata is deliberately not forced to 0, so a store
+@@ -196,9 +198,9 @@
+ 				    (unsigned long long) idata);
+ 			else
+ 				fatal("[ vme: unimplemented read from register "
+-				    "0x%x (len %d) -- served 0x%x.  (once) ]\n",
++				    "0x%x (len %d) -- served 0x%llx.  (once) ]\n",
+ 				    (unsigned) relative_addr, (int) len,
+-				    (unsigned) odata);
++				    (unsigned long long) odata);
+ 		}
+ 		break;
+ 
+@@ -210,10 +212,11 @@
+ 			    "0x%x ]\n", (int)relative_addr, (int)idata);
+ 		/*  #568 (vmedefaultkill): an offset this model does not service:
+ 		    no header-named register, or the inside of one (a sub-word
+-		    start).  Refuse the access -- memory_rw then raises the m88k
+-		    data-access exception, the bus error a badaddr() probe
+-		    expects -- instead of exit(1), which ended the emulator with
+-		    no visible reason (debug() is silent at default verbosity).  */
++		    start).  Refuse the access -- for a guest data load or store,
++		    memory_rw then raises the m88k data-access exception, the bus
++		    error a badaddr() probe expects -- instead of exit(1), which
++		    ended the emulator with no visible reason (debug() is silent
++		    at default verbosity).  */
+ 		return 0;
+ 	}
+ 

@@ -385,7 +385,7 @@ check "readiness: no unrecognised endswith spelling" "$unknown" "$EXPECT_UNKNOWN
 #  and reds THREE rows -- this one, the promptless count and the promptless-names row -- because all three are
 #  grandfathered names that exist only in the working tree (measured on a copy with them removed: 70/73, 40/43,
 #  names gone=the three).  Written by `tools/derive_hygiene_pins.sh --write`, never by hand. ***
-EXPECT_PTY_PROBES=76
+EXPECT_PTY_PROBES=77
 #  *** AND THE SAME PROBE BROKE A SECOND CENSUS IN THIS FILE, WHICH pass 11's OWN
 #  REPAIR DID NOT FIX.  Found by the codex seat reviewing that repair. ***
 #
@@ -420,8 +420,9 @@ sgi_de_width_probe.py sgi_re_unmapped_probe.py
 alpha_harness_probe.py alpha_pfnoffset_probe.py alpha_swpctx_v0_probe.py alpha_tbi_probe.py arm_bfx_width_probe.py landisk_aux_probe.py lca_badval_probe.py lca_confbus_probe.py lca_confwidth_probe.py lca_irqstub_probe.py lca_irqstub_uart_probe.py lca_isalane_probe.py lca_widewrite_probe.py maple_dmaaddr_probe.py pcc2_c040_probe.py sgi_mte_fill_probe.py sgi_re_colourdefault_probe.py sgi_re_randompixel_probe.py sgi_re_rgb_probe.py wdc_altdigin_probe.py
 arm_msrmode_probe.py lca_isaphys_probe.py
 crime_width_probe.py
-sgi_mte_decline_probe.py"
-#  hygienecensus: tools/derive_hygiene_pins.sh --grandfather appended FOUR blocks to the list above; they are
+sgi_mte_decline_probe.py
+vme_default_probe.py"
+#  hygienecensus: tools/derive_hygiene_pins.sh --grandfather appended FIVE blocks to the list above; they are
 #  named here by their FIRST NAME, never by position, because the next --grandfather appends another.
 #  The block beginning `alpha_harness_probe.py` (derived 2026-09-19): 20 PROMPTLESS pty probes committed
 #  between 2026-09-05 and 2026-09-18 that moved NO PIN -- they moved the promptless census (20 -> 40) and the
@@ -442,7 +443,11 @@ sgi_mte_decline_probe.py"
 #  waits, no readiness read -- and moved neither census, so this gate would have reddened at the next battery;
 #  #567, adding its own pty probe, could not re-derive its pins while it stood, because --write refuses a
 #  promptless probe that is neither grandfathered nor prompt-detecting.  Grandfathered on the 2026-09-19
-#  precedent; converting its readiness is its own round.
+#  precedent; converting its readiness is its own round.  The block beginning `vme_default_probe.py`
+#  (2026-10-21, #568): its pty driver DOES wait for the prompt -- `PROMPT in buf[0]' and
+#  `buf[0].find(PROMPT, start)' -- a real readiness wait this census cannot see, as with alpha_tbi_probe.py,
+#  because the key is a CODE-level call of the ends-with method.  Grandfathered by name, not converted; the same
+#  --write moved EXPECT_PTY_PROBES 76 -> 77 (75 committed + this probe + lca_isaphys_probe.py, still untracked).
 #  Re-derive, never hand-edit: `bash tools/derive_hygiene_pins.sh` (report),
 #  `--grandfather NAME...` / `--release NAME...`, then `--write`.
 

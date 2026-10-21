@@ -1,0 +1,75 @@
+#!/usr/bin/env python3
+"""mk_argon23.py -- Argon pack 23 (2026-10-21): `vmer1`, the packet-fed lens on `vmedefaultkill`'s REPAIR-DIFF pass (R1).
+Pass 2's Argon job (pack 22: two bundles, 118 KB) timed out while generating three times, so this one is NARROW: one
+bundle -- the device as shipped (D), the probe's row contract (R), kill table 2's legs and per-row census (K), the first
+seat's floor answer to attack (F) -- and two questions.  Writes jobs_20261021_argonpack23/vmer1/.  REFUSES if an input
+is missing or the bundle exceeds 60,000 bytes."""
+import io, os, subprocess, sys
+G = "C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/gweb"
+REPO = "C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC"
+SP = "C:/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/vme"
+KT2 = REPO + "/regress/artifacts/vmedefaultkill/killtable2_20261021/KILLTABLE2_VS_PRETABLE2.out"
+DEV = REPO + "/src/devices/dev_vme.c"
+PROBE = REPO + "/regress/vme_default_probe.py"
+FABLE = SP + "/r1/fable5_r1.md"
+JD = G + "/jobs_20261021_argonpack23/vmer1"
+TOK = "ARGON_VMER1_20261021"
+for p in (KT2, DEV, PROBE, FABLE):
+    if not os.path.exists(p):
+        sys.exit("REFUSED: missing " + p)
+os.makedirs(JD, exist_ok=True)
+def rd(p): return io.open(p, encoding="utf-8", errors="replace", newline="").read().replace("\r\n", "\n")
+def cut(t, a, b): i = t.index(a); j = t.find(b, i + len(a)) if b else -1; return t[i:j if j >= 0 else len(t)].rstrip("\n")
+def lab(label, what, text): return ["==== FILE %s = %s ====" % (label, what)] + ["%s:%d  %s" % (label, i + 1, l) for i, l in enumerate(text.split("\n"))]
+kt2 = rd(KT2)
+k = "\n".join([cut(kt2, "== REFERENCE RUNS ==", "== RED ROWS BY KIND"), "", cut(kt2, "== SURVIVORS", "== THE FLOOR BREACH"), "",
+               cut(kt2, "== PER-ROW KILL CENSUS", "== OBSERVATIONS"),
+               "", "TABLE 2b (one clause-(e) leg, prediction written first): M_IDATABIT1 -- in the population-2 arm,",
+               "`if (writeflag == MEM_WRITE)' -> `if (writeflag == MEM_WRITE && !(idata & 2))' -- 38/38, CONTROL=OK, as predicted."])
+part = (["LEGEND: D = src/devices/dev_vme.c as the fix ships it (the WHOLE file).  R = the 38-row probe's row contract, "
+         "verbatim from its header (each row, the mutant it is designed to catch, the channel that differs under it).  "
+         "K = kill table 2 (34 one-edit legs on this fix, the probe frozen) plus table 2b.  F = the first seat's answer to "
+         "the floor question, which you are asked to BREAK.", ""]
+        + lab("D", "dev_vme.c (fix568b)", rd(DEV).rstrip("\n")) + [""]
+        + lab("R", "vme_default_probe.py header: rows and contract", cut(rd(PROBE), "ROWS, each with the mutant", "TEST-FIRST SHAPE:")) + [""]
+        + lab("K", "KILLTABLE2_VS_PRETABLE2.out (extract) + table 2b", k) + [""]
+        + lab("F", "first seat (Fable 5.1), its Q2", cut(rd(FABLE), "## Q2", "## Q3")))
+bp = JD + "/argon_bundle_1.txt"
+io.open(bp, "w", encoding="utf-8", newline="\n").write("\n".join(part) + "\n")
+n = os.path.getsize(bp)
+print("part 1: %d bytes" % n)
+if n > 60000:
+    sys.exit("REFUSED: bundle %d bytes > 60000" % n)
+task = """# vmedefaultkill (repair pass) -- an emulator's VME bus-controller model: try to break a closing "no escapes" claim
+
+**Format:** open with the token `%s`, then ONE line `VERDICT: CLOSE | REPAIR AGAIN | CANNOT SETTLE -- <one line>`,
+then Q1 and Q2.  Every FLAG is a line of its own starting `FLAG:`, citing `<label>:<n>`.  Facts and flags only; agreement
+is not wanted.
+
+**This is a reading task on the ATTACHED file `argon_bundle_1.txt` (read it to the end) and this message only.**  D is the
+device as the fix ships it; R is the 38-row regression probe's row contract; K is the measured mutation table (34
+one-edit variants of D, plus one more); F is another reviewer's claim that NO one-edit variant inside the bound below
+escapes the probe.  Anything you cannot settle from this material is UNSETTLED: name what would settle it.
+
+**The bound** (the only variants that count): (1) the conditions that control the fix's edited lines -- the
+population-2 `case` labels, the latch test `if (!(d->warned_unimpl & (1ULL << (relative_addr >> 2))))` and its set, the
+direction test `if (writeflag == MEM_WRITE)` inside it, and `default:`'s `return 0` -- walked only to the end of the
+function; and (2) swaps of a condition's operand for another value the guarded code itself reads (`writeflag`,
+`relative_addr`, `len`, `idata`, `odata`, `d->warned_unimpl`).  A condition weakened to a form that still reads like the
+same check counts; deleting it does not.  A value the guarded code never tests as a case (a particular store value, a
+single bit of idata) is OUTSIDE the bound -- that is disclosed, not owed.
+
+Q1. Walk F's table row by row against D and R.  List each ONE-EDIT change to D inside the bound that would keep all 38
+    rows green and is NOT among K's legs, and each row F credits with a kill that would NOT go red under the edit F
+    names.  For each: the edit as a one-line diff, the row(s) you expect to stay green, and why that row's check cannot
+    see it.  Cite D:<n>, R:<n>, F:<n>.  If you find none, say so and list what you swept.
+Q2. K's M_IDATABIT1 adds `&& !(idata & 2)` to the direction test and scored 38/38.  Is it rightly OUTSIDE the bound (the
+    guarded code tests no bit of idata), or is it an escape that counts?  And F lists the low-word bits that are clear in
+    all five store values the probe uses (0x0, 0xa5a5a5a5, 0xd4, 0xc3d4, 0x1122334455667788) as 1, 11, 19, 20, 25, 27:
+    check that list.
+""" % TOK
+pk = JD + "/task_vmer1.md"
+io.open(pk, "w", encoding="utf-8", newline="\n").write(task)
+r = subprocess.run([sys.executable, G + "/mk_gweb_job.py", JD, pk, "VMER1", "--title=vmedefaultkill repair pass (Argon)", "--date=2026-10-21"],
+                   capture_output=True, text=True)
+print(r.stdout.strip().split("\n")[0]); print(r.stderr.strip())

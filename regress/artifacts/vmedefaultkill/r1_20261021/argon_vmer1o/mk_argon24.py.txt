@@ -1,0 +1,68 @@
+#!/usr/bin/env python3
+"""mk_argon24.py -- Argon pack 24 (2026-10-21): `vmer1o`, an ORACLE AUDIT of `vmedefaultkill`'s rev-3 probe -- the angle
+pass 2's Argon job (pack 22) carried and never answered (it timed out three times).  ONE bundle: the probe's row contract
+(C), its constants (K), and its session machinery plus row code (M) -- the instruction encoders are left out to keep the
+bundle near pack 23's size.  ONE question.  Send it only AFTER pack 23 (vmer1) is banked, and only if the meter allows.
+Writes jobs_20261021_argonpack24/vmer1o/.  REFUSES if an input is missing, a cut point moved, or the bundle exceeds
+60,000 bytes."""
+import io, os, subprocess, sys
+G = "C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/gweb"
+PROBE = "C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/vme_default_probe.py"
+JD = G + "/jobs_20261021_argonpack24/vmer1o"
+TOK = "ARGON_VMER1O_20261021"
+if not os.path.exists(PROBE):
+    sys.exit("REFUSED: missing " + PROBE)
+src = io.open(PROBE, encoding="utf-8", newline="").read().replace("\r\n", "\n").split("\n")
+def find(prefix):
+    hits = [i for i, l in enumerate(src) if l.startswith(prefix)]
+    if len(hits) != 1:
+        sys.exit("REFUSED: cut point %r found %d times" % (prefix, len(hits)))
+    return hits[0]
+c0, c1 = find("ROWS, each with the mutant"), find("CONTRACT (clause e).")
+k0, k1 = find("VME = 0xfff40000"), find("# ------------------------------------------------------------------- encodings")
+m0 = find("# ------------------------------------------------------------------- sessions")
+def lab(label, what, first, lines):
+    return ["==== FILE %s = %s (probe lines %d-%d) ====" % (label, what, first + 1, first + len(lines))] + \
+           ["%s:%d  %s" % (label, first + i + 1, l) for i, l in enumerate(lines)]
+os.makedirs(JD, exist_ok=True)
+part = (["LEGEND: one regression probe, `regress/vme_default_probe.py' (38 rows, 1047 lines), for an emulator's VME "
+         "bus-controller model.  C = its row contract (each row, the mutant it is designed to catch, the channel that "
+         "differs).  K = its constants.  M = its session machinery and every row's code, to the end of the file.  "
+         "Labels carry the PROBE's own line numbers, so `M:886' is probe line 886.  Left out: lines 1-75 (history), "
+         "the instruction encoders (each placed word is re-read by the disassembler, row `unasm').", ""]
+        + lab("C", "row contract", c0, src[c0:c1]) + [""]
+        + lab("K", "constants", k0, src[k0:k1]) + [""]
+        + lab("M", "session machinery + rows", m0, src[m0:]))
+bp = JD + "/argon_bundle_1.txt"
+io.open(bp, "w", encoding="utf-8", newline="\n").write("\n".join(part) + "\n")
+n = os.path.getsize(bp)
+print("part 1: %d bytes (C %d-%d, K %d-%d, M %d-%d)" % (n, c0 + 1, c1, k0 + 1, k1, m0 + 1, len(src)))
+if n > 60000:
+    sys.exit("REFUSED: bundle %d bytes > 60000" % n)
+task = """# vmedefaultkill -- audit the ORACLES of an emulator regression probe: can any row pass when it should fail?
+
+**Format:** open with the token `%s`, then ONE line `VERDICT: ORACLES SOUND | ORACLE DEFECTS FOUND | CANNOT SETTLE --
+<one line>`, then your findings.  Every FLAG is a line of its own starting `FLAG:`, citing `<label>:<n>`.  Facts and flags
+only; agreement is not wanted.
+
+**This is a reading task on the ATTACHED file `argon_bundle_1.txt` (read it to the end) and this message only.**  The
+probe drives an emulator through its debugger: STEPPED sessions feed commands on stdin, FREE-RUNNING sessions drive a pty,
+place a breakpoint and `continue'.  Each row prints `<name>  <got> ... ok|FAIL`, and a gate counts the `ok' lines by name.
+
+**The question.**  Find any row whose oracle can report `ok' when the behaviour it claims to pin is ABSENT -- in
+particular the rows revision 3 added or changed: `p2 zero wr', `p2 nw rd 2', `p2 nw wr 2', `p1 quiet', the two lane-0
+accesses in `p1 widths', and the CONTROL split (`CONTROL_ROWS').  For each candidate, which shape it is:
+  (a) an expected value computed from the output it checks;
+  (b) a row that passes on a session that died, timed out, or never reached its breakpoint;
+  (c) a count that can be satisfied by zero matching lines, or a zero accepted without proof the run happened;
+  (d) a pattern that also matches another row's line, another session's text, or the echoed command;
+  (e) a timeout or a missing line read as the wanted value.
+Name the row, the shape, the line(s), and the smallest emulator behaviour under which it would wrongly print `ok'.  If you
+find none, say which rows you checked and against which of (a)-(e).  Anything you cannot settle from this material is
+UNSETTLED: name what would settle it.
+""" % TOK
+pk = JD + "/task_vmer1o.md"
+io.open(pk, "w", encoding="utf-8", newline="\n").write(task)
+r = subprocess.run([sys.executable, G + "/mk_gweb_job.py", JD, pk, "VMER1O", "--title=vmedefaultkill probe oracle audit (Argon)",
+                    "--date=2026-10-21"], capture_output=True, text=True)
+print(r.stdout.strip().split("\n")[0]); print(r.stderr.strip())

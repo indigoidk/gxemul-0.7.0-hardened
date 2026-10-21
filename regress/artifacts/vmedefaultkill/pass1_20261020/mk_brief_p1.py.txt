@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+"""mk_brief_p1.py <outdir> -- assemble the vmedefaultkill pass-1 packets.
+
+Every quoted source excerpt is READ FROM THE FILE at build time (never hand-copied), so a "verbatim" claim in the
+brief is true by construction.  Refuses if any anchor it expects is missing, or if dev_vme.c is not HEAD's.
+"""
+import io, os, re, subprocess, sys
+
+ROOT = "C:/DocumentNoSnc/cc/GXEMUL"
+SEC = ROOT + "/GXEMUL-SEC"
+HERE = os.path.dirname(os.path.abspath(__file__))
+OUT = sys.argv[1]
+
+
+def rd(p):
+    return io.open(p, encoding="latin-1", newline="").read().replace("\r\n", "\n")
+
+
+def numbered(path, a, b):
+    lines = rd(path).split("\n")
+    return "\n".join("%4d  %s" % (i, lines[i - 1]) for i in range(a, b + 1))
+
+
+def must(cond, msg):
+    if not cond:
+        sys.stderr.write("REFUSED: " + msg + "\n")
+        sys.exit(3)
+
+
+vme = SEC + "/src/devices/dev_vme.c"
+head = subprocess.run(["git", "-C", SEC, "--no-optional-locks", "show", "HEAD:src/devices/dev_vme.c"],
+                      capture_output=True).stdout.decode("latin-1").replace("\r\n", "\n")
+must(head == rd(vme), "working dev_vme.c differs from HEAD")
+vl = rd(vme).split("\n")
+must(vl[49].startswith("#define\tVME_LEN"), "dev_vme.c line 50 is not VME_LEN: %r" % vl[49])
+must(vl[168] == "}", "dev_vme.c line 169 is not the end of DEVINIT: %r" % vl[168])
+DEV_VME = numbered(vme, 44, 169)
+
+mrw = SEC + "/src/cpus/memory_rw.c"
+ml = rd(mrw).split("\n")
+must(ml[582].strip() == "res = 0;", "memory_rw.c:583 moved: %r" % ml[582])
+must("goto do_return_ok;" in ml[625], "memory_rw.c:626 moved: %r" % ml[625])
+MEMRW = numbered(mrw, 583, 626)
+
+pcc = SEC + "/src/devices/dev_pcc2.c"
+pl = rd(pcc).split("\n")
+must("warned_unimpl" in pl[167], "dev_pcc2.c:168 moved: %r" % pl[167])
+must(pl[740].strip() == "default:", "dev_pcc2.c:741 moved: %r" % pl[740])
+must(pl[779].strip() == "break;", "dev_pcc2.c:780 moved: %r" % pl[779])
+PCC2 = numbered(pcc, 165, 168) + "\n   ...\n" + numbered(pcc, 741, 781)
+
+# --- the census, re-derived (the same deriver the brief describes)
+hdr = rd(SEC + "/src/include/thirdparty/mvme88k_vme.h")
+defs = {}
+for m in re.finditer(r"^#define\s+(VME2_[A-Z0-9_]+)\s+(0x[0-9a-fA-F]+|\d+)\b", hdr, re.M):
+    defs.setdefault(int(m.group(2), 0), []).append(m.group(1))
+labels = re.findall(r"^\s*case\s+([A-Za-z0-9_]+)\s*:", rd(vme), re.M)
+cased = set()
+for t in labels:
+    if re.match(r"^(0x[0-9a-fA-F]+|\d+)$", t):
+        cased.add(int(t, 0))
+    else:
+        mm = re.search(r"^#define\s+" + t + r"\s+(0x[0-9a-fA-F]+|\d+)", hdr, re.M)
+        must(mm, "label %s not in header" % t)
+        cased.add(int(mm.group(1), 0))
+must(len(cased) == 10, "expected 10 cased offsets, got %d" % len(cased))
+cl = []
+for v in sorted(defs):
+    if v <= 0x8c and v % 4 == 0:
+        cl.append("    %-6s %s%s" % (hex(v), ", ".join(defs[v]), "   <- CASED" if v in cased else ""))
+pop2 = [v for v in range(4, 0x90, 4) if v not in cased]
+must(len(pop2) == 26, "population 2 is %d, not 26" % len(pop2))
+CENSUS = ("```\n" + "\n".join(cl) +
+          "\n    (values 0xc0, 0xf0, 0x100, 0x200, 0x400, 0x800 also appear: GCSRCTL_ROMSIZE, TCTL1_OVF and bit masks"
+          " -- no register name)\n```\n\nCased offsets (from the switch): " +
+          ", ".join(hex(v) for v in sorted(cased)) + ".  Population 2 (word starts 0x04..0x8c not cased): " +
+          str(len(pop2)) + ".  Population 1 (word starts 0x90..0xffc): " + str((0x1000 - 0x90) // 4) + ".")
+
+# --- the guest's accesses, re-derived by grep
+gpath = ROOT + "/_guest-src-openbsd22/sys/arch/mvme88k/dev/vme.c"
+gl = rd(gpath).split("\n")
+want = [452, 467, 480, 482, 494, 496, 513, 576, 581]
+for n in want:
+    must("vme2->vme2_" in gl[n - 1], "guest vme.c:%d is not a vme2 access: %r" % (n, gl[n - 1]))
+GUEST = "```\n" + "\n".join("vme.c:%-4d %s" % (n, gl[n - 1].strip()) for n in want) + \
+    "\n```\n(The `vme2_master1`/`vme2_master2` reads at vme.c:456-463 sit inside `#if 0` and are compiled out; " \
+    "`gcsrctl` at :496/:513 is CASED.)"
+
+tmpl = rd(os.path.join(HERE, "brief_tmpl.md"))
+for k, v in (("{CENSUS}", CENSUS), ("{GUEST}", GUEST), ("{DEV_VME}", DEV_VME), ("{MEMRW}", MEMRW), ("{PCC2}", PCC2)):
+    must(tmpl.count(k) == 1, "placeholder %s count %d" % (k, tmpl.count(k)))
+    tmpl = tmpl.replace(k, v)
+must("{" + "CENSUS}" not in tmpl, "placeholder left")
+
+os.makedirs(OUT, exist_ok=True)
+VERD = "VERDICT: PROCEED | PROCEED WITH CHANGES | DO NOT PROCEED -- <one line>"
+for seat in ("ASTRA", "GROK", "GLM", "FABLE"):
+    hdrtxt = "Open your answer with the token %s_VME_P1_20261020, then ONE line:\n%s\n\n" % (seat, VERD)
+    io.open(os.path.join(OUT, "packet_%s.md" % seat), "w", encoding="utf-8", newline="\n").write(hdrtxt + tmpl)
+io.open(os.path.join(OUT, "brief_body.md"), "w", encoding="utf-8", newline="\n").write(tmpl)
+ptr = ("ASTRA seat -- PASS 1 (design) of an ordinary bounds- and correctness-engineering review: a VME bus-controller\n"
+       "device model in an emulator ends the process on any register offset its switch does not name; the owner has\n"
+       "ruled what each class of offset should do, and this pass checks the implementation sketch and the planned\n"
+       "regression probe before any edit.\n\n"
+       "Read this file and answer it exactly as its Questions section directs:\n\n"
+       "    " + OUT.replace("\\", "/") + "/packet_ASTRA.md\n\n"
+       "READ-ONLY: write nothing to any project tree.\n\n"
+       "Open your answer with the token ASTRA_VME_P1_20261020, then ONE line:\n" + VERD + "\n")
+io.open(os.path.join(OUT, "astra_pointer.md"), "w", encoding="utf-8", newline="\n").write(ptr)
+print("BRIEF_BUILT body %d bytes; dev_vme 44-169, memory_rw 583-626, pcc2 165-168+741-781; pop2=%d" %
+      (len(tmpl.encode("utf-8")), len(pop2)))

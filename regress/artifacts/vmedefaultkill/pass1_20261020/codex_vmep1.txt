@@ -1,0 +1,131 @@
+ASTRA_VME_P1_20261020
+VERDICT: PROCEED WITH CHANGES -- The core sketch implements the rulings; correct the interim contract and wide-write diagnostic, and close the detector’s direction/width announcement gaps.
+
+Q1 — The word census and zero invariant hold; the exception claim needs qualification, and the producer requires natural alignment.
+
+**(a)** I enumerated the header’s register definitions against the switch, rather than treating every numeric `VME2_*` macro as a register. The results are:
+
+- CASED, **10**: `00,2c,4c,50,54,60,6c,80,84,88`.
+- Population 2, **26**: `04,08,0c,10,14,18,1c,20,24,28,30,34,38,3c,40,44,48,58,5c,64,68,70,74,78,7c,8c`.
+- Population 1, **988 word starts**: enumerating `range(0x90,0x1000,4)` produced 28 starts in the first `0x100` block and 64 in each remaining block.
+
+Sources: [mvme88k_vme.h:46](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/thirdparty/mvme88k_vme.h:46), [dev_vme.c:68](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:68).
+
+**(b)** Initialization zeroes the array. Subsequent writers touch only word indices `{20,21,24,34}`: T1CMP, T1COUNT—including its read increment—TCTL and VBR. DEVINIT also seeds VBR. None is a population-2 index. Thus the population-2 zero invariant holds throughout the modeled device lifetime. Sources: [dev_vme.c:87](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:87), [dev_vme.c:101](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:101), [dev_vme.c:134](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:134), [dev_vme.c:158](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:158).
+
+**(c)** An ordinary guest load/store reaching this callback uses `CACHE_DATA`, without `NO_EXCEPTIONS`; callback failure requests a data-access exception and returns failure. It does not silently complete the load. However:
+
+- `NO_EXCEPTIONS` suppresses exception delivery. Because VME uses `DM_DEFAULT`, that path actually skips its callback and can return success with a zero-filled read buffer. Debugger memory inspection therefore cannot substitute for executing guest loads.
+- Instruction fetch selects **instruction-access**, rather than data-access.
+- An already-set PSR.SFRZ converts the requested nontrap exception into ERROR. Expected PC `0x18` requires VBR zero and an appropriate initial PSR.
+
+Sources: [cpu_m88k_instr_loadstore.c:60](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_m88k_instr_loadstore.c:60), [memory_rw.c:485](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:485), [memory_rw.c:583](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:583), [dev_vme.c:164](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:164), [cpu_m88k.c:811](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_m88k.c:811), [cpu_m88k.c:863](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_m88k.c:863).
+
+**(d)** Enumerating the actual producer domain gives, per direction:
+
+| Callback `len` | Reachable offsets | Count | CASED bases | Population-2 bases | Starts ≥ `0x90` |
+|---:|---|---:|---:|---:|---:|
+| 1 | `0,1,…,fff` | 4096 | 10 | 26 | 3952 |
+| 2 | `0,2,…,ffe` | 2048 | 10 | 26 | 1976 |
+| 4 | `0,4,…,ffc` | 1024 | 10 | 26 | 988 |
+| 8 | `0,8,…,ff8` | 512 | 5 | 13 | 494 |
+
+Total: **7680 `(offset,len)` pairs**. The remaining pairs are interiors of cased words, **40**, and population-2 words, **104**.
+
+Misaligned halfwords/words never reach VME. Neither does `ld.d` at an offset that is 4 mod 8. An aligned doubleword reaches **one eight-byte callback**, not two word callbacks. No enumerated pair crosses the memory dispatcher’s 1 KiB split boundary or this device’s end. Sources: [cpu_m88k_instr_loadstore.c:167](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_m88k_instr_loadstore.c:167), [cpu_m88k_instr_loadstore.c:189](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_m88k_instr_loadstore.c:189), [cpu_m88k_instr_loadstore.c:234](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_m88k_instr_loadstore.c:234), [memory_rw.c:186](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:186).
+
+Q2 — The executable paths are sound for the stated scope; the default-arm explanation is inaccurate.
+
+Walking the original function with packet §5 applied:
+
+- Writes decode `idata`; reads preload one array word. Dispatch bounds keep that index within the array. Sources: [dev_vme.c:60](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:60), [memory_rw.c:480](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:480).
+- `0`, GCSRCTL, TCR, IRQEN, IRQL3 and IRQL4 retain their existing behavior. T1CMP, TCTL and VBR store only on writes. T1COUNT reads return the **pre-increment** value, then increment storage by 100. Source: [dev_vme.c:70](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:70).
+- The proposed population-2 arm stores no register data, announces through a bounded, unique bit, then reaches the normal success tail. Its read diagnostic does not consume `idata` (packet §5).
+- Default failure correctly skips successful serialization and `return 1`. The memory layer has already zeroed the caller’s read buffer, so “writes no data back” should mean **no successful result or destination-register update**, not “the buffer is untouched.” Sources: [dev_vme.c:146](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:146), [memory_rw.c:485](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:485), [cpu_m88k_instr_loadstore.c:189](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_m88k_instr_loadstore.c:189).
+
+Replace “no register is defined here” in packet §5: default also receives interior offsets of **defined** registers. State that these are unsupported offsets, including the disclosed interim lane limitations.
+
+Q3 — Omit `odata = 0` here; no current population-2 word-start read can preload nonzero storage.
+
+The writer enumeration in Q1 proves the invariant. Even a wide store in a cased arm assigns only its indexed `uint32_t`; buffer serialization does not write adjacent device words. Sources: [dev_vme.c:85](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:85), [memory.c:89](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/memory.c:89).
+
+Your lean is sound: an explicit zero would hide a future population-2 backing-store edit from the proposed readback oracle. Document the zero-storage invariant next to the decline arm. The omission preserves useful regression sensitivity; it does not by itself prove that every possible side effect is absent.
+
+Q4 — Keep exact labels as the interim implementation, explicitly widen the disclosure, and correct the halfword example.
+
+A **byte at `0x29`** reaches VME default. A **halfword at `0x29`** fails alignment before reaching VME; use **`0x2a`** for that device-level test. Source: [cpu_m88k_instr_loadstore.c:167](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_m88k_instr_loadstore.c:167).
+
+Enumeration finds 78 byte starts and 26 aligned halfword starts inside population-2 words: **104 pairs**. Name these explicitly in the contract and widened `vmewidthlanes` scope, with their own interim regression pin.
+
+Containing-word decoding would instead make those pairs decline and share their containing register’s latch. Restrict such decoding to population 2 if chosen; masking the whole switch would also change cased-register behavior. That is a larger lane-policy change than this sketch needs.
+
+Neither choice changes the cited word-width guest sites. Those sites and field types are confirmed by [guest vme.c:452](C:/DocumentNoSnc/cc/GXEMUL/_guest-src-openbsd22/sys/arch/mvme88k/dev/vme.c:452), [guest vme.c:576](C:/DocumentNoSnc/cc/GXEMUL/_guest-src-openbsd22/sys/arch/mvme88k/dev/vme.c:576), and [guest vme.h:140](C:/DocumentNoSnc/cc/GXEMUL/_guest-src-openbsd22/sys/arch/mvme88k/dev/vme.h:140). The detector must pin whichever interior policy is selected.
+
+Q5 — The latch is correct; the proposed write diagnostic truncates reachable eight-byte values.
+
+Enumerated latch indices are:
+
+`1,2,3,4,5,6,7,8,9,10,12,13,14,15,16,17,18,22,23,25,26,28,29,30,31,35`.
+
+They are unique and fit `uint64_t`. The extended structure remains zeroed by [dev_vme.c:158](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:158). Sharing one bit across directions and widths implements the packet’s per-register ruling.
+
+But `st.d` can deliver a genuine 64-bit `idata`; `(int)idata` discards its upper half. Print it with, for example, `%016llx` and `(unsigned long long)idata`. Prefer an unsigned cast for the offset’s `%x` too. Full-width declined-write logging already appears at [dev_sgi_re.c:833](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:833); input assembly is at [memory.c:55](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/memory.c:55).
+
+The first-access direction wording and `(once)` marker are otherwise appropriate. The sibling’s truncating cast is precedent, not justification.
+
+Q6 — Keep the debug lines; the population-1 ruling does not require an additional host-visible announcement.
+
+The observable response is the guest exception. Default-verbosity silence is acceptable once the handler no longer terminates the process. The fork already has a silent fault device whose handler simply returns zero: [dev_unreadable.c:41](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_unreadable.c:41). Exception conversion remains at [memory_rw.c:603](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:603).
+
+Q7 — The detector misses announcement predicates and nonword writes; gate 14 is the right home.
+
+For the proposed rows in packet §6:
+
+- **`p2 width` is vacuous against adding `&& len == 4` to the announcement/latch condition.** Excluded widths still read zero and complete successfully.
+- **`p2 wr census` cannot detect an announcement restricted to reads.** Writes still disappear and readback remains zero.
+- Consequently, the `(d)` direction/width mutants lack coverage **when they gate announcement**. If they instead reject the access with `return 0`, value/PC checks can detect them. Specify each mutant’s exact insertion site.
+- The width row contains only loads. A predicate rejecting **nonword writes** also survives every planned row.
+
+These conclusions follow from packet §5’s effect-free decline body and the preload/success tail at [dev_vme.c:65](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:65) and [dev_vme.c:146](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:146).
+
+Add:
+
+1. **Free-running write-first announcement coverage**, checking offset, direction, length, payload and exactly one message per register.
+2. **Nonword-first announcement and write coverage** for byte, halfword and aligned doubleword accesses. Then repeat across direction/width to verify that the same register remains suppressed. Check both destination registers for `ld.d`.
+3. A named population-2 interior interim pin, using byte `0x29` and halfword `0x2a`.
+
+Also seed and check every readback destination in `p2 wr census`, and require completed PC/liveness for both announcement phases. “Zero new lines” alone cannot prove the second phase executed. The fork documents precisely such a stale-prompt failure at [pcc2_c040_probe.py:422](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/pcc2_c040_probe.py:422).
+
+Remaining coverage limits should be explicit: endpoint population-1 tests do not establish the whole region; fresh subprocesses with one instance each do not prove per-instance latch isolation.
+
+Gate 14 already hosts the relevant probes at [gate_arm.sh:1800](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh:1800), [gate_arm.sh:1851](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh:1851), and [gate_arm.sh:1873](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh:1873). Keep the planned named-row/equality checks, and measure the HEAD, reinstatement, null-medium and predicate legs before claiming the floor is met.
+
+Q8 — Change only the proposed write announcement’s `fatal` to `debug`; every planned row can remain green.
+
+This single-identifier edit violates visible first-write announcement during free-running execution. Nevertheless:
+
+- `p2 wr census` still observes dropped writes and zero readback.
+- `p2 announce` and `p2 once` execute reads, whose `fatal()` is unchanged.
+- All other planned value/exception checks are unchanged.
+
+That prediction uses packet §§5–6 and the suppression logic at [debugmsg.c:365](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:365). The same write-observability gap is explicitly documented at [pcc2_c040_probe.py:395](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/pcc2_c040_probe.py:395).
+
+An additional small escape is adding `case 0x94:` to the decline group: the planned `p1 fault lo`, `p1 fault hi` and `p1 p2 edge` rows still test only `0x90` and `0xffc` (packet §6).
+
+Q9 — Consider the fork’s compile-time bitmap bounds and bounded-default decoding; neither requires changing the owner’s selected members.
+
+The useful omitted safeguard is a compile-time check that `(VME2_MISC >> 2) + 1` fits **both the actual latch field and the shift operand type**. The fork already checks both capacities at [dev_pcc2.c:177](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:177). Adapt that idiom to `warned_unimpl` and `1ULL`.
+
+A valid alternative to 26 labels is a bounded test **inside default, after the existing cases**:
+
+```c
+!(relative_addr & 3) && relative_addr <= VME2_MISC
+```
+
+The documented register map is contiguous through `0x8c`, so this selects exactly the remaining 26 starts. Sources: [mvme88k_vme.h:46](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/thirdparty/mvme88k_vme.h:46), with range-inside-default precedent at [dev_sgi_gbe.c:691](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_gbe.c:691).
+
+Explicit labels remain reasonable. The range alternative introduces a contiguity dependency and changes missing-case mutants: a deleted cased label could become decline instead of fault. Re-derive those detector expectations if adopting it.
+
+Additional findings: packet §4c’s PCC2 line numbers describe the working copy, which contains a pre-existing 20-line comment insertion. At committed HEAD, that default arm starts at `src/devices/dev_pcc2.c:721`, not 741; its executable behavior matches the excerpt. The guest-access list also omits additional **cased** accesses, such as TCTL at [guest vme.c:450](C:/DocumentNoSnc/cc/GXEMUL/_guest-src-openbsd22/sys/arch/mvme88k/dev/vme.c:450); its six-register/seven-site population-2 count remains correct.
+
+I verified HEAD `5dbc000e`, read the relevant sources, and performed in-memory enumerations. I wrote nothing. I did **not** build, execute probes or mutants, reproduce S5, verify real-hardware behavior, or independently establish the reported guest panic consequence. Those measurement and hardware claims remain packet premises.

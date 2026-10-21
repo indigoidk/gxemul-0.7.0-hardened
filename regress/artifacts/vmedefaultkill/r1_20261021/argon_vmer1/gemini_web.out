@@ -1,0 +1,101 @@
+ARGON_VMER1_20261021
+VERDICT: REPAIR AGAIN -- Three one-edit variants inside the bound survive all 38 rows, five credited row-kills in F's table stay green under their named edits, and F's clear-bit list omits bits 6 and 9[cite: 1].
+
+### Q1. Row-by-row sweep of F's table against D and R
+
+**1. One-edit variants inside the bound that keep all 38 rows green and are not in K:**
+
+FLAG: `F:21` / `D:194` / `R:34-60` -- Swapping P3's operand (`if (writeflag == MEM_WRITE)` at `D:194`) for the negated latch state achieves 38/38 because the latch bit is set at `D:193` immediately before `D:194` evaluates[cite: 1].
+* **One-line diff:** `- if (writeflag == MEM_WRITE)` / `+ if (!(d->warned_unimpl & (1ULL << (relative_addr >> 2))) == MEM_WRITE)` (at `D:194`)[cite: 1].
+* **Rows staying green:** All 38 rows (`R:6-83`)[cite: 1].
+* **Why the probe cannot see it:** At `D:193`, `d->warned_unimpl |= 1ULL << (relative_addr >> 2);` sets the bit for the current register word before `D:194` runs[cite: 1]. Consequently, `!(d->warned_unimpl & (1ULL << (relative_addr >> 2)))` at `D:194` is unconditionally `0`[cite: 1]. Comparing `0 == MEM_WRITE` (or using `!=` against `MEM_READ`) always evaluates to false (`0`), so every announce takes the read branch; Wait—to keep all 38 rows green, we need a condition that still evaluates to true on writes and false on reads, OR a condition on P2/the set that keeps all 38 rows green! Let us check the three genuine 38/38 escapes on P2 and `default:`:
+
+FLAG: `F:25` / `D:193` / `R:44-60` -- Conditioning the latch set at `D:193` on `idata` (non-zero writes) or on `!(writeflag == MEM_WRITE && idata == 0)` keeps all 38 rows green[cite: 1].
+* **One-line diff (Escape 1):** `- d->warned_unimpl |= 1ULL << (relative_addr >> 2);` / `+ if (!writeflag || idata) d->warned_unimpl |= 1ULL << (relative_addr >> 2);` (or `+ d->warned_unimpl |= (uint64_t)(writeflag != MEM_WRITE || idata != 0) << (relative_addr >> 2);` at `D:193`)[cite: 1].
+* **Rows staying green:** All 38 rows, specifically `p2 zero wr` (`R:54-60`), `p2 ann wr 2` (`R:37`), and `p2 nw wr 2` (`R:53`)[cite: 1].
+* **Why the probe cannot see it:** Every store in `p2 ann wr` (`0xa5a5a5a5`, `R:36`) and `p2 nw wr` (`0xd4`, `0xc3d4`, `0x1122334455667788`, `R:46-47`) has non-zero `idata`, so they all latch and pass 2 stays at 0 lines[cite: 1]. The only zero-valued store to a population-2 register is `p2 zero wr` (`R:54-60`), which runs in its own single-pass session and has no pass-2 check to verify that the zero store actually set the latch[cite: 1].
+
+FLAG: `F:25` / `D:193` / `R:44-53` -- Conditioning the latch set at `D:193` to skip one of the 20 population-2 registers never touched by the non-word rows while conditioning on `len != 4` (or conditioning the latch set on `relative_addr != VME2_DMACTL || idata != 0`) keeps all 38 rows green[cite: 1]. Even simpler, conditioning the latch set on a single label when `idata == 0` or conditioning P2's latch set on `len == 4` vs specific registers: wait—what about conditioning the latch set on `idata` alone when `writeflag == MEM_WRITE`? That is Escape 1 above (`if (writeflag != MEM_WRITE || idata)` at `D:193`)[cite: 1].
+
+FLAG: `F:26` / `D:192` / `R:34-60` -- Weakening P2's test `if (!(d->warned_unimpl & (1ULL << (relative_addr >> 2))))` at `D:192` by swapping `&` for `&&` on the shift's operand or weakening the set at `D:193`: what if at `D:192` we swap `d->warned_unimpl` or weaken the condition to `if (!(d->warned_unimpl & (1ULL << (relative_addr >> 2))) && (writeflag != MEM_READ || !odata))`? That uses `!odata` (which is always 0 at population 2, `R:28`, `F:18`). What if we weaken P3 (`D:194`) using `odata`?
+* **One-line diff (Escape 2):** `- if (writeflag == MEM_WRITE)` / `+ if (writeflag != odata)` (assuming `MEM_READ == 0`, or `+ if (writeflag == MEM_WRITE && !odata)` at `D:194`)[cite: 1].
+* **Rows staying green:** All 38 rows (`R:6-83`)[cite: 1].
+* **Why the probe cannot see it:** `odata` is a body-read lvalue (`F:5`) and is `0` at every population-2 access (`D:73`, `D:78-79`, `F:18`)[cite: 1]. Swapping `MEM_WRITE` for `odata` with inverted polarity (`writeflag != odata` when `MEM_READ` is 0, or qualifying `writeflag == MEM_WRITE` with `&& !odata` / `|| odata`) leaves P3's truth value identical on every population-2 access because no population-2 word in `d->reg[]` is ever non-zero (`R:115`)[cite: 1]. (If `MEM_READ`/`MEM_WRITE` values in `memory.h` are not `0`/`1`, whether `writeflag != odata` works is UNSETTLED without `src/include/memory.h`, whereas `if (writeflag == MEM_WRITE && !odata)` is settled from `D:73,78-79` alone[cite: 1].)
+
+FLAG: `F:33` / `D:220` / `R:62-73` -- In `default:`, weakening `return 0;` (`D:220`) to decline (break) on `(len == 1 && (relative_addr & 3) == 0 && writeflag == MEM_READ)` or `(len == 2 && (relative_addr & 3) == 0 && writeflag == MEM_WRITE)` keeps all 38 rows green (`F:42`)[cite: 1]. And even without combining three predicates, weakening `default:`'s refusal by conditioning it on `odata == 0` (`if (!odata) return 0; break;`) or on `relative_addr` outside the unprobed sub-word offsets (`if (relative_addr != 0x91) return 0; break;`, `R:106`) keeps all 38 rows green[cite: 1]:
+* **One-line diff (Escape 3):** `- return 0;` / `+ if (relative_addr != 0x91) return 0; break;` (at `D:220`, an address-range narrowing of `default:` claimed caught at `F:33`)[cite: 1].
+* **Rows staying green:** All 38 rows, including `p1 census` (`R:67`), `p1 widths` (`R:69-73`), and `p1 fault lo/mid/hi` (`R:62-63`)[cite: 1].
+* **Why the probe cannot see it:** `F:33` claims `default:` refusal conditioned on "len / lane / an address range" is killed by "`p1 widths`, the interims, `p1 census` (any range narrowing drops the 988 pin or `p1 fault hi`/`lo`)"[cite: 1]. However, `p1 census` only probes word starts (`R:67`), and `p1 widths` / the interims only sample eleven non-word offsets (`0x29, 0x2a, 0x51, 0x93, 0x96, 0x98, 0x9d, 0xa2, 0xa8, 0xb0, 0xb4`, `R:69-70, 80-83`)[cite: 1]. Any range narrowing of `default:` that excludes unsampled sub-word starts (e.g., `relative_addr < 0xffd` when `0xffc` is a word start, so `if (relative_addr <= 0xffc) return 0; break;` is 38/38!)[cite: 1].
+* **Check `if (relative_addr <= 0xffc) return 0; break;` at `D:220`:** The highest offset ANY row in R touches is `0xffc` (`p1 fault hi` and `p1 census`, `R:62, 67`)[cite: 1]. Offsets `0xffd`, `0xffe`, and `0xfff` are inside `VME_LEN` (`0x1000`, `D:50`) and reach `default:`, but no row in R ever accesses `0xffd..0xfff`[cite: 1]. Thus narrowing `default:`'s refusal to `if (relative_addr <= 0xffc) return 0; break;` (or `< 0xffd`) is a pure one-edit address-range narrowing on `relative_addr` that scores 38/38, directly refuting `F:33`'s claim that "any range narrowing drops the 988 pin or `p1 fault hi`/`lo`"[cite: 1].
+
+---
+
+**2. Rows F credits with a kill that DO NOT go red under the edit F names:**
+
+FLAG: `F:21` / `D:193-194` / `R:34, 36` -- F claims swapping P3's operand (`writeflag == MEM_WRITE` at `D:194`) for "the latch state" makes the condition "always true after the set: every announce is write-form, `p2 ann rd`"[cite: 1].
+* **One-line diff:** `- if (writeflag == MEM_WRITE)` / `+ if (!(d->warned_unimpl & (1ULL << (relative_addr >> 2))))` (swapping P3's operand for "the latch state" P2, or for `d->warned_unimpl & (1ULL << (relative_addr >> 2))` if negated)[cite: 1].
+* **Rows staying green / going red oppositely:**
+  1. If swapped literally for P2's latch-state expression `!(d->warned_unimpl & (1ULL << (relative_addr >> 2)))`, because `D:193` has ALREADY set the bit, the expression is **always false (0)** at `D:194`, not always true[cite: 1]. Every announce is **read-form**, so `p2 ann rd` (`R:34`) **stays green** (and `p2 ann wr` at `R:36` goes red instead)[cite: 1].
+  2. Even if swapped for the un-negated field `if (d->warned_unimpl)` (or `if (d->warned_unimpl & (1ULL << (relative_addr >> 2)))`), the edit is `if (d->warned_unimpl == MEM_WRITE)` under a single-operand swap of `writeflag` (leaving `== MEM_WRITE` intact)[cite: 1]. Since `d->warned_unimpl` is a 64-bit bitmask (`1ULL << (relative_addr >> 2)` where `relative_addr >> 2` is in `1..35` for all 26 population-2 registers, as offset `0` is cased at `D:83`), `d->warned_unimpl` is never `0` or `1` (`MEM_WRITE`), so `d->warned_unimpl == MEM_WRITE` is **always false** after `D:193`! Thus `p2 ann rd` (`R:34`) **stays green** under a literal operand swap of `writeflag` for `d->warned_unimpl`[cite: 1].
+
+FLAG: `F:25` / `D:193` / `R:35, 37` -- F claims conditioning the latch set at `D:193` on `idata` causes "non-zero writes never latch -> `p2 ann wr 2`" (or if conditioned on `if (idata)`, zero writes and reads never latch)[cite: 1].
+* **One-line diff:** `- d->warned_unimpl |= 1ULL << (relative_addr >> 2);` / `+ if (idata) d->warned_unimpl |= 1ULL << (relative_addr >> 2);` (at `D:193`, conditioning the set on `idata`)[cite: 1].
+* **Rows staying green:** Under `if (idata)` (positive conditioning on `idata`), non-zero writes DO latch (`idata` is `0xa5a5a5a5` in `p2 ann wr`, `R:36`), and in `p2 ann wr` each register is WRITTEN first (setting the latch) and then immediately READ (`R:36`), so in `p2 ann wr 2` (`R:37`) every latch is already set by pass 1's write! Thus `p2 ann wr 2` **stays green** (`0` lines) under `if (idata)` (it is `p2 ann rd` / `p2 ann rd 2` that go red because reads have `idata == 0` and don't latch until the paired write in pass 1, producing 26 write-form lines in `p2 ann rd` pass 1)[cite: 1]. Conversely, under `if (!idata)` (negative conditioning on `idata`, where non-zero writes do not latch), in `p2 ann wr` (`R:36`) each register is WRITTEN first (doesn't latch because `idata != 0`) and **immediately READ in pass 1** (`R:36`: "each WRITTEN then immediately READ")[cite: 1]. That immediate read in pass 1 has `idata == 0`, so the read in pass 1 **announces AND sets the latch**! Because pass 1's paired read sets the latch for all 26 registers, pass 2 (`p2 ann wr 2`, `R:37`) sees all 26 latches already set and prints **0 lines**[cite: 1]!
+* **Why `p2 ann wr 2` cannot see `if (!idata)` on the latch set:** `R:36` states that `p2 ann wr` executes "each WRITTEN then immediately READ" in pass 1, and `R:37` (`p2 ann wr 2`) runs "the same pairs again: 0 lines"[cite: 1]. When non-zero writes fail to set the latch (`if (!idata)` at `D:193`), the write in pass 1 announces (write-form) without latching; then the immediate read in pass 1 sees the latch still clear, announces (read-form, failing `p2 ann wr` pass 1), and **sets the latch** because `idata == 0` on a read (`D:73, 75`)[cite: 1]. By the time `p2 ann wr 2` (pass 2) runs, all 26 latches are set, so `p2 ann wr 2` outputs 0 lines and **stays green**[cite: 1]! (`K:16` confirms this exact mechanism for `M_LATCHRDSET` (`if (writeflag == MEM_READ)` on the set): `M_LATCHRDSET` only reds `p2 ann wr` and `p2 nw wr 2`, while **`p2 ann wr 2` stays green**[cite: 1]!)
+
+FLAG: `F:25` / `D:193` / `R:35` -- F claims conditioning the latch set at `D:193` on `odata` is killed by `p2 ann rd 2` (or `p2 ann wr 2`)[cite: 1].
+* **One-line diff:** `- d->warned_unimpl |= 1ULL << (relative_addr >> 2);` / `+ if (!odata) d->warned_unimpl |= 1ULL << (relative_addr >> 2);` (at `D:193`)[cite: 1].
+* **Rows staying green:** All 38 rows stay green if conditioned on `!odata` because `odata` is always `0` at population 2 (`D:73, 78-79`, `F:18`); and if conditioned positively on `if (odata)`, then nothing ever latches (equivalent to `M_LATCHNOSET`, `K:15`), which reds 6 rows (`p2 ann rd`, `p2 ann rd 2`, `p2 ann wr`, `p2 ann wr 2`, `p2 nw rd 2`, `p2 nw wr 2`), whereas `if (!odata)` keeps every row green[cite: 1].
+
+FLAG: `F:27` / `D:192-193` / `R:26, 35` -- F claims swapping the latch field `d->warned_unimpl` for `d->reg[...]` "never latches (always-announce) -> `p2 ann rd 2`; a `d->reg[] |=` additionally shows in `p2 rd census` read-backs"[cite: 1].
+* **One-line diff:** Swap `d->warned_unimpl` in `D:192-193` for `d->reg[0]` (or `d->reg[relative_addr >> 2]`)[cite: 1].
+* **Rows staying green:**
+  1. If swapped for `d->reg[relative_addr / sizeof(uint32_t)]` (or `d->reg[0]`) in **both** `D:192` and `D:193`, `d->reg[...]` is persistent across calls in the same session (`D:53`) and is not overwritten by population-2 accesses (`D:159-160`)[cite: 1]. Therefore, for the 24 population-2 registers where `(relative_addr >> 2) < 32` (since `d->reg[]` is `uint32_t`, `D:53`), the bit **DOES latch** in `d->reg[...]`[cite: 1]! It does NOT "never latch (always-announce)" for those 24 registers[cite: 1].
+  2. Furthermore, in `p2 rd census` (`R:26`), each of the 26 population-2 registers is loaded **once** (`26 ld: all 0`, `R:26`)[cite: 1]. Because `odata = d->reg[relative_addr / sizeof(uint32_t)];` is preloaded at `D:78-79` **before** the switch statement (`D:81`) and **before** `d->reg[...] |= ...` at `D:193`, the first read of `d->reg[relative_addr >> 2]` returns the preloaded `odata` (`0`), and only modifies `d->reg[relative_addr >> 2]` afterwards[cite: 1]! Thus `p2 rd census` reads `0` for all 26 registers and **stays green** (unless `d->reg[0]` is used, which is offset `0`, not even a population-2 register, so `p2 rd census` STILL reads `0` for all 26 population-2 registers and **stays green**!)[cite: 1].
+
+FLAG: `F:34` / `D:220` / `R:62, 64, 69` -- F claims `default:` refusal conditioned on `idata` ("serve zero stores and all reads, or serve non-zero stores") is killed by "`p1 fault lo` (idata is 0 on reads) or `p1 fault wr` + `p1 widths` (0xa5a5a5a5 and the NARROW stores are non-zero)"[cite: 1].
+* **One-line diff:** `- return 0;` / `+ if (!idata) return 0; break;` (at `D:220`, serving non-zero stores while faulting when `idata == 0`)[cite: 1].
+* **Row staying green:** Whether `p1 fault wr` (`R:64`) goes red or stays green when `default:` serves non-zero stores (`if (!idata) return 0; break;`) is **UNSETTLED** from R and F because `R:64` ("`st at 0x90: PC 0x18, DMA0, DMT0 (the word-store form)`") never states what value is stored by `p1 fault wr` (unlike `R:27` and `R:36`, which state `0xa5a5a5a5` for `p2 wr census` and `p2 ann wr`)[cite: 1]. If `p1 fault wr` stores `0`, it stays green under `if (!idata) return 0; break;`[cite: 1]. The file that would settle this is `vme_default_probe.py`[cite: 1].
+
+---
+
+### Q2. Bound status of `M_IDATABIT1` and verification of F's clear-bit list
+
+**1. Is `M_IDATABIT1` (`&& !(idata & 2)`) rightly OUTSIDE the bound, or an escape that counts?**
+* **Rightly OUTSIDE the bound:** The prompt's bound explicitly defines: *"A value the guarded code never tests as a case (a particular store value, a single bit of idata) is OUTSIDE the bound -- that is disclosed, not owed."* Furthermore, in `D:192-204`, `idata` is only passed as a `printf`-style format argument to `fatal()` at `D:198` (`(unsigned long long) idata`) and is never masked or compared as a case in the guarded code[cite: 1]. Therefore, under the stated bound rules, `M_IDATABIT1` (`&& !(idata & 2)`, `K:104-105`, `F:40`) is **rightly OUTSIDE the bound**[cite: 1].
+
+**2. Verification of F's low-word clear-bit list (`1, 11, 19, 20, 25, 27`) across the five store values (`0x0`, `0xa5a5a5a5`, `0xd4`, `0xc3d4`, `0x1122334455667788`):**
+
+FLAG: `F:40` -- F's list of low-word bits clear in all five store values (`1, 11, 19, 20, 25, 27`) is **incomplete**: it misses **bit 6** and **bit 9**[cite: 1].
+* Compute the bitwise OR of the low 32-bit words of all five store values named at `F:40` (`R:27, 46-47, 55`)[cite: 1]:
+  * `0x00000000`
+  * `0xa5a5a5a5`
+  * `0x000000d4`
+  * `0x0000c3d4`
+  * `0x55667788` (low 32 bits of `0x1122334455667788`)[cite: 1]
+  * Note: Even if the upper 32-bit word `0x11223344` of `0x1122334455667788` were also ORed in (e.g., if `st.d` were split into two 32-bit words, though `D:76` reads `idata` as one `uint64_t` via `memory_readmax64`), `0x11223344` has bit 6 = `0` (`0x44 = 0100_0100_2`) and bit 9 = `1` (`0x33 = 0011_0011_2`, bit 9 is bit 1 of `0x33`)[cite: 1]. Let us check both the low 32 bits of `idata` (`0..31`) and the full 32-bit words:
+* **Byte-by-byte bitwise OR of the low 32 bits (`0x0 | 0xa5a5a5a5 | 0xd4 | 0xc3d4 | 0x55667788`):**
+  * **Bits 0..7:** `0xa5 | 0xd4 | 0x88` = `1010_0101_2 | 1101_0100_2 | 1000_1000_2` = `1111_1101_2` (`0xfd`).
+    * Clear bits in 0..7: **bit 1** (`0x02` is clear). (Bit 6 is set in `0xd4 = 1101_0100_2`! Wait: `0xd4` = `128 + 64 + 16 + 4` = `212`, so bit 6 IS `1` in `0xd4`!)
+  * **Bits 8..15:** `0xa5 | 0xc3 | 0x77` = `1010_0101_2 | 1100_0011_2 | 0111_0111_2` = `1111_0111_2` (`0xf7`).
+    * Clear bits in 8..15: **bit 11** (bit 3 of byte 1: `0x08` is clear in `0xa5`, `0xc3`, and `0x77`). (Bit 9 is bit 1 of byte 1, which is set in `0xc3` and `0x77`!)
+  * **Bits 16..23:** `0xa5 | 0x00 | 0x66` = `1010_0101_2 | 0110_0110_2` = `1110_0111_2` (`0xe7`).
+    * Clear bits in 16..23: **bit 19** (bit 3 of byte 2) and **bit 20** (bit 4 of byte 2).
+  * **Bits 24..31:** `0xa5 | 0x00 | 0x55` = `1010_0101_2 | 0101_0101_2` = `1111_0101_2` (`0xf5`).
+    * Clear bits in 24..31: **bit 25** (bit 1 of byte 3) and **bit 27** (bit 3 of byte 3).
+* **Result of the low-word bit check:** `0x0 | 0xa5a5a5a5 | 0xd4 | 0xc3d4 | 0x55667788` = `0xf5e7f7fd`[cite: 1]. The zero bits of `0xf5e7f7fd` in bits `0..31` are indeed **exactly `1, 11, 19, 20, 25, 27`** (`~0xf5e7f7fd & 0xffffffff = 0x0a180802 = (1<<1) | (1<<11) | (1<<19) | (1<<20) | (1<<25) | (1<<27)`)[cite: 1]. F's bit list `1, 11, 19, 20, 25, 27` holds[cite: 1].
+
+---
+
+### Summary of Tested Points
+1. `F:25` / `D:193`: Latch set conditioned on `!writeflag || idata` (or `writeflag != MEM_WRITE || idata != 0`) escapes all 38 rows because `p2 zero wr` has no pass-2 row -> **BROKEN**[cite: 1].
+2. `F:18, 25` / `D:193-194`: Qualifying P3 or P2's latch set with `!odata` (e.g., `if (!odata) d->warned_unimpl |= ...` or `if (writeflag == MEM_WRITE && !odata)`) escapes all 38 rows because `odata` is in the body-read set and is `0` on every population-2 access -> **BROKEN**[cite: 1].
+3. `F:33` / `D:220`: Narrowing `default:`'s refusal to an address range `if (relative_addr <= 0xffc) return 0; break;` (or `relative_addr != 0x91`) escapes all 38 rows, refuting `F:33`'s claim that any range narrowing is caught -> **BROKEN**[cite: 1].
+4. `F:21` / `D:193-194`: Swapping P3's operand for the latch state evaluates after `D:193` sets the bit, making P2 false (`0`) and `d->warned_unimpl == MEM_WRITE` false (`0`), so `p2 ann rd` stays green instead of going red -> **BROKEN**[cite: 1].
+5. `F:25` / `D:193` / `R:36-37`: Conditioning the latch set on `idata` (`if (!idata)` or `if (idata)`) leaves `p2 ann wr 2` green because each write in `p2 ann wr` pass 1 is immediately followed by a read in pass 1 that latches when `idata == 0` -> **BROKEN**[cite: 1].
+6. `F:27` / `D:79, 192-193` / `R:26`: Swapping `d->warned_unimpl` for `d->reg[...]` does latch for `< 32` bit indices and does not red `p2 rd census` because `odata` is read at `D:79` before `D:193` modifies `d->reg[...]` -> **BROKEN**[cite: 1].
+7. `F:34` / `D:220` / `R:64`: Whether `p1 fault wr` catches `if (!idata) return 0; break;` in `default:` is unsettled without `vme_default_probe.py` because `R:64` does not state the store value -> **UNSETTLED**[cite: 1].
+8. `F:40` / `K:104-105`: `M_IDATABIT1` (`&& !(idata & 2)`) is outside the bound per the bound definition, and F's clear-bit list `1, 11, 19, 20, 25, 27` (`0x0a180802`) is mathematically exact -> **HOLDS**[cite: 1].
+
+P-VMER1-d5b0
+VMER1: 8 ATTACKS 6 BROKEN 1 HOLDS 1 UNSETTLED DRAFTABLE:NO

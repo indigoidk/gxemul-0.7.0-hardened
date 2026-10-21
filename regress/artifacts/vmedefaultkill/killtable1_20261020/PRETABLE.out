@@ -1,0 +1,90 @@
+PRETABLE -- #568 (vmedefaultkill), written BEFORE kill table 1 runs (this file's mtime is the order proof).
+Main loop, 2026-10-20 ~20:1x.  Fix under test: scratchpad vme/fix/dev_vme.fix568.c (md5 4e3e7fc2), generated from HEAD
+by mk_fix568.py.  Detector under test: vme_default_probe.py REVISION 2 (being built by the probe sub-agent from
+pass1_20261020/ADJUDICATION_p1.md plus two refinements: two announce sessions `p2 ann rd` / `p2 ann wr`; non-word
+first accesses; cased write paths; interim pins; population-1 width variety).  Row names below are the PLANNED names;
+when revision 2 lands its row list is DIFFED against this file's prescribed rows (the #490 rule) and any rename or
+drop is recorded in an addendum written before table 1.
+
+== 1. SIBLING PARITY ==
+* The edited `default:` arm (now FAULT) vs its siblings in the same switch: the five cased debug-only arms (GCSRCTL,
+  TCR, IRQEN, IRQL3, IRQL4) DECLINE with an UNLATCHED debug() per access.  The new population-2 arm DECLINES with a
+  LATCHED fatal() -- owner-ruled (S3), so the asymmetry is deliberate.  Rows owed: the free-running announce rows (the
+  new arm prints at default verbosity) and `free quiet` (a cased debug-only read prints NOTHING free-running) -- the
+  pair pins that the two declining shapes differ in exactly the ruled way.
+* The new population-2 arm vs `#501`'s PCC2 `default:` (dev_pcc2.c, the ruled sibling): same N=1-per-offset latch,
+  same direction-decides-wording, same (once) marker.  `#501` disclosed its len-8 value truncation; #568 prints all 64
+  bits -> row owed: a `st.d` first access whose high and low words differ (revision 2, item 2b).
+* The new FAULT arm vs `dev_unreadable.c` (the pure FAULT member installed three times around this window): both
+  `return 0`; dev_unreadable is silent, and #568's default keeps two debug() lines (silent free-running, measured by the
+  probe sub-agent: 8 free-running population-1 faults print 0 host lines).  No asymmetry a row is owed for.
+
+== 2. CLAIM -> ROW (every ADDED comment sentence asserting an observable consequence) ==
+  "a read is served the word preloaded above, which is 0"              -> p2 rd census, p2 ld widths
+  "a write is dropped"                                                 -> p2 wr census, p2 st widths
+  "one fatal() per register per device, the first access's direction
+   deciding its wording"                                               -> p2 ann rd, p2 ann wr (+ their second passes)
+  "(odata is deliberately not forced to 0, so a store added by a later
+   edit would show in a read-back)"                                    -> p2 wr census (and the M_STORE leg below)
+  "Sub-word starts inside these words are not matched here and reach
+   default:"                                                           -> p2 int byte, p2 int half
+  default: "memory_rw then raises the m88k data-access exception"      -> p1 fault lo / hi / wr, p1 census, p1 widths
+  default: "the bus error a badaddr() probe expects"                   -> NO ROW: a statement about the guest's
+                                                                          recovery path; NOT CLAIMED (the 10-09
+                                                                          measurement read PFSR/PFAR 0)
+  "A bus error here would panic that guest's attach"                   -> NO ROW: counterfactual about a guest boot
+                                                                          the harness does not run; NOT CLAIMED, with
+                                                                          the 10-09 FAULT-sketch measurement cited
+  struct: "Zeroed by DEVINIT's memset, so every instance starts with
+   every announce armed"                                               -> p2 ann rd / p2 ann wr first pass (26 lines)
+  typedef: "narrowing warned_unimpl ... would shift past bit ...; make
+   that a compile error"                                               -> NO RUNTIME ROW: by construction, the build
+                                                                          itself fails (leg M_CAPNARROW below)
+
+== 3. GUARD FIELD vs BODY FIELD, with the partition the body induces ==
+  The new predicate reads d->warned_unimpl (bit relative_addr >> 2).  The guarded body reads writeflag, relative_addr,
+  len, idata (write) / odata (read), and writes d->warned_unimpl.  Writers of warned_unimpl: this arm and DEVINIT's
+  memset ONLY (grep) -- so no state where guard field and body field disagree can be built except across device
+  instances (one instance per process: NOT CLAIMED).
+  Partitions the body induces: writeflag {READ, WRITE} (the `if (writeflag == MEM_WRITE)`); the latch bit {clear, set};
+  the dispatch LABEL (26 exact cases) -- the label's value flows into the latch index, so labels are a floor axis.
+  Floor cells: 26 labels x {read, write} x {clear, set} = 104.  Covered by TWO free-running sessions: `p2 ann rd`
+  (every label READ first [read, clear] then WRITTEN [write, set]) and `p2 ann wr` (every label WRITTEN first
+  [write, clear] then READ [read, set]) -- 104 of 104.  len is NOT tested by the body (only printed): its values are
+  clause-(e) disclosure, SAMPLED at 1, 2, 4, 8 by the non-word first-access rows.
+
+== 4. CHANNEL (planned row -> the mutant it is aimed at -> the observable that differs) ==
+  unasm / live / neg apparatus / vbr reset / free ctl / free quiet  -> apparatus / device presence / free-running proof
+  cased census   -> a cased label dropped                -> that load FAULTs: PC + sentinels left
+  t1cmp rt, tctl rt, vbr rt, t1count inc, cased wr  -> a cased WRITE path broken -> read-back value / PC
+  p2 rd census   -> a population-2 label dropped; HEAD   -> PC (fault) / process death
+  p2 wr census   -> writes stored (M_STORE); writes FAULT (M_WRFAULT) -> read-back value / PC + liveness after stores
+  p2 ld widths / p2 st widths -> decline conditioned on len (M_LENFAULT) -> PC + both destination registers
+  p2 ann rd / p2 ann wr (+ second passes) -> latch shared / never set / set only on reads / cleared on writes;
+                    fatal->debug in either branch; (once) dropped -> line count, form, tail literal
+  p2 nonword ann -> announce only for len 4 (M_ANNLEN4); 32-bit value print (M_TRUNC) -> the (len N) line / 64-bit value
+  p1 fault lo / hi / wr -> return 0 -> break (M_FLTBREAK); exit(1) back (M_EXIT) -> PC 0x18, DMA0, DMT0 / process death
+  p1 census      -> an extra label anywhere in 0x90..0xffc (M_ADD94) -> fault count 987 of 988
+  p1 widths      -> the refusal narrowed to word accesses (M_FLTLEN, M_FLTWR) -> fault count
+  p1 p2 edge     -> the last label (MISC) dropped (M_DROPMISC) / an extra label at 0x90 -> 0x8c faults / 0x90 declines
+  p2 int byte / p2 int half / p3 interim -> the interim width policy changed (M_FLTLEN reds p3 interim) -> PC, DMA0
+  CHECK OF THE CHANNEL LINE ITSELF (the carrier asks the first mandated applications to test it): every row above was
+  named WITH its mutant before any table ran; table 1's per-row scores say whether each named channel varied.
+
+== 5. THE TABLE (planned legs; each a one-edit variant of fix568, built in a scratch clone; predictions = rows that RED) ==
+  BASE (fix568)     all green                                   NULL (no vme device)  device rows red (measured v1)
+  HEAD              every population row red (process death)    M_EXIT       population-1 rows die
+  M_DROPMCTL        p2 rd census, p2 wr census, p2 ann rd/wr     M_DROPMISC   p2 censuses, p1 p2 edge, p2 ann rd/wr
+  M_ADD94           p1 census (987)                              M_LATCHONE   p2 ann rd/wr (1 line)
+  M_LATCHNOSET      p2 ann rd/wr (52 lines), second passes       M_LATCHRDSET p2 ann wr (write-first re-announces)
+  M_LATCHCLRW       p2 ann rd (the write clears; later reads)    M_WDEBUG     p2 ann wr (0 write lines free-running)
+  M_RDEBUG          p2 ann rd                                    M_ANNLEN4    p2 nonword ann
+  M_WRFAULT         p2 wr census, p2 st widths, p2 ann wr        M_LENFAULT   p2 ld widths, p2 st widths, p2 nonword ann
+  M_STORE           p2 wr census (non-zero read-back)            M_ODATA0     NONE predicted -- equivalent today
+                                                                              (reads are 0 either way); disclosed
+  M_FLTBREAK        p1 fault lo/hi/wr, p1 census, p1 widths      M_FLTLEN     p1 widths, p3 interim, p2 int byte/half
+  M_FLTWR           p1 fault wr, p1 widths                       M_NOONCE     p2 ann rd (tail literal)
+  M_TRUNC           p2 nonword ann (the st.d value)              M_DROPTCTL   cased census, tctl rt
+  M_CAPNARROW       BUILD FAILS (the typedef) -- killed by construction; measured as a failed build
+  Equivalent-mutant note: M_ODATA0 is predicted to SURVIVE; a survival there is a RESULT (target equivalent today),
+  recorded as the reason the comment says odata is deliberately not forced.

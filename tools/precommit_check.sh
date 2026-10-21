@@ -356,7 +356,9 @@ elif out=$(python "$SCORECHK" 2>&1); then
 	#  RAISED 35 -> 36 ON 2026-10-18, DELIBERATELY.  One newly gated probe: fbctrl_cmd_probe.py
 	#  (#567, pinned UNQUOTED in gate_mips_folds.sh at its final 125 rows; 95 when this line was
 	#  first written, before the review passes grew it).
-	SCORE_CLAIMS_MANIFEST=36
+	#  RAISED 36 -> 37 ON 2026-10-21, DELIBERATELY.  One newly gated probe: vme_default_probe.py
+	#  (#568, pinned UNQUOTED in gate_arm.sh at 38 rows under the stem vme_default).
+	SCORE_CLAIMS_MANIFEST=37
 	_spinned=$(printf '%s\n' "$out" | sed -n 's/^SCORE_CLAIMS_PINNED=//p')
 	if [ -z "$_spinned" ]; then
 		bad "check_score_claims printed no SCORE_CLAIMS_PINNED line -- the count cannot be pinned"

@@ -25139,3 +25139,38 @@ Fable 5.1, GPT-6 Astra, Grok 4.7).  Each row's ledger `state_note` carries its s
   measurement.
 * **`ppcrldiclbanner` (LOW, open)** -- its first two items done (docstring line 2 and the first banner read DETECTOR; the
   usage message names `ppc_rldicl_probe.py`); open for the third, `vacuous cell`'s note split across two rows.
+
+
+### 2026-10-21 -- `vmedefaultkill` fixed by `#568`; `vmewidthlanes` widened; three rows filed
+
+* **`vmedefaultkill` (HIGH) -- FIXED by `#568`.**  `dev_vme.c`'s `default:` no longer ends the emulator: the 26
+  header-named VME2 registers the model does not implement DECLINE with one latched announce per register (owner
+  2026-10-09), and every other unmatched offset returns 0, which `memory_rw.c` turns into the m88k data-access exception
+  for a guest data load or store (owner 2026-09-11 for the unnamed word starts; sub-word starts the same way only as
+  an interim, which `vmewidthlanes` decides).  Rung-3 witness `regress/artifacts/vmedefaultkill/witness_20261020/`
+  (7 of 7 guest access sites rc 1 on HEAD 5dbc000e); detector `regress/vme_default_probe.py` (38 rows), gated in gate 14
+  and pinned at 38; kill table 2 and its addenda 2b, 2c and 2d in `regress/artifacts/vmedefaultkill/killtable2_20261021/`; the
+  repair chain closed on the repair-diff pass (`r1_20261021/`).
+* **`vmewidthlanes` (LOW, open)** -- widened: population-2 SUB-WORD starts (the probe pins three interims --
+  `p3 interim`, `p2 int byte`, `p2 int half` -- that this row will re-derive) and cased-word `ld.d`/`st.d` lane
+  placement (a 32-bit register served into, or stored from, the wrong half of an 8-byte access at 0x00, 0x60, 0x88).
+* **`vmewarnedbit` (LOW, open)** -- new.  `dev_vme.c` writes its latch index `1ULL << (relative_addr >> 2)` twice, in
+  the test and in the set; one shared macro (`dev_pcc2.c`'s shape) would make a one-sided index edit impossible and a
+  two-sided relabel one edit.  D5 of `#568`'s pass-2 adjudication, filed rather than built.  The index edits kill table 2 built are
+  TWO-sided -- M_LATCHONE (a constant index in both) and M_ONENARROW (a 32-bit literal in both) -- and die of a
+  collision and an overflow; a ONE-sided edit (test and set disagreeing) was not built, only derived to re-announce;
+  the two-sided relabels the repair-diff pass named (`1ULL` -> `2ULL`, `(relative_addr >> 2) ^ 1`) are equivalents.
+* **`vmeprobedebt` (LOW, open)** -- new.  Three rows of `regress/vme_default_probe.py` carry no own-channel kill in kill
+  table 2: `free quiet` (no leg reds it), `vbr rt` and `t1count inc` (red only as dependents of M_DROPTCTL).  The absent
+  legs: a cased arm's `debug()` -> `fatal()` promotion; a VBR write-path break; a T1COUNT write-path break.  Also the
+  clause-(e) cells the probe's NOT CLAIMED list names: the store-data slice (28 of 64 bits clear in every store value;
+  bit 1 measured 38/38 in table 2b), the latch set skipped for a zero store (M_ZEROSET, 38/38 in table 2d: the sampled
+  zero pins the announce's form, not the set), and `default:` serving 0xffd..0xfff (M_DFLTFFC, 38/38).  Coverage debt,
+  ranked below live defects.
+* **`m88kpsrmxm` (MED, open)** -- new.  A guest that sets PSR.MXM STOPS THE EMULATED CPU: `src/cpus/cpu_m88k.c`'s PSR
+  write prints `stcr: TODO: MXM support` at ERROR level and sets `cpu->running = false` (the `M88K_PSR_MXM` arm of the
+  control-register store).  The MC88100 manual (`_scratchpad/mc88100.txt:2047-2052`, `:9243-9245`) makes MXM the
+  misaligned-access exception MASK: when set, a misaligned access does not trap and the processor rounds the address
+  down to a consistent boundary.  Named on `#568`'s pass 1 (Fable) as an unmodelled divergence and adjudicated FILE,
+  LOW, before anyone read the arm; the arm halts, so it is filed MED.  Whether an in-tree guest sets MXM is not
+  established -- the reachability question that ranks it.

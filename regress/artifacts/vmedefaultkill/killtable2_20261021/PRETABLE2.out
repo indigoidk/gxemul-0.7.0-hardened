@@ -1,0 +1,317 @@
+PRETABLE2 -- #568 (vmedefaultkill) REPAIR 1, kill table 2, written BEFORE table 2's first build (this file's mtime
+and PRETABLE2_predictions.json's are the order proof).  Measuring seat (Opus 5.5), 2026-10-21.  Spec: rev3/REV3_SPEC.md
+sections 1-6 (section 6's amendments govern).  Lines marked RECORDED are computed by mk_pretable2.py from the inputs; the
+dispositions and the per-leg predictions are the seat's derivations, written before any table-2 leg was built.
+
+== 0. INPUTS (RECORDED md5s) ==
+  fix568b  rev3/dev_vme.fix568b.c          beb120eae1be112b682bd528f103191c  (mk_fix568b.py over fix568 4e3e7fc2; objdump record:
+           rev3/OBJDUMP_fix568_vs_fix568b.txt)
+  HEAD     fix/dev_vme.head.c              2516a82bc777fe780f2dc6ccc00fd6c3  (1a59a47e's dev_vme.c)
+  rev 3    rev3/vme_default_probe.rev3.frozen.py  ddcebfe3257d3370f3c16b0bee79a4be  (38 rows; the ONE instrument of table 2)
+  rev 2    killtable1/vme_default_probe.frozen.py 19de15b3ea69af28e437cdf92e22c97e  (34 rows; tables 1, 1b and the M_IDATA run)
+  legs     rev3/table2/legs/MANIFEST.txt (mk_legs568t2.py; 34 legs + NULL, each ONE exact find/replace)
+  DEVELOPMENT runs of rev 3, before this file and before any leg was built (rev3/dev/, a clone since deleted):
+    dev1_BASE  VME_DEFAULT_RESULT=38/38 CONTROL=OK  (RECORDED from rev3/dev/dev1_BASE.raw)
+    dev1_HEAD  VME_DEFAULT_RESULT=14/38 CONTROL=OK  (RECORDED from rev3/dev/dev1_HEAD.raw)
+    dev1_NULL  VME_DEFAULT_RESULT=5/38 CONTROL=FAIL  (RECORDED from rev3/dev/dev1_NULL.raw)
+
+== 1. SIBLING PARITY ==
+  * `default:' (FAULT) vs the five cased debug-only arms (GCSRCTL, TCR, IRQEN, IRQL3, IRQL4: DECLINE + unlatched
+    debug()): both print only through debug(), silent free-running.  Rev 2 pinned the cased side (`free quiet',
+    `free neg ctl'); rev 3 adds the FAULT side -- `p1 quiet' counts `[ vme:' in the two free-running population-1
+    runs, so a debug -> fatal promotion in `default:' (either direction) is visible.  DELETION of those debug()
+    calls is the same on both sides (silent either way): NOT CLAIMED, said so in the contract.
+  * the population-2 arm vs #501's PCC2 `default:' (latched fatal, direction decides wording, `(once)'): rev 3
+    adds the zero-valued first store (`p2 zero wr': direction decides the wording even when the value is 0) and
+    the cross-width latch hold (`p2 nw rd 2' / `p2 nw wr 2': a non-word first access latches).
+  * `default:' vs dev_unreadable.c (pure FAULT): both `return 0'; no asymmetry owed (unchanged from PRETABLE.out).
+  * the population-2 arm vs itself across lanes (FB F10c): word starts are labels, sub-word starts fault; `p1
+    widths' now holds BOTH lane-0 widths in population 1 (ld.hu 0xb0, st.b 0xb4) beside the lane-1/2/3 accesses.
+
+== 2. CLAIM -> ROW (every comment sentence fix568b ADDS or REWRITES over HEAD; RECORDED: the added comment text) ==
+  RECORDED (78 lines added or rewritten over HEAD, 31 of them comment text; fix568b line numbers):
+      55 |     /*  #568: one bit per register WORD (relative_addr >> 2) for the
+      56 |         unimplemented-register announce below; the highest such word is
+      57 |         VME2_MISC (0x8c >> 2 == 35).  Zeroed by DEVINIT's memset, so every
+      58 |         instance starts with every announce armed.  */
+      62 | /*  #568: a warned_unimpl narrower than VME2_MISC >> 2 + 1 bits would
+      63 |     leave MISC's announce bit outside the field; make that a compile error
+      64 |     (dev_pcc2.c's pcc2_w_fits_in_warned shape).  The 1ULL in the shifts
+      65 |     below is not checked here.  */
+     150 |     /*  #568 (vmedefaultkill): registers the header names but this model
+     151 |         does not implement.  Each ended the emulator in default: below.
+     152 |         OpenBSD 2.2's mvme88k driver (sys/arch/mvme88k/dev/vme.c) has
+     153 |         access sites at six of them.  Its attach reaches four:
+     154 |         vme2chip_init() reads MASTERCTL and writes it back and writes
+     155 |         MASTER3, MASTER4 and MASTER4MOD.  The other two, IRQSTAT and
+     156 |         IRQCLR, are in vme2abort(), the ABORT-switch interrupt handler,
+     157 |         and this model raises no VME2 interrupt.  A bus error here
+     158 |         would panic that guest's attach, so these DECLINE: a read is served
+     159 |         the word preloaded above, which is 0 because nothing writes these
+     160 |         words of d->reg[] (odata is deliberately not forced to 0, so a store
+     161 |         added by a later edit would show in a read-back); a write is
+     162 |         dropped; one fatal() per register per device, the first access's
+     163 |         direction deciding its wording (#501's shape in dev_pcc2.c).
+     164 |         Sub-word starts inside these words are not matched here and reach
+     165 |         default: (vmewidthlanes).  */
+     213 |         /*  #568 (vmedefaultkill): an offset this model does not service:
+     214 |             no header-named register, or the inside of one (a sub-word
+     215 |             start).  Refuse the access -- for a guest data load or store,
+     216 |             memory_rw then raises the m88k data-access exception, the bus
+     217 |             error a badaddr() probe expects -- instead of exit(1), which
+     218 |             ended the emulator with no visible reason (debug() is silent
+     219 |             at default verbosity).  */
+  CLAIMS and their rows:
+    - struct: one bit per register WORD ... Zeroed by DEVINIT's memset, so every instance starts with every announce armed
+        -> p2 ann rd / p2 ann wr (26 first-access lines each), p2 nw rd / p2 nw wr, p2 zero wr
+    - typedef: a warned_unimpl narrower than VME2_MISC >> 2 + 1 bits ... make that a compile error
+        -> NO RUNTIME ROW, by construction: leg M_CAPNARROW must FAIL TO BUILD
+    - typedef: The 1ULL in the shifts below is not checked here
+        -> a DISCLOSURE; leg M_ONENARROW measures what that literal's narrowing does on this host (UB-mediated)
+    - arm: registers the header names but this model does not implement. Each ended the emulator in default: below
+        -> HEAD (test-first): the 20 population rows die on HEAD
+    - arm: OpenBSD 2.2's mvme88k driver has access sites at six of them. Its attach reaches four ... IRQSTAT and IRQCLR ... ABORT-switch interrupt handler, and this model raises no VME2 interrupt
+        -> NO ROW: a SOURCE-READING claim about the guest (no mvme187 OpenBSD boot image on this host; GLM's boot census offered, not adopted); NOT CLAIMED in the probe contract
+    - arm: A bus error here would panic that guest's attach
+        -> NO ROW: counterfactual about a guest boot; NOT CLAIMED
+    - arm: a read is served the word preloaded above, which is 0 ... (odata is deliberately not forced to 0, so a store added by a later edit would show in a read-back)
+        -> p2 rd census, p2 ld widths (0 served); p2 wr census, p2 st widths (a store shows: M_STORE)
+    - arm: a write is dropped
+        -> p2 wr census, p2 st widths
+    - arm: one fatal() per register per device, the first access's direction deciding its wording
+        -> p2 ann rd/rd 2/wr/wr 2, p2 nw rd/wr, p2 nw rd 2/wr 2, p2 zero wr (wording on a ZERO store: M_IDATA)
+    - arm: Sub-word starts inside these words are not matched here and reach default: (vmewidthlanes)
+        -> p2 int byte, p2 int half
+    - default: an offset this model does not service ... Refuse the access -- for a guest data load or store, memory_rw then raises the m88k data-access exception
+        -> p1 fault lo/hi/mid/wr (PC 0x18, DMA0, DMT0), p1 census, p1 widths, p3 interim, p2 int byte/half; instruction fetch NOT CLAIMED (the qualifier)
+    - default: the bus error a badaddr() probe expects
+        -> NO ROW: the guest's recovery path; NOT CLAIMED
+    - default: instead of exit(1), which ended the emulator with no visible reason
+        -> HEAD's `died:exit1' rows
+    - default: (debug() is silent at default verbosity)
+        -> p1 quiet (0 `[ vme:' lines in two free runs) -- and free quiet / free neg ctl on the cased side
+
+== 3. GUARD FIELD vs BODY FIELD, with the partition the body induces (RECORDED: the greps) ==
+  RECORDED `grep -n warned_unimpl' fix568b (every reader and writer of the latch field):
+      59:     uint64_t    warned_unimpl;
+      62: /*  #568: a warned_unimpl narrower than VME2_MISC >> 2 + 1 bits would
+      67:     8 * sizeof(((struct vme_data *)0)->warned_unimpl) ? 1 : -1];
+     192:         if (!(d->warned_unimpl & (1ULL << (relative_addr >> 2)))) {
+     193:             d->warned_unimpl |= 1ULL << (relative_addr >> 2);
+  RECORDED `grep -n memset' fix568b:
+      57:         VME2_MISC (0x8c >> 2 == 35).  Zeroed by DEVINIT's memset, so every
+     235:     memset(d, 0, sizeof(struct vme_data));
+  WRITERS of warned_unimpl: the arm's `|=' and DEVINIT's memset ONLY -- no state where guard field and body field
+  disagree is buildable within one instance (one vme device per process: NOT CLAIMED).
+  Partitions the arm's body induces, per lvalue:
+    writeflag      tested `== MEM_WRITE' -> {READ, WRITE} -- EXHAUSTED (both rowed at every label: the ann pair)
+    latch bit      tested by the guard -> {clear, set} -- EXHAUSTED (pass 1 clear, pass 2 set)
+    label (26)     each a dispatch label whose value flows into the latch index -> a FLOOR AXIS (26 x 2 x 2 = 104
+                   cells, the ann pair)
+    len            NOT tested by the fixed body (printed only) -- SAMPLED: 1, 2, 4, 8 by the non-word rows (one
+                   register per width) and the width rows at 0x28 / 0x08; the latch-hold across widths now rowed
+                   (`p2 nw rd 2', `p2 nw wr 2')
+    idata          NOT tested by the fixed body (printed in the write form); the operand swap M_IDATA makes the
+                   direction test read idata's zero-ness -> {0, non-0}: the 0 cell at a first access is rowed by
+                   `p2 zero wr' (one width, len 4), the non-0 cell by every other store -- DEPENDS-ON clause (2)
+    odata          NOT tested (printed in the read form; always 0 today: M_ODATA0 / M_SERVED0 equivalent)
+  `default:': no predicate of its own (the switch's fallthrough); the body tests writeflag (which debug())
+  -> {READ, WRITE} and nothing else.  The refusal-narrowing mutants each condition `return 0' on a lvalue the
+  body reads: len (M_FLTLEN), writeflag (M_FLTWR), len x lane (M_LANE0H, M_LANE0B) -- rowed by `p1 widths' (8
+  accesses: len 1, 2 and 8, lanes 0-3, both directions) and the stepped fault rows (len 4).
+
+== 4. CHANNEL: per row, the legs it is DESIGNED to kill and the observable that differs ==
+  neg apparatus  CONTROL      APPARATUS: a bogus subtype must make `live' fail
+  session        CONTROL      APPARATUS: the control session runs to quit
+  live           CONTROL      APPARATUS: an or-immediate reads back
+  vbr reset      CONTROL      MEDIUM: DEVINIT's VBR seed (a DEVINIT-seed edit or a device-less build reds it; no leg edits DEVINIT)
+  t1cmp rt       scored       read-back value of a cased store
+                              designed against: M_T1CMPWRDROP
+  cased census   scored       a dropped cased label FAULTs: PC 0x18 + sentinels
+                              designed against: M_DROPTCTL, M_DROPIRQEN
+  free ctl       scored       free-running T1CMP round trip value
+                              designed against: M_T1CMPWRDROP
+  free quiet     scored       no `[ vme:' text in the free ctl run (a cased access that announced would show; no such leg)
+  free neg ctl   CONTROL      APPARATUS: GCSRCTL's debug() line, 1 stepped and 0 free-running
+  tctl rt        scored       TCTL store/read-back value or PC
+                              designed against: M_DROPTCTL
+  vbr rt         scored       VBR store/read-back (no leg breaks the VBR write path: DEPENDENT under M_DROPTCTL)
+  t1count inc    scored       T1COUNT store + `+= 100' (no leg breaks it: DEPENDENT under M_DROPTCTL)
+  cased wr       scored       PC after six stores to non-storing cased arms
+                              designed against: M_DROPIRQEN
+  p2 rd census   scored       a dropped population-2 label FAULTs: PC + sentinels
+                              designed against: M_DROPMCTL, M_DROPMISC
+  p2 wr census   scored       read-back value / PC after stores
+                              designed against: M_DROPMCTL, M_DROPMISC, M_STORE, M_WRFAULT
+  p2 ld widths   scored       PC + destinations of ld.bu/ld.hu 0x28, ld.d 0x08
+                              designed against: M_LENFAULT, M_DROPMCTL
+  p2 st widths   scored       PC / read-back after st.b/st.h/st.d
+                              designed against: M_LENFAULT, M_WRFAULT, M_STORE, M_DROPMCTL
+  p2 ann rd      scored       pass-1 line count / form / tail literal
+                              designed against: M_LATCHONE, M_LATCHNOSET, M_LATCHCLRW, M_RDEBUG, M_NOONCE, M_ONENARROW, M_DROPMCTL, M_DROPMISC
+  p2 ann rd 2    scored       pass-2 line count
+                              designed against: M_LATCHNOSET, M_LATCHCLRW, M_LATCHCLRW_POST
+  p2 ann wr      scored       pass-1 line count / form
+                              designed against: M_LATCHONE, M_LATCHNOSET, M_LATCHRDSET, M_LATCHCLRW_POST, M_WDEBUG, M_WRFAULT, M_ONENARROW, M_DROPMCTL, M_DROPMISC
+  p2 ann wr 2    scored       pass-2 line count
+                              designed against: M_LATCHNOSET, M_LATCHCLRW, M_LATCHCLRW_POST
+  p2 nw rd       scored       the `(len N)' read lines
+                              designed against: M_ANNLEN4, M_RDEBUG, M_NOONCE, M_LENFAULT, M_LATCHONE
+  p2 nw wr       scored       the `(len N)' write lines and the 64-bit value
+                              designed against: M_ANNLEN4, M_TRUNC, M_WDEBUG, M_LENFAULT, M_WRFAULT, M_LATCHONE
+  p2 nw rd 2     scored       pass-2 read-form line count, same process
+                              designed against: M_LATCHLEN4, M_LATCHNOSET
+  p2 nw wr 2     scored       pass-2 write-form line count, same process
+                              designed against: M_LATCHLEN4, M_LATCHNOSET, M_LATCHRDSET, M_LATCHCLRW, M_LATCHCLRW_POST
+  p2 zero wr     scored       the exact write-form literal of a zero first store
+                              designed against: M_IDATA, M_WDEBUG, M_WRFAULT
+  p1 fault lo    scored       PC 0x18, DMA0, DMT0, process alive
+                              designed against: M_FLTBREAK, M_EXIT, M_ADD90
+  p1 fault hi    scored       PC 0x18, DMA0, DMT0, process alive
+                              designed against: M_FLTBREAK, M_EXIT
+  p1 fault mid   scored       PC 0x18, DMA0, DMT0, process alive
+                              designed against: M_FLTBREAK, M_EXIT, M_ADD94
+  p1 fault wr    scored       PC 0x18, DMA0, DMT0 of a store
+                              designed against: M_FLTBREAK, M_EXIT, M_FLTWR, M_ADD90
+  p1 p2 edge     scored       0x8c declines, 0x90 faults
+                              designed against: M_DROPMISC, M_ADD90, M_FLTBREAK, M_EXIT
+  p3 interim     scored       a sub-word start faults
+                              designed against: M_FLTLEN, M_FLTBREAK, M_EXIT
+  p2 int byte    scored       a sub-word start faults
+                              designed against: M_FLTLEN, M_FLTBREAK, M_EXIT
+  p2 int half    scored       a sub-word start faults
+                              designed against: M_FLTLEN, M_FLTBREAK, M_EXIT
+  p1 census      scored       988 counted faults
+                              designed against: M_ADD94, M_ADD90, M_FLTBREAK, M_EXIT
+  p1 widths      scored       eight counted width faults + r8's sentinel
+                              designed against: M_FLTLEN, M_FLTWR, M_LANE0H, M_LANE0B, M_FLTBREAK, M_EXIT
+  p1 quiet       scored       `[ vme:' lines in the census and widths free runs
+                              designed against: M_DFATAL, M_DFATALW
+  unasm          CONTROL      APPARATUS: every placed word re-read (literal 1441)
+  CHECK OF THE CHANNEL LINE ITSELF: every channel above is named BEFORE table 2; the table's per-row reds say
+  whether each varied under its named legs.  A red under a leg NOT named for that row is reported as DEPENDENT
+  (its session stopped before the row's check, or pass 1 was silent) or as a SECOND CHANNEL (named in the leg's
+  note, e.g. p1 quiet under M_ADD94 / M_ADD90).
+
+== 5. ROW-LIST DIFF (the #490 rule): rev 3's rows against every row prescribed earlier ==
+  RECORDED PRETABLE.out               26 names transcribed, 26 found verbatim in the file
+  RECORDED PRETABLE_ADDENDUM_v2.out   7 names transcribed, 7 found verbatim in the file
+  RECORDED PRETABLE1B.txt             8 names transcribed, 8 found verbatim in the file
+  prescribed rows (union, `p1 fault hi' from PRETABLE.out's `p1 fault lo/hi/wr'): 35; DROPPED in rev 3: none
+  renamed earlier and still present: `p2 nonword ann' -> `p2 nw rd' + `p2 nw wr' (addendum section 1)
+  rev 2 rows (RECORDED from killtable1/legs/BASE.raw): 34; rev 3 rows (RECORDED from rev3/dev/dev1_BASE.raw): 38
+  ADDED in rev 3: p2 nw rd 2, p2 nw wr 2, p2 zero wr, p1 quiet
+  REMOVED in rev 3: none
+  CHANGED in rev 3 (same name): `p1 widths' 6 -> 8 faults (+ r8's sentinel); `p2 nw rd' / `p2 nw wr' now pass 1
+  of a two-pass session (their checks unchanged); `cased census', `t1cmp rt', `free ctl', `free quiet' leave
+  CONTROL_ROWS (scored); the stop wording of every row that stops before its check.
+
+== 6. NULL PER CLASS (the medium carries none of the behaviour under test; after the CONTROL split both classes ==
+==    red BY DESIGN, so a double FAIL is the expected shape, not an apparatus fault) ==
+  CONTROL rows red  : vbr reset, free neg ctl
+  CONTROL rows green: session, live, neg apparatus, unasm  (apparatus that needs no device)
+  scored rows red   : 31 -- every row that reads the device: t1cmp rt, cased census, free ctl, tctl rt, vbr rt, t1count inc, cased wr, p2 rd census, p2 wr census, p2 ld widths, p2 st widths, p2 ann rd, p2 ann rd 2, p2 ann wr, p2 ann wr 2, p2 nw rd, p2 nw wr, p2 nw rd 2, p2 nw wr 2, p2 zero wr, p1 fault lo, p1 fault hi, p1 fault mid, p1 fault wr, p1 p2 edge, p3 interim, p2 int byte, p2 int half, p1 census, p1 widths, p1 quiet
+  scored rows green : free quiet  (a run that prints nothing passes it with or without a device)
+  => 5 of 38 rows green, CONTROL=FAIL (`vbr reset': no DEVINIT seed; `free neg ctl': no GCSRCTL line).  The
+     development run dev1_NULL.raw already MEASURED this shape (see section 0); table 2 re-measures it as clause
+     (c)'s receipt for rev 3 (table 1's NULL.raw stays rev 2's).
+
+== 7. M_ONENARROW'S MECHANISM, PINNED (GLM: a future reorder would otherwise orphan the x86-64 kill silently) ==
+  RECORDED POP2 order (frozen rev 3): SADDR2=0x04 SLAVELMOD1=0x08 SLAVELMOD2=0x0c SLAVECTL=0x10 MASTER1=0x14 MASTER2=0x18 MASTER3=0x1c MASTER4=0x20 MASTER4MOD=0x24 MASTERCTL=0x28 DMACTL=0x30 DMAMODE=0x34 DMALADDR=0x38 DMAVMEADDR=0x3c DMACOUNT=0x40 DMATABLE=0x44 DMASTAT=0x48 T2CMP=0x58 T2COUNT=0x5c PRESCALE=0x64 IRQSTAT=0x68 SETSOFTIRQ=0x70 IRQCLR=0x74 IRQL1=0x78 IRQL2=0x7c MISC=0x8c
+  RECORDED MISC at 0x8c: latch index 0x8c >> 2 = 35 >= 32; a 32-bit shift whose count is masked to 5 bits
+           uses bit 3 -- the bit of SLAVELMOD2 (0x0c >> 2 = 3)
+  RECORDED POP2 index of SLAVELMOD2 = 2, of MISC = 25: SLAVELMOD2 is reached FIRST in `p2 ann rd' and `p2 ann wr' (both walk
+           POP2 in order), so its first access sets bit 3 and MISC's first access then finds it set -- MISC's
+           announce is silenced: 25 lines in each pass 1.  No other population-2 index reaches 32.
+  This is the reading-derived prediction for THIS x86-64 build (Fable, grok, GLM).  The shift is UNDEFINED in C,
+  so no portable claim is made (Astra, D5): a build whose shift yields 0 would red all four ann rows (MISC never
+  latches: 27 lines in pass 1, 2 in pass 2); a build that emits a 64-bit bit-test/set with the unmasked count
+  would behave like the fix and SURVIVE.  Table 2 records the compiler, flags, host, the leg's object code for the
+  two arm lines (disassembled AFTER the run) and which row reds.
+
+== 8. THE TABLE: legs, edits and PREDICTED red rows (rev 3 frozen, fix568b; one leg at a time) ==
+  BASE              fix568b, rev 3                                 38/38 CONTROL=OK   red(0): -
+                      38 green (development run rev3/dev/dev1_BASE.raw MEASURED it: 38 of 38)
+  HEAD              1a59a47e unmodified                            14/38 CONTROL=OK   red(24): p2 rd census, p2 wr census, p2 ld widths, p2 st widths, p2 ann rd, p2 ann rd 2, p2 ann wr, p2 ann wr 2, p2 nw rd, p2 nw wr, p1 fault lo, p1 fault hi, p1 fault mid, p1 fault wr, p1 p2 edge, p3 interim, p2 int byte, p2 int half, p1 census, p1 widths, p2 nw rd 2, p2 nw wr 2, p2 zero wr, p1 quiet
+                      the 20 population rows die (exit 1) and the four new rows die or are not exercised (dev1_HEAD.raw MEASURED it)
+  NULL              machine_mvme88k.c without the vme device_add (  5/38 CONTROL=FAIL red(33): vbr reset, t1cmp rt, cased census, free ctl, free neg ctl, tctl rt, vbr rt, t1count inc, cased wr, p2 rd census, p2 wr census, p2 ld widths, p2 st widths, p2 ann rd, p2 ann rd 2, p2 ann wr, p2 ann wr 2, p2 nw rd, p2 nw wr, p2 nw rd 2, p2 nw wr 2, p2 zero wr, p1 fault lo, p1 fault hi, p1 fault mid, p1 fault wr, p1 p2 edge, p3 interim, p2 int byte, p2 int half, p1 census, p1 widths, p1 quiet
+                      see NULL PER CLASS (dev1_NULL.raw MEASURED it)
+  M_EXIT            default: return 0 -> exit(1)                   27/38 CONTROL=OK   red(11): p1 fault lo, p1 fault hi, p1 fault mid, p1 fault wr, p1 p2 edge, p3 interim, p2 int byte, p2 int half, p1 census, p1 widths, p1 quiet
+                      p1 quiet is DEPENDENT: its census session dies
+  M_DROPMCTL        drop case MASTERCTL                            30/38 CONTROL=OK   red(8): p2 rd census, p2 wr census, p2 ld widths, p2 st widths, p2 ann rd, p2 ann rd 2, p2 ann wr, p2 ann wr 2
+                      table 1 measured these eight; no rev-3 row touches 0x28 otherwise
+  M_DROPMISC        drop case MISC                                 31/38 CONTROL=OK   red(7): p2 rd census, p2 wr census, p1 p2 edge, p2 ann rd, p2 ann rd 2, p2 ann wr, p2 ann wr 2
+                      as table 1
+  M_ADD94           case 0x94 added                                35/38 CONTROL=OK   red(3): p1 fault mid, p1 census, p1 quiet
+                      NEW channel: the census now DECLINES 0x94 and its first-access fatal() prints one `[ vme:' line in the free run, so p1 quiet (want 0/0) reads 1/0
+  M_LATCHONE        one shared latch                               33/38 CONTROL=OK   red(5): p2 ann rd, p2 ann wr, p2 nw rd, p2 nw wr, p2 nw wr 2
+                      the non-word session's first access (ld.bu 0x04) takes the shared latch: pass 1 has 1 read line and 0 write lines, so p2 nw wr 2 reads `pass 1 silent' (dependent) while p2 nw rd 2 sees 0 (green); p2 zero wr is its session's only population-2 access, so it announces (green)
+  M_LATCHNOSET      no latch set                                   32/38 CONTROL=OK   red(6): p2 ann rd, p2 ann rd 2, p2 ann wr, p2 ann wr 2, p2 nw rd 2, p2 nw wr 2
+                      pass 2 of the non-word session re-announces all six (3 + 3)
+  M_LATCHRDSET      latch set only on reads                        36/38 CONTROL=OK   red(2): p2 ann wr, p2 nw wr 2
+                      non-word writes never latch: pass 2 re-announces the three stores
+  M_LATCHCLRW       a write clears the bit BEFORE the check        34/38 CONTROL=OK   red(4): p2 ann rd, p2 ann rd 2, p2 ann wr 2, p2 nw wr 2
+                      every write re-announces: pass 2's three stores
+  M_LATCHCLRW_POST  a write clears the bit AFTER the check         34/38 CONTROL=OK   red(4): p2 ann rd 2, p2 ann wr, p2 ann wr 2, p2 nw wr 2
+                      pass 1's stores clear their bits, so pass 2's three stores re-announce
+  M_WDEBUG          write announce fatal -> debug                  33/38 CONTROL=OK   red(5): p2 ann wr, p2 ann wr 2, p2 nw wr, p2 nw wr 2, p2 zero wr
+                      p2 nw wr 2 `pass 1 silent' (dependent); p2 zero wr prints nothing (0/0)
+  M_RDEBUG          read announce fatal -> debug                   34/38 CONTROL=OK   red(4): p2 ann rd, p2 ann rd 2, p2 nw rd, p2 nw rd 2
+                      p2 nw rd 2 `pass 1 silent' (dependent); the zero store is a write (green)
+  M_ANNLEN4         announce and latch only for len 4              34/38 CONTROL=OK   red(4): p2 nw rd, p2 nw wr, p2 nw rd 2, p2 nw wr 2
+                      pass 1 silent in both directions, so both pass-2 rows read `pass 1 silent' (dependent)
+  M_TRUNC           write announce prints 32 bits                  37/38 CONTROL=OK   red(1): p2 nw wr
+                      the zero store prints 0x0 either way (green); pass 2 is latched (green)
+  M_WRFAULT         decline arm faults writes                      27/38 CONTROL=OK   red(11): p2 wr census, p2 st widths, p2 nw rd, p2 nw wr, p2 nw rd 2, p2 nw wr 2, p2 zero wr, p2 ann rd, p2 ann rd 2, p2 ann wr, p2 ann wr 2
+                      the non-word session stops at its first store; both pass-2 rows `not exercised' (dependent); the zero store announces then faults (unexpected stop)
+  M_LENFAULT        decline arm faults len != 4                    32/38 CONTROL=OK   red(6): p2 ld widths, p2 st widths, p2 nw rd, p2 nw wr, p2 nw rd 2, p2 nw wr 2
+                      the non-word session stops at its first ld.bu; both pass-2 rows `not exercised' (dependent)
+  M_STORE           decline arm stores writes                      36/38 CONTROL=OK   red(2): p2 wr census, p2 st widths
+                      as table 1
+  M_ODATA0          odata = 0 in the arm                           38/38 CONTROL=OK   red(0): -
+                      predicted SURVIVOR (equivalent today: no population-2 word is ever non-zero)
+  M_SERVED0         read announce prints a literal 0               38/38 CONTROL=OK   red(0): -
+                      predicted SURVIVOR (equivalent today)
+  M_FLTBREAK        default: return 0 -> break                     28/38 CONTROL=OK   red(10): p1 fault lo, p1 fault hi, p1 fault mid, p1 fault wr, p1 p2 edge, p3 interim, p2 int byte, p2 int half, p1 census, p1 widths
+                      p1 quiet stays green: both free runs complete and default:'s debug() is silent
+  M_FLTLEN          default: refusal narrowed to len 4             34/38 CONTROL=OK   red(4): p3 interim, p2 int byte, p2 int half, p1 widths
+                      p1 widths 0/8: all eight width accesses are non-word
+  M_FLTWR           default: writes no longer refused              36/38 CONTROL=OK   red(2): p1 fault wr, p1 widths
+                      p1 widths 4/8: the four stores decline
+  M_NOONCE          (once) dropped from the read announce          36/38 CONTROL=OK   red(2): p2 ann rd, p2 nw rd
+                      p2 nw rd 2 green: pass 1 printed three read lines (no exact match, but RD_HEAD-prefixed), pass 2 none
+  M_DROPTCTL        drop case TCTL                                 34/38 CONTROL=OK   red(4): cased census, tctl rt, vbr rt, t1count inc
+                      CONTROL is now OK: cased census is scored after the split; vbr rt and t1count inc are DEPENDENT (one session)
+  M_CAPNARROW       uint64_t warned_unimpl -> uint32_t             BUILD FAILS
+                      the typedef must refuse the build: size of array 'vme_warned_fits' is negative
+  M_DROPIRQEN       drop case IRQEN                                36/38 CONTROL=OK   red(2): cased census, cased wr
+                      CONTROL OK after the split
+  M_T1CMPWRDROP     T1CMP store dropped                            36/38 CONTROL=OK   red(2): t1cmp rt, free ctl
+                      CONTROL OK after the split: both are scored rows now
+  M_ADD90           case 0x90 added                                33/38 CONTROL=OK   red(5): p1 fault lo, p1 fault wr, p1 p2 edge, p1 census, p1 quiet
+                      NEW channel as for M_ADD94: the census's first load (0x90) now announces, p1 quiet 1/0
+  M_IDATA           if (writeflag == MEM_WRITE) -> if (idata)      37/38 CONTROL=OK   red(1): p2 zero wr
+                      the zero store prints the READ form: p2 zero wr 0/1; every other store in the probe is non-zero
+  M_LATCHLEN4       if (len == 4) before the latch set             36/38 CONTROL=OK   red(2): p2 nw rd 2, p2 nw wr 2
+                      pass 2 re-announces the three reads and the three stores (3 each)
+  M_DFATAL          default: READ debug -> fatal                   37/38 CONTROL=OK   red(1): p1 quiet
+                      p1 quiet 988/4 (census reads, widths reads)
+  M_DFATALW         default: WRITE debug -> fatal                  37/38 CONTROL=OK   red(1): p1 quiet
+                      p1 quiet 0/4 (the four width stores)
+  M_LANE0H          default: aligned len-2 accesses served         37/38 CONTROL=OK   red(1): p1 widths
+                      p1 widths 7/8 with r8 losing its sentinel; ld.hu 0x96 and 0x2a are lane 2 (still fault)
+  M_LANE0B          default: aligned len-1 accesses served         37/38 CONTROL=OK   red(1): p1 widths
+                      p1 widths 7/8; every other byte access in the probe is at lane 1 or 3
+  M_ONENARROW       both arm literals 1ULL -> 1u                   36/38 CONTROL=OK   red(2): p2 ann rd, p2 ann wr
+                      UB-MEDIATED (see M_ONENARROW): IF this x86-64 build masks the 32-bit shift count to 5 bits, MISC (35) lands on bit 3 = SLAVELMOD2's, which POP2 order sets first, so MISC is silenced: 25 lines each.  A shift-to-zero build would red the four ann rows instead; a build using a 64-bit bit-test/set with the unmasked count would SURVIVE.  The leg's object code is disassembled AFTER the run and recorded.
+  BASE_FINAL        fix568b restored                               38/38 CONTROL=OK   red(0): -
+                      38 green
+  Predicted survivors: M_ODATA0, M_SERVED0 (equivalent today).  Every other leg must red at least one row; a
+  survivor is a RESULT, reported with the three-way diagnosis (mis-built / dead target / mis-cut row).
+  TIMING EXPECTED, so it is not mistaken for load: a two-pass session whose pass 1 stops on a fault runs pass 2
+  with PSR.SFRZ set and its `continue' never reaches a breakpoint (30-s budget, child killed).  Expected for
+  M_DROPMCTL and M_DROPMISC (both ann sessions), M_WRFAULT (both ann sessions + the non-word session) and
+  M_LENFAULT (the non-word session).  No row's value depends on it: those pass-2 rows report `dependent check not
+  exercised' from pass 1.  A leg that reds ONLY through a `timeout:' row is re-run alone before it is scored.
+
+PRETABLE2_DONE

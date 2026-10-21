@@ -1,0 +1,45 @@
+PRETABLE1B -- #568 (vmedefaultkill) kill table 1b, written BEFORE its first build (this file's mtime is the order proof).
+Measuring seat (Opus 5.5), 2026-10-20.  Purpose: close the two gaps table 1 named (KILLTABLE1_VS_PRETABLE.out,
+OBSERVATIONS (c)) -- no leg built PRETABLE's "a cased WRITE path broken" (t1cmp rt / cased wr saw no leg), and no leg built
+"a label added AT 0x90" for p1 p2 edge.  Legs and predictions are the coordinator's (message of 2026-10-20, quoted below);
+the seat's own reading of the frozen probe follows each one.
+
+Method (same as table 1): fresh scratch clone /tmp/gxkt568b from `git archive 1a59a47e'; fix568 installed (md5
+4e3e7fc220062b429f7d9d6e140fec9e); the FROZEN probe killtable1/vme_default_probe.frozen.py (md5
+19de15b3ea69af28e437cdf92e22c97e) alone; a .MUTANT sentinel; dev_vme.o / machine_mvme88k.o / gxemul removed before every
+build and `[ gxemul -nt source ]' after it; a BASE run first; restore + BASE_FINAL + sentinel clearance + clone removal last.
+
+== THE LEGS (each ONE exact find/replace on fix568) ==
+1. M_DROPIRQEN    delete the line `\tcase VME2_IRQEN:' only (fix568 line 120); the IRQEN arm body becomes unreachable
+                  and 0x6c reaches default: -> FAULT.  `cased wr''s growth mutant: a legal register falls into the refusal.
+   COORDINATOR:   "Predicted red: cased wr, cased census (CONTROL=FAIL), and any later row in those sessions."
+   SEAT READING:  cased census (6/11 pc=0x18: r4..r9 read, the 7th load -- r10 at 0x6c -- faults), cased wr
+                  (0x18/0xdeadbeef: the 4th store -- 0x6c -- faults).  CONTROL=FAIL.  Score 32/34.
+                  "any later row in those sessions" resolves to NONE here: each of those two sessions feeds exactly one
+                  row, except that `free neg ctl' reads the cased-census session's TEXT for GCSRCTL's stepped debug line
+                  -- and the GCSRCTL load (the 2nd) precedes the 0x6c fault, so free neg ctl stays 1/0, green.
+2. M_T1CMPWRDROP  in the T1CMP arm only (fix568 lines 98-99): `case VME2_T1CMP:\n\t\tif (writeflag == MEM_WRITE)'
+                  -> `case VME2_T1CMP:\n\t\tif (writeflag == MEM_READ)'.  The store is dropped (a read then stores idata,
+                  which is 0, after odata was already taken).  PRETABLE's "a cased WRITE path broken".
+   COORDINATOR:   "Predicted red: t1cmp rt and free ctl, both CONTROL rows, so CONTROL=FAIL."
+   SEAT READING:  t1cmp rt (0x0), free ctl (0x0/0x67000000/0x1234).  CONTROL=FAIL.  Score 32/34.  session / live /
+                  vbr reset share t1cmp rt's session and do not depend on the store (green); free quiet and free neg ctl
+                  share free ctl's run and print nothing either way (green); cased census reads T1CMP unwritten (0, green);
+                  p3 interim's ld.bu 0x51 is a default: fault either way (green).
+3. M_ADD90        add `\tcase 0x90:' immediately before `\tcase VME2_SADDR2:' (fix568 line 164) -- 0x90 joins the
+                  decline list (latch bit 0x90 >> 2 = 36, inside the uint64_t).  `p1 p2 edge''s named mutant.
+   COORDINATOR:   "Predicted red: p1 fault lo, p1 fault wr, p1 p2 edge, p1 census (987/988)."
+   SEAT READING:  p1 fault lo (ld r4 at 0x90 declines: PC 0x1000c, r4 = 0), p1 fault wr (st at 0x90 dropped, PC advances),
+                  p1 p2 edge (ld r6 at 0x90 declines), p1 census (987/988, the first load at 0x90 declines and writes 0 into
+                  r4).  CONTROL=OK.  Score 30/34.  p1 fault mid (0x94), p1 fault hi (0xffc) and p1 widths (0x93, 0x96,
+                  0x98, 0x9d, 0xa2, 0xa8 -- none starts at 0x90) still fault: green.  No row counts vme text in a session
+                  that touches 0x90, so the new announce is not observed by any row.
+
+== REFERENCE RUNS ==
+BASE / BASE_FINAL: 34/34, CONTROL=OK (as in table 1).
+
+== HOW KILLTABLE1B.out SCORES A LEG ==
+MATCH = every predicted row red, no row red outside (predicted rows + "any later row in those sessions" where the
+prediction says so -- for M_DROPIRQEN that allowance is the rows computed from the cased-census and cased-wr sessions:
+free neg ctl), and CONTROL as predicted where the prediction names it.  MISS otherwise.  Numerators the prediction names
+(987/988) are checked against the measured got-value.
