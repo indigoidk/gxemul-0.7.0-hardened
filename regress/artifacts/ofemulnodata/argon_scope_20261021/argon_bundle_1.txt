@@ -1,0 +1,1034 @@
+LEGEND: OF = src/promemul/of.c (comments removed, ORIGINAL line numbers kept; a removed comment that named rounds is replaced by /*[#NNN ...]*/; blank lines omitted); AI = src/cpus/cpu_arm_instr.c excerpts (X(openfirmware), X(reboot), X(swi), and the SWI decode case); PI = src/cpus/cpu_ppc_instr.c excerpts (X(sc), X(openfirmware), the sc decode case); MP = src/machines/machine_macppc.c, the ONLY caller of of_emul_init (the only writer of machine->md.of_data, OF:1078); L = the three ledger rows; W = a rung-3 attempt's output at HEAD e483d931 (debugger-driven guest instructions on unmodified machines; H1-ARM is this family's path, H2-MIPS a different row's); R = the project's option-set and round-scope rules, quoted.  The tree is GXEMUL-SEC (md5-checked anchors).
+
+==== FILE OF = src/promemul/of.c (all of it) ====
+OF:47  #include <stdio.h>
+OF:48  #include <stdlib.h>
+OF:49  #include <string.h>
+OF:50  #include <sys/types.h>
+OF:52  #define OF_C
+OF:54  #include "console.h"
+OF:55  #include "cpu.h"
+OF:56  #include "device.h"
+OF:57  #include "devices.h"
+OF:58  #include "diskimage.h"
+OF:59  #include "machine.h"
+OF:60  #include "memory.h"
+OF:61  #include "misc.h"
+OF:62  #include "of.h"
+OF:67  extern int quiet_mode;
+OF:68  extern int verbose;
+OF:76  static void readstr(struct cpu *cpu, uint64_t addr, char *strbuf,
+OF:77  	int bufsize)
+OF:78  {
+OF:79  	int i;
+OF:80  	for (i=0; i<bufsize; i++) {
+OF:81  		unsigned char ch;
+OF:82  		cpu->memory_rw(cpu, cpu->mem, addr + i,
+OF:83  		    &ch, sizeof(ch), MEM_READ, CACHE_DATA | NO_EXCEPTIONS);
+OF:84  		strbuf[i] = '\0';
+OF:85  		if (ch >= 1 && ch < 32)
+OF:86  			ch = 0;
+OF:87  		strbuf[i] = ch;
+OF:88  		if (strbuf[i] == '\0')
+OF:89  			break;
+OF:90  	}
+OF:92  	strbuf[bufsize - 1] = '\0';
+OF:93  }
+OF:102  static void of_store_32bit_in_host(unsigned char *d, uint32_t x)
+OF:103  {
+OF:104  	d[0] = x >> 24; d[1] = x >> 16;
+OF:105  	d[2] = x >>  8; d[3] = x;
+OF:106  }
+OF:114  static int find_device_handle(struct of_data *ofd, const char *name)
+OF:115  {
+OF:116  	int handle = 1, cur_parent = 1;
+OF:118  	if (name[0] == 0)
+OF:119  		return 0;
+OF:121  	for (;;) {
+OF:122  		struct of_device *od = ofd->of_devices;
+OF:123  		char tmp[200];
+OF:124  		int i;
+OF:126  		while (name[0] == '/')
+OF:127  			name++;
+OF:128  		if (name[0] == '\0')
+OF:129  			break;
+OF:130  		snprintf(tmp, sizeof(tmp), "%s", name);
+OF:131  		i = 0;
+OF:132  		while (tmp[i] != '\0' && tmp[i] != '/')
+OF:133  			i++;
+OF:134  		tmp[i] = '\0';
+OF:136  		OF_FIND(od, strcmp(od->name, tmp) == 0 &&
+OF:137  		    od->parent == cur_parent);
+OF:138  		if (od == NULL)
+OF:139  			return -1;
+OF:141  		handle = cur_parent = od->handle;
+OF:142  		name += strlen(tmp);
+OF:143  	}
+OF:145  	return handle;
+OF:146  }
+OF:152  OF_SERVICE(call_method_2_2)
+OF:153  {
+OF:154  	fatal("[ of: call_method_2_2('%s'): TODO ]\n", arg[0]);
+OF:155  	return -1;
+OF:156  }
+OF:159  OF_SERVICE(call_method_3_4)
+OF:160  {
+OF:161  	fatal("[ of: call_method_3_4('%s'): TODO ]\n", arg[0]);
+OF:162  	return -1;
+OF:163  }
+OF:166  OF_SERVICE(call_method_5_2)
+OF:167  {
+OF:168  	if (strcmp(arg[0], "set-colors") == 0) {
+OF:170  		struct vfb_data *v = cpu->machine->md.of_data->vfb_data;
+OF:171  		int color = OF_GET_ARG(3);
+OF:172  		uint64_t ptr = OF_GET_ARG(4);
+OF:173  		unsigned char rgb[3];
+OF:174  		cpu->memory_rw(cpu, cpu->mem, ptr, rgb, 3, MEM_READ,
+OF:175  		    CACHE_DATA | NO_EXCEPTIONS);
+OF:179  		if (v != NULL && color >= 0 && color < 256) {
+OF:180  			memcpy(v->rgb_palette + 3 * color, rgb, 3);
+OF:181  			v->update_x1 = v->update_y1 = 0;
+OF:182  			v->update_x2 = v->xsize - 1;
+OF:183  			v->update_y2 = v->ysize - 1;
+OF:184  		}
+OF:185  	} else {
+OF:186  		fatal("[ of: call_method_5_2('%s'): TODO ]\n", arg[0]);
+OF:187  		return -1;
+OF:188  	}
+OF:189  	return 0;
+OF:190  }
+OF:193  OF_SERVICE(call_method_6_1)
+OF:194  {
+OF:195  	fatal("[ of: call_method_6_1('%s'): TODO ]\n", arg[0]);
+OF:196  	return -1;
+OF:197  }
+OF:200  OF_SERVICE(call_method_6_2)
+OF:201  {
+OF:202  	fatal("[ of: call_method_6_2('%s'): TODO ]\n", arg[0]);
+OF:203  	return -1;
+OF:204  }
+OF:207  OF_SERVICE(child)
+OF:208  {
+OF:209  	struct of_device *od = cpu->machine->md.of_data->of_devices;
+OF:210  	int handle = OF_GET_ARG(0);
+OF:211  	OF_FIND(od, od->parent == handle);
+OF:212  	store_32bit_word(cpu, base + retofs, od == NULL? 0 : od->handle);
+OF:213  	return 0;
+OF:214  }
+OF:217  OF_SERVICE(claim)
+OF:218  {
+OF:219  	// Arguments:  virtualaddr, size, alignment
+OF:220  	// Returns:    pointer to claimed memory
+OF:222  	// TODO: This is just a dummy.
+OF:223  	fatal("[ of: claim(0x%x,0x%x,0x%x): TODO ]\n",
+OF:224  	    OF_GET_ARG(0), OF_GET_ARG(1), OF_GET_ARG(2));
+OF:226  	store_32bit_word(cpu, base + retofs, OF_GET_ARG(0));
+OF:227  	return 0;
+OF:228  }
+OF:231  OF_SERVICE(exit)
+OF:232  {
+OF:233  	cpu->running = 0;
+OF:234  	return 0;
+OF:235  }
+OF:238  OF_SERVICE(finddevice)
+OF:239  {
+OF:240  	int h = find_device_handle(cpu->machine->md.of_data, arg[0]);
+OF:241  	store_32bit_word(cpu, base + retofs, h);
+OF:242  	return h>0? 0 : -1;
+OF:243  }
+OF:246  OF_SERVICE(getprop)
+OF:247  {
+OF:248  	struct of_device *od = cpu->machine->md.of_data->of_devices;
+OF:249  	struct of_device_property *pr;
+OF:250  	int handle = OF_GET_ARG(0), i, len_returned = 0;
+OF:251  	uint64_t buf = OF_GET_ARG(2);
+OF:252  	uint64_t max = OF_GET_ARG(3);
+OF:254  	OF_FIND(od, od->handle == handle);
+OF:255  	if (od == NULL) {
+OF:256  		fatal("[ of: WARNING: getprop handle=%i; no such handle ]\n",
+OF:257  		    handle);
+OF:258  		return -1;
+OF:259  	}
+OF:261  	pr = od->properties;
+OF:262  	OF_FIND(pr, strcmp(pr->name, arg[1]) == 0);
+OF:263  	if (pr == NULL) {
+OF:264  		fatal("[ of: WARNING: getprop: no property '%s' at handle"
+OF:265  		    " %i (device '%s') ]\n", arg[1], handle, od->name);
+OF:266  		return -1;
+OF:267  	}
+OF:269  	if (pr->data == NULL) {
+OF:270  		fatal("[ of: WARNING: property '%s' of '%s' has no data! ]\n",
+OF:271  		    arg[1], od->name);
+OF:272  		goto ret;
+OF:273  	}
+OF:276  	len_returned = pr->len <= max? pr->len : max;
+OF:278  	for (i=0; i<len_returned; i++) {
+OF:279  		if (!cpu->memory_rw(cpu, cpu->mem, buf + i, pr->data + i,
+OF:280  		    1, MEM_WRITE, CACHE_DATA | NO_EXCEPTIONS)) {
+OF:281  			/*[#218]*/
+OF:284  			break;
+OF:285  		}
+OF:286  	}
+OF:288  ret:
+OF:289  	store_32bit_word(cpu, base + retofs, len_returned);
+OF:290  	return 0;
+OF:291  }
+OF:294  OF_SERVICE(getproplen)
+OF:295  {
+OF:296  	struct of_device *od = cpu->machine->md.of_data->of_devices;
+OF:297  	struct of_device_property *pr;
+OF:298  	int handle = OF_GET_ARG(0);
+OF:300  	OF_FIND(od, od->handle == handle);
+OF:301  	if (od == NULL) {
+OF:302  		fatal("[ of: TODO: getproplen handle=%i; no such handle ]\n",
+OF:303  		    handle);
+OF:304  		return -1;
+OF:305  	}
+OF:307  	pr = od->properties;
+OF:308  	OF_FIND(pr, strcmp(pr->name, arg[1]) == 0);
+OF:309  	if (pr == NULL) {
+OF:310  		fatal("[ of: TODO: getproplen: no property '%s' at handle"
+OF:311  		    " %i (device '%s') ]\n", arg[1], handle, od->name);
+OF:312  		return -1;
+OF:313  	}
+OF:315  	store_32bit_word(cpu, base + retofs, pr->len);
+OF:316  	return 0;
+OF:317  }
+OF:320  OF_SERVICE(instance_to_package)
+OF:321  {
+OF:322  	int handle = OF_GET_ARG(0);
+OF:324  	store_32bit_word(cpu, base + retofs, handle);
+OF:325  	return 0;
+OF:326  }
+OF:329  OF_SERVICE(interpret_1)
+OF:330  {
+OF:331  	if (strcmp(arg[0], "#lines 2 - to line#") == 0) {
+OF:332  	} else {
+OF:333  		fatal("[ of: interpret_1('%s'): TODO ]\n", arg[0]);
+OF:334  		return -1;
+OF:335  	}
+OF:336  	return 0;
+OF:337  }
+OF:340  OF_SERVICE(interpret_2)
+OF:341  {
+OF:342  	store_32bit_word(cpu, base + retofs, 0);
+OF:343  	if (strcmp(arg[0], "#columns") == 0) {
+OF:344  		store_32bit_word(cpu, base + retofs + 4, 80);
+OF:345  	} else if (strcmp(arg[0], "#lines") == 0) {
+OF:346  		store_32bit_word(cpu, base + retofs + 4, 40);
+OF:347  	} else if (strcmp(arg[0], "char-height") == 0) {
+OF:348  		store_32bit_word(cpu, base + retofs + 4, 15);
+OF:349  	} else if (strcmp(arg[0], "char-width") == 0) {
+OF:350  		store_32bit_word(cpu, base + retofs + 4, 10);
+OF:351  	} else if (strcmp(arg[0], "line#") == 0) {
+OF:352  		store_32bit_word(cpu, base + retofs + 4, 0);
+OF:353  	} else if (strcmp(arg[0], "font-adr") == 0) {
+OF:354  		store_32bit_word(cpu, base + retofs + 4, 0);
+OF:355  	} else {
+OF:356  		fatal("[ of: interpret_2('%s'): TODO ]\n", arg[0]);
+OF:357  		return -1;
+OF:358  	}
+OF:359  	return 0;
+OF:360  }
+OF:363  OF_SERVICE(package_to_path)
+OF:364  {
+OF:365  	fatal("[ of: package-to-path: TODO ]\n");
+OF:366  	return -1;
+OF:367  }
+OF:370  OF_SERVICE(parent)
+OF:371  {
+OF:372  	struct of_device *od = cpu->machine->md.of_data->of_devices;
+OF:373  	int handle = OF_GET_ARG(0);
+OF:374  	OF_FIND(od, od->handle == handle);
+OF:375  	store_32bit_word(cpu, base + retofs, od == NULL? 0 : od->parent);
+OF:376  	return 0;
+OF:377  }
+OF:380  OF_SERVICE(peer)
+OF:381  {
+OF:382  	struct of_device *od = cpu->machine->md.of_data->of_devices;
+OF:383  	int handle = OF_GET_ARG(0), parent = 0, peer = 0, seen_self = 1;
+OF:385  	if (handle == 0) {
+OF:387  		store_32bit_word(cpu, base + retofs, 1);
+OF:388  		return 0;
+OF:389  	}
+OF:391  	OF_FIND(od, od->handle == handle);
+OF:392  	if (od == NULL) {
+OF:393  		fatal("[ of: TODO: peer(): can't find handle %i ]\n", handle);
+OF:394  		exit(1);
+OF:395  	}
+OF:396  	parent = od->parent;
+OF:397  	seen_self = 0;
+OF:399  	od = cpu->machine->md.of_data->of_devices;
+OF:401  	while (od != NULL) {
+OF:402  		if (od->parent == parent) {
+OF:403  			if (seen_self) {
+OF:404  				peer = od->handle;
+OF:405  				break;
+OF:406  			}
+OF:407  			if (od->handle == handle)
+OF:408  				seen_self = 1;
+OF:409  		}
+OF:410  		od = od->next;
+OF:411  	}
+OF:412  	store_32bit_word(cpu, base + retofs, peer);
+OF:413  	return 0;
+OF:414  }
+OF:417  OF_SERVICE(open)
+OF:418  {
+OF:419  	// TODO.
+OF:420  	uint64_t ptr = OF_GET_ARG(0);
+OF:422  	unsigned char s[2000];
+OF:423  	int s_len = 0;
+OF:425  	int i = 0;
+OF:426  	for (;;) {
+OF:427  		unsigned char ch;
+OF:428  		if (!cpu->memory_rw(cpu, cpu->mem, ptr + i, &ch,
+OF:429  		    1, MEM_READ, CACHE_DATA | NO_EXCEPTIONS)) {
+OF:430  			/*[#218]*/
+OF:432  			break;
+OF:433  		}
+OF:435  		if (ch == 0)
+OF:436  			break;
+OF:438  		s[s_len++] = ch;
+OF:439  			if (s_len == sizeof(s) - 1)
+OF:440  				break;
+OF:441  		++ i;
+OF:442  	}
+OF:444  	s[s_len] = 0;
+OF:446  	if (s[0]) {
+OF:447  		printf("Unimplemented OF_SERVICE(open) with name: '%s'\n", s);
+OF:448  		exit(1);
+OF:449  	}
+OF:451  	return 0;
+OF:452  }
+OF:455  OF_SERVICE(read)
+OF:456  {
+OF:458  	uint64_t ptr = OF_GET_ARG(1);
+OF:460  	int c;
+OF:461  	unsigned char ch;
+OF:466  	c = console_readchar(cpu->machine->main_console_handle);
+OF:467  	ch = c;
+OF:468  	if (!cpu->memory_rw(cpu, cpu->mem, ptr, &ch, 1, MEM_WRITE,
+OF:469  	    CACHE_DATA | NO_EXCEPTIONS)) {
+OF:470  		/*[#218]*/
+OF:472  		return 0;
+OF:473  	}
+OF:475  	store_32bit_word(cpu, base + retofs, c == -1? 0 : 1);
+OF:476  	return c == -1? -1 : 0;
+OF:477  }
+OF:480  OF_SERVICE(write)
+OF:481  {
+OF:483  	uint64_t ptr = OF_GET_ARG(1);
+OF:484  	int n_written = 0, i, len = OF_GET_ARG(2);
+OF:488  	for (i=0; i<len; i++) {
+OF:489  		unsigned char ch;
+OF:490  		if (!cpu->memory_rw(cpu, cpu->mem, ptr + i, &ch,
+OF:491  		    1, MEM_READ, CACHE_DATA | NO_EXCEPTIONS)) {
+OF:492  			/*[#218]*/
+OF:494  			break;
+OF:495  		}
+OF:496  		if (ch != 7)
+OF:497  			console_putchar(cpu->machine->main_console_handle, ch);
+OF:498  		n_written ++;
+OF:499  	}
+OF:501  	store_32bit_word(cpu, base + retofs, n_written);
+OF:502  	return 0;
+OF:503  }
+OF:514  static int of_get_unused_device_handle(struct of_data *of_data)
+OF:515  {
+OF:516  	int max_handle = 0;
+OF:517  	struct of_device *od = of_data->of_devices;
+OF:519  	while (od != NULL) {
+OF:520  		if (od->handle > max_handle)
+OF:521  			max_handle = od->handle;
+OF:522  		od = od->next;
+OF:523  	}
+OF:525  	return max_handle + 1;
+OF:526  }
+OF:534  static struct of_device *of_add_device(struct of_data *of_data, const char *name,
+OF:535  	const char *parentname)
+OF:536  {
+OF:537  	struct of_device *od;
+OF:539  	CHECK_ALLOCATION(od = (struct of_device *) malloc(sizeof(struct of_device)));
+OF:540  	memset(od, 0, sizeof(struct of_device));
+OF:542  	CHECK_ALLOCATION(od->name = strdup(name));
+OF:544  	od->handle = of_get_unused_device_handle(of_data);
+OF:545  	od->parent = find_device_handle(of_data, parentname);
+OF:546  	if (od->parent < 0) {
+OF:547  		fatal("of_add_device(): adding '%s' to parent '%s' failed: "
+OF:548  		    "parent not found!\n", name, parentname);
+OF:549  		exit(1);
+OF:550  	}
+OF:552  	od->next = of_data->of_devices;
+OF:553  	of_data->of_devices = od;
+OF:555  	return od;
+OF:556  }
+OF:564  static void of_add_prop(struct of_data *of_data, const char *devname,
+OF:565  	const char *propname, unsigned char *data, uint32_t len, int flags)
+OF:566  {
+OF:567  	struct of_device_property *pr;
+OF:568  	struct of_device *od = of_data->of_devices;
+OF:569  	int h = find_device_handle(of_data, devname);
+OF:571  	CHECK_ALLOCATION(pr = (struct of_device_property *) malloc(sizeof(struct of_device_property)));
+OF:572  	memset(pr, 0, sizeof(struct of_device_property));
+OF:574  	OF_FIND(od, od->handle == h);
+OF:575  	if (od == NULL) {
+OF:576  		fatal("of_add_prop(): device '%s' not registered\n", devname);
+OF:577  		exit(1);
+OF:578  	}
+OF:580  	CHECK_ALLOCATION(pr->name = strdup(propname));
+OF:581  	pr->data = data;
+OF:582  	pr->len = len;
+OF:583  	pr->flags = flags;
+OF:585  	pr->next = od->properties;
+OF:586  	od->properties = pr;
+OF:587  }
+OF:595  static void of_add_service(struct of_data *of_data, const char *name,
+OF:596  	int (*f)(OF_SERVICE_ARGS), int n_args, int n_ret_args)
+OF:597  {
+OF:598  	struct of_service *os;
+OF:600  	CHECK_ALLOCATION(os = (struct of_service *) malloc(sizeof(struct of_service)));
+OF:601  	memset(os, 0, sizeof(struct of_service));
+OF:603  	CHECK_ALLOCATION(os->name = strdup(name));
+OF:605  	os->f = f;
+OF:606  	os->n_args = n_args;
+OF:607  	os->n_ret_args = n_ret_args;
+OF:609  	os->next = of_data->of_services;
+OF:610  	of_data->of_services = os;
+OF:611  }
+OF:619  static void of_dump_devices(struct of_data *ofd, int parent)
+OF:620  {
+OF:621  	struct of_device *od = ofd->of_devices;
+OF:623  	while (od != NULL) {
+OF:624  		struct of_device_property *pr = od->properties;
+OF:625  		if (od->parent != parent) {
+OF:626  			od = od->next;
+OF:627  			continue;
+OF:628  		}
+OF:630  		debug("\"%s\"", od->name);
+OF:631  		debug(" (handle %i)\n", od->handle);
+OF:632  		debug_indentation(1);
+OF:634  		while (pr != NULL) {
+OF:635  			debug("(%s: ", pr->name);
+OF:636  			if (pr->flags == OF_PROP_STRING)
+OF:637  				debug("\"%s\"", pr->data);
+OF:638  			else
+OF:639  				debug("%i bytes", pr->len);
+OF:640  			debug(")\n");
+OF:641  			pr = pr->next;
+OF:642  		}
+OF:644  		of_dump_devices(ofd, od->handle);
+OF:645  		debug_indentation(-1);
+OF:646  		od = od->next;
+OF:647  	}
+OF:648  }
+OF:656  static void of_dump_all(struct of_data *ofd)
+OF:657  {
+OF:658  	struct of_service *os;
+OF:660  	debug("openfirmware debug dump:\n");
+OF:661  	debug_indentation(1);
+OF:664  	of_dump_devices(ofd, 0);
+OF:667  	os = ofd->of_services;
+OF:668  	while (os != NULL) {
+OF:669  		debug("service '%s'", os->name);
+OF:670  		if (os->n_ret_args > 0 || os->n_args > 0) {
+OF:671  			debug(" (");
+OF:672  			if (os->n_args > 0) {
+OF:673  				debug("%i arg%s", os->n_args,
+OF:674  				    os->n_args > 1? "s" : "");
+OF:675  				if (os->n_ret_args > 0)
+OF:676  					debug(", ");
+OF:677  			}
+OF:678  			if (os->n_ret_args > 0)
+OF:679  				debug("%i return value%s", os->n_ret_args,
+OF:680  				    os->n_ret_args > 1? "s" : "");
+OF:681  			debug(")");
+OF:682  		}
+OF:683  		debug("\n");
+OF:684  		os = os->next;
+OF:685  	}
+OF:687  	debug_indentation(-1);
+OF:688  }
+OF:696  static void of_add_prop_int32(struct of_data *ofd,
+OF:697  	const char *devname, const char *propname, uint32_t x)
+OF:698  {
+OF:699  	unsigned char *p;
+OF:701  	CHECK_ALLOCATION(p = (unsigned char *) malloc(sizeof(int32_t)));
+OF:703  	of_store_32bit_in_host(p, x);
+OF:704  	of_add_prop(ofd, devname, propname, p, sizeof(int32_t),
+OF:705  	    OF_PROP_INT);
+OF:706  }
+OF:714  static void of_add_prop_str(struct machine *machine, struct of_data *ofd,
+OF:715  	const char *devname, const char *propname, const char *data)
+OF:716  {
+OF:717  	char *p;
+OF:719  	CHECK_ALLOCATION(p = strdup(data));
+OF:721  	of_add_prop(ofd, devname, propname, (unsigned char *)p, strlen(p) + 1,
+OF:722  	    OF_PROP_STRING);
+OF:723  }
+OF:729  void of_emul_init_isa(struct machine *machine)
+OF:730  {
+OF:731  	struct of_data *ofd = machine->md.of_data;
+OF:732  	unsigned char *isa_ranges;
+OF:734  	of_add_device(ofd, "isa", "/");
+OF:736  	CHECK_ALLOCATION(isa_ranges = (unsigned char *) malloc(32));
+OF:737  	memset(isa_ranges, 0, 32);
+OF:741  	of_store_32bit_in_host(isa_ranges + 0, 0);
+OF:742  	of_store_32bit_in_host(isa_ranges + 4, 0xc0000000);
+OF:744  	of_store_32bit_in_host(isa_ranges + 16, 1);
+OF:745  	of_store_32bit_in_host(isa_ranges + 20, 0xd0000000);
+OF:747  	of_add_prop(ofd, "/isa", "ranges", isa_ranges, 32, 0);
+OF:748  }
+OF:754  void of_emul_init_adb(struct machine *machine)
+OF:755  {
+OF:756  	struct of_data *ofd = machine->md.of_data;
+OF:757  	unsigned char *adb_interrupts, *adb_reg;
+OF:759  	CHECK_ALLOCATION(adb_interrupts = (unsigned char *) malloc(4 * sizeof(uint32_t)));
+OF:760  	CHECK_ALLOCATION(adb_reg = (unsigned char *) malloc(8 * sizeof(uint32_t)));
+OF:762  	of_add_device(ofd, "adb", "/bandit/gc");
+OF:763  	of_add_prop_str(machine, ofd, "/bandit/gc/adb", "name", "via-cuda");
+OF:764  	of_store_32bit_in_host(adb_interrupts + 0, 25);
+OF:765  	of_store_32bit_in_host(adb_interrupts + 4, 0);
+OF:766  	of_store_32bit_in_host(adb_interrupts + 8, 0);
+OF:767  	of_store_32bit_in_host(adb_interrupts + 12, 0);
+OF:768  	of_add_prop(ofd, "/bandit/gc/adb", "interrupts", adb_interrupts,
+OF:769  	    4*sizeof(uint32_t), 0);
+OF:770  	of_store_32bit_in_host(adb_reg + 0, 0x16000);
+OF:771  	of_store_32bit_in_host(adb_reg + 4, 0x2000);
+OF:772  	of_store_32bit_in_host(adb_reg + 8, 0);
+OF:773  	of_store_32bit_in_host(adb_reg + 12, 0);
+OF:774  	of_store_32bit_in_host(adb_reg + 16, 0);
+OF:775  	of_store_32bit_in_host(adb_reg + 20, 0);
+OF:776  	of_store_32bit_in_host(adb_reg + 24, 0);
+OF:777  	of_store_32bit_in_host(adb_reg + 28, 0);
+OF:778  	of_add_prop(ofd, "/bandit/gc/adb", "reg", adb_reg,
+OF:779  	    8*sizeof(uint32_t), 0);
+OF:780  }
+OF:786  void of_emul_init_zs(struct machine *machine)
+OF:787  {
+OF:788  	struct of_data *ofd = machine->md.of_data;
+OF:789  	unsigned char *zs_interrupts, *zs_reg;
+OF:791  	CHECK_ALLOCATION(zs_reg = (unsigned char *) malloc(6 * sizeof(uint32_t)));
+OF:794  	of_add_device(ofd, "zs", "/bandit/gc");
+OF:795  	of_add_prop_str(machine, ofd, "/bandit/gc/zs", "device_type", "serial");
+OF:796  	of_add_prop_str(machine, ofd, "/bandit/gc/zs", "name", "escc");
+OF:797  	of_store_32bit_in_host(zs_reg + 0, 0x13000);
+OF:798  	of_store_32bit_in_host(zs_reg + 4, 0x40);
+OF:799  	of_store_32bit_in_host(zs_reg + 8, 0x100);
+OF:800  	of_store_32bit_in_host(zs_reg + 12, 0x100);
+OF:801  	of_store_32bit_in_host(zs_reg + 16, 0x200);
+OF:802  	of_store_32bit_in_host(zs_reg + 20, 0x100);
+OF:803  	of_add_prop(ofd, "/bandit/gc/zs", "reg", zs_reg, 6*sizeof(uint32_t), 0);
+OF:806  	CHECK_ALLOCATION(zs_interrupts = (unsigned char *) malloc(3 * sizeof(uint32_t)));
+OF:807  	CHECK_ALLOCATION(zs_reg = (unsigned char *) malloc(6 * sizeof(uint32_t)));
+OF:809  	of_add_device(ofd, "zstty1", "/bandit/gc/zs");
+OF:810  	of_add_prop_str(machine, ofd, "/bandit/gc/zs/zstty1", "name", "ch-a");
+OF:811  	of_store_32bit_in_host(zs_interrupts + 0, 16);
+OF:812  	of_store_32bit_in_host(zs_interrupts + 4, 0);
+OF:813  	of_store_32bit_in_host(zs_interrupts + 8, 0);
+OF:814  	of_add_prop(ofd, "/bandit/gc/zs/zstty1", "interrupts", zs_interrupts,
+OF:815  	    3*sizeof(uint32_t), 0);
+OF:816  	of_store_32bit_in_host(zs_reg + 0, 0x13800);
+OF:817  	of_store_32bit_in_host(zs_reg + 4, 0x100);
+OF:818  	of_store_32bit_in_host(zs_reg + 8, 0x100);
+OF:819  	of_store_32bit_in_host(zs_reg + 12, 0x100);
+OF:820  	of_store_32bit_in_host(zs_reg + 16, 0x200);
+OF:821  	of_store_32bit_in_host(zs_reg + 20, 0x100);
+OF:822  	of_add_prop(ofd, "/bandit/gc/zs/zstty1",
+OF:823  	    "reg", zs_reg, 6*sizeof(uint32_t), 0);
+OF:826  	CHECK_ALLOCATION(zs_interrupts = (unsigned char *) malloc(3 * sizeof(uint32_t)));
+OF:827  	CHECK_ALLOCATION(zs_reg = (unsigned char *) malloc(6 * sizeof(uint32_t)));
+OF:829  	of_add_device(ofd, "zstty0", "/bandit/gc/zs");
+OF:830  	of_add_prop_str(machine, ofd, "/bandit/gc/zs/zstty0", "name", "ch-b");
+OF:831  	of_store_32bit_in_host(zs_interrupts + 0, 15);
+OF:832  	of_store_32bit_in_host(zs_interrupts + 4, 0);
+OF:833  	of_store_32bit_in_host(zs_interrupts + 8, 0);
+OF:834  	of_add_prop(ofd, "/bandit/gc/zs/zstty0", "interrupts", zs_interrupts,
+OF:835  	    3*sizeof(uint32_t), 0);
+OF:836  	of_store_32bit_in_host(zs_reg + 0, 0x13400);
+OF:837  	of_store_32bit_in_host(zs_reg + 4, 0x100);
+OF:838  	of_store_32bit_in_host(zs_reg + 8, 0x100);
+OF:839  	of_store_32bit_in_host(zs_reg + 12, 0x100);
+OF:840  	of_store_32bit_in_host(zs_reg + 16, 0x200);
+OF:841  	of_store_32bit_in_host(zs_reg + 20, 0x100);
+OF:842  	of_add_prop(ofd, "/bandit/gc/zs/zstty0",
+OF:843  	    "reg", zs_reg, 6*sizeof(uint32_t), 0);
+OF:844  }
+OF:850  void of_emul_init_uninorth(struct machine *machine)
+OF:851  {
+OF:852  	struct of_data *ofd = machine->md.of_data;
+OF:853  	unsigned char *uninorth_reg, *uninorth_bus_range, *uninorth_ranges;
+OF:854  	unsigned char *macio_aa, *ata_interrupts, *ata_reg;
+OF:855  	struct of_device *ic;
+OF:856  	const char *n = "pci@e2000000";
+OF:857  	const char *macio = "mac-io";
+OF:859  	of_add_device(ofd, n, "/");
+OF:860  	of_add_prop_str(machine, ofd, n, "name", "pci");
+OF:861  	of_add_prop_str(machine, ofd, n, "device_type", "pci");
+OF:862  	of_add_prop_str(machine, ofd, n, "compatible", "uni-north");
+OF:864  	CHECK_ALLOCATION(uninorth_reg = (unsigned char *) malloc(2 * sizeof(uint32_t)));
+OF:865  	CHECK_ALLOCATION(uninorth_bus_range = (unsigned char *) malloc(2 * sizeof(uint32_t)));
+OF:866  	CHECK_ALLOCATION(uninorth_ranges = (unsigned char *) malloc(12 * sizeof(uint32_t)));
+OF:867  	CHECK_ALLOCATION(macio_aa = (unsigned char *) malloc(5 * sizeof(uint32_t)));
+OF:868  	CHECK_ALLOCATION(ata_interrupts = (unsigned char *) malloc(6 * sizeof(uint32_t)));
+OF:869  	CHECK_ALLOCATION(ata_reg = (unsigned char *) malloc(8 * sizeof(uint32_t)));
+OF:871  	of_store_32bit_in_host(uninorth_reg + 0, 0xe2000000);
+OF:872  	of_store_32bit_in_host(uninorth_reg + 4, 0);
+OF:873  	of_add_prop(ofd, n, "reg", uninorth_reg, 2*sizeof(uint32_t), 0);
+OF:875  	of_store_32bit_in_host(uninorth_bus_range + 0, 0);
+OF:876  	of_store_32bit_in_host(uninorth_bus_range + 4, 0);
+OF:877  	of_add_prop(ofd, n, "bus-range", uninorth_bus_range,
+OF:878  	    2*sizeof(uint32_t), 0);
+OF:881  	of_store_32bit_in_host(uninorth_ranges + 0, 0x02000000);
+OF:882  	of_store_32bit_in_host(uninorth_ranges + 4, 0);
+OF:883  	of_store_32bit_in_host(uninorth_ranges + 8, 0);
+OF:884  	of_store_32bit_in_host(uninorth_ranges + 12, 0xd0000000);
+OF:885  	of_store_32bit_in_host(uninorth_ranges + 16, 0);
+OF:886  	of_store_32bit_in_host(uninorth_ranges + 20, 0x04000000);
+OF:888  	of_store_32bit_in_host(uninorth_ranges + 24, 0x01000000);
+OF:889  	of_store_32bit_in_host(uninorth_ranges + 28, 0);
+OF:890  	of_store_32bit_in_host(uninorth_ranges + 32, 0);
+OF:891  	of_store_32bit_in_host(uninorth_ranges + 36, 0xe2000000);
+OF:892  	of_store_32bit_in_host(uninorth_ranges + 40, 0);
+OF:893  	of_store_32bit_in_host(uninorth_ranges + 44, 0x01000000);
+OF:894  	of_add_prop(ofd, n, "ranges", uninorth_ranges,
+OF:895  	    12*sizeof(uint32_t), 0);
+OF:897  	ic = of_add_device(ofd, macio, "/");
+OF:898  	memset(macio_aa, 0, 20);
+OF:899  	of_store_32bit_in_host(macio_aa + 0, 15 << 11);
+OF:900  	of_store_32bit_in_host(macio_aa + 8, 0xf3000000);
+OF:901  	of_add_prop(ofd, macio, "assigned-addresses", macio_aa,
+OF:902  	    5*sizeof(uint32_t), 0);
+OF:905  	of_add_prop_int32(ofd, "/chosen", "interrupt-controller", ic->handle);
+OF:907  	of_add_device(ofd, "bandit", "/");
+OF:908  	of_add_device(ofd, "gc", "/bandit");
+OF:909  	of_add_prop(ofd, "/bandit/gc", "assigned-addresses", macio_aa,
+OF:910  	    5*sizeof(uint32_t), 0);
+OF:912  	if (diskimage_exist(machine, 0, DISKIMAGE_IDE) ||
+OF:913  	    diskimage_exist(machine, 1, DISKIMAGE_IDE)) {
+OF:914  		char tmpstr[400];
+OF:915  		of_add_device(ofd, "ata", "/bandit/gc");
+OF:916  		of_add_prop_str(machine, ofd, "/bandit/gc/ata", "name", "ata");
+OF:917  		of_add_prop_str(machine, ofd, "/bandit/gc/ata", "compatible",
+OF:918  		    "heathrow-ata");
+OF:919  		of_store_32bit_in_host(ata_interrupts + 0, 13);
+OF:920  		of_store_32bit_in_host(ata_interrupts + 4, 0);
+OF:921  		of_store_32bit_in_host(ata_interrupts + 8, 0);
+OF:922  		of_store_32bit_in_host(ata_interrupts + 12, 0);
+OF:923  		of_store_32bit_in_host(ata_interrupts + 16, 0);
+OF:924  		of_store_32bit_in_host(ata_interrupts + 20, 0);
+OF:925  		of_add_prop(ofd, "/bandit/gc/ata", "interrupts", ata_interrupts,
+OF:926  		    6*sizeof(uint32_t), 0);
+OF:927  		of_store_32bit_in_host(ata_reg + 0, 0x20000);
+OF:928  		of_store_32bit_in_host(ata_reg + 4, 0);
+OF:929  		of_store_32bit_in_host(ata_reg + 8, 0x21000);
+OF:930  		of_store_32bit_in_host(ata_reg + 12, 0x22000);
+OF:931  		of_store_32bit_in_host(ata_reg + 16, 0);
+OF:932  		of_store_32bit_in_host(ata_reg + 20, 0);
+OF:933  		of_store_32bit_in_host(ata_reg + 24, 0);
+OF:934  		of_store_32bit_in_host(ata_reg + 28, 0);
+OF:935  		of_add_prop(ofd, "/bandit/gc/ata", "reg", ata_reg,
+OF:936  		    8*sizeof(uint32_t), 0);
+OF:938  		snprintf(tmpstr, sizeof(tmpstr), "wdc addr=0xf3020000 "
+OF:939  		    "irq=%s.cpu[%i].gc.lo.21 addr_mult=0x10", machine->path,
+OF:940  		    machine->bootstrap_cpu);
+OF:941  		device_add(machine, tmpstr);
+OF:942  	}
+OF:943  }
+OF:951  struct of_data *of_emul_init(struct machine *machine, struct vfb_data *vfb_data,
+OF:952  	uint64_t fb_addr, int fb_xsize, int fb_ysize)
+OF:953  {
+OF:954  	unsigned char *memory_reg, *memory_av;
+OF:955  	unsigned char *root_address_cells, *root_size_cells;
+OF:956  	unsigned char *zs_assigned_addresses;
+OF:957  	struct of_device *memory_dev, *mmu, *devstdout, *devstdin;
+OF:958  	struct of_data *ofd;
+OF:959  	int i;
+OF:961  	CHECK_ALLOCATION(ofd = (struct of_data *) malloc(sizeof(struct of_data)));
+OF:962  	memset(ofd, 0, sizeof(struct of_data));
+OF:964  	ofd->vfb_data = vfb_data;
+OF:969  	of_add_device(ofd, "", "");
+OF:970  	of_add_prop_str(machine, ofd, "/", "model", "GXemul OpenFirmware machine");
+OF:972  	CHECK_ALLOCATION(root_address_cells = (unsigned char *) malloc(1 * sizeof(uint32_t)));
+OF:973  	of_store_32bit_in_host(root_address_cells, 0);
+OF:974  	of_add_prop(ofd, "/", "#address-cells", root_address_cells, 1 * sizeof(uint32_t), 0);
+OF:976  	CHECK_ALLOCATION(root_size_cells = (unsigned char *) malloc(1 * sizeof(uint32_t)));
+OF:977  	of_store_32bit_in_host(root_size_cells, 0);
+OF:978  	of_add_prop(ofd, "/", "#size-cells", root_size_cells, 1 * sizeof(uint32_t), 0);
+OF:980  	of_add_device(ofd, "io", "/");
+OF:981  	devstdin  = of_add_device(ofd, "stdin", "/io");
+OF:982  	devstdout = of_add_device(ofd, "stdout", "/io");
+OF:984  	if (machine->x11_md.in_use) {
+OF:985  		fatal("!\n!  TODO: keyboard + framebuffer for MacPPC\n!\n");
+OF:987  		of_add_prop_str(machine, ofd, "/io/stdin", "name",
+OF:988  		    "keyboard");
+OF:989  		of_add_prop_str(machine, ofd, "/io", "name", "adb");
+OF:991  		of_add_prop_str(machine, ofd, "/io/stdout", "device_type",
+OF:992  		    "display");
+OF:993  		of_add_prop_int32(ofd, "/io/stdout", "width", fb_xsize);
+OF:994  		of_add_prop_int32(ofd, "/io/stdout", "height", fb_ysize);
+OF:995  		of_add_prop_int32(ofd, "/io/stdout", "linebytes", fb_xsize * 1);
+OF:996  		of_add_prop_int32(ofd, "/io/stdout", "depth", 8);
+OF:997  		of_add_prop_int32(ofd, "/io/stdout", "address", fb_addr);
+OF:998  	} else {
+OF:999  		CHECK_ALLOCATION(zs_assigned_addresses = (unsigned char *) malloc(12));
+OF:1000  		memset(zs_assigned_addresses, 0, 12);
+OF:1002  		of_add_prop_str(machine, ofd, "/io/stdin", "name", "ch-b");
+OF:1003  		of_add_prop_str(machine, ofd, "/io/stdin", "device_type",
+OF:1004  		    "serial");
+OF:1005  		of_add_prop_int32(ofd, "/io/stdin", "reg", 0xf3013000);
+OF:1006  		of_add_prop(ofd, "/io/stdin", "assigned-addresses",
+OF:1007  		    zs_assigned_addresses, 12, 0);
+OF:1009  		of_add_prop_str(machine, ofd, "/io/stdout", "device_type",
+OF:1010  		    "serial");
+OF:1011  	}
+OF:1013  	of_add_device(ofd, "cpus", "/");
+OF:1014  	for (i=0; i<machine->ncpus; i++) {
+OF:1015  		char tmp[50];
+OF:1016  		snprintf(tmp, sizeof(tmp), "@%x", i);
+OF:1017  		of_add_device(ofd, tmp, "/cpus");
+OF:1018  		snprintf(tmp, sizeof(tmp), "/cpus/@%x", i);
+OF:1019  		of_add_prop_str(machine, ofd, tmp, "device_type", "cpu");
+OF:1020  		of_add_prop_int32(ofd, tmp, "timebase-frequency",
+OF:1021  		    machine->emulated_hz / 4);
+OF:1022  		of_add_prop_int32(ofd, tmp, "clock-frequency",
+OF:1023  		    machine->emulated_hz);
+OF:1024  		of_add_prop_int32(ofd, tmp, "reg", i);
+OF:1025  	}
+OF:1027  	mmu = of_add_device(ofd, "mmu", "/");
+OF:1030  	of_add_prop(ofd, "/mmu", "translations", NULL, 0, 0);
+OF:1032  	of_add_device(ofd, "chosen", "/");
+OF:1033  	of_add_prop_int32(ofd, "/chosen", "mmu", mmu->handle);
+OF:1034  	of_add_prop_int32(ofd, "/chosen", "stdin", devstdin->handle);
+OF:1035  	of_add_prop_int32(ofd, "/chosen", "stdout", devstdout->handle);
+OF:1037  	memory_dev = of_add_device(ofd, "memory", "/");
+OF:1038  	CHECK_ALLOCATION(memory_reg = (unsigned char *) malloc(2 * sizeof(uint32_t)));
+OF:1039  	CHECK_ALLOCATION(memory_av = (unsigned char *) malloc(2 * sizeof(uint32_t)));
+OF:1041  	of_store_32bit_in_host(memory_reg + 0, 0);
+OF:1042  	of_store_32bit_in_host(memory_reg + 4, machine->physical_ram_in_mb<<20);
+OF:1043  	of_store_32bit_in_host(memory_av + 0, 10 << 20);
+OF:1044  	of_store_32bit_in_host(memory_av + 4, (machine->physical_ram_in_mb - 10) << 20);
+OF:1045  	of_add_prop(ofd, "/memory", "reg", memory_reg, 2 * sizeof(uint32_t), 0);
+OF:1046  	of_add_prop(ofd, "/memory", "available", memory_av, 2*sizeof(uint32_t),0);
+OF:1047  	of_add_prop_str(machine, ofd, "/memory", "name", "memory");
+OF:1048  	of_add_prop_str(machine, ofd, "/memory","device_type","memory");
+OF:1050  	of_add_prop_int32(ofd, "/chosen", "memory", memory_dev->handle);
+OF:1053  	of_add_service(ofd, "call-method", of__call_method_2_2, 2, 2);
+OF:1054  	of_add_service(ofd, "call-method", of__call_method_3_4, 3, 4);
+OF:1055  	of_add_service(ofd, "call-method", of__call_method_5_2, 5, 2);
+OF:1056  	of_add_service(ofd, "call-method", of__call_method_6_1, 6, 1);
+OF:1057  	of_add_service(ofd, "call-method", of__call_method_6_2, 6, 2);
+OF:1058  	of_add_service(ofd, "child", of__child, 1, 1);
+OF:1059  	of_add_service(ofd, "claim", of__claim, 3, 1);
+OF:1060  	of_add_service(ofd, "exit", of__exit, 0, 0);
+OF:1061  	of_add_service(ofd, "finddevice", of__finddevice, 1, 1);
+OF:1062  	of_add_service(ofd, "getprop", of__getprop, 4, 1);
+OF:1063  	of_add_service(ofd, "getproplen", of__getproplen, 2, 1);
+OF:1064  	of_add_service(ofd, "instance-to-package",
+OF:1065  	    of__instance_to_package, 1, 1);
+OF:1066  	of_add_service(ofd, "interpret", of__interpret_1, 1, 1);
+OF:1067  	of_add_service(ofd, "interpret", of__interpret_2, 1, 2);
+OF:1068  	of_add_service(ofd, "package-to-path", of__package_to_path, 3, 1);
+OF:1069  	of_add_service(ofd, "parent", of__parent, 1, 1);
+OF:1070  	of_add_service(ofd, "peer", of__peer, 1, 1);
+OF:1071  	of_add_service(ofd, "open", of__open, 1, 1);
+OF:1072  	of_add_service(ofd, "read", of__read, 3, 1);
+OF:1073  	of_add_service(ofd, "write", of__write, 3, 1);
+OF:1075  	if (verbose >= 2)
+OF:1076  		of_dump_all(ofd);
+OF:1078  	machine->md.of_data = ofd;
+OF:1080  	return ofd;
+OF:1081  }
+OF:1089  int of_emul(struct cpu *cpu)
+OF:1090  {
+OF:1091  	int i, nargs, nret, ofs, retval = 0;
+OF:1092  	char service[50];
+OF:1093  	char *arg[OF_N_MAX_ARGS];
+OF:1094  	uint64_t base, ptr;
+OF:1095  	struct of_service *os;
+OF:1096  	struct of_data *of_data = cpu->machine->md.of_data;
+OF:1098  	if (of_data == NULL) {
+OF:1099  		fatal("of_emul(): no of_data struct?\n");
+OF:1100  		exit(1);
+OF:1101  	}
+OF:1112  	switch (cpu->cpu_family->arch) {
+OF:1113  	case ARCH_ARM:
+OF:1114  		base = cpu->cd.arm.r[0];
+OF:1115  		break;
+OF:1116  	case ARCH_PPC:
+OF:1117  		base = cpu->cd.ppc.gpr[3];
+OF:1118  		break;
+OF:1119  	default:fatal("of_emul(): unimplemented arch (TODO)\n");
+OF:1120  		exit(1);
+OF:1121  	}
+OF:1124  	ptr   = load_32bit_word(cpu, base);
+OF:1125  	nargs = load_32bit_word(cpu, base + 4);
+OF:1126  	nret  = load_32bit_word(cpu, base + 8);
+OF:1128  	/*[#201]*/
+OF:1131  	if (nargs > OF_N_MAX_ARGS)
+OF:1132  		nargs = OF_N_MAX_ARGS;
+OF:1134  	readstr(cpu, ptr, service, sizeof(service));
+OF:1136  	debug("[ of: %s(", service);
+OF:1137  	ofs = 12;
+OF:1138  	for (i=0; i<nargs; i++) {
+OF:1139  		int x;
+OF:1140  		if (i > 0)
+OF:1141  			debug(", ");
+OF:1142  		if (i >= OF_N_MAX_ARGS) {
+OF:1143  			fatal("TOO MANY ARGS!");
+OF:1144  			continue;
+OF:1145  		}
+OF:1147  		ptr = load_32bit_word(cpu, base + ofs);
+OF:1149  		CHECK_ALLOCATION(arg[i] = (char *) malloc(OF_ARG_MAX_LEN + 1));
+OF:1150  		memset(arg[i], 0, OF_ARG_MAX_LEN + 1);
+OF:1152  		x = ptr;
+OF:1153  		if (x > -256 && x < 256) {
+OF:1154  			debug("%i", x);
+OF:1155  		} else {
+OF:1156  			readstr(cpu, ptr, arg[i], OF_ARG_MAX_LEN);
+OF:1157  			if (arg[i][0])
+OF:1158  				debug("\"%s\"", arg[i]);
+OF:1159  			else
+OF:1160  				debug("0x%x", x);
+OF:1161  		}
+OF:1162  		ofs += sizeof(uint32_t);
+OF:1163  	}
+OF:1164  	debug(") ]\n");
+OF:1168  	os = of_data->of_services;
+OF:1169  	while (os != NULL) {
+OF:1170  		if (strcmp(service, os->name) == 0 &&
+OF:1171  		    nargs == os->n_args && nret == os->n_ret_args) {
+OF:1172  			retval = os->f(cpu, arg, base, ofs);
+OF:1173  			break;
+OF:1174  		}
+OF:1175  		os = os->next;
+OF:1176  	}
+OF:1178  	if (os == NULL) {
+OF:1179  		quiet_mode = 0;
+OF:1180  		cpu_register_dump(cpu->machine, cpu, 1, 0);
+OF:1181  		printf("\n");
+OF:1182  		fatal("[ of: unimplemented service \"%s\" with %i input "
+OF:1183  		    "args and %i output values ]\n", service, nargs, nret);
+OF:1184  		/*[#219]*/
+OF:1186  		cpu->running = 0;
+OF:1187  	}
+OF:1189  	for (i=0; i<nargs; i++)
+OF:1190  		free(arg[i]);
+OF:1193  	switch (cpu->cpu_family->arch) {
+OF:1194  	case ARCH_ARM:
+OF:1195  		cpu->cd.arm.r[0] = retval;
+OF:1196  		break;
+OF:1197  	case ARCH_PPC:
+OF:1198  		cpu->cd.ppc.gpr[3] = retval;
+OF:1199  		break;
+OF:1200  	default:fatal("of_emul(): TODO: unimplemented arch (Retval)\n");
+OF:1201  		exit(1);
+OF:1202  	}
+OF:1204  	return 1;
+OF:1205  }
+
+==== FILE AI = cpu_arm_instr.c 960-1012 and 5022-5040 ====
+AI:961  /*
+AI:962   *  mcr_mrc:  Coprocessor move
+AI:963   *  cdp:      Coprocessor operation
+AI:964   *
+AI:965   *  arg[0] = copy of the instruction word
+AI:966   */
+AI:967  X(mcr_mrc) {
+AI:968  	uint32_t low_pc = ((size_t)ic - (size_t)
+AI:969  	    cpu->cd.arm.cur_ic_page) / sizeof(struct arm_instr_call);
+AI:970  	cpu->pc &= ~((ARM_IC_ENTRIES_PER_PAGE-1) << ARM_INSTR_ALIGNMENT_SHIFT);
+AI:971  	cpu->pc += (low_pc << ARM_INSTR_ALIGNMENT_SHIFT);
+AI:972  	arm_mcr_mrc(cpu, ic->arg[0]);
+AI:973  }
+AI:974  Y(mcr_mrc)
+AI:975  X(cdp) {
+AI:976  	uint32_t low_pc = ((size_t)ic - (size_t)
+AI:977  	    cpu->cd.arm.cur_ic_page) / sizeof(struct arm_instr_call);
+AI:978  	cpu->pc &= ~((ARM_IC_ENTRIES_PER_PAGE-1) << ARM_INSTR_ALIGNMENT_SHIFT);
+AI:979  	cpu->pc += (low_pc << ARM_INSTR_ALIGNMENT_SHIFT);
+AI:980  	arm_cdp(cpu, ic->arg[0]);
+AI:981  }
+AI:982  Y(cdp)
+AI:985  /*
+AI:986   *  openfirmware:
+AI:987   */
+AI:988  X(openfirmware)
+AI:989  {
+AI:990  	/*  TODO: sync pc?  */
+AI:991  	of_emul(cpu);
+AI:992  	cpu->pc = cpu->cd.arm.r[ARM_LR];
+AI:993  	if (cpu->machine->show_trace_tree)
+AI:994  		cpu_functioncall_trace_return(cpu);
+AI:995  	quick_pc_to_pointers_arm(cpu);
+AI:996  }
+AI:999  /*
+AI:1000   *  reboot:
+AI:1001   */
+AI:1002  X(reboot)
+AI:1003  {
+AI:1004  	cpu->running = 0;
+AI:1005  	cpu->n_translated_instrs --;
+AI:1006  	cpu->cd.arm.next_ic = &nothing_call;
+AI:1007  }
+AI:1010  /*
+AI:1011   *  swi:  Software interrupt.
+AI:1012   */
+AI:5022  			cpu->cd.arm.combination_check =
+AI:5023  			    COMBINE(netbsd_cacheclean);
+AI:5024  		break;
+AI:5026  	case 0xf:
+AI:5027  		/*  SWI:  */
+AI:5028  		/*  Default handler:  */
+AI:5029  		ic->f = cond_instr(swi);
+AI:5030  		ic->arg[0] = addr & 0xfff;
+AI:5031  		if (iword == 0xef8c64eb) {
+AI:5032  			/*  Hack for rebooting a machine:  */
+AI:5033  			ic->f = instr(reboot);
+AI:5034  		} else if (iword == 0xef8c64be) {
+AI:5035  			/*  Hack for openfirmware prom emulation:  */
+AI:5036  			ic->f = instr(openfirmware);
+AI:5037  		}
+AI:5038  		break;
+AI:5040  	default:goto bad;
+
+==== FILE PI = cpu_ppc_instr.c 3936-3966 and 4394-4406 ====
+PI:3938  /*
+PI:3939   *  sc: Syscall.
+PI:3940   */
+PI:3941  X(sc)
+PI:3942  {
+PI:3943  	/*  Synchronize the PC (pointing to _after_ this instruction)  */
+PI:3944  	cpu->pc = (cpu->pc & ~0xfff) + ic->arg[1];
+PI:3946  	ppc_exception(cpu, PPC_EXCEPTION_SC);
+PI:3948  	/*  This caused an update to the PC register, so there is no need
+PI:3949  	    to worry about the next instruction being an end_of_page.  */
+PI:3950  }
+PI:3953  /*
+PI:3954   *  openfirmware:
+PI:3955   */
+PI:3956  X(openfirmware)
+PI:3957  {
+PI:3958  	of_emul(cpu);
+PI:3960  	cpu->pc = cpu->cd.ppc.spr[SPR_LR];
+PI:3961  	if (cpu->machine->show_trace_tree)
+PI:3962  		cpu_functioncall_trace_return(cpu);
+PI:3964  	quick_pc_to_pointers(cpu);
+PI:3966  	if (!cpu->running) {
+PI:4394  		}
+PI:4395  		break;
+PI:4397  	case PPC_HI6_SC:
+PI:4398  		ic->arg[0] = (iword >> 5) & 0x7f;
+PI:4399  		ic->arg[1] = (addr & 0xfff) + 4;
+PI:4400  		if (iword == 0x44ee0002) {
+PI:4401  			/*  Special case/magic hack for OpenFirmware emul:  */
+PI:4402  			ic->f = instr(openfirmware);
+PI:4403  		} else
+PI:4404  			ic->f = instr(sc);
+PI:4405  		break;
+
+==== FILE MP = machine_macppc.c 90-110 ====
+MP:90  	    "%s.cpu[%i].gc.lo.1", machine->path, machine->bootstrap_cpu);
+MP:91  	device_add(machine, tmpstr);
+MP:93  	if (!machine->prom_emulation)
+MP:94  		return;
+MP:97  	b = 8 * 1048576; a = b - 0x800;
+MP:99  	of_emul_init(machine, fb, 0xf1000000, 1024, 768);
+MP:100  	of_emul_init_uninorth(machine);
+MP:102  	if (machine->x11_md.in_use)
+MP:103  		of_emul_init_adb(machine);
+MP:104  	else
+MP:105  		of_emul_init_zs(machine);
+MP:107  	/*
+MP:108  	 *  r3 = pointer to boot_args (for the Mach kernel).
+MP:109  	 *  See http://darwinsource.opendarwin.org/10.3/
+MP:110  	 *  BootX-59/bootx.tproj/include.subproj/boot_args.h
+
+==== FILE L = the three ledger rows (JSON) ====
+L:[
+L: {
+L:  "id": "ofopenexit",
+L:  "title": "OpenFirmware open exits the host on any nonempty pathname",
+L:  "sev": "HIGH",
+L:  "state": "open",
+L:  "opened": "2026-10-02",
+L:  "commits": "",
+L:  "witness": "",
+L:  "hold_question": "",
+L:  "state_note": "GOVERNING TEXT (from the dispositions file, cut at 400 characters): CONFIRMED-NEW HIGH ofopenexit \"OpenFirmware open exits the host on any nonempty pathname\"",
+L:  "entries": [
+L:   {
+L:    "phase": "assess",
+L:    "seat": "fable5",
+L:    "date": "2026-10-02",
+L:    "grade": "",
+L:    "grader": "",
+L:    "ev": "regress/artifacts/astraretro_20260926/DISPOSITIONS.md",
+L:    "note": "[NOT A SEAT ANSWER] Filed by GXEMUL [087a90] (main loop) by #554 from the Astra review campaign (wave 1, the emulator source): batch 3h, bundle_promemul:F1.  The finding, its ruling, its confirmation and the evidence are in regress/artifacts/astraretro_20260926/DISPOSITIONS.md; the filing table and its review are in regress/artifacts/astrafiling_20261002/.  NOT FIXED by #554."
+L:   }
+L:  ]
+L: },
+L: {
+L:  "id": "ofpeerexit",
+L:  "title": "OpenFirmware peer(): of.c:394 calls exit(1) when the handle is not the root and the lookup misses",
+L:  "sev": "HIGH",
+L:  "state": "open",
+L:  "opened": "2026-10-02",
+L:  "commits": "",
+L:  "witness": "",
+L:  "hold_question": "",
+L:  "state_note": "GOVERNING TEXT (from the dispositions file, cut at 400 characters): (added by the review pass)  [Astra afile_01, D:956 (the ruler's own addition)]",
+L:  "entries": [
+L:   {
+L:    "phase": "assess",
+L:    "seat": "fable5",
+L:    "date": "2026-10-02",
+L:    "grade": "",
+L:    "grader": "",
+L:    "ev": "regress/artifacts/astraretro_20260926/DISPOSITIONS.md",
+L:    "note": "[NOT A SEAT ANSWER] Filed by GXEMUL [087a90] (main loop) by #554 from the Astra review campaign (wave 1, the emulator source): batch 3h.  The finding, its ruling, its confirmation and the evidence are in regress/artifacts/astraretro_20260926/DISPOSITIONS.md; the filing table and its review are in regress/artifacts/astrafiling_20261002/.  NOT FIXED by #554."
+L:   }
+L:  ]
+L: },
+L: {
+L:  "id": "ofemulnodata",
+L:  "sev": "HIGH",
+L:  "state": "open",
+L:  "witness": null,
+L:  "commits": "",
+L:  "title": "src/promemul/of.c of_emul(): the OpenFirmware emulation entry calls fatal() + exit(1) when machine->md.of_data is NULL, which is true on every machine except macppc -- and the ARM and PowerPC decoders route their OpenFirmware magic instruction to it with no machine or privilege check",
+L:  "state_note": "filed 2026-10-16 from the adjudication of the agy pack's second readings (packet D, H1): all three seats FILE, HIGH, own row (regress/artifacts/adj_20261016/astra/D_secondreadings/codex_adjD.txt, grok/D_secondreadings/grok_adjD.txt, fable5/fable5_adj_D_secondreadings_v2_FABLE.md).  Source: prescreen_audits5.md of_two/F9.  READ at HEAD by all three: of.c:1096-1101 (the NULL check and the exit), :1078 (the only writer, of_emul_init, called only from machine_macppc.c:99); ARM decode cpu_arm_instr.c:5034-5036 -> X(openfirmware) :988-991; PowerPC decode cpu_ppc_instr.c:4400-4402 -> X(openfirmware) :3956-3958.  A guest instruction therefore ends the emulator process on machines that never set up OpenFirmware.  Not covered by ofopenexit or ofpeerexit (other sites in the same file); Fable 5.1: may share one round with them.  A rung-3 ATTEMPT exists, made by claude-opus-4-8 in the Fable seat's fallback run (so it is not a Fable ruling and owes review before it counts as the witness): regress/artifacts/adj_20261016/fable5/meas_D/witness_hostexit.py and .out, at HEAD e483d931 on the unmodified ARM test machine (the emulator prints `of_emul(): no of_data struct?' and the process exits 1), each with a benign-instruction liveness control that stays alive."
+L: }
+L:]
+
+==== FILE W = witness_hostexit.out (summary block) ====
+W:=== H2-MIPS LIVENESS (nop) ===
+W:  prompt=True pc_before=ffffffff80100000 pc_after=ffffffff80100004 alive_after_step=True kill_line=False exit=0 signal=None
+W:=== H2-MIPS KILL (syscall 0x30378) ===
+W:  prompt=True pc_before=ffffffff80100000 pc_after=None alive_after_step=False kill_line=True exit=1 signal=None
+W:=== H1-ARM  LIVENESS (mov r0,r0) ===
+W:  prompt=True pc_before=00008000 pc_after=00008004 alive_after_step=True kill_line=False exit=0 signal=None
+W:=== H1-ARM  KILL (swi 0xef8c64be) ===
+W:  prompt=True pc_before=00008000 pc_after=None alive_after_step=False kill_line=True exit=1 signal=None
+
+==== FILE R = the option-set and round-scope rules ====
+R:O1 (the option set).  "1 DELETE . 2 DECLINE (silent) . 3 DECLINE + BOUNDED (LATCHED) ANNOUNCE . 4 ACCEPT . 5 FAULT .
+R:6 BACKED ACCEPT . 7 IMPLEMENT".  4 ACCEPT: the model already computes the right value -- delete the kill, keep the value,
+R:no latch.  5 FAULT: deliver the architectural error.  7 IMPLEMENT: "All six members above presume the access is a REFUSAL
+R:DECISION, and that presumption fails for an UNIMPLEMENTED PATH ... The tell that member 7 is the right one is a site with
+R:NO PREDICATE."
+R:O2 (availability).  "BEFORE CHOOSING A MEMBER, CHECK IT IS AVAILABLE ON THIS CPU.  The set is a menu of dispositions, not a
+R:menu of things every machine can do."
+R:O3 (the house latch).  A guest-drivable fatal() needs a LATCH, not a verbosity flag: "N = 1, PER DEVICE INSTANCE, PLUS AN
+R:EXPLICIT SUPPRESSION MARKER IN THE MESSAGE TEXT", `(once)` the usual spelling.  fatal() itself does not exit.
+R:O4 (the addition licence).  "Additions to product code in a hardening fork are licensed by MEASURED DELTAS or by a
+R:TRANSFERRED WARRANT -- never by 'it cannot hurt.'"
+R:O5 (round scope).  "A round takes ONE site; a second joins only if it is witnessed, in the SAME device and SAME semantic
+R:class ... (so one fix design covers both), and covered by the SAME detector with no new oracle.  More witnesses create
+R:more candidate ROUNDS, never bigger rounds."
+R:O6 (the sketch rule).  "A PROPOSED EDIT IS A SKETCH, NOT A FIX, UNTIL IT HAS BEEN RUN AGAINST THE ENCLOSING FUNCTION'S
+R:REAL CONTROL FLOW" -- every exit path and the common tail.  Here the callers' tails matter: X(openfirmware) sets the pc
+R:from the link register after of_emul returns.
+R:O7 (de-escalation).  "When a fix removes a host-fatal guard, enumerate from the diff every predicate that used to gate
+R:death, and the detector shipping with that fix must pin the ACCEPT SIDE of each" -- here, that macppc's OpenFirmware
+R:calls still work.

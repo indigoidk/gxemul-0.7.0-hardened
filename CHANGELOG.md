@@ -1,3 +1,26 @@
+# Records, 2026-10-21: the OpenFirmware exit family scoped by Argon -- `ofemulnodata`'s title corrected, the scoping in three rows' notes, `armrebootmagic` filed
+
+Argon (Gemini web, packet-fed; extended thinking off, as since 10-15) read `src/promemul/of.c` whole, the two decoders' magic-word
+routing and the only `of_emul_init` caller, and was asked per `exit(1)` who reaches it, which option-set member fits on each
+architecture, and whether one round may take the family (`regress/artifacts/ofemulnodata/argon_scope_20261021/`, with `DISPOSITIONS.md`; its first control
+returned an app error at 08:31 and is kept as `failed_control_0831/`).  Main-loop dispositions, each checked by reading:
+
+* **Title corrected (L4):** `ofemulnodata` said `of_data` is NULL "on every machine except macppc".  `machine_macppc.c`'s
+  `if (!machine->prom_emulation) return;` precedes `of_emul_init`, so macppc without PROM emulation is NULL as well.
+* **Scope:** three rounds, not one (of.c:1100, :394, :448 -- different semantic class, fix design and detector); of.c:549, :577,
+  :1120 and :1201 unreachable.  Recorded in the three rows' notes as a READING for their passes 1 to test, not a ruling.
+* **Design input for `ofemulnodata`:** gate the magic word at the decoders, so a machine without OpenFirmware takes the
+  architectural SWI / system call; an early return inside `of_emul` would send the guest to its link register, because
+  `X(openfirmware)` sets the pc from it after the call.
+* **`ppcshiftwide` and `ppcsrdmissing` gain a `state_note`** ("WITNESSED ONLY ... NO fix round has started"):
+  precommit section W refused this unit's first attempt because `7f48ea10` committed their witnesses while both
+  rows stay `open`, and the check reads a committed witness as shipped work.  The note is its prescribed remedy.
+* **Filed: `armrebootmagic` (MED)** -- the ARM decoder routes 0xef8c64eb to `X(reboot)` (`cpu->running = 0`) on every ARM
+  machine at any privilege; `machine_cats.c` plants the word as the cats PROM's reboot entry.  No witness yet.
+
+Ledger (three notes, one title, one new row), `OUTSTANDING_BUGS.md` (one section), `matrix.html`, this block and the banked
+reading only.
+
 # Records, 2026-10-21: two PowerPC rows filed with rung-3 witnesses -- `ppcshiftwide` (slw/srw/sraw shift amounts 32..63 wrap) and `ppcsrdmissing` (srd/srad/sradi undecoded)
 
 Filed 2026-10-20 by the main loop while drafting `ppcrlwhighhalf`'s brief, witnessed on HEAD `1a59a47e` the same hour, and

@@ -1,0 +1,156 @@
+ARGON_OFEXITS_20261021
+VERDICT: SEVERAL ROUNDS -- `OF:394` (`ofpeerexit`), `OF:448` (`ofopenexit`), and `OF:1100` (`ofemulnodata`) have distinct semantic classes, fix designs, and machines/oracles under `R:O5` (3 rounds total; `OF:549`, `OF:577`, `OF:1120`, `OF:1201` are UNREACHABLE; `AI:1002` is a separate row).[cite: 1]
+
+FLAG: `L:61` (`ofemulnodata` title claims `machine->md.of_data` is NULL "on every machine except macppc") vs `MP:93` (`if (!machine->prom_emulation) return;` before `MP:99` `of_emul_init`): `machine->md.of_data` is ALSO NULL on `macppc` whenever `!machine->prom_emulation`.[cite: 1]
+FLAG: `L:62` (`ofemulnodata` state_note: "Fable 5.1: may share one round with them [`ofopenexit` or `ofpeerexit`]") vs `R:O5` ("A round takes ONE site; a second joins only if it is witnessed, in the SAME device and SAME semantic class ... (so one fix design covers both), and covered by the SAME detector with no new oracle") and `OF:1100` vs `OF:394`/`OF:448`: `OF:1100` is a missing-subsystem decoder/dispatch gate on machines without OpenFirmware (resolved by `5 FAULT` / ordinary instruction decode in `AI:5034` / `PI:4400`), whereas `OF:394` (`4 ACCEPT`) and `OF:448` (`3 DECLINE + BOUNDED (LATCHED) ANNOUNCE`) are service-level handlers inside `of_emul` on `macppc` with `of_data != NULL`. Neither fix design, semantic class, nor detector oracle is shared.[cite: 1]
+
+---
+
+### Per-Site Analysis of `exit(1)` in `OF` (`src/promemul/of.c`)
+
+#### 1. `OF:394` — `OF_SERVICE(peer)` (`ofpeerexit`)
+* **1. REACH:**
+  * **Machines:** `macppc` with `machine->prom_emulation != 0` (`MP:93`, `MP:99`, `OF:1078`).[cite: 1] (On any machine with `of_data == NULL`, `of_emul` stops at `OF:1098` before reaching service lookup at `OF:1168`.)[cite: 1]
+  * **Instruction sequence & privilege:** Guest executes `0x44ee0002` (`PI:4400`, decoded in `PPC_HI6_SC` at `PI:4397` to `instr(openfirmware)` at `PI:4402` with no privilege check; `sc` is executable in user or supervisor mode).[cite: 1] (If `of_data` were ever populated on ARM, `0xef8c64be` at `AI:5034` -> `instr(openfirmware)` at `AI:5036`, also executable in user or privileged mode.)[cite: 1] `gpr[3]` (`OF:1117`) points to a parameter block where `load_32bit_word(cpu, base)` (`OF:1124`) points to `"peer"`, `nargs == 1` (`OF:1125`, `OF:1070`), `nret == 1` (`OF:1126`, `OF:1070`), and arg 0 (`base + 12`, read via `OF_GET_ARG(0)` at `OF:383`) is a non-zero integer `handle` (`OF:385`) not matching any `od->handle` in `of_data->of_devices` (`OF:391`–`OF:392`).[cite: 1]
+* **2. OPTION-SET MEMBER (`R:O1`, `R:O2`) & CALLER TAIL (`R:O6`):**
+  * **Choice:** `4 ACCEPT` (or `3 DECLINE + BOUNDED (LATCHED) ANNOUNCE` if the `fatal()` diagnostic at `OF:393` is kept with a per-`of_data` latch under `R:O3`; compare `OF:370` `OF_SERVICE(parent)` and `OF:207` `OF_SERVICE(child)`, which have no `fatal()` and silently store `0` at `OF:375` / `OF:212`).[cite: 1]
+  * **Why `4 ACCEPT` applies (`R:O1`) & `R:O6` control-flow trace:** `OF:383` initializes `peer = 0`.[cite: 1] However, simply deleting `exit(1)` at `OF:394` without guarding `OF:396` (`parent = od->parent;`) would dereference `od == NULL` at `OF:396`![cite: 1] Under `R:O6`, running the edit against `OF_SERVICE(peer)`'s real control flow requires either:
+    * storing `0` (`store_32bit_word(cpu, base + retofs, 0); return 0;`) inside the `if (od == NULL)` block at `OF:392`–`OF:395`, or
+    * jumping to `OF:412` (`store_32bit_word(cpu, base + retofs, peer); return 0;`).[cite: 1]
+  * **Caller tail (`R:O6`):** `of__peer` returns `0` to `of_emul` (`OF:1172`), which sets `cpu->cd.ppc.gpr[3] = 0` (`OF:1198`) and returns `1` (`OF:1204`) to `X(openfirmware)` (`PI:3958`), which sets `cpu->pc = cpu->cd.ppc.spr[SPR_LR]` (`PI:3960`) and refreshes PC pointers (`PI:3964`).[cite: 1] Same on ARM (`OF:1195` `r[0] = retval`, `AI:992` `cpu->pc = cpu->cd.arm.r[ARM_LR]`).[cite: 1]
+* **3. WHAT A DETECTOR MUST PIN (`R:O7`):**
+  * **Decline/miss row (`macppc`):** Calling `"peer"` (`nargs=1, nret=1`) with an unallocated nonzero handle (e.g. `0x7fffffff`) does not exit the emulator, returns `0` in `gpr[3]`, writes `0` at `base + 16` (`base + retofs`), and advances `pc` to `SPR_LR`.[cite: 1]
+  * **Accept rows (`macppc`, `R:O7`):**
+    1. `handle == 0` (`OF:385`): writes root handle `1` to `base + 16`, returns `0` in `gpr[3]`.[cite: 1]
+    2. Valid `handle` with a sibling (e.g. handle of `"io"` under `"/"`, `OF:980`): writes sibling's handle to `base + 16`, returns `0` in `gpr[3]`.[cite: 1]
+    3. Valid `handle` that is the last sibling under its parent: loop `OF:401`–`OF:411` finishes with `peer = 0`, writes `0` to `base + 16`, returns `0` in `gpr[3]`.[cite: 1]
+
+---
+
+#### 2. `OF:448` — `OF_SERVICE(open)` (`ofopenexit`)
+* **1. REACH:**
+  * **Machines:** `macppc` with `machine->prom_emulation != 0` (`MP:93`, `MP:99`).[cite: 1]
+  * **Instruction sequence & privilege:** Guest executes `0x44ee0002` (`PI:4400`, user or supervisor mode) with `gpr[3]` pointing to a parameter block where service is `"open"`, `nargs == 1`, `nret == 1` (`OF:1071`), and arg 0 (`OF_GET_ARG(0)` at `OF:420`) is a guest virtual address pointing to at least one readable non-null byte (`s[0] != 0` at `OF:446`).[cite: 1]
+* **2. OPTION-SET MEMBER (`R:O1`, `R:O2`) & CALLER TAIL (`R:O6`):**
+  * **Choice:** `3 DECLINE + BOUNDED (LATCHED) ANNOUNCE` (identical across PPC and ARM).[cite: 1]
+  * **Why (`R:O1`, `R:O3`, `R:O6`):** Opening a named device in `OF_SERVICE(open)` is unimplemented (`OF:419` `// TODO.`), gated by predicate `if (s[0])` (`OF:446`).[cite: 1] Under `R:O3`, replace `printf` + `exit(1)` (`OF:447`–`OF:448`) with a latched `fatal("[ of: open(\"%s\"): TODO (once) ]\n", s);` (latched per `of_data` instance, `N = 1`).[cite: 1]
+  * **Trace through `OF_SERVICE(open)` and caller tail (`R:O6`):** Look at `OF:417`–`OF:452`: `open` is registered with `n_args = 1, n_ret_args = 1` (`OF:1071`), yet `OF_SERVICE(open)` currently **never writes to `base + retofs`** and returns `0` at `OF:451`![cite: 1] Compare `OF:238` `OF_SERVICE(finddevice)`:
+    ```c
+    store_32bit_word(cpu, base + retofs, h);
+    return h>0? 0 : -1;
+    ```
+    In OpenFirmware client interface convention (as seen in `OF:241`–`OF:242`, `OF:258`, `OF:304`), a failed `open` writes `0` (or `-1`) to `base + retofs` (the `ihandle` return slot) and returns `-1` (so `gpr[3]` / `r[0]` gets `-1` at `OF:1195`/`OF:1198`).[cite: 1] For the `if (s[0])` refusal path at `OF:446`, storing `0` to `base + retofs` and returning `-1` (while leaving the `s[0] == '\0'` accept path at `OF:451` untouched so existing callers of `open("")` see no change) cleanly declines the unimplemented nonempty path. Then `of_emul` sets `gpr[3] = -1` (`OF:1198`) and `X(openfirmware)` sets `cpu->pc = cpu->cd.ppc.spr[SPR_LR]` (`PI:3960`).[cite: 1]
+* **3. WHAT A DETECTOR MUST PIN (`R:O7`):**
+  * **Decline row (`macppc`):** Calling `"open"` (`nargs=1, nret=1`) with a pointer to a non-empty string (e.g. `"/io"`) twice in a row does not exit the host, prints the latched message with `(once)` on the first call and suppresses it on the second (`R:O3`), sets the return value (`-1` in `gpr[3]` and `0` in `base + 16`), and returns to `SPR_LR`.[cite: 1]
+  * **Accept row (`macppc`, `R:O7`):** Calling `"open"` (`nargs=1, nret=1`) with a pointer to an empty string `""` (`s[0] == 0` at `OF:446`, or unmapped address where `memory_rw` returns 0 on byte 0 at `OF:428`) takes the existing `return 0;` path at `OF:451`, sets `gpr[3] = 0`, and returns to `SPR_LR`.[cite: 1]
+
+---
+
+#### 3. `OF:549` — `of_add_device`
+* **1. REACH:** **UNREACHABLE** from guest execution (and unreachable during machine init).[cite: 1]
+  * **Reason from code:** `of_add_device` (`OF:534`) is `static` to `of.c` and is called only from `of_emul_init` (`OF:969`, `OF:980`–`OF:982`, `OF:1013`, `OF:1017`, `OF:1027`, `OF:1032`, `OF:1037`), `of_emul_init_isa` (`OF:734`), `of_emul_init_adb` (`OF:762`), `of_emul_init_zs` (`OF:794`, `OF:809`, `OF:829`), and `of_emul_init_uninorth` (`OF:859`, `OF:897`, `OF:907`, `OF:908`, `OF:915`).[cite: 1] None of the runtime `OF_SERVICE` callbacks or `of_emul` call `of_add_device`.[cite: 1] Furthermore, during `macppc` init (`MP:99`–`MP:105`), `of_emul_init` first adds `""` with `parentname = ""` (`OF:969`, where `find_device_handle` returns `0` at `OF:118`–`OF:119`, creating handle `1`), and every subsequent call in `MP:99`–`MP:105` passes a `parentname` (`"/"`, `"/io"`, `"/cpus"`, `"/bandit"`, `"/bandit/gc"`, `"/bandit/gc/zs"`) that was already registered immediately prior.[cite: 1] Thus `od->parent < 0` (`OF:546`) is never true.[cite: 1]
+* **2. OPTION-SET MEMBER:** None (not guest-reachable; no edit licensed under `R:O4`).[cite: 1]
+* **3. DETECTOR:** None (`R:O4`, `R:O5`).[cite: 1]
+
+---
+
+#### 4. `OF:577` — `of_add_prop`
+* **1. REACH:** **UNREACHABLE** from guest execution (and unreachable during machine init).[cite: 1]
+  * **Reason from code:** `of_add_prop` (`OF:564`) is `static` to `of.c`, called only by `of_add_prop_int32` (`OF:704`), `of_add_prop_str` (`OF:721`), and the `of_emul_init*` functions (`OF:747`, `OF:768`, `OF:778`, `OF:803`, `OF:814`, `OF:822`, `OF:834`, `OF:842`, `OF:873`, `OF:877`, `OF:894`, `OF:901`, `OF:909`, `OF:925`, `OF:935`, `OF:974`, `OF:978`, `OF:1006`, `OF:1030`, `OF:1045`, `OF:1046`).[cite: 1] Every `devname` passed in `of_emul_init*` is registered via `of_add_device` before `of_add_prop*` is called on it.[cite: 1] No `OF_SERVICE` or runtime path calls `of_add_prop`.[cite: 1]
+* **2. OPTION-SET MEMBER:** None (not guest-reachable; no edit licensed under `R:O4`).[cite: 1]
+* **3. DETECTOR:** None (`R:O4`, `R:O5`).[cite: 1]
+
+---
+
+#### 5. `OF:1100` — `of_emul` (`if (of_data == NULL)`) (`ofemulnodata`)
+* **1. REACH:**
+  * **Machines:**
+    * **ARM:** Every ARM machine (since `MP` `machine_macppc.c` is the only caller of `of_emul_init` at `MP:99`, `machine->md.of_data` is `NULL` on all ARM machines).[cite: 1]
+    * **PowerPC:** Every non-`macppc` PowerPC machine, AND `macppc` when `!machine->prom_emulation` (`MP:93`–`MP:94` returns before `MP:99` `of_emul_init`).[cite: 1]
+  * **Instruction sequence & privilege:**
+    * **ARM:** Executing instruction word `0xef8c64be` (`AI:5034`) in **any** privilege mode (user or privileged; `SWI` encoding `case 0xf:` at `AI:5026` has no privilege check, and `0xef8c64be` has condition field `0xe` = `AL`).[cite: 1] Witnessed in `W:8` (`swi 0xef8c64be` at PC `0x00008000` exits 1).[cite: 1]
+    * **PowerPC:** Executing instruction word `0x44ee0002` (`PI:4400`) in **any** privilege mode (user or supervisor; `case PPC_HI6_SC:` at `PI:4397` has no privilege check).[cite: 1]
+* **2. OPTION-SET MEMBER (`R:O1`, `R:O2`) & CALLER TAIL (`R:O6`):**
+  * **Choice:** `5 FAULT` — deliver the architectural exception that the instruction word natively encodes (`cond_instr(swi)` on ARM at `AI:5029`, `instr(sc)` on PowerPC at `PI:4404`) when `cpu->machine->md.of_data == NULL`, **rather than editing inside `of_emul`**.[cite: 1]
+  * **Availability check (`R:O2`):**
+    * **ARM:** In `AI:5026`–`AI:5038`, `ic->f = cond_instr(swi); ic->arg[0] = addr & 0xfff;` is ALREADY set as the default handler at `AI:5029`–`AI:5030` before the `else if (iword == 0xef8c64be)` override at `AI:5034`![cite: 1] In `0xef8c64be`, bits 31..28 are `0xe` (`AL`, unconditional) and bits 27..24 are `0xf` (`SWI`), so architectural ARM execution of `0xef8c64be` is an unconditional SWI exception (`cond_instr(swi)`).[cite: 1]
+    * **PowerPC:** In `PI:4397`–`PI:4405`, `ic->arg[0] = (iword >> 5) & 0x7f; ic->arg[1] = (addr & 0xfff) + 4;` is ALREADY populated at `PI:4398`–`PI:4399` before `if (iword == 0x44ee0002)` at `PI:4400`, with the `else` branch setting `ic->f = instr(sc);` (`PI:4404`), which synchronizes `cpu->pc = (cpu->pc & ~0xfff) + ic->arg[1]` and calls `ppc_exception(cpu, PPC_EXCEPTION_SC)` (`PI:3944`–`PI:3946`).[cite: 1] (Note: whether `0x44ee0002` with reserved bits set triggers `PPC_EXCEPTION_SC` or program check on real hardware is irrelevant to `R:O2` because `PI:4397` already decodes the entire `PPC_HI6_SC` opcode group to `instr(sc)` using `ic->arg[0]` and `ic->arg[1]`.)[cite: 1]
+  * **Why a decoder-level gate (or `X(openfirmware)` fallback) beats editing inside `of_emul` (`R:O6` caller-tail trace):**
+    * Look at what happens if you instead edit `of_emul` (`OF:1098`) to return early when `of_data == NULL`:
+      1. `X(openfirmware)` on ARM (`AI:988`–`AI:996`) calls `of_emul(cpu)` (`AI:991`) **ignoring its return value**, then unconditionally executes:
+         ```c
+         cpu->pc = cpu->cd.arm.r[ARM_LR];
+         if (cpu->machine->show_trace_tree)
+             cpu_functioncall_trace_return(cpu);
+         quick_pc_to_pointers_arm(cpu);
+         ```
+         (`AI:992`–`AI:995`).[cite: 1]
+      2. `X(openfirmware)` on PowerPC (`PI:3956`–`PI:3966`) likewise calls `of_emul(cpu)` (`PI:3958`) **ignoring its return value**, then unconditionally executes:
+         ```c
+         cpu->pc = cpu->cd.ppc.spr[SPR_LR];
+         if (cpu->machine->show_trace_tree)
+             cpu_functioncall_trace_return(cpu);
+         quick_pc_to_pointers(cpu);
+         ```
+         (`PI:3960`–`PI:3964`).[cite: 1]
+      3. Therefore, if `of_emul` merely declines and returns when `of_data == NULL`, a user-mode guest executing `0xef8c64be` (ARM) or `0x44ee0002` (PPC) on a machine without OpenFirmware does **not** take a syscall/SWI trap and does **not** advance `pc` to `pc + 4` — instead, it **branches to `LR`** (`r[14]` / `SPR_LR`) as if `swi 0x8c64be` / `sc` were a return-to-link-register instruction (and if `of_emul` reaches `OF:1193`–`OF:1199`, it also clobbers `r[0]` or `gpr[3]`)![cite: 1]
+    * By contrast, gating in the decoders:
+      * **ARM (`AI:5034`):** `else if (iword == 0xef8c64be && cpu->machine->md.of_data != NULL)` leaves `ic->f = cond_instr(swi)` (`AI:5029`) in place when `of_data == NULL`.[cite: 1]
+      * **PowerPC (`PI:4400`):** `if (iword == 0x44ee0002 && cpu->machine->md.of_data != NULL)` takes the `else` branch `ic->f = instr(sc)` (`PI:4404`) when `of_data == NULL`.[cite: 1]
+      * *(Check on initialization order:* `of_emul_init` sets `machine->md.of_data = ofd` at `OF:1078` during `machine_macppc` setup at `MP:99`, before any guest instruction page is translated by the dyntrans decoder. Even if `of_data` could ever be NULL in `X(openfirmware)`, keeping `if (of_data == NULL) return 0;` in `OF:1098` or gating in `X(openfirmware)` is harmless, but gating at `AI:5034` and `PI:4400` directly uses the already-prepared `ic->arg` fields for `cond_instr(swi)` and `instr(sc)` without touching `X(swi)`.)[cite: 1]
+* **3. WHAT A DETECTOR MUST PIN (`R:O7`):**
+  * **Fault/exception row on ARM (no `of_data`):** Executing `0xef8c64be` on an ARM machine does not exit the emulator and does NOT jump to `LR`; it takes the ARM SWI exception vector (`0x00000008`, saving return address in `lr_svc` and switching to SVC mode, matching an ordinary `swi` instruction).[cite: 1]
+  * **Fault/exception row on PowerPC without OpenFirmware (e.g. non-`macppc` PPC machine, or `macppc` without `prom_emulation`):** Executing `0x44ee0002` does not exit the emulator and does NOT jump to `SPR_LR`; it delivers `PPC_EXCEPTION_SC` (`SRR0 = pc + 4`, jumping to the SC vector `0x00000c00` / `0xfff00c00`, matching an ordinary `sc` instruction).[cite: 1]
+  * **Accept row on `macppc` with `prom_emulation` (`R:O7`):** Executing `0x44ee0002` on `macppc` (where `machine->md.of_data != NULL`) still dispatches to `X(openfirmware)` -> `of_emul(cpu)`, executes the requested OF service (e.g. `"finddevice"` `"/"` returning handle `1` in `base + 16` and `0` in `gpr[3]`), and sets `pc = SPR_LR`.[cite: 1]
+
+---
+
+#### 6. `OF:1120` — `of_emul` (`switch (cpu->cpu_family->arch)` entry `default:`)
+* **1. REACH:** **UNREACHABLE**.[cite: 1]
+  * **Reason from code:** `of_emul` has only two callers in the codebase (`L:62`): `X(openfirmware)` in `cpu_arm_instr.c` (`AI:991`, where `cpu->cpu_family->arch == ARCH_ARM`, handled at `OF:1113`) and `X(openfirmware)` in `cpu_ppc_instr.c` (`PI:3958`, where `cpu->cpu_family->arch == ARCH_PPC`, handled at `OF:1116`).[cite: 1] Moreover, only `machine_macppc.c` (`MP:99`, `ARCH_PPC`) initializes `of_data` (`OF:1078`), so no other architecture can ever reach `OF:1112`.[cite: 1]
+* **2. OPTION-SET MEMBER:** None (unreachable; `R:O4`).[cite: 1]
+* **3. DETECTOR:** None (`R:O4`, `R:O5`).[cite: 1]
+
+---
+
+#### 7. `OF:1201` — `of_emul` (`switch (cpu->cpu_family->arch)` exit `default:`)
+* **1. REACH:** **UNREACHABLE**.[cite: 1]
+  * **Reason from code:** Identical `switch (cpu->cpu_family->arch)` on `ARCH_ARM` (`OF:1194`) and `ARCH_PPC` (`OF:1197`) as `OF:1112`–`OF:1121` in the same function `of_emul`, with no intervening modification to `cpu->cpu_family->arch`.[cite: 1] Any execution reaching `OF:1193` already matched `ARCH_ARM` or `ARCH_PPC` at `OF:1112`–`OF:1118`.[cite: 1]
+* **2. OPTION-SET MEMBER:** None (unreachable; `R:O4`).[cite: 1]
+* **3. DETECTOR:** None (`R:O4`, `R:O5`).[cite: 1]
+
+---
+
+### Round Scoping (`R:O5`) and ARM `0xef8c64eb` (`X(reboot)`)
+
+1. **How many rounds for the reachable `of.c` `exit(1)` sites (`OF:394`, `OF:448`, `OF:1100`)?**
+   * **THREE ROUNDS** (one per reachable site: `ofpeerexit`, `ofopenexit`, `ofemulnodata`).[cite: 1]
+   * **Why they CANNOT share one round under `R:O5`:**
+     * `R:O5` states: *"A round takes ONE site; a second joins only if it is witnessed, in the SAME device and SAME semantic class ... (so one fix design covers both), and covered by the SAME detector with no new oracle. More witnesses create more candidate ROUNDS, never bigger rounds."*[cite: 1]
+     * **`OF:1100` (`ofemulnodata`) vs `OF:394`/`OF:448`:** `OF:1100` is a decoder-level gate (`AI:5034`, `PI:4400`) choosing `5 FAULT` (`cond_instr(swi)` / `instr(sc)`) on machines where `of_data == NULL` (witnessed on ARM + non-OF PPC).[cite: 1] `OF:394` and `OF:448` are inside `of.c` service handlers on `macppc` where `of_data != NULL`.[cite: 1] They do not share files edited, semantic class, fix design, or target machine in the detector.
+     * **`OF:394` (`ofpeerexit`) vs `OF:448` (`ofopenexit`):** Although both are in `src/promemul/of.c` on `macppc`, they are in different semantic classes with different option-set members and different fix designs:
+       * `OF:394` (`peer`) is a lookup miss on an implemented service where `peer = 0` is already initialized (`4 ACCEPT`: store `0` and return `0`, matching `parent` at `OF:375` and `child` at `OF:212`, or guard `od == NULL` before `od->parent` dereference at `OF:396`).[cite: 1]
+       * `OF:448` (`open`) is an unimplemented service path (`// TODO` at `OF:419`) gated by `if (s[0])` (`OF:446`), requiring `3 DECLINE + BOUNDED (LATCHED) ANNOUNCE` (a per-`of_data` latch with `(once)` marker under `R:O3` and failure return `-1` / `ihandle = 0`).[cite: 1]
+       * Their detectors also require different service parameter blocks (`"peer"` with an integer handle vs `"open"` with a guest string pointer and a 2-call latch suppression check) and different `R:O7` accept-side pins (`peer(0)` / valid sibling handles vs `open("")`).[cite: 1]
+
+2. **Is ARM's `0xef8c64eb` reboot magic (`AI:1002` `X(reboot)`, `AI:5031`) the same class or a different row?**
+   * **DIFFERENT ROW (and different semantic class).**[cite: 1]
+   * **Reason from code:**
+     1. `X(reboot)` (`AI:1002`–`AI:1007`) does **not** call `of_emul` and does **not** call `exit(1)`; instead it sets `cpu->running = 0; cpu->n_translated_instrs --; cpu->cd.arm.next_ic = ¬hing_call;` (`AI:1004`–`AI:1006`), which halts the emulated CPU (like `OF_SERVICE(exit)` at `OF:233`), not `exit(1)` of the host process.[cite: 1]
+     2. `0xef8c64eb` (`AI:5031`) has no relation to `of_data` or OpenFirmware (`src/promemul/of.c`): it is an unconditional ARM decoder backdoor (`AI:5031`–`AI:5033`) allowing any ARM guest (including unprivileged user mode) to halt `cpu->running` without a machine or privilege check.[cite: 1] Whether `0xef8c64eb` is intended PROM/kernel-emulation machinery on specific ARM machines cannot be settled from `argon_bundle_1.txt` alone (UNSETTLED; would require checking `src/machines/machine_*arm*.c` or `src/cpus/cpu_arm*.c` for what writes `0xef8c64eb` into guest RAM), and even if gated, it belongs to the unprivileged-guest-halt (`cpu->running = 0`) class, not the `of.c` `exit(1)` host-process-termination family.[cite: 1]
+
+---
+
+### Summary of Points Tested
+
+1. `L:61` claim that `machine->md.of_data` is NULL "on every machine except macppc": **BROKEN** (`MP:93` returns early on `macppc` when `!machine->prom_emulation`, leaving `of_data == NULL`).[cite: 1]
+2. `L:62` claim ("Fable 5.1: may share one round with them"): **BROKEN** under `R:O5` (`OF:1100`, `OF:394`, and `OF:448` have different option-set dispositions, fix designs, and detector oracles -> 3 rounds).[cite: 1]
+3. `OF:394` (`ofpeerexit`) reachability, `R:O6` null-deref hazard at `OF:396` (`parent = od->parent`) if `exit(1)` is simply deleted, and `4 ACCEPT` disposition: **HOLDS**.[cite: 1]
+4. `OF:448` (`ofopenexit`) reachability and `3 DECLINE + BOUNDED (LATCHED) ANNOUNCE` disposition with `R:O3` latch and `R:O7` `s[0] == 0` accept pin: **HOLDS**.[cite: 1]
+5. `OF:549` (`of_add_device`) and `OF:577` (`of_add_prop`) guest reachability: **HOLDS** (both UNREACHABLE from guest execution and during `macppc` init).[cite: 1]
+6. `OF:1100` (`ofemulnodata`) decoder-level `5 FAULT` disposition (`AI:5034`, `PI:4400`) vs editing inside `of_emul` (`R:O6` caller-tail trace showing `AI:992` / `PI:3960` would jump to `LR`): **HOLDS**.[cite: 1]
+7. `OF:1120` and `OF:1201` (`of_emul` arch switch defaults) guest reachability: **HOLDS** (both UNREACHABLE; only ARM and PPC call `of_emul`).[cite: 1]
+8. ARM `0xef8c64eb` (`AI:1002` `X(reboot)`, `AI:5031`) classification: **UNSETTLED** which ARM machines legitimately install `0xef8c64eb` (settled by `src/machines/machine_*arm*.c` / `src/promemul/`), though definitively a separate row (`cpu->running = 0`, not `of.c` `exit(1)`).[cite: 1]
+
+P-OFEXITS-1919
+OFEXITS: 8 ATTACKS 2 BROKEN 5 HOLDS 1 UNSETTLED DRAFTABLE:YES

@@ -25187,3 +25187,17 @@ Fable 5.1, GPT-6 Astra, Grok 4.7).  Each row's ledger `state_note` carries its s
   down to a consistent boundary.  Named on `#568`'s pass 1 (Fable) as an unmodelled divergence and adjudicated FILE,
   LOW, before anyone read the arm; the arm halts, so it is filed MED.  Whether an in-tree guest sets MXM is not
   established -- the reachability question that ranks it.
+
+### 2026-10-21 -- the of.c exit family scoped (Argon); `ofemulnodata`'s title corrected; `armrebootmagic` filed
+
+* **`ofemulnodata` / `ofpeerexit` / `ofopenexit` (HIGH, open)** -- Argon's packet-fed scoping (`regress/artifacts/ofemulnodata/argon_scope_20261021/`, a reading,
+  not a measurement): three rounds, not one -- of.c:1100, :394 and :448 differ in semantic class, fix design and
+  detector; of.c:549, :577, :1120 and :1201 are unreachable.  For of.c:1100 it proposes gating the magic word at
+  the two DECODERS on `of_data != NULL`, so a machine without OpenFirmware takes the architectural SWI / system
+  call -- an early return inside `of_emul` would send the guest to its link register.  `ofemulnodata`'s title said
+  `of_data` is NULL "on every machine except macppc"; macppc without PROM emulation is NULL too
+  (`machine_macppc.c` returns before `of_emul_init`) -- corrected.
+* **`armrebootmagic` (MED, open)** -- new.  The ARM decoder routes the word 0xef8c64eb to `X(reboot)`
+  (`cpu->running = 0`) on every ARM machine at any privilege level; `machine_cats.c` plants it as the cats PROM's
+  reboot entry.  One user-mode instruction stops the emulated CPU instead of taking the SWI it encodes.  No
+  witness yet (READ at 7f48ea10).
