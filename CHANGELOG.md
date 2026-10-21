@@ -1,3 +1,116 @@
+# Records, 2026-10-20: three late Argon readings adjudicated -- `#565`'s and `#566`'s probe records and `fableheldform`'s records corrected in place, `sgirekills`' assess hold restored, two rows filed and three widened
+
+**What was read.**  Argon (Gemini 4 Argon, web; a packet-fed lens) read the packets of three rounds before they
+committed -- `#565`'s shared-findings pass, `#566`'s pass 2 and `fableheldform`'s design pass -- so many of its flags
+were already satisfied at HEAD.  Three read-only records checks (Opus 5.5 sub-agents) tested every flag against HEAD;
+their reports and draft diffs are committed beside each row's artifacts (`regress/artifacts/ppcrldiclzero/
+argonlate_20261020/`, `regress/artifacts/ip30abortkill/argonlate_20261020/`, `regress/artifacts/fableheldform/
+argonlate_20261020/`), and Argon's three answers with the packets it read under `regress/artifacts/argonlate_20261020/
+argon/`.  The late-dissent rule governs: a wrong record is corrected in place, a measured false pass is repaired in a
+follow-up (none was found), and everything else is filed.
+
+**The adjudication** (`regress/artifacts/argonlate_20261020/adj/`: the packet `brief_body.md`, 21 dispositions; the
+rulings `FINAL_DISPOSITIONS.md`).  GPT-6 Astra, Grok 4.7, GLM 5.3 (packet-fed) and Fable 5.1 answered, and Argon read
+the dispositions of its own flags; all five said ADOPT WITH CHANGES.  The grades stand except B5's (FILE -> token now)
+and C0''s F8 (REFUTED -> split, its absent selftest case filed); the other changes were to replacement texts.
+
+**Corrected in place** -- each beside the sentence it corrects, dated, the old words kept unless a log prints them:
+* `regress/ppc_rldicl_probe.py` (`#565`'s records; gate 13).  The five flipped rows are ABOVE `WHY THE SIBLING ROWS ARE
+  NOT HERE`, not "kept below" -- true in no revision on record (A1).  The printed `wants derived from` line credited
+  `:6878 (ROTL32)`, which no row consumes, and left out rldicr's `:29822`; it now reads `rldicl/rldicr register-value
+  and CR0 wants derived from ...:29736 (rldiclx), :29748 (CR0 if Rc=1), :29822 (rldicrx), :6878 (ROTL64)` -- scoped at
+  GLM 5.3's, Grok 4.7's and GPT-6 Astra's request, `:29748` Argon's and read in the manual before it was used (A2).
+  `EVERY want ... never from the tree` is true of the rldicl value wants only, and TEST-FIRST SHAPE's `every want is
+  the ARCHITECTURAL value` is untrue of the non-architectural wants -- decoder text, exit statuses, disassembly and
+  census counts, the `yes`/`differs` flags -- not of every control row (Grok 4.7's narrowing); the contract's sibling,
+  `Every row calls want_rldicl / want_rldicr` (Grok 4.7), takes GPT-6 Astra's replacement (A3).  The CONTRACT's
+  `every entry was established by a mutant that was built and scored` is untrue of its reasoned and partly measured
+  entries, itemized in the probe's bracket; the
+  bracket names the built mutants (M_NOAND among them), says M_MB5 measures the loss of `mb5` only, and that the mask
+  bit positions and the end bound share one mutant, M_MASKEND, whose construction holds an undefined shift, the end
+  bound's loop form being derivation only (A4; GPT-6 Astra, Fable 5.1, Argon).  The self-label `RUNG-3 WITNESS` --
+  docstring line 2 and the first printed banner -- reads DETECTOR, and the usage message names this file
+  (`ppcrldiclbanner`'s first two items).  Its AST is identical to HEAD's but for the docstring and three printed
+  strings, the usage message and two banner lines (`regress/artifacts/argonlate_20261020/ast_20261020.out`); no gate
+  check reads any of them.
+* `regress/artifacts/ppcrldiclzero/killtable_20260910/t2/SCORES.txt` -- its `#521 mk48nvramkill` header kept, with a
+  bracket naming `#522`'s table 2 (A6).
+* `regress/artifacts/ip30abortkill/ip30_abort_probe.py` (`#566`'s records; gate 14) -- one dated block in its
+  docstring: clause (b) WAS measured after `#566` (14/33; the four fixed sites -- DEVICE_TICK's bit-50 arm and the
+  `0x10020`, `0x10028` and `0x10030` arms -- and the three ISR announce sites -- those arms' WRITE paths -- each named,
+  at GLM 5.3's request); two more CATCHes overstated (no kill table deletes the `0x10020` store or reds `isr keep`;
+  M11 was killed, in `killtable3_20260918`); the CATCHES list is not the 27-row instrument's (its M11 line is row 28,
+  and its last three entries' qualifiers came with the F2 adjudication -- Argon); four F13 siblings; the PROBE ATTACK
+  rows' `scored 12/12`, a reading; and the kill rows' present-tense pre-`#531` notes, which stay by the probe's own
+  polarity convention (Fable 5.1, Grok 4.7).  `latch 1x`'s note -- `TWO declined ISR accesses`, printed in every gate-14 log -- is the one
+  sentence changed IN PLACE, to `TWO accepted ISR writes`, and `#566`'s `kept as it was written` names that exception.
+  Its AST is identical to HEAD's but for the docstring and that one string.
+* `regress/artifacts/ip30abortkill/PROBEATTACK_grok_20260917.txt` -- committed unchanged (13,519 bytes, md5
+  `d6f667ed`).  The ledger cited it three times as durable while it was untracked, and it is the warrant for the
+  `12/12` correction: its opening paragraph says the attack did not re-run the emulator (C3).
+* `tools/pipeline/check_probe_wiring.py` -- the t2 frozen copy's note names this unit's edits (A5); five
+  `opus_killtable_20260917/` drivers listed under `#531` as kill-table drivers are relabelled for what they mutate --
+  `mutate3.py` and `mutate4.py` (`dev_sgi_re.c`, `#498`), `mutate500.py` and `mutate500b.py` (`dev_sgi_re.c`, `#500`),
+  `mutate524g.py` (`cpu_arm_instr.c`, `#524`) (C4); MANIFEST lines for the receipts' scripts.
+* `fableheldform`'s records -- its 2026-10-18 block below, that day's bug-file section and the ledger called two STALLS
+  and eight passes Fable was not fired on walls (B1-B3).  Corrected in each, with `its third wall that morning` and
+  `its fourth wall that day` stated as the ordinals they are, not a day total (Fable 5.1, GLM 5.3, Argon), and each
+  design seat quoted as it spoke -- GPT-6 Astra and Grok 4.7 called V3 a stall, GLM 5.3 a wall.  `cxlaunchquotation`
+  [8] and [12], both stalls, keep their non-answer token with its gloss annotated (Grok 4.7).
+* `#566`'s block below gains one bracketed line for the CATCHES-list correction (W8).
+
+**`sgirekills`' assess hold, restored (B5).**  Entries [70] and [71] (`#564`'s close, 2026-10-18) say kimi and opus5
+`never answered` the 2026-08-30 assess stage that was held for them, but untokened they counted as those seats'
+answers: `live_holds()` discharged the hold and `check_stage_panels.py --list` printed `ok sgirekills assess 9/9`.  Both
+carry the non-answer token now; the stage reads HOLD 7/9 and a re-close is CLOSED-WHILE-HELD.  FOR: GPT-6 Astra, Fable
+5.1, Argon -- the token says only that an entry recording `it never answered` is not an answer, true under every ruling
+the owner could make, and `6c2840d7` tokened `cxlaunchquotation` [8]/[12] the same way.  AGAINST: GLM 5.3, Grok 4.7 --
+`untokenedanswers` item (2) asks the owner how a deliberately excluded seat is recorded, so tokening decides it by side
+effect.  Decided by argument: the token makes the record match its own text; what the owner owns is whether a
+roster-narrowed stage may CLOSE short, and the restored hold blocks a re-close until the owner rules.  The question goes
+to the owner with the dissent, in `untokenedanswers`.
+
+**The other two disputes, both sides recorded.**  W7 in place (GPT-6 Astra, Fable 5.1) against a docstring disclosure
+alone (GLM 5.3, Grok 4.7): in place, because no log reader sees a docstring and A2 already edits a printed banner on the
+same ground; the packet's premise that W6 prints was wrong -- it lies past the 70 characters a row note prints (GPT-6
+Astra, Grok 4.7, Fable 5.1, Argon).  A3's matching sentence at `cpu_ppc_instr.c:2470-2471` stays out of this unit (Fable
+5.1, Grok 4.7, GLM 5.3, Argon; GPT-6 Astra would have included it and accepted a source commit's pass 2) and lands on
+`heldrecedits`, with GPT-6 Astra's wording as the ruled replacement and Fable 5.1's choice of carrier.
+
+**Ruled, not edited.**  A0, B0 and C0 OVERTAKEN (Argon read drafts).  Argon's rldiclf2 Angle 2 PREDICTED the
+identity-body leg row for row -- 16 green, 8 red, `census zero` green and `vacuous cell` red -- and `#565`'s
+`gatewire_20261018/nullmedium/identity/IDENTITY.out` measured exactly that set (Fable 5.1); its F7 is settled, every
+artifact `#565`'s notes cite exists at HEAD.  B4 REFUTED, qualified (GPT-6 Astra): the strictly-later discharge rule
+rests on the 2026-08-30 same-date mis-clears, measured under `>=`; an index tie-break re-opening them is a RISK by the
+same mechanism, not a measured re-opening.  The rest of C0' refuted or settled -- section U re-derived on `8faf4a16`'s
+files, `SCORE_CLAIMS_PINNED=35`, PASS, 13 of 35 (`regress/artifacts/ip30abortkill/argonlate_20261020/
+rederive_U_8faf4a16.out`).  Option E, if the owner chooses it, is keyed to the 2026-10-17 directive and not to the fable5
+seat -- a seat-keyed form would also let `alphavmkill`'s 2026-09-19 first-hand Fable hold close (the checker's caution on
+Argon's mechanism).
+
+**Filed or widened.**
+* `ip30selftest3233` (LOW, new) -- the selftest of gate 14's ip30_abort scoring text has no all-green 33-row log
+  carrying `RESULT=32/33`, so no case shows the numerator pin red on its own (C0'/F8, split: the wording objection
+  refuted, the absent case true -- GPT-6 Astra, Argon).
+* `rldiclanchor` (LOW, new) -- gate 13's rldicl block transmits the probe's ok/FAIL tokens and anchors no value, so a
+  comparator edit in the probe's `row()` passes; Argon's F9 names an anchor that adds no check (design debt, as `#565`
+  disclosed it).
+* `untokenedanswers` -- the discharge direction (`sgirekills`, restored here), `fableheldform`'s review roster (B7: a
+  later-dated Fable review answer that discharges the hold leaves the stage short of nine in section H), a positive
+  answer marker as the keyword-free key (S1), an automatic token writer (Argon; GPT-6 Astra: that no writer exists does
+  not refute creating one), and the owner's roster-waiver question with GLM 5.3's and Grok 4.7's dissent.
+* `heldrecedits` -- widened to `cpu_ppc_instr.c:2470-2471` (A3).
+* `ip30stallgreen` -- Argon's derivation of the stall, verbatim, as provenance (late-dissent rule).
+* `ppcrldiclbanner` stays OPEN for its third item, `vacuous cell`'s split note; its first two are done here.
+
+**Seats.**  Each seat's answer is recorded on `wiringcliff` (`#565`'s row), `ip30abortkill` and `fableheldform`, in their
+review stages; Opus 5.5, agy, kimi, deepseek and minimax were deliberately not fired (the owner's roster) and are recorded
+per row with the non-answer token and each its own reason.  Fable 5.1 answered this adjudication's packet, not the
+review questions those three rows hold for it, so each row's Fable review hold is restated beside its answer -- a
+later-dated Fable answer otherwise discharges every earlier Fable hold in its stage.  Argon is not a ledger seat; its
+readings are credited here and in the seats' notes.  `ledger.json`, `matrix.html`, `fable_queue.md`,
+`check_probe_wiring.py`, `OUTSTANDING_BUGS.md`, the two probes, the t2 score header, the receipts and this block.
+
 # Records, 2026-10-20: `fbctrlcmdkill` names its landing commit 5dbc000e, and 5dbc000e's pass-2 receipt
 
 The landing commit 5dbc000e cannot name itself; this adds it to `fbctrlcmdkill`'s `commits` field (the row stays HELD for fable5) and writes the pass-2 receipt precommit section F requires after a commit that touches `src/`.  Ledger, matrix, this block and `regress/pass2_ledger.tsv` only.
@@ -109,21 +222,23 @@ order GPT-6 Astra, Grok 4.7 and GLM 5.3 each asked for in `#567`'s pass 2:
 # Records, 2026-10-18: `fableheldform` -- seventeen walled Fable entries carry a stage token; nine rows that shut while a stage awaited Fable go back to held; the wider class is filed
 
 **The defect** (filed by `#566`).  The owner's 2026-10-17 directive records a Fable wall as a SEAT FAILURE with a HELD
-marker and a question, never as agreement.  Seventeen `fable5` entries since 2026-10-16 recorded one in untokened prose
+marker and a question, never as agreement.  Seventeen `fable5` entries since 2026-10-16 recorded a non-answer in untokened prose
 ("NOT FIRED", "SEAT FAILURE", "HTTP 429"), and `stage_tokens.is_answer()` counts any untokened entry as an answer -- so
 the checkers read Fable as having answered, and nine rows passed section H's no-close-while-held rule and were shut on
 2026-10-17 and 2026-10-18 with a Fable stage still owed.  GPT-6 Astra's confirm on `ip30abortkill`'s closure records
 (`d42c76a8`, the same afternoon) is what exposed it: a review stage then reads complete on older answers.
 
 **What this commit does** (records only):
-* tags fifteen walls with the HELD token, keeping each entry's prose and receipt, and `cxlaunchquotation`'s 2026-10-16
-  v2 and V3 walls with the non-answer token instead -- a later pass superseded each and Fable answered that one (V4,
-  2026-10-17); no same-day answer can clear a HELD tag on V3 under the strictly-later rule (a later-date one could), and
-  one on the v2 wall would already be cleared by V4 (Grok 4.7; GPT-6 Astra's confirm corrected `forever');
+* tags fifteen non-answers (seven walls, eight passes Fable was not fired on) with the HELD token, keeping each entry's
+  prose and receipt, and `cxlaunchquotation`'s 2026-10-16 v2 and V3 stalls with the non-answer token instead -- a later
+  pass superseded each and Fable answered that one (V4, 2026-10-17); no same-day answer can clear a HELD tag on V3
+  under the strictly-later rule (a later-date one could), and one on the v2 stall would already be cleared by V4 (Grok
+  4.7; GPT-6 Astra's confirm corrected `forever');
 * moves nine rows `closed` -> `held` -- `sgirekills`, `sgirandomcolour`, `mapledmaaddr`, `xscaleinten`,
   `ppcrldimimask`, `ppcrlwimiwidth`, `ppcgateimageskip`, `cxlaunchquotation`, `dashokclass` -- each keeping its closure
   object as the record of the close, naming in `reopened` every commit whose subject called it closed (section L),
-  heading its state note with the warrant, and adding to its `hold_question` the packet of the pass Fable walled on;
+  heading its state note with the warrant, and adding to its `hold_question` the packet of the pass Fable walled on or
+  was not fired on;
 * adds `#565`'s two Fable stages to `wiringcliff`'s held work, with their question;
 * moves `fableheldform` `open` -> `held` (its own review is Fable's), with the design pass's seat entries;
 * FILES `untokenedanswers` (MED): the same defect for every seat and date -- a keyword correlate finds 497 matches among
@@ -141,7 +256,8 @@ a live field; correcting it rewrites no history); Grok agreed no fresh ruling is
 committed closures is the owner's call and drafted the question.  **The owner question is recorded in
 `fableheldform`'s `hold_question`**: may a row close while its research or review question is held for Fable?  Until it
 is answered, rulings and commits proceed and closes wait.  Flags taken: the census's date cutoff missed
-`cxlaunchquotation`'s 2026-10-16 wall (Astra, GLM); `cxlaunchquotation` walled on V3 and V6 as well as V7 (all three);
+`cxlaunchquotation`'s 2026-10-16 stall (Astra, GLM); `cxlaunchquotation` did not answer V3 (it stalled) or V6 (it
+walled) as well as V7 (all three seats);
 my brief said `ip30abortkill` "was committed held" while that commit was still in its hook (GLM); `ppcgateimageskip`'s
 review is 9/9 only through seven untokened non-answers -- five roster exclusions, GLM deliberately not fired, Fable
 held (Grok; the split is GPT-6 Astra's confirm).  Fable 5.1 walled (HTTP 429,
@@ -151,6 +267,16 @@ not established non-answers; the seven notes on `ppcgateimageskip` are not all r
 the discharge rule.  Fable 5.1 walled on the confirm too (`confirm/fable5_cf_WALL.txt`), held.  Micro-confirm (GPT-6 Astra): 1 flag, taken --
 `fableheldform`'s `hold_question` lacked the confirm's own question, now item (3).  Opus 5.5, agy, kimi, deepseek and minimax deliberately not fired (the owner's
 2026-10-17 roster).  `ledger.json`, `OUTSTANDING_BUGS.md`, `fable_queue.md`, `matrix.html` and this block only.
+
+*Corrected 2026-10-20, from the late-review adjudication of an Argon (Gemini web) reading of the design pass: this block
+said `walled Fable entries`, `fifteen walls`, `v2 and V3 walls`, `the 2026-10-16 wall` and `walled on V3`.  Of the
+seventeen, seven are walls (HTTP 429); `cxlaunchquotation`'s v2 and V3 entries STALLED (stream watchdog, 600 s), as both
+entries say and as GPT-6 Astra and Grok 4.7 said of V3 (GLM 5.3 called V3 a wall, quoting its STALLED); eight record a
+pass Fable was not fired on after an earlier wall that day -- and the carrier keeps a seat failure and a seat
+deliberately not fired apart.  The ordinals the ledger's own entries carry -- `dashokclass` V7 at 09:13, Fable's
+`third wall that morning`, and `cxlaunchquotation` V7, `its fourth wall that day` -- are reached without V3, by V6 at
+07:17 and V6's re-fire at 07:5x; they are ordinals, not a day total (`sgirekills`' `#564` pass-1 and pass-2 walls are
+dated 2026-10-17 too, with no time recorded).  The heading keeps the commit subject's wording.*
 
 # Records, 2026-10-18: `ip30abortkill`'s closure records -- clause (b) measured on the shipped 33-row instrument, 14/33 as named before the run; the close is HELD for Fable, who walled on the closure check; its residuals and `#560`/`#561`'s held `src/` comments get rows
 
@@ -243,6 +369,9 @@ EXPIRED.  Witness `harness:` -- the round's subject is the test apparatus.
   five; `latch 1x` on the write arms; the ten enumerated latch cells and the `xbit rev2` a measured escape added after
   them; the pre-fix red now 23 of 33 rows; the first CATCH resting on the pre-fix build, not a kill table; THE CLAIM
   UNDER TEST quoting the pre-fix file).  Its AST, docstring excluded, is identical to HEAD's.
+  *[2026-10-20, records (the late-review adjudication): the CATCHES list was not only the 27-row instrument's -- its M11
+  line names `isr 28 rd val`, row 28, and the qualifiers on its last three entries came with the same F2 adjudication;
+  the probe's dated block of 2026-10-20 lists this and the file's other stale sentences.]*
 * `OUTSTANDING_BUGS.md` -- the `ip30abortkill` entry's "28 ROWS ... PRE-FIX owed ... pass 2 owed" corrected in place
   (pass 2 `panel_20260917_215210`, 2026-09-17; F2 and kill tables 3-5, 2026-09-18), and a `#566` section.
 * `tools/pipeline/ledger.json` -- `wiringcliff`'s state note and this round's seat entries, Fable's two stages as HELD
@@ -270,7 +399,9 @@ EXPIRED.  Witness `harness:` -- the round's subject is the test apparatus.
   detectors run by a gate, 8 dated-exempt, 44 witnesses correctly ungated) and at `--today 2026-10-31` fails only on the
   other session's four expiries; HEAD's checker reports STALE EXEMPTION at the exec line; the exec line commented out
   reports UNWIRED DETECTOR; HEAD's checker with the gate unwired passes today and at `--today 2026-10-31` reports the
-  probe EXPIRED.  Section U: `SCORE_CLAIMS_PINNED=35`, PASS, 13 of 35 stems with a docstring checked.
+  probe EXPIRED.  Section U: `SCORE_CLAIMS_PINNED=35`, PASS, 13 of 35 stems with a docstring checked.  [2026-10-20: no section-U
+  receipt was archived with #566; these figures were re-derived against 8faf4a16 by the records check, receipt
+  `regress/artifacts/ip30abortkill/argonlate_20261020/rederive_U_8faf4a16.out`.]
 
 **Panel.**  Pass 1 (`brief_p1_body.md`): GPT-6 Astra 4 flags and a list of controls, Grok 4.7 7, GLM 5.3 11 (packet-fed;
 most "not settleable from the packet", settled here by reading `lib.sh`, `git log` and the checker).  Pass 2

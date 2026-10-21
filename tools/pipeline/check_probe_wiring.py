@@ -665,6 +665,10 @@ MANIFEST = {
     #  unlisted file is RED so a new detector cannot arrive unnoticed), not a defect. ***
     #  [#566, 2026-10-18] WIRED: gate_arm.sh (gate 14) runs it and scores every row by name, with its run,
     #  correct, emitted, green and red counts pinned; its EXEMPT entry is DISCHARGED below.
+    #  [argonlate, 2026-10-20: five of the opus_killtable_20260917/ tools below are NOT ip30 tools --
+    #  mutate3.py and mutate4.py (dev_sgi_re.c, #498), mutate500.py and mutate500b.py (dev_sgi_re.c,
+    #  #500) and mutate524g.py (cpu_arm_instr.c, #524).  They sit in #531's directory and were listed
+    #  here as ip30 kill-table drivers; their notes now say what each mutates.]
     "artifacts/ip30abortkill/ip30_abort_probe.py":
         (CLASS_DETECTOR, "#531 ip30abortkill: four guest-reachable abort() calls in dev_sgi_ip30.c. "
                          "33 rows, base 33/33, GREEN once the fix is in -- a DETECTOR by this file's own "
@@ -688,17 +692,17 @@ MANIFEST = {
     "artifacts/ip30abortkill/opus_killtable_20260917/mutate2.py":
         (CLASS_TOOL, "kill-table driver"),
     "artifacts/ip30abortkill/opus_killtable_20260917/mutate3.py":
-        (CLASS_TOOL, "kill-table driver"),
+        (CLASS_TOOL, "NOT an ip30 driver: it mutates dev_sgi_re.c in /tmp/gxo498 -- #498 (sgidewidth)'s kill table [argonlate, 2026-10-20: this said `kill-table driver']"),
     "artifacts/ip30abortkill/opus_killtable_20260917/mutate4.py":
-        (CLASS_TOOL, "kill-table driver"),
+        (CLASS_TOOL, "NOT an ip30 driver: like mutate3.py, it mutates dev_sgi_re.c in /tmp/gxo498 (#498) [argonlate, 2026-10-20: this said `kill-table driver']"),
     "artifacts/ip30abortkill/opus_killtable_20260917/mutate5.py":
         (CLASS_TOOL, "kill-table driver"),
     "artifacts/ip30abortkill/opus_killtable_20260917/mutate500.py":
-        (CLASS_TOOL, "kill-table driver, the 0x500 arm"),
+        (CLASS_TOOL, "NOT an ip30 driver: it mutates dev_sgi_re.c in /tmp/gxopus500 -- #500's kill table [argonlate, 2026-10-20: this said `kill-table driver, the 0x500 arm']"),
     "artifacts/ip30abortkill/opus_killtable_20260917/mutate500b.py":
-        (CLASS_TOOL, "kill-table driver, the 0x500 arm, second form"),
+        (CLASS_TOOL, "NOT an ip30 driver: the second form of mutate500.py, dev_sgi_re.c in /tmp/gxopus500 (#500) [argonlate, 2026-10-20: this said `kill-table driver, the 0x500 arm, second form']"),
     "artifacts/ip30abortkill/opus_killtable_20260917/mutate524g.py":
-        (CLASS_TOOL, "kill-table driver, the 524g mutant"),
+        (CLASS_TOOL, "NOT an ip30 driver: #524 (armbdt)'s class-closure mutator, table 6/g, which edits cpu_arm_instr.c [argonlate, 2026-10-20: this said `kill-table driver, the 524g mutant']"),
     "artifacts/ip30abortkill/opus_killtable_20260917/isrsem.py":
         (CLASS_TOOL, "one-off: ISR set/clear semantics probe"),
     "artifacts/ip30abortkill/opus_killtable_20260917/latchcount.py":
@@ -1714,7 +1718,7 @@ MANIFEST = {
     "artifacts/ppcrldiclzero/killtable_20260910/t1/ppc_rldicl_probe.frozen.py":
         (CLASS_RESEARCH, "ppcrldiclzero (#522) table 1: the as-run 19-row instrument -- pass 2 escaped it TWICE at 19/19 (a shift-decode mutant it was blind to BY CONSTRUCTION, and a CR0 mutant that is the sibling handler's own shipping token)"),
     "artifacts/ppcrldiclzero/killtable_20260910/t2/ppc_rldicl_probe.frozen.py":
-        (CLASS_RESEARCH, "ppcrldiclzero (#522) table 2: the CLOSING 24-row instrument, byte-identical to the shipped regress/ppc_rldicl_probe.py [#565: AS SHIPPED AT e777ff06 -- a05660af changed its helper oracles, and #565 its comments and one printed note, since; NL7]"),
+        (CLASS_RESEARCH, "ppcrldiclzero (#522) table 2: the CLOSING 24-row instrument, byte-identical to the shipped regress/ppc_rldicl_probe.py [#565: AS SHIPPED AT e777ff06 -- a05660af changed its helper oracles, #565 its comments and one printed note, and the 2026-10-20 argonlate records unit its docstring, its comments and three printed strings (the usage message and two banner lines), since; NL7]"),
     "artifacts/ppcrldiclzero/killtable_20260910/t0_apparatus_failure/ppc_rldicl_probe.frozen.py":
         (CLASS_RESEARCH, "ppcrldiclzero (#522) table 0: an APPARATUS FAILURE preserved rather than deleted -- the driver was derived by substitution from #521 and called THAT round's mutator, which replied `unknown mutant'.  The hard-fail refused rather than measuring an unmutated tree, but the table looked HALF-HEALTHY because both mutators define BASE and answered it identically.  No number from it is cited anywhere"),
 
@@ -3118,6 +3122,35 @@ MANIFEST = {
         (CLASS_TOOL, "#564 pass-3 packet's per-row catcher table, computed from kill table 3's logs"),
     "artifacts/sgirekills/pass3_564_20261018/sgi_mte_decline_probe.pass2_86caed24.py":
         (CLASS_RESEARCH, "#564 the 53-row detector as pass 2 reviewed it (md5 86caed24), preserved as the base of the repair diff"),
+    # -- argonlate (2026-10-20): receipts of the three read-only records checks behind the late-review
+    #  adjudication of Argon's readings (regress/artifacts/argonlate_20261020/adj/).  Measurements over
+    #  COPIES of the ledger and of HEAD's probes; none is a detector or a witness, and none is gated.
+    "artifacts/ppcrldiclzero/argonlate_20261020/enum_rows.py":
+        (CLASS_RESEARCH, "argonlate rldiclf2 check: an AST-only enumeration of every row() call and helper call site in a ppc_rldicl_probe.py revision (enum_HEAD.out) -- the evidence for A2 and A3; it never imports or runs the probe"),
+    "artifacts/fableheldform/argonlate_20261020/sim_sgirekills.py":
+        (CLASS_RESEARCH, "argonlate fhfp1 check, X1a: sgirekills' assess hold on ledger COPIES -- HEAD-form re-closed, entries [70]/[71] with the non-answer token re-closed and held (sim_sgirekills.txt, H_sim_A/B/C.out)"),
+    "artifacts/fableheldform/argonlate_20261020/discharge_census.py":
+        (CLASS_RESEARCH, "argonlate fhfp1 check: every discharged (hold, seat) pair in a ledger copy, with a broad non-answer keyword net over the discharging entries (discharge_census.txt; a correlate, read by hand)"),
+    "artifacts/fableheldform/argonlate_20261020/sim_fable_answers_all.py":
+        (CLASS_RESEARCH, "argonlate fhfp1 check, X1b: a ledger COPY with a simulated later Fable answer in every stage Fable holds on the rows fableheldform touched, for section H (H_sim_D.out) -- a measurement input, never a ledger entry"),
+    "artifacts/fableheldform/argonlate_20261020/fable5_since1016.py":
+        (CLASS_RESEARCH, "argonlate fhfp1 check, F4/F9: every fable5 entry dated 2026-10-16 or later that is_answer() counts, listed keyword-free to be read (fable5_answers_since_1016.txt)"),
+    "artifacts/fableheldform/argonlate_20261020/dkw_census.py":
+        (CLASS_RESEARCH, "argonlate fhfp1 check, S1: entries counted as answers since 2026-10-01, cross-tabbed by `d' presence and a 12-phrase non-answer keyword net (dkw_census.txt; a correlate, stated as one)"),
+    "artifacts/fableheldform/argonlate_20261020/measure_holds.py":
+        (CLASS_RESEARCH, "argonlate fhfp1 check, F2/M3: live holds per stage on a ledger copy, and same-day later-index answers (measure_HEAD.txt; TOTAL 0)"),
+    "artifacts/fableheldform/argonlate_20261020/optionE_scope.py":
+        (CLASS_RESEARCH, "argonlate fhfp1 check, M1: rows whose live holds in section H's stages are all fable5 -- what a seat-keyed option E would let close (optionE_scope.txt)"),
+    "artifacts/fableheldform/argonlate_20261020/diff_ledgers.py":
+        (CLASS_RESEARCH, "argonlate fhfp1 check, F8: which ledger fields 6c2840d7 changed, and that HEAD left those rows alone (diff_parent_6c28.txt, diff_6c28_HEAD.txt)"),
+    "artifacts/fableheldform/argonlate_20261020/dump_rows.py":
+        (CLASS_RESEARCH, "argonlate fhfp1 check: row dumps of a ledger copy (rows_fhf_HEAD.txt, rows_ip30_HEAD.txt)"),
+    "artifacts/fableheldform/argonlate_20261020/build_edits.py":
+        (CLASS_TOOL, "argonlate fhfp1 check: built the PROPOSED edits.diff against HEAD blob copies in its own work dir -- a writer, never run on the repo; the landed text is the late-review adjudication's, not this draft's"),
+    "artifacts/fableheldform/argonlate_20261020/st/stage_tokens.py":
+        (CLASS_RESEARCH, "argonlate fhfp1 check: the copy of tools/pipeline/stage_tokens.py (blob identical at 5dbc000e and 1a59a47e) that the measurement scripts here import from st/"),
+    "artifacts/fableheldform/argonlate_20261020/st/check_stage_panels.py":
+        (CLASS_RESEARCH, "argonlate fhfp1 check: the copy of tools/pipeline/check_stage_panels.py (blob identical at 5dbc000e and 1a59a47e) that the section-H simulations here ran"),
 }
 
 #  DATED, NAMED DEBT -- not a count and not a silent allowlist.  gate_offline.sh MEASURED that

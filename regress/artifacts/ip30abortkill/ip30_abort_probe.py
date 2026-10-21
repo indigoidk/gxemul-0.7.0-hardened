@@ -13,6 +13,8 @@ the pass-2 class closure.
 
 ================================================================================
 [#566, 2026-10-18 -- a records correction; the text below it is kept as it was written.]
+[argonlate, 2026-10-20: with one exception since -- `latch 1x''s printed note is corrected in
+place, because every gate-14 log prints it; the dated block at the end of this note says so.]
 The CATCHES list, the fourteen-cell paragraph and "THE CLOSURE IS OWED" below are the 27-row
 instrument's of 2026-09-18; the DOES NOT CATCH list was updated later and is current.  The
 probe that ships has 33 rows, and these statements below are no longer true of it:
@@ -46,6 +48,39 @@ Two escapes remain DISCLOSED: MH_nocounter (V7_nocounter, 32/32 in table 4), und
 ESCAPES below, and the WIDTH axis (V8_len4, 33/33 in table 5), under DOES NOT CATCH.  Since
 #566 this probe runs in gate 14 (regress/gate_arm.sh); a load stall can read green there
 (ip30stallgreen).
+[argonlate, 2026-10-20 -- a records correction from the late-review adjudication of an Argon
+(Gemini web) reading of #566's pass 2, re-checked against HEAD 1a59a47e.]  More statements in
+this file are no longer true of the probe that ships:
+  * the fifth bullet above is out of date: clause (b) WAS measured after #566 -- the removed
+    fatal() + abort() pair re-inserted at all four fixed sites of the fixed file (the four
+    places #531 removed it from: DEVICE_TICK's bit-50 arm and the 0x10020, 0x10028 and
+    0x10030 arms) scores 14/33 (regress/artifacts/ip30abortkill/close_20261018/CLAUSE_B.txt).
+    And `Every CATCH below has a MEASURED kill in killtable{,2}' overstates two more CATCHes:
+    no kill table deletes the 0x10020 store or reds `isr keep' (M1 deletes the 0x10028 store
+    and reds `isr clr'), and M11 WAS killed, but in killtable3_20260918, not killtable{,2};
+  * the CATCHES list is not the 27-row instrument's as it stands: its M11 line names row 28,
+    `isr 28 rd val', added at the F2 sibling-parity repair (killtable3_20260918, base 28/28),
+    and the qualifiers on its last three entries came with the same F2 adjudication --
+    opusF2_20260918/probe.frozen.py, the 27-row copy, has neither;
+  * the first two bullets' F13 corrections have siblings below, kept as written: `ALL FIVE ISR
+    announces' (the `kill 30 txt' comment) and `all five ISR sites' (the write-arm `txt'
+    comment) are three since F13 -- the three ISR announce sites are the 0x10020, 0x10028 and
+    0x10030 WRITE arms; the SIBLING PARITY comment's `both announce' and the note of `isr 28
+    rd val', `(the announce still fires)', predate F13 -- the read arms decline silently, and
+    `kill 28 rd txt' stays green under M11 because that arm stays silent.  That note's clause
+    lies past the 70 characters row() prints, so no log shows it;
+  * `latch 1x''s note said `TWO declined ISR accesses', from before its re-aim: they are two
+    WRITES, which those arms accept and keep.  It is the one sentence corrected IN PLACE --
+    its first 70 characters print in every gate-14 log, as
+    gatewire_20261018/gate14/ip30_abort.log shows, and no gate check reads note text; the AST
+    is otherwise unchanged;
+  * over the PROBE ATTACK rows, `Every one of these closes a mutant that scored 12/12' quotes
+    a READING: that attack ran no emulator (PROBEATTACK_grok_20260917.txt), and the rows were
+    written CONSTRUCTED, not MEASURED; no kill table holds M_tick_abort, M_wf20_abort_wr or
+    M_wf28_abort_wr;
+  * the kill rows' printed notes (`kill 20 rd', `kill 28 rd', `kill 30 wr') describe the
+    pre-#531 code in the present tense and stay: each names the defect its row's pre-fix FAIL
+    reproduces, which is the POLARITY paragraph's convention (WANT IS POST-FIX CORRECT).
 ================================================================================
 THE CONTRACT -- vacuity-floor clause (e).  A detector that says what it catches is
 FALSIFIABLE; one that claims completeness is not.  Every CATCH below has a MEASURED
@@ -616,7 +651,7 @@ row("xbit tick", (str(counted(t, TICKMSG)) if alive else "died"), "1",
 #  keep their store AND announce), so the latch-defeat channel survives there.
 t, alive = session(guest_store(A_SETISR, 0x1) + guest_store(A_CLRISR, 0x1))
 row("latch 1x", (str(counted(t, ISRMSG)) if alive else "died"), "1",
-    "TWO declined ISR accesses, ONE announce -- that is what the unqualified `(once)' marker "
+    "TWO accepted ISR writes, ONE announce -- that is what the unqualified `(once)' marker "
     "in the message text CLAIMS, so this row is what makes the marker true rather than decorative.  "
     "Defeat the latch and it reads 2.")
 

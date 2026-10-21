@@ -1,0 +1,94 @@
+#!/usr/bin/env python3
+"""ast_proof.py <label> <old.py> <new.py> [<label> <old.py> <new.py> ...]
+
+For each pair: (1) parse both; (2) replace EVERY str constant -- docstrings included -- with one placeholder
+and compare ast.dump(): the code, names, numbers and structure must be identical; (3) walk both trees in the
+same order and list every str constant whose value differs, with its line in each file and both values'
+first 100 characters; (4) py_compile the new file.  Exit 1 if any structure differs or a compile fails.
+It writes nothing to the trees it compares: besides stdout, py_compile creates <new>.pyc.tmp beside the new file
+and the finally clause removes it."""
+import ast
+import hashlib
+import py_compile
+import sys
+
+
+class Strip(ast.NodeTransformer):
+    def visit_Constant(self, node):
+        if isinstance(node.value, str):
+            return ast.copy_location(ast.Constant(value="<STR>"), node)
+        return node
+
+
+def strs(tree):
+    return [n for n in ast.walk(tree) if isinstance(n, ast.Constant) and isinstance(n.value, str)]
+
+
+def is_docstring(tree, node):
+    for n in ast.walk(tree):
+        if isinstance(n, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            b = getattr(n, "body", None)
+            if b and isinstance(b[0], ast.Expr) and b[0].value is node:
+                return True
+    return False
+
+
+def short(s):
+    s = s.replace("\n", "\\n")
+    return s if len(s) <= 100 else s[:97] + "..."
+
+
+bad = 0
+args = sys.argv[1:]
+assert args and len(args) % 3 == 0, __doc__
+for i in range(0, len(args), 3):
+    label, old_p, new_p = args[i:i + 3]
+    old_b, new_b = open(old_p, "rb").read(), open(new_p, "rb").read()
+    print("=" * 100)
+    print("%s\n  HEAD md5 %s  %d bytes  CRLF=%s\n  unit md5 %s  %d bytes  CRLF=%s"
+          % (label, hashlib.md5(old_b).hexdigest(), len(old_b), b"\r\n" in old_b,
+             hashlib.md5(new_b).hexdigest(), len(new_b), b"\r\n" in new_b))
+    old_t, new_t = ast.parse(old_b.decode("utf-8")), ast.parse(new_b.decode("utf-8"))
+    same = ast.dump(Strip().visit(ast.parse(old_b.decode("utf-8")))) == \
+        ast.dump(Strip().visit(ast.parse(new_b.decode("utf-8"))))
+    print("  AST with every str constant (docstrings included) replaced by one placeholder: %s"
+          % ("IDENTICAL" if same else "*** DIFFERS ***"))
+    if not same:
+        bad += 1
+        continue
+    so, sn = strs(old_t), strs(new_t)
+    assert len(so) == len(sn)
+    diffs = [(a, b) for a, b in zip(so, sn) if a.value != b.value]
+    print("  str constants: %d in each; %d differ:" % (len(so), len(diffs)))
+    for a, b in diffs:
+        kind = "DOCSTRING" if is_docstring(old_t, a) else "string"
+        print("   - %s at HEAD line %d / unit line %d" % (kind, a.lineno, b.lineno))
+        if kind == "DOCSTRING":
+            import difflib
+            ol, nl = a.value.split("\n"), b.value.split("\n")
+            rem, add = [], []
+            for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, ol, nl, autojunk=False).get_opcodes():
+                if tag in ("replace", "delete"):
+                    rem += ol[i1:i2]
+                if tag in ("replace", "insert"):
+                    add += nl[j1:j2]
+            print("       HEAD %d chars / %d lines, unit %d chars / %d lines: %d line(s) removed, %d added"
+                  % (len(a.value), len(ol), len(b.value), len(nl), len(rem), len(add)))
+            for r in rem:
+                print("       removed: %s" % short(r))
+        else:
+            print("       HEAD: %s" % short(a.value))
+            print("       unit: %s" % short(b.value))
+    try:
+        py_compile.compile(new_p, doraise=True, cfile=new_p + ".pyc.tmp")
+        print("  py_compile: OK")
+    except py_compile.PyCompileError as e:
+        bad += 1
+        print("  py_compile: *** FAILED *** %s" % e)
+    finally:
+        import os
+        if os.path.exists(new_p + ".pyc.tmp"):
+            os.remove(new_p + ".pyc.tmp")
+print("=" * 100)
+print("AST_PROOF_%s" % ("FAIL" if bad else "PASS"))
+sys.exit(1 if bad else 0)

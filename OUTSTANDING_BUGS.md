@@ -25010,21 +25010,24 @@ Fable 5.1, GPT-6 Astra, Grok 4.7).  Each row's ledger `state_note` carries its s
 ### 2026-10-18 -- `fableheldform`: seventeen walled Fable entries carry a stage token; nine rows that shut while a stage awaited Fable go back to held; the wider class is filed
 
 * **`fableheldform` (MED) HELD for fable5** -- the conversion is done.  Under the owner's 2026-10-17 directive a Fable
-  wall is a SEAT FAILURE recorded as a HELD marker with a question, never agreement; seventeen entries had recorded one
-  in untokened prose, which `stage_tokens.is_answer()` counts as an answer.  Fifteen now carry the HELD token (prose and
-  receipt kept); `cxlaunchquotation`'s 2026-10-16 v2 wall and its V3 wall carry the non-answer token instead, because a
-  later pass superseded each and Fable answered that one (V4, 2026-10-17).  No same-day answer can clear a HELD tag on V3
-  under the strictly-later discharge rule (a later-date one could), and one on the v2 wall would already be cleared
-  by V4 (Grok 4.7, corrected by GPT-6 Astra's confirm).  Design pass 1 (`regress/artifacts/fableheldform/
+  wall is a SEAT FAILURE recorded as a HELD marker with a question, never agreement; seventeen entries had recorded a
+  non-answer in untokened prose, which `stage_tokens.is_answer()` counts as an answer.  Fifteen (seven walls, eight
+  passes Fable was not fired on) now carry the HELD token (prose and receipt kept); `cxlaunchquotation`'s 2026-10-16 v2
+  stall and its V3 stall carry the non-answer token instead, because a later pass superseded each and Fable answered
+  that one (V4, 2026-10-17).  No same-day answer can clear a HELD tag on V3 under the strictly-later discharge rule (a
+  later-date one could), and one on the v2 stall would already be cleared by V4 (Grok 4.7, corrected by GPT-6 Astra's
+  confirm).  Design pass 1 (`regress/artifacts/fableheldform/
   design_20261018/`): GPT-6 Astra, Grok 4.7 and GLM 5.3 all chose this (option A); Fable 5.1 walled, so this row's own
   review is held.
 * **NINE ROWS REOPENED, `closed` -> `held`**: `sgirekills`, `sgirandomcolour`, `mapledmaaddr`, `xscaleinten`,
   `ppcrldimimask`, `ppcrlwimiwidth`, `ppcgateimageskip`, `cxlaunchquotation`, `dashokclass`.  Each was shut on 2026-10-17
-  or 2026-10-18 while its review stage (and `sgirekills`' research stage) held a Fable wall written as an untokened
-  note; a row may not close while a stage awaits a seat (`check_stage_panels.py`, CLOSED-WHILE-HELD), so with the token
+  or 2026-10-18 while its review stage (and `sgirekills`' research stage) held a Fable wall, or a pass Fable was not
+  fired on, written as an untokened note; a row may not close while a stage awaits a seat (`check_stage_panels.py`,
+  CLOSED-WHILE-HELD), so with the token
   in place each is held until Fable answers.  Each keeps its closure object (the record of that close), names in
   `reopened` every commit whose subject called it closed (section L), heads its state note with the warrant, and adds to
-  its `hold_question` the packet of the pass Fable walled on.  GPT-6 Astra's confirm on `ip30abortkill` earlier the same
+  its `hold_question` the packet of the pass Fable walled on or was not fired on.  GPT-6 Astra's confirm on
+  `ip30abortkill` earlier the same
   afternoon is the precedent.  **The owner question the panel named** -- may a row close while its research or review
   question is held for Fable (a change to section H and the state semantics)? -- is in `fableheldform`'s
   `hold_question`; until it is answered, rulings and commits proceed and closes wait.
@@ -25037,6 +25040,11 @@ Fable 5.1, GPT-6 Astra, Grok 4.7).  Each row's ledger `state_note` carries its s
   every counted Fable entry (the keyword census is reconnaissance, not that review), a forward-only structural check
   that reds a NEW untokened non-answer, an owner ruling on how an excluded seat is recorded, and row-by-row correction
   of the history when a round touches it (no sweep).
+* **Corrected 2026-10-20** (the late-review adjudication of an Argon (Gemini web) reading of the design pass): this
+  section said `walled Fable entries`, `v2 wall`, `V3 wall` and `held a Fable wall` throughout.  Seven of the
+  seventeen are walls; `cxlaunchquotation`'s v2 and V3 entries STALLED (stream watchdog), as both entries say; eight
+  record a pass Fable was not fired on after an earlier wall that day.  See the 2026-10-20 section below for what
+  `untokenedanswers` gained and for `sgirekills`' restored assess hold.
 
 ### 2026-10-19 -- `#564`'s stranded gate-6 census: the promptless probe grandfathered, the pty pin re-derived; three rows filed
 
@@ -25084,3 +25092,50 @@ Fable 5.1, GPT-6 Astra, Grok 4.7).  Each row's ledger `state_note` carries its s
 * **`gatedevicesplit`** -- gate 16 is now the second CPU gate holding device probes (`#549`'s and `#567`'s, both on
   `-E testmips`).  THE STOP (GLM 5.3, upheld at F2): a third device probe lands in gate 16 only with the split or with a
   pin on the gate's launch count.  Procedural, not mechanical -- this entry, the row and the gate's own comment carry it.
+
+### 2026-10-20 -- three late Argon readings adjudicated: `#565`'s and `#566`'s probe records and `fableheldform`'s records corrected; `sgirekills`' assess hold restored; two rows filed, three widened
+
+* **The adjudication** (`regress/artifacts/argonlate_20261020/adj/`; rulings in `FINAL_DISPOSITIONS.md`): GPT-6 Astra,
+  Grok 4.7, GLM 5.3 and Fable 5.1 ruled on 21 dispositions of three read-only records checks of Argon's late readings,
+  and Argon read the dispositions of its own flags; all five ADOPT WITH CHANGES.  Wrong records corrected in place in
+  `regress/ppc_rldicl_probe.py`, `regress/artifacts/ip30abortkill/ip30_abort_probe.py` (a dated block, and `latch 1x`'s
+  printed note in place), the t2 kill table's score header and `check_probe_wiring.py`; `PROBEATTACK_grok_20260917.txt`
+  committed.
+* **`sgirekills` (HIGH, held)** -- its 2026-08-30 assess hold is live again for kimi and opus5: entries [70] and [71]
+  (2026-10-18) recorded that those seats never answered and, untokened, discharged the hold, so section H read the stage
+  9/9.  Both carry the non-answer token now (HOLD 7/9).  GLM 5.3 and Grok 4.7 dissented (the owner's question, decided by
+  side effect); whether a roster-narrowed stage may close short is the owner's ruling under `untokenedanswers` (2).
+* **`fableheldform` (MED, held)** -- its records called two stalls and eight not-fired passes walls; corrected in the
+  ledger, in the 2026-10-18 section above and in the CHANGELOG.  Fable 5.1 answered the adjudication; its review hold is
+  restated beside that answer, because the answer was not given `hold_question` (3)'s packet.
+* **`wiringcliff` (MED, in work)**, **`ip30abortkill` (HIGH, held)** -- each records the adjudication's seat answers in
+  its review stage, with its Fable review hold restated beside Fable 5.1's answer; `#565`'s and `#566`'s probe records
+  corrected (above).
+* **`untokenedanswers` (MED, open)** -- gains: the discharge direction, measured on `sgirekills` and restored there; the
+  review roster of `fableheldform` (a later-dated Fable review answer that discharges its hold leaves the stage short of
+  nine in section H -- the nine-seat count against the four-seat owner roster, distinct from the two-seat records
+  confirm the round ran); a positive answer marker as the keyword-free key for its check (S1); an automatic token writer
+  where a non-answer is recorded (Argon; GPT-6 Astra: that no tracked writer exists does not refute creating one); and
+  the owner's roster-waiver question, with GLM 5.3's and Grok 4.7's dissent.
+* **`ip30selftest3233` (LOW, open)** -- new.  The selftest of gate 14's ip30_abort scoring text has no case where all 33
+  row lines read ok and RESULT says 32/33 (`n1` and `n8` turn a row FAIL under RESULT=33/33, `n9` shrinks the table to
+  32/32), so no case shows the `rows correct` numerator pin red on its own.  The scorer already requires 33: test-coverage
+  debt, not a gap.  Argon's F8, split by GPT-6 Astra and Argon on the adjudication.
+* **`rldiclanchor` (LOW, open)** -- new.  Gate 13's rldicl block transmits the probe's ok/FAIL tokens and anchors no
+  value, so an edit to the probe's own comparator in `row()` (`ok = True`, or `got >= want`, under which `rc cr0` reads
+  M_CR0's `0x80000000` as ok) passes all 30 checks -- disclosed in the block's CONTRACT by `#565`.  Design debt: anchor
+  `rc cr0`'s and `census wrong`'s observed GOT values (`0x40000000` and 0) on their existing per-row grep lines, which
+  adds no check (Argon's F9) -- the got column, not the want: under M_CR0 the row reads got `0x80000000` beside the
+  unchanged want `0x40000000` (`regress/artifacts/ppcrldiclzero/killtable_20260910/t2/probe_M_CR0.raw`), so a
+  want-column anchor leaves the comparator escape open (GPT-6 Astra's records confirmation, F3).
+* **`heldrecedits` (LOW, open)** -- widened by one held `src/` comment: `src/cpus/cpu_ppc_instr.c:2470-2471`, X(rldicl)'s
+  note on its witness, `The wants come from the rldiclx RTL in the architecture manual, not from this tree` -- too broad
+  for the witness's rldimi, rlwinm and rlwimi rows and its `bits32 rld bad`.  Ruled replacement (GPT-6 Astra's wording):
+  `The rldicl general-register expected values come from the rldiclx RTL in the architecture manual, not from this
+  tree`.  Held, not applied: a `src/` hunk would make the records unit a source commit owing its own pass 2.
+* **`ip30stallgreen` (LOW, open)** -- gains Argon's derivation of the stall as provenance: `session()` reads the pty for
+  0.35 + 2.5 = 2.85 s after its last command and not at all during the 12 s poll, so a session that stalls between its
+  first and second announce leaves `alive` true and a count of 1.  Read against the shipped probe; a derivation, not a
+  measurement.
+* **`ppcrldiclbanner` (LOW, open)** -- its first two items done (docstring line 2 and the first banner read DETECTOR; the
+  usage message names `ppc_rldicl_probe.py`); open for the third, `vacuous cell`'s note split across two rows.

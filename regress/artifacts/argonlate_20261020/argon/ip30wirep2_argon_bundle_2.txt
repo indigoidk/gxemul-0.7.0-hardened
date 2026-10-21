@@ -1,0 +1,855 @@
+LEGEND: P = regress/artifacts/ip30abortkill/ip30_abort_probe.py as EDITED by #566 (a dated note in its docstring; its code is unchanged); X = every line of the COMMIT copy of tools/pipeline/check_probe_wiring.py (HEAD plus #566's hunks) that names ip30, with 4 lines of context (its line numbers are that copy's); L = regress/lib.sh's count() and check().
+
+==== FILE P = the probe ====
+P:1  #!/usr/bin/env python3
+P:2  """ip30abortkill -- RUNG-3 REPRODUCTION ATTEMPT on unmodified `-E sgi -e ip30'.
+P:3  
+P:4  TEST-FIRST: this exists BEFORE any edit, and it is run against the COMMITTED build.  It began
+P:5  as a WITNESS attempt -- if it reproduces, it becomes the witness; if it cannot, the round
+P:6  proceeds documented-only WITH THE ATTEMPT RECORDED, which is a different state from "did not
+P:7  think to ask" and must not render the same.
+P:8  
+P:9  *** IT REPRODUCED, AND IT IS NOW BOTH: the round's WITNESS **and** its SHIPPED DETECTOR.  The
+P:10  sentence above said "not a shipped detector" long after two kill tables had made that false;
+P:11  corrected 2026-09-18. ***  8/21 pre-fix -> 21/21 post-fix on one instrument, then 27 rows after
+P:12  the pass-2 class closure.
+P:13  
+P:14  ================================================================================
+P:15  [#566, 2026-10-18 -- a records correction; the CONTRACT below is kept as it was written on
+P:16  2026-09-18, for the 27-row instrument.  The file's later sections were updated and this one
+P:17  was not.]  The probe that ships has 33 rows, and five statements below are no longer true:
+P:18    * the F13 silent-decline repair made both READ arms (0x10020, 0x10028) decline WITHOUT an
+P:19      announce, so there are FOUR announce sites, not six, and `kill 20 rd txt' / `kill 28 rd
+P:20      txt' now pin the SILENCE (want `no');
+P:21    * `latch 1x' was re-aimed onto the two WRITE arms (0x10020-WR, then 0x10028-WR) when the
+P:22      read arms went silent;
+P:23    * the latch axis is {4 announce sites} x {announce fires, latch sets} + {2 collision
+P:24      directions} = TEN cells, all rowed (THE LATCH-AXIS CLASS CLOSURE, below);
+P:25    * "THE CLOSURE IS OWED" was DONE in-round: `latch 1x' (0x10020-WR), `latch 28wr', `latch
+P:26      30wr', `latch tick' (ME_nolatchsettick) and `xbit rev' (MA_assign20wr) -- kill table 4,
+P:27      32 rows -- and `xbit rev2' after V2_assigntick (MD's shape) scored 32/32 there; kill table
+P:28      5 then: base 33/33, V1_assign20wr 32/33, V2_assigntick 32/33 (regress/artifacts/
+P:29      ip30abortkill/killtable4_20260918/, killtable5_20260918/).  MF's cell, a latch set on the
+P:30      0x10028 READ, no longer exists: that arm no longer announces;
+P:31    * the pre-fix red is no longer `13 rows': on this instrument the pre-fix build scores 10/33
+P:32      (#566's prefix leg, regress/artifacts/ip30abortkill/gatewire_20261018/legs/probe_prefix.log).
+P:33  V7_nocounter (MH's shape, 32/32 in table 4) and the WIDTH axis (V8_len4, 33/33 in table 5)
+P:34  remain DISCLOSED, as DOES NOT CATCH says.  Since #566 this probe runs in gate 14
+P:35  (regress/gate_arm.sh).
+P:36  ================================================================================
+P:37  THE CONTRACT -- vacuity-floor clause (e).  A detector that says what it catches is
+P:38  FALSIFIABLE; one that claims completeness is not.  Every CATCH below has a MEASURED
+P:39  kill in regress/artifacts/ip30abortkill/killtable{,2}_20260917/.
+P:40  ================================================================================
+P:41  
+P:42  CATCHES:
+P:43    * reinstating any of the four abort() calls                (the pre-fix red, 13 rows)
+P:44    * deleting the announce at ANY of the SIX announce sites   (M3,M4,M7,M8 + the rd txt rows)
+P:45    * deleting either surviving store (0x10020, 0x10028)       (isr keep, isr clr / M1)
+P:46    * re-inserting the dropped 0x10030 clear-on-write          (isr drop 30 / M2)
+P:47    * moving the tick guard between bits 49 and 50             (tick 50 txt + tick 49 / M5)
+P:48    * mirroring d->isr into a DECLINED read, AT BOTH READ ARMS  (isr 20 rd val / M10,
+P:49                                                               isr 28 rd val / M11)
+P:50    * collapsing the two latch bits onto one, IN THE TICK->ISR DIRECTION ONLY
+P:51                                                               (xbit isr / M6)
+P:52    * defeating the latch mask outright AT THE 0x10020-READ SITE ONLY
+P:53                                                               (latch 1x / M9)
+P:54  
+P:55  *** THOSE TWO LINES ONCE READ WITHOUT THEIR QUALIFIERS, AND THE opus5 F2 SEAT MEASURED BOTH
+P:56  UNQUALIFIED CLAIMS FALSE -- EIGHT MUTANTS, ALL 27/27, SIX INSIDE CELLS THIS CONTRACT CALLED
+P:57  CLOSED.  Corrected 2026-09-18 on the fable5 adjudication. ***
+P:58  
+P:59  THE LATCH IS NOT A SHARED RESOURCE WITH TWO FAILURE MODES.  It is SIX DUPLICATED STATEMENTS,
+P:60  one `d->warned |= IP30_W_*' beside every announce -- the same duplication the ANNOUNCE axis was
+P:61  decomposed for.  The real space is {6 sites} x {announce fires, latch sets} = twelve cells, plus
+P:62  {2 collision directions} = FOURTEEN.  THIS DETECTOR ROWS SIX OF THEM.
+P:63  
+P:64    * `latch 1x' visits 0x10020-RD then 0x10028-RD.  The FIRST access latches, so the SECOND
+P:65      arm's latch-set is never load-bearing: MF_nolatchset28rd deletes the latch set in an arm
+P:66      this row literally traverses and scores 27/27.
+P:67    * `xbit' runs TICK then ISR -- the OPPOSITE order from the hazard the product comment names
+P:68      ("a guest write to Set-ISR would silence the TIMER diagnostic forever").  Seeing that needs
+P:69      tick -> ISR -> tick.  MA_assign20wr and MD_assigntick are both 27/27.
+P:70  
+P:71  MEASURED ESCAPES, ALL 27/27, ranked by what they admit (regress/artifacts/ip30abortkill/
+P:72  opusF2_20260918/):
+P:73    ME_nolatchsettick  WORST -- one guest `sd' arming imask0 bit 50 gives AN ANNOUNCE PER TICK,
+P:74                       FOREVER: guest-drivable floodclass on the arm this round de-fatalised
+P:75    MA_assign20wr      `|=' -> `=' at 0x10020-WR: one character, falsifies the two-bit design
+P:76    MD_assigntick      the same at TICK, the other collision direction
+P:77    MB/MF/MG           delete the latch SET at 0x10020-WR / 0x10028-RD / 0x10030-WR: bounded
+P:78                       per-arm floods
+P:79    MH_nocounter       delete `d->reg_0x20000 += 1000': COVERAGE DEBT, not a floor cell -- the
+P:80                       counter is UNCONDITIONAL, above the de-fatalised guard, so it is
+P:81                       fix-independent (fable5 ruling)
+P:82    MC_len4            `&& len == 4' on the 0x10020 write guard: the WIDTH axis, disclosed below
+P:83  
+P:84  *** THE CLOSURE IS OWED IN-ROUND, NOT FILED (fable5, 2026-09-18): six of the eight escapes
+P:85  weaken statements THE FIX'S OWN DIFF INTRODUCED, which is the canonical clause-(d) shape, and
+P:86  the vacuity floor makes that L2 -- replace in-round however late it is found. ***
+P:87  
+P:88  DOES NOT CATCH -- disclosed here rather than discovered later:
+P:89    * THE WIDTH / len AXIS AT 0x10020 -- *** MEASURED TO ESCAPE, not merely unswept. ***
+P:90      `V8_len4' (`&& len == 4' on the 0x10020 write guard) scored 33/33 against this instrument
+P:91      on 2026-09-18.  Ruled OUTSIDE THE FLOOR by two seats: the guarded body never tests `len',
+P:92      so by the pcc2widthkills bound it is a single-operand MARGINAL -- clause (e) debt.  Carried
+P:93      with the cost NAMED rather than hidden: `len' takes at most four values and this probe
+P:94      already has guest_store64/guest_load64, so the debt is CHEAP, not unbounded.
+P:95      *** A DISCLOSURE BACKED BY A MEASUREMENT TELLS A READER WHICH EDIT WALKS FREE; ONE BACKED BY
+P:96      AN OMISSION ONLY TELLS THEM NOBODY LOOKED. ***
+P:97      (A first attempt at this mutant was MIS-BUILT -- anchored on the first `writeflag' guard in
+P:98      the file, which is `case 0x10000', the INTERRUPT MASK REGISTER.  It killed four tick rows
+P:99      because they arm imask0 with a 64-bit `sd', and it would have been filed as coverage of a
+P:100      cell it never touched.  Incidental finding, kept: THIS DETECTOR DOES CATCH A WIDTH NARROWING
+P:101      AT imask0, with a four-row signature.)
+P:102    * POSITION / TRANSLATION (clause (f)).  No row asserts WHICH cell an access lands on, so a
+P:103      re-map that keeps the probed offsets distinct is invisible to every row here.
+P:104    * latch-macro RENUMBERING -- measured EQUIVALENT (all uses go through the macros and no
+P:105      observable differs), so a RESULT rather than a gap.
+P:106    * DEVICE_ACCESS(sgi_ip30_2) -- a different device; filed as `ip30asdvasdvnb'.
+P:107  
+P:108  *** THE ATTRIBUTION RULE, WITHOUT WHICH HALF THESE ROWS ARE VACUOUS AND LOOK FINE: ***
+P:109  All FIVE ISR sites print ONE IDENTICAL STRING behind ONE SHARED BIT.  So a row can attribute an
+P:110  announce to a SPECIFIC arm ONLY IF its session makes a SINGLE ISR access.  A multi-access
+P:111  session asserts merely "at least one of these arms announced" -- which is exactly how the
+P:112  original `kill 30 txt' sat GREEN while blind to its own named mutant.  ANY NEW ANNOUNCE ROW
+P:113  MUST USE A SINGLE-ACCESS SESSION.
+P:114  
+P:115  *** AND TWO ROWS ARE COUPLED: `xbit isr' is NOT a pure collision detector. ***  It reds under
+P:116  BOTH the bit-collision mutant (alone) and the 0x10020-announce-deletion mutant (together with
+P:117  `kill 20 wr txt').  Only the PRESENCE of `kill 20 wr txt' separates the two causes.  Delete
+P:118  that row as redundant and `xbit isr' silently stops meaning what its comment says.
+P:119  
+P:120  THE CLAIM UNDER TEST, from reading dev_sgi_ip30.c at HEAD:
+P:121  
+P:122      :127  case 0x10020  Set ISR    d->isr = idata;  fatal(...); abort();
+P:123      :135  case 0x10028  Clear ISR  d->isr &= ~idata; fatal(...); abort();
+P:124      :145  case 0x10030  ISR write arm             fatal(...); abort();
+P:125      :78   DEVICE_TICK              if (d->imask0 & (1<<50)) { fatal(...); abort(); }
+P:126  
+P:127  `abort()` contains no `exit(', which is why three `exit(' sweeps of this queue walked past all
+P:128  four.  *** AND `case 0x10020' HAS NO `writeflag' TEST AND RUNS `d->isr = idata' FIRST, with
+P:129  idata initialised 0 and assigned only on writes -- so a guest LOAD is predicted to ZERO THE ISR
+P:130  and THEN abort. ***  That asymmetry is why `kill 20 rd' and `kill 30 rd' are separate rows:
+P:131  0x10030 IS writeflag-tested and its READ is predicted to be SERVICED.
+P:132  
+P:133  WITNESS-LADDER CLAUSE (ii) -- rung 3 owes BOTH controls, because one is not enough (the
+P:134  footbridge probe's first draft returned 0x0 everywhere WITH ITS RAM CONTROL GREEN):
+P:135  
+P:136      live    LIVENESS   -- a known value planted in RAM returns through a guest load
+P:137      devsig  DEVICE-SIG -- case 0x20 returns 0x80010000, a value RAM CANNOT produce
+P:138                            (dev_sgi_ip30.c `case 0x20:  odata = 0x80010000ULL;')
+P:139  
+P:140  Clause (iii): the machine description and dispatch are COMMITTED AND UNMODIFIED.  No device_add
+P:141  is introduced to reach the site -- `machine_sgi.c:417' already adds `sgi_ip30 addr=0x0ff00000'
+P:142  and `:744' advertises the subtype.
+P:143  
+P:144  POLARITY: **WANT IS POST-FIX CORRECT**, the house convention -- so a kill row wants `alive' and
+P:145  its PRE-FIX FAIL *IS* the reproduction.  Written want=DEAD first, which scored a tidy 9/9 on the
+P:146  defect and would have gone RED after a correct fix, reading as though the fix broke something.
+P:147  
+P:148  *** ORACLE POLARITY -- EOF ALONE IS THE KILL. ***  The text is DIAGNOSIS, not half the trigger.
+P:149  A build that still abort()s with a REWORDED message gives EOF and no matching text; an
+P:150  EOF-AND-text oracle would never fire and would certify a live defect GREEN.  That lesson was
+P:151  bought on the ARM MSR spec this same day and is applied here rather than re-learned.
+P:152  """
+P:153  import os
+P:154  import pty
+P:155  import re
+P:156  import select
+P:157  import signal
+P:158  import sys
+P:159  import time
+P:160  
+P:161  BIN = sys.argv[1] if len(sys.argv) > 1 else "../../../build/gxemul"
+P:162  LABEL = sys.argv[2] if len(sys.argv) > 2 else "?"
+P:163  
+P:164  #  The stub is a GENERATED artefact, never committed (top-level regress/*.bin is NEVER STAGE).
+P:165  #  All 11 top-level probes that reference such a stub create it if absent; this does the same,
+P:166  #  so the probe runs on a fresh clone.
+P:167  DUMMY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ip30_dummy.bin")
+P:168  if not os.path.exists(DUMMY):
+P:169      with open(DUMMY, "wb") as f:
+P:170          f.write(b"\0" * 8)
+P:171  
+P:172  CODE = 0x80001000
+P:173  SENTINEL = 0x5a5a5a5a
+P:174  RAMPLANT = 0x11223344
+P:175  
+P:176  #  KSEG1 (uncached), sign-extended the way the file's own :113 comment prints it:
+P:177  #  "Address: 0xffffffffaff10018".  base 0x0ff00000 -> 0xffffffffaff00000.
+P:178  BASE = 0xFFFFFFFFAFF00000
+P:179  A_BANKCFG = BASE + 0x00020     # case 0x20    -> 0x80010000, the DEVICE SIGNATURE
+P:180  A_IMASK0 = BASE + 0x10000      # case 0x10000 -> implemented r/w
+P:181  A_R10018 = BASE + 0x10018      # case 0x10018 -> implemented r/w
+P:182  A_SETISR = BASE + 0x10020      # case 0x10020 -> PREDICTED KILL, and no writeflag test
+P:183  A_CLRISR = BASE + 0x10028      # case 0x10028 -> PREDICTED KILL, and no writeflag test
+P:184  A_ISR = BASE + 0x10030         # case 0x10030 -> writeflag-TESTED; READ predicted SERVICED
+P:185  A_C20000 = BASE + 0x20000    # case 0x20000 -> implemented r/w counter
+P:186  A_C30000 = BASE + 0x30000    # case 0x30000 -> implemented r/w
+P:187  A_RAM = 0xFFFFFFFF80002000     # KSEG0 RAM, for the liveness control
+P:188  
+P:189  OP_LW_V0_AT = 0x8C220000       # lw   $v0, 0($at)
+P:190  OP_SW_T0_A3 = 0xACE80000       # sw   $t0, 0($a3)
+P:191  #  *** 64-BIT FORMS ARE NOT OPTIONAL FOR imask0.  `case 0x10000' does
+P:192  #  `d->imask0 = idata' with `idata = memory_readmax64(cpu, data, len)', so a 4-BYTE
+P:193  #  `sw' CAPS idata BELOW 2^32 AND BIT 50 CAN NEVER BE SET.  Measured: sw 0xffffffff
+P:194  #  + 70000 steps -> ALIVE.  A tick row built with OP_SW_T0_A3 would arm NOTHING,
+P:195  #  stay alive, and score GREEN ON A LIVE HOST DEATH. ***
+P:196  OP_SD_T0_A3 = 0xFCE80000       # sd   $t0, 0($a3)   -- REQUIRED to reach bit 50
+P:197  OP_LD_V0_AT = 0xDC220000       # ld   $v0, 0($at)   -- its readback
+P:198  OP_B_SELF = 0x1000FFFF         # b    .
+P:199  OP_NOP = 0x00000000
+P:200  
+P:201  rows = []
+P:202  
+P:203  
+P:204  def row(name, got, want, note=""):
+P:205      rows.append((name, str(got), str(want), note))
+P:206  
+P:207  
+P:208  def session(cmds, settle=2.0, spin=2.5):
+P:209      """One fresh process per SESSION -- most sessions score one row, but
+P:210      `tick 50`/`tick 50 txt` and `xbit isr`/`xbit tick` each score two rows from
+P:211      one process, by design (the cross-bit mutant needs both announce classes in
+P:212      one device lifetime) (#561).  Returns (transcript, alive)."""
+P:213      pid, fd = pty.fork()
+P:214      if pid == 0:
+P:215          os.execv(BIN, [BIN, "-V", "-x", "-E", "sgi", "-e", "ip30", "-M", "64",
+P:216                         "0x%x:" % CODE + DUMMY])
+P:217          os._exit(127)
+P:218      buf = ""
+P:219  
+P:220      def rd(t):
+P:221          nonlocal buf
+P:222          end = time.time() + t
+P:223          while time.time() < end:
+P:224              try:
+P:225                  r, _, _ = select.select([fd], [], [], 0.1)
+P:226              except OSError:
+P:227                  return
+P:228              if not r:
+P:229                  continue
+P:230              try:
+P:231                  d = os.read(fd, 65536)
+P:232              except OSError:
+P:233                  return
+P:234              if not d:
+P:235                  return
+P:236              buf += d.decode("utf-8", "replace")
+P:237  
+P:238      rd(settle)
+P:239      for c in cmds:
+P:240          try:
+P:241              os.write(fd, (c + "\n").encode())
+P:242          except OSError:
+P:243              break
+P:244          rd(0.35)
+P:245      rd(spin)
+P:246  
+P:247      #  *** POLL, NEVER SAMPLE ONCE.  MEASURED 2026-09-17, and the first run of this probe
+P:248      #  reported `alive' for a process that SIGABRT'd 0.6 s later. ***
+P:249      #  `rd()' RETURNS IMMEDIATELY ON EOF rather than waiting out its timeout, so `spin' --
+P:250      #  which exists precisely to give a dying child time to die -- is SKIPPED EXACTLY WHEN THE
+P:251      #  CHILD DIES.  A single waitpid(WNOHANG) then lands ~0 s after EOF while the kernel is
+P:252      #  still writing a 6 MB core, reports "still running", and THE KILL ROW GOES GREEN ON A
+P:253      #  LIVE HOST DEATH.  That is the false-green this probe exists to refuse.
+P:254      alive = True
+P:255      deadline = time.time() + 12.0
+P:256      while time.time() < deadline:
+P:257          try:
+P:258              wpid, status = os.waitpid(pid, os.WNOHANG)
+P:259          except ChildProcessError:
+P:260              alive = False
+P:261              break
+P:262          if wpid == pid:
+P:263              alive = False
+P:264              break
+P:265          time.sleep(0.05)
+P:266      if alive:
+P:267          try:
+P:268              os.kill(pid, signal.SIGKILL)
+P:269              os.waitpid(pid, 0)
+P:270          except OSError:
+P:271              pass
+P:272      try:
+P:273          os.close(fd)
+P:274      except OSError:
+P:275          pass
+P:276      return buf, alive
+P:277  
+P:278  
+P:279  def run_ops(ops, at=CODE):
+P:280      put = ["put w 0x%x, 0x%08x" % (at + 4 * i, op) for i, op in enumerate(ops)]
+P:281      put += ["put w 0x%x, 0x%08x" % (at + 4 * len(ops), OP_B_SELF),
+P:282              "put w 0x%x, 0x%08x" % (at + 4 * len(ops) + 4, OP_NOP)]
+P:283      return put + ["pc=0x%x" % at, "step %d" % len(ops)]
+P:284  
+P:285  
+P:286  def guest_load(addr):
+P:287      """A REAL guest instruction through real decode and real memory_rw -- rung 3.
+P:288      NOT `dump': all four ip30 registrations are DM_DEFAULT, so dump BYPASSES the handler
+P:289      and would prove nothing about the device at all."""
+P:290      return ["at=0x%x" % addr, "v0=0x%x" % SENTINEL] + run_ops([OP_LW_V0_AT]) + ["print v0"]
+P:291  
+P:292  
+P:293  def guest_store(addr, val):
+P:294      return ["a3=0x%x" % addr, "t0=0x%x" % val] + run_ops([OP_SW_T0_A3])
+P:295  
+P:296  
+P:297  def guest_store64(addr, val):
+P:298      """A 64-BIT store.  The ONLY way to reach imask0 bit 50 -- see OP_SD_T0_A3."""
+P:299      return ["a3=0x%x" % addr, "t0=0x%x" % val] + run_ops([OP_SD_T0_A3])
+P:300  
+P:301  
+P:302  def guest_load64(addr):
+P:303      return ["at=0x%x" % addr, "v0=0x%x" % SENTINEL] + run_ops([OP_LD_V0_AT]) + ["print v0"]
+P:304  
+P:305  
+P:306  def printed_last(t, reg):
+P:307      """*** THE LAST `print <reg>', NOT THE FIRST. ***  L1 repair 2026-09-17.
+P:308  
+P:309      `printed()' uses `re.search', which returns the FIRST match.  A row that issues
+P:310      MORE THAN ONE guest_load therefore reads the WRONG load's value, silently -- and
+P:311      `isr keep' does three commands ending in the read-back it actually wants.
+P:312  
+P:313      PRE-FIX THE BUG WAS INVISIBLE because the row's seeding write aborted and the row
+P:314      read `died'; the construction defect only surfaced once the fix let the session
+P:315      survive.  A row that cannot pass even on a correct fix is vacuous, so this is L1
+P:316      construction, repaired in-round rather than filed."""
+P:317      m = re.findall(r"print\s+%s\s*\n\s*(0x[0-9a-f]+)" % reg, t)
+P:318      return m[-1] if m else "ABSENT"
+P:319  
+P:320  
+P:321  def counted(t, needle):
+P:322      """*** HOW MANY TIMES DID THIS ANNOUNCE FIRE? ***  Added by the #531 class closure.
+P:323  
+P:324      Presence is not enough for the LATCH cells.  A defeated latch (mask -> 0) announces on
+P:325      EVERY access and a presence oracle reads `yes' either way -- the CHANNEL vacuity, one
+P:326      level along.  Only a COUNT varies under that mutant."""
+P:327      return t.count(needle)
+P:328  
+P:329  
+P:330  def printed(t, reg):
+P:331      """`print <reg>' emits a BARE 0x... -- `reg' is the command that carries the `r0 = ' prefix.
+P:332      Copied from regress/lca_isalane_probe.py rather than invented."""
+P:333      m = re.search(r"print\s+%s\s*\n\s*(0x[0-9a-f]+)" % reg, t)
+P:334      return m.group(1) if m else "ABSENT"
+P:335  
+P:336  
+P:337  # ------------------------------------------------------------------ CONTROL=DEAD set
+P:338  #  If any of these reds the vehicle is not the vehicle, and NO kill row may be scored.
+P:339  t, alive = session(["put w 0x%x, 0x%08x" % (A_RAM & 0xFFFFFFFF, RAMPLANT)]
+P:340                     + guest_load(A_RAM))
+P:341  live_got = printed(t, "v0") if alive else "died"
+P:342  row("live", live_got, "0x%x" % RAMPLANT,
+P:343      "LIVENESS: a known value planted in RAM returns through a guest load. If this reds, plant "
+P:344      "or step or print never executed and nothing below is evidence.")
+P:345  
+P:346  t, alive = session(guest_load(A_BANKCFG))
+P:347  devsig_got = printed(t, "v0") if alive else "died"
+P:348  row("devsig", devsig_got, "0xffffffff80010000",
+P:349      "DEVICE-SIGNATURE: case 0x20 answers 0x80010000 and `lw' SIGN-EXTENDS it to "
+P:350      "0xffffffff80010000 on this 64-bit R10000 -- a value RAM cannot produce. One control is "
+P:351      "NOT enough: the footbridge probe's first draft returned 0x0 everywhere with its RAM "
+P:352      "control green.")
+P:353  
+P:354  # ------------------------------------------------------------------ accept side
+P:355  t, alive = session(guest_store(A_R10018, 0xDEADBEEF) + guest_load(A_R10018))
+P:356  row("acc 18", (printed(t, "v0") if alive else "died"), "0xffffffffdeadbeef",
+P:357      "case 0x10018 is IMPLEMENTED r/w (the PROM complains without it). An accept control, and "
+P:358      "the de-escalation clause's accept row for this arm.  *** THE WANT IS SIGN-EXTENDED: `lw' sign-extends on this 64-bit R10000, so 0xdeadbeef comes back as 0xffffffffdeadbeef.  My first oracle wanted the truncated form and reddened a CORRECT device -- the apparatus was wrong, not the model. ***")
+P:359  
+P:360  t, alive = session(guest_load(A_ISR))
+P:361  row("acc 30 rd", ("alive" if alive else "died"), "alive",
+P:362      "case 0x10030 IS writeflag-tested, so its READ returns d->isr and must NOT die. This is "
+P:363      "the row that proves the three arms are NOT uniform.")
+P:364  
+P:365  #  ---------------------------------------------------------------- de-escalation accept rows
+P:366  #  A fatal->survive fix DELETES the accidental tripwire that made guard growth self-announcing,
+P:367  #  so the detector shipping WITH the fix owes the ACCEPT SIDE of every predicate that used to
+P:368  #  gate death.  These are owed under EVERY candidate member, which is why they are written
+P:369  #  before the disposition is settled -- they cannot be wasted work.
+P:370  #  *** THIS ROW EXPECTED A COUNTER NOT TO COUNT, SO IT WAS RED ON A CORRECT BUILD.  L1
+P:371  #  construction repair, 2026-09-17, found by running the pre-fix baseline. ***
+P:372  #
+P:373  #  Measured: stored 0x1234, read back 0x161c -- and 0x161c - 0x1234 = 0x3e8 = 1000 EXACTLY,
+P:374  #  which is `d->reg_0x20000 += 1000' in DEVICE_TICK.  The DEVICE was right and the ROW was
+P:375  #  wrong: as written it manufactured a phantom failure on a correct build, so it could never
+P:376  #  signal the defect this probe exists for.  (The file's own `/*  A counter  */' comment on
+P:377  #  case 0x20000 says so; the access arm alone reads like a plain r/w register.)
+P:378  #
+P:379  #  THE REPAIRED ORACLE IS STRICTLY STRONGER THAN THE ONE IT REPLACES.  The counter is always
+P:380  #  a multiple of 1000 (it starts at 0 and only ever += 1000), and 0x1234 = 4660 is NOT a
+P:381  #  multiple of 1000 -- so:
+P:382  #      store LANDED    -> readback - 0x1234 == N*1000, an exact multiple
+P:383  #      store LOST      -> readback is some M*1000, and M*1000 - 4660 is NEVER a multiple
+P:384  #  The row therefore pins THAT THE STORE REACHED reg_0x20000, which the old literal compare
+P:385  #  only did by accident on a tickless run, while tolerating any number of ticks.
+P:386  t, alive = session(guest_store(A_C20000, 0x1234) + guest_load(A_C20000))
+P:387  _v20000 = printed(t, "v0")
+P:388  _got20000 = "ABSENT"
+P:389  if alive and _v20000 != "ABSENT":
+P:390      _d20000 = int(_v20000, 16) - 0x1234
+P:391      _got20000 = ("stored+N*1000" if (_d20000 >= 0 and _d20000 % 1000 == 0)
+P:392                   else _v20000)
+P:393  row("acc 20000", (_got20000 if alive else "died"), "stored+N*1000",
+P:394      "case 0x20000 is writeflag-tested r/w AND is incremented 1000 per DEVICE_TICK, so the "
+P:395      "oracle pins that the STORE LANDED (the residue is an exact multiple of the tick stride) "
+P:396      "rather than that a counter stood still.  A neighbour that must keep working.")
+P:397  
+P:398  t, alive = session(guest_store(A_C30000, 0x5678) + guest_load(A_C30000))
+P:399  row("acc 30000", (printed(t, "v0") if alive else "died"), "0x5678",
+P:400      "case 0x30000, writeflag-tested r/w. Second neighbour.")
+P:401  
+P:402  #  *** THIS IS **THE** ACCEPT ROW FOR THE TICK, not merely a neighbour: the write to imask0 is
+P:403  #  precisely what used to ARM the host death at :78, so it is the predicate that gated death. ***
+P:404  #  *** THE SENTENCE THAT STOOD HERE WAS MEASURED FALSE THE SAME DAY.  It read: "Safe under
+P:405  #  `step' ONLY: tickshift is 16, so the tick fires every 65536 cycles and a handful of steps
+P:406  #  cannot reach it."  A HANDFUL OF STEPS REACHES IT ON THE FIRST ONE. ***
+P:407  #  `machine_add_tickfunction' sets `ticks_till_next[n] = 0' (machine.c:354) while
+P:408  #  `ticks_reset_value[n] = 1 << tickshift' (:355), and `machine_run()' decrements then fires
+P:409  #  while <= 0 -- so THE FIRST machine_run OF ANY SESSION FIRES EVERY TICK FUNCTION.
+P:410  #  THIS ROW IS STILL SAFE -- BUT ONLY ONE OF THE TWO REASONS BELOW IS LOAD-BEARING, AND
+P:411  #  SAYING OTHERWISE INVERTS A HAZARD INTO A SAFETY PROPERTY (Fable adjudication, same day):
+P:412  #  *** REASON (2) MISDIRECTS.  This row's value is 1<<18 = 0x40000, which has NO high bits
+P:413  #  at ANY store width -- so width is irrelevant to THIS row, and reason (1) alone carries
+P:414  #  it.  Written as a pair, `sw cannot set bit 50' reads as a general safety invariant for
+P:415  #  imask0, AND IT IS NOT ONE: THE DEATH IS REACHABLE, BY `sd 1<<50'. ***
+P:416  #  Keep both facts, but know which is which: (1) is why this row is safe; (2) is why a
+P:417  #  COPY of it would be inert as a kill row.  They are a safety reason and a HAZARD.
+P:418  #    (1) it writes bit 18, not bit 50, so the guarded branch is never armed; and
+P:419  #    (2) *** IT USES `sw', AND A 4-BYTE STORE CANNOT SET BIT 50 AT ALL. ***  `case 0x10000'
+P:420  #        does `d->imask0 = idata' with `idata = memory_readmax64(cpu, data, len)', so a
+P:421  #        word store caps idata below 2^32.  ARMING THE TICK REQUIRES `sd' (0xFCE80000).
+P:422  #  *** AND THAT IS A FALSE-GREEN TRAP FOR THE NEXT PERSON: `OP_SW_T0_A3' IS THE ONLY STORE
+P:423  #  HELPER IN THIS FILE, so a tick row copy-pasted from here would arm NOTHING, stay ALIVE,
+P:424  #  and score GREEN ON A LIVE HOST DEATH. ***  Measured: sw 0xffffffff + 70000 steps -> alive.
+P:425  #  The tick witness lives in tick_20260917/ip30_tick_probe.py, which uses `sd'.
+P:426  t, alive = session(guest_store(A_IMASK0, 1 << 18) + guest_load(A_IMASK0))
+P:427  row("acc imask", (printed(t, "v0") if alive else "died"), "0x40000",
+P:428      "case 0x10000 (imask0) accepts and reads back. THE accept row for the tick predicate -- "
+P:429      "bit 18 is used, NOT bit 50, so the row does not arm the death it is pinning.")
+P:430  
+P:431  # ------------------------------------------------------------------ the kill rows
+P:432  #  EOF ALONE => RED.  The text is diagnosis.
+P:433  for nm, addr, note in (
+P:434      ("kill 20 rd", A_SETISR,
+P:435       "*** A GUEST **LOAD** AT 0x0ff10020. case 0x10020 has NO writeflag test and runs "
+P:436       "`d->isr = idata' FIRST with idata==0, so this is predicted to ZERO THE ISR and THEN "
+P:437       "abort() -- corruption AND host death in one arm. ***"),
+P:438      ("kill 28 rd", A_CLRISR,
+P:439       "case 0x10028, same missing writeflag test; `d->isr &= ~idata' is a no-op at idata==0, "
+P:440       "then abort()."),
+P:441  ):
+P:442      t, alive = session(guest_load(addr))
+P:443      row(nm, ("alive" if alive else "DEAD"), "alive", note)
+P:444      #  *** RE-PINNED 2026-09-17 ONTO THE SHIPPED #531 TEXT.  The old literal was the
+P:445      #  PRE-FIX message `IP30 legacy interrupt rewrite: TODO', which #531 replaces with a
+P:446      #  latched announce -- so this row pinned a string the fix legitimately renames.
+P:447      #  ORDER DISCRIMINATOR (the oracle-correction rule): the re-pin is shown RED on a
+P:448      #  PRE-FIX binary before being trusted -- see artifacts/ip30abortkill/REPIN_*.out.
+P:449      #  *** WANT "no" SINCE 2026-09-18: the read arms adopted MEMBER 2, SILENT DECLINE, on the
+P:450      #  fable5 ruling.  These rows previously wanted "yes" and pinned an announce that was a
+P:451      #  FALSE MESSAGE (a read is not a rewrite) and a BIT THIEF (one benign read consumed the
+P:452      #  shared IP30_W_ISR latch and silenced the genuine write-side diagnostic for the device's
+P:453      #  life).  They now pin the SILENCE, which is the repair's own observable. ***
+P:454      row(nm + " txt", ("yes" if "sgi_ip30: interrupt-status rewrite not implemented" in t else "no"), "no",
+P:455          "DIAGNOSIS ONLY, never half the trigger: a reworded-message mutant still abort()s, "
+P:456          "gives EOF with no text, and an EOF-AND-text oracle would certify it GREEN.")
+P:457  
+P:458  t, alive = session(guest_store(A_ISR, 0x1))
+P:459  row("kill 30 wr", ("alive" if alive else "DEAD"), "alive",
+P:460      "case 0x10030's WRITE arm aborts while its read is serviced -- the asymmetry, measured.")
+P:461  #  Closes M_latch_silent_30: deleting the 0x10030 write-arm fatal() while keeping survival.
+P:462  #
+P:463  #  *** THIS ROW SAT 65 LINES LOWER AND READ `isr keep''s TRANSCRIPT, WHICH WRITES 0x10020 AND
+P:464  #  NEVER TOUCHES 0x10030.  Found by the pass-2 agy seat; L1, repaired in-round. ***  It is the
+P:465  #  THIRD rolling-`t' defect in this one probe, and the one the output could never reveal:
+P:466  #  ALL FIVE ISR announces are BYTE-IDENTICAL, so the row read `yes' from the 0x10020 arm and
+P:467  #  was GREEN while blind to its own named mutant.  The shared message is correct design (see
+P:468  #  the latch comment in dev_sgi_ip30.c) and is exactly what made this invisible.
+P:469  row("kill 30 txt", ("yes" if "sgi_ip30: interrupt-status rewrite not implemented" in t else "no"), "yes",
+P:470      "DIAGNOSIS sibling for the 0x10030 WRITE arm, bound to THIS session's 0x10030 store.  "
+P:471      "`kill 20/28 rd txt' never visit that arm, so without this a mutant can delete its announce "
+P:472      "silently.  Never half a trigger.")
+P:473  
+P:474  #  ------------------------------------------------- rows the PROBE ATTACK proved missing
+P:475  #  Every one of these closes a mutant that scored 12/12 against the probe without it.  They
+P:476  #  are L1 CONSTRUCTION -- found while this is still a draft, which is the whole reason the
+P:477  #  detector was attacked BEFORE the fix shipped.
+P:478  
+P:479  #  *** THE TICK ROW.  Closes M_tick_abort (which is ALSO clause (b) at site 4 -- a VERBATIM
+P:480  #  REINSTATEMENT the probe could not see) and M_tick_bit49. ***  It uses `sd' because `sw'
+P:481  #  cannot set bit 50 at all, and `step 1' suffices because machine_add_tickfunction sets
+P:482  #  ticks_till_next[n] = 0 (machine.c:354), so the FIRST machine_run fires every tick function.
+P:483  #  *** THE CHANNEL, AND WHY SURVIVAL ALONE IS NOT ONE POST-FIX.  ***  The pass-2 codex seat
+P:484  #  measured that after de-fatalisation `tick 50' and `tick 49' BOTH read `alive', so the pair
+P:485  #  that discriminated pre-fix (ALIVE against DEAD) stops discriminating on the shipped build --
+P:486  #  the CHANNEL check's "a row whose named channel cannot vary under its named mutant is vacuous
+P:487  #  by construction", arriving because the fix removed the channel the rows were built on.
+P:488  #  The channel that DOES vary post-fix is the ANNOUNCE, so the pair is re-aimed onto it.
+P:489  TICKMSG = "sgi_ip30: timer interrupt delivery not implemented"
+P:490  ISRMSG  = "sgi_ip30: interrupt-status rewrite not implemented"
+P:491  
+P:492  t, alive = session(guest_store64(A_IMASK0, 1 << 50) + ["step 1"])
+P:493  row("tick 50", ("alive" if alive else "DEAD"), "alive",
+P:494      "*** ARM imask0 BIT 50 WITH `sd', THEN ONE STEP. ***  Pre-fix the DEVICE_TICK abort fires "
+P:495      "and the host dies; post-fix it must survive with a latched announce.  `sw' here would arm "
+P:496      "nothing and score GREEN on a live death -- that is the trap this row exists to avoid.")
+P:497  #  Pre-fix this reads `no': HEAD prints `IP30 legacy interrupt rewrite: TODO' and aborts, so the
+P:498  #  row is RED on the committed build and green only once the fix renames and latches it.
+P:499  row("tick 50 txt", ("yes" if TICKMSG in t else "no"), "yes",
+P:500      "*** THE POST-FIX HALF OF THE DISCRIMINATOR. ***  `tick 50' pins that the host LIVES; this "
+P:501      "pins that the arm still ANNOUNCES.  Without it a mutant deleting the tick fatal() leaves "
+P:502      "both tick rows green, and so does one moving the guard to bit 49.")
+P:503  #  The DISCRIMINATOR: same store, same step, bit 49 instead of 50.  Without it, `tick 50' could
+P:504  #  be passing for any reason at all and M_tick_bit49 walks free.
+P:505  t, alive = session(guest_store64(A_IMASK0, 1 << 49) + ["step 1"])
+P:506  row("tick 49", (("yes" if TICKMSG in t else "no") if alive else "died"), "no",
+P:507      "DISCRIMINATOR for `tick 50': bit 49 is NOT the guarded bit, so the arm must stay SILENT on "
+P:508      "BOTH builds.  Survival is still pinned -- a dead host reads `died', not `no'.  Re-aimed "
+P:509      "from a bare survival oracle, which post-fix could not vary: see the CHANNEL note above.  "
+P:510      "A mutant moving the guard to 1<<49 makes this announce and reds the row.")
+P:511  
+P:512  #  *** THE WRITE ARMS.  The probe only ever LOADED at 0x10020/0x10028, so M_wf20_abort_wr and
+P:513  #  M_wf28_abort_wr -- abort() kept INSIDE the write arm -- were invisible. ***
+P:514  for nm, addr in (("kill 20 wr", A_SETISR), ("kill 28 wr", A_CLRISR)):
+P:515      t, alive = session(guest_store(addr, 0x1))
+P:516      row(nm, ("alive" if alive else "DEAD"), "alive",
+P:517          "A guest WRITE at this offset.  Pre-fix it reaches the same abort(); post-fix it must "
+P:518          "survive.  Without this row a fix that adds the writeflag test and leaves abort() in "
+P:519          "the WRITE arm scores a clean sweep.")
+P:520      #  *** CLASS CLOSURE.  These two sessions are SINGLE-ACCESS, which is the only shape that
+P:521      #  can attribute an announce to one arm -- all five ISR sites print one identical string
+P:522      #  behind one shared bit.  Without these, M9_silent20wr and M5_silent28wr (drop the announce
+P:523      #  in these very arms) BOTH scored 19/19 against the measuring seat's table. ***
+P:524      row(nm + " txt", ("yes" if ISRMSG in t else "no"), "yes",
+P:525          "DIAGNOSIS for the " + nm[5:7] + " WRITE arm specifically.  Single-access session, so a "
+P:526          "`yes' here can only have come from THIS arm.  Deleting this arm's announce reds it.")
+P:527  
+P:528  #  *** THE asicindexcase ROW.  Closes M_wf20_store_out -- the writeflag wrapping only the
+P:529  #  ANNOUNCE while `d->isr = idata' still runs on a LOAD.  That mutant leaves the host ALIVE and
+P:530  #  the guest's read still zeroes the ISR, which is WORSE than the defect being fixed. ***
+P:531  #  PRE-FIX THIS ROW READS `dead': the seeding write at 0x10020 itself aborts.  That is correct
+P:532  #  and is part of the reproduction, not an apparatus failure.
+P:533  t, alive = session(guest_store(A_SETISR, 0x5a5a)      # seed ISR through the Set arm
+P:534                     + guest_load(A_SETISR)             # the LOAD that must not clobber it
+P:535                     + guest_load(A_ISR))               # read it back through the read-only ISR
+P:536  row("isr keep", (printed_last(t, "v0") if alive else "died"), "0x5a5a",
+P:537      "*** ISR UNCHANGED ACROSS A LOAD AT 0x10020. ***  Seed via the Set arm, load at 0x10020, "
+P:538      "read back at 0x10030 (heart.h: isr is the read-only status register).  If a fix declines "
+P:539      "the ANNOUNCE but still runs the store on a read, this row reds while every survival row "
+P:540      "stays green.  Pre-fix it reads `died' because the seeding write aborts -- that is the "
+P:541      "reproduction, not a broken row.")
+P:542  
+P:543  #  *** THE 0x10028 STORE IS THE FIX'S REPAIR AT THAT SITE AND NO ROW OBSERVED IT -- a clause-(d)
+P:544  #  CLEAN SWEEP, L2, repaired in-round. ***  Four seats converged independently (deepseek, glm,
+P:545  #  kimi-substitute, minimax): the member-4 ACCEPT at 0x10028 KEEPS `d->isr &= ~idata', and (d)
+P:546  #  says keep the guard and null the repair -- which deletes exactly that line.  `kill 28 wr'
+P:547  #  pins only that the host survives, and a deleted store survives perfectly well.
+P:548  t, alive = session(guest_store(A_SETISR, 0x5a5a)      # seed ISR = 0x5a5a through the Set arm
+P:549                     + guest_store(A_CLRISR, 0x0a0a)    # clear those bits through the Clear arm
+P:550                     + guest_load(A_ISR))               # read back through the read-only ISR
+P:551  row("isr clr", (printed_last(t, "v0") if alive else "died"), "0x5050",
+P:552      "*** 0x5a5a & ~0x0a0a = 0x5050. ***  Pins that the Clear-ISR store STILL RUNS post-fix.  "
+P:553      "Delete `d->isr &= ~idata' and the readback stays 0x5a5a, reddening this row -- no survival "
+P:554      "row in the probe can see that edit.  Pre-fix the seeding write aborts, so this reads `died'.")
+P:555  
+P:556  #  *** THE DROPPED CLEAR-ON-WRITE AT 0x10030 -- named by agy, glm and the kimi substitute, and
+P:557  #  the ONLY row that pins it stays dropped. ***  heart.h marks `isr' read-only, so this round
+P:558  #  DELETED the clear.  Re-inserting it is a (b)-adjacent mutant that every survival row passes.
+P:559  t, alive = session(guest_store(A_SETISR, 0x5a5a)      # seed ISR = 0x5a5a
+P:560                     + guest_store(A_ISR, 0x1234)       # write the READ-ONLY register
+P:561                     + guest_load(A_ISR))               # it must come back UNTOUCHED
+P:562  row("isr drop 30", (printed_last(t, "v0") if alive else "died"), "0x5a5a",
+P:563      "*** THE WRITE MUST BE DISCARDED. ***  Re-inserting `d->isr &= ~idata' here gives "
+P:564      "0x5a5a & ~0x1234 = 0x484a and reds this row.  `kill 30 wr' pins survival only and is "
+P:565      "structurally blind to it -- the refusal-EFFECT channel, not the refusal.")
+P:566  
+P:567  #  =====================================================================================
+P:568  #  THE LATCH-MECHANISM CELLS.  Every row above asks WHETHER an arm announced; these ask
+P:569  #  HOW MANY TIMES and FROM WHICH BIT.  The measuring seat built two one-character mutants
+P:570  #  that no presence oracle can see, and both scored 19/19.
+P:571  #  =====================================================================================
+P:572  
+P:573  #  *** CROSS-BIT.  Closes the bit-collision mutant (IP30_W_ISR (1<<1) -> (1<<0)). ***
+P:574  #  Recipe MEASURED by the opus5 seat, and its first attempt was a DEFECTIVE APPARATUS worth
+P:575  #  recording: machine_add_tickfunction sets ticks_till_next[n] = 0, so the tick's one free
+P:576  #  firing lands on the session's FIRST machine_run -- a seeding store BEFORE the arm consumes
+P:577  #  it, and the row then says nothing.  ARM BIT 50 FIRST.
+P:578  t, alive = session(guest_store64(A_IMASK0, 1 << 50) + ["step 1"] + guest_store(A_SETISR, 0x1))
+P:579  row("xbit isr", (str(counted(t, ISRMSG)) if alive else "died"), "1",
+P:580      "*** TICK FIRST, THEN AN ISR ACCESS, IN ONE DEVICE LIFETIME. ***  Both classes must "
+P:581      "announce, from their OWN bits.  Collapse IP30_W_ISR onto IP30_W_TICK and the tick consumes "
+P:582      "the bit first, so the ISR arm falls silent and this reads 0.  No fresh-process row can see "
+P:583      "that mutant at all -- it needs both announce classes in ONE lifetime.")
+P:584  row("xbit tick", (str(counted(t, TICKMSG)) if alive else "died"), "1",
+P:585      "The other half of the same session: the TICK announce is still exactly one.  Together with "
+P:586      "`xbit isr' this pins that the two bits are INDEPENDENT, which is the claim the round makes "
+P:587      "in product code and which nothing measured before now.")
+P:588  
+P:589  #  *** ANNOUNCE COUNT.  Closes the latch-defeat mutant ((1<<1) -> (0<<1)). ***
+P:590  #  A presence oracle reads `yes' whether the latch works or not; only a COUNT varies.
+P:591  #  *** RE-AIMED 2026-09-18 ONTO THE WRITE ARMS, BECAUSE THE F13 SILENT-DECLINE REPAIR DESTROYED
+P:592  #  THE CHANNEL THIS ROW WAS BUILT ON.  Measured: it read got=0 want=1 the moment the read arms
+P:593  #  went silent -- vacuous by construction, exactly as its own CHANNEL note warns. ***
+P:594  #
+P:595  #  THAT IS THE THIRD TIME IN THIS ROUND A FIX HAS REMOVED THE CHANNEL A ROW RESTED ON: the tick
+P:596  #  pair when de-fatalisation removed the DEATH channel, `kill 20/28 rd txt' when the silent
+P:597  #  decline removed the ANNOUNCE, and now this.  The general form is worth more than the fix:
+P:598  #  *a repair does not only have to be correct, it has to be checked against every row whose
+P:599  #  oracle reads the channel it changes* -- and a row so invalidated goes GREEN or RED for a
+P:600  #  reason unrelated to the mutant it names.
+P:601  #
+P:602  #  Two WRITE accesses still announce (0x10020-WR and 0x10028-WR are member-4 ACCEPT arms that
+P:603  #  keep their store AND announce), so the latch-defeat channel survives there.
+P:604  t, alive = session(guest_store(A_SETISR, 0x1) + guest_store(A_CLRISR, 0x1))
+P:605  row("latch 1x", (str(counted(t, ISRMSG)) if alive else "died"), "1",
+P:606      "TWO declined ISR accesses, ONE announce -- that is what the unqualified `(once)' marker "
+P:607      "in the message text CLAIMS, so this row is what makes the marker true rather than decorative.  "
+P:608      "Defeat the latch and it reads 2.")
+P:609  
+P:610  #  *** THE DECLINED READ'S VALUE.  Closes the mirror mutant grok named at design time. ***
+P:611  t, alive = session(guest_store(A_SETISR, 0x5a5a) + guest_load(A_SETISR))
+P:612  row("isr 20 rd val", (printed_last(t, "v0") if alive else "died"), "0x0",
+P:613      "A declined READ at 0x10020 returns ZERO, not a mirror of d->isr.  `odata = d->isr' here "
+P:614      "would read 0x5a5a and red this row.  The ISR is seeded NON-ZERO on purpose: against a "
+P:615      "zero ISR the mutant and the fix are indistinguishable, which is how a value row goes "
+P:616      "vacuous without looking it.")
+P:617  
+P:618  #  *** SIBLING PARITY -- THE SYMMETRIC CELL, AND ITS ABSENCE WAS A FLOOR BREACH IN THE CLASS
+P:619  #  CLOSURE ITSELF.  Required by the agy seat; grok independently named it and diagnosed the
+P:620  #  cause. ***  The two READ arms are structurally identical -- both decline, both announce,
+P:621  #  both leave odata 0 -- so closing the declined-VALUE cell at 0x10020 and not at 0x10028 is
+P:622  #  the #499 shape exactly: repaired at the address the mutant used, symmetric cell left open.
+P:623  #
+P:624  #  THE CAUSE IS WORTH MORE THAN THE ROW, and it was in the round's own pre-table block:
+P:625  #  PRETABLE.out listed BOTH read arms as "decline, no value to pin".  *** A DECLINE HAS A
+P:626  #  VALUE, AND IT IS 0. ***  That framing is what made the miss mechanical -- the enumeration
+P:627  #  asked which arms ANNOUNCE and treated a refusal as having no observable, when the refusal's
+P:628  #  own returned value is exactly the channel M10 travels on.
+P:629  t, alive = session(guest_store(A_SETISR, 0x5a5a) + guest_load(A_CLRISR))
+P:630  row("isr 28 rd val", (printed_last(t, "v0") if alive else "died"), "0x0",
+P:631      "A declined READ at 0x10028 returns ZERO, not a mirror of d->isr -- the sibling of "
+P:632      "`isr 20 rd val'.  Seed via 0x10020 so the ISR is NON-ZERO: against a zero ISR the mirror "
+P:633      "mutant and the fix are indistinguishable, which is how a value row goes vacuous without "
+P:634      "looking it.  `kill 28 rd txt' stays GREEN under that mutant (the announce still fires), "
+P:635      "so no other row in this probe can see it.")
+P:636  
+P:637  #  =====================================================================================
+P:638  #  THE LATCH-AXIS CLASS CLOSURE.  Obligation 5 of the fable5 adjudication, 2026-09-18.
+P:639  #
+P:640  #  *** THE LATCH IS NOT A SHARED RESOURCE WITH TWO FAILURE MODES.  It is one
+P:641  #  `d->warned |= IP30_W_*' beside EVERY announce -- the same duplication the ANNOUNCE axis was
+P:642  #  decomposed for, and leaving it atomic is how six mutants swept a 27-row instrument. ***
+P:643  #
+P:644  #  THE SPACE, enumerated from the function's own inputs:
+P:645  #      {4 announce sites} x {announce fires, latch sets}  +  {2 collision directions} = TEN.
+P:646  #  It was FOURTEEN before the F13 silent-decline repair removed the two READ-arm announces --
+P:647  #  resolving that design question REMOVED four cells of detector work rather than adding them.
+P:648  #
+P:649  #  ALREADY CLOSED (6): the four announce rows (kill 20 wr txt, kill 28 wr txt, kill 30 txt,
+P:650  #  tick 50 txt), the 0x10020-WR latch-set (latch 1x), and the TICK->ISR collision (xbit).
+P:651  #  CLOSED HERE (4): the remaining three latch-set cells and the reverse collision direction.
+P:652  #
+P:653  #  *** THE SECOND TICK IS FORCEABLE, AND THAT WAS MEASURED RATHER THAN ASSUMED. ***  The
+P:654  #  adjudicator allowed an UNBUILDABLE cell to be disclosed with its apparatus reason, but only
+P:655  #  after being measured unbuildable.  MEASURED, and the artifact is named because a cited
+P:656  #  measurement must live at a durable path -- regress/artifacts/ip30abortkill/
+P:657  #  tickcount_20260918.out, sentinel TICKCOUNT_DONE, REPLICATED on an independent re-run.
+P:658  #  Counting ticks by the unconditional `reg_0x20000 += 1000':
+P:659  #        step 1 / 2 / 3 / 8 / 1000 -> ONE tick      step 65536 / 70000 -> TWO
+P:660  #        step 140000 -> THREE
+P:661  #  *** STOPPING AT `step 8' WOULD HAVE DISCLOSED TWO BUILDABLE CELLS AS UNBUILDABLE. ***  The
+P:662  #  threshold is ~65536 because machine.c decrements ticks_till_next by ONE per single-step.
+P:663  #  So these rows are SLOW by construction, not by accident; that is the price of the cell.
+P:664  #  =====================================================================================
+P:665  
+P:666  #  Closes MB/MF/MG-shaped mutants at the two remaining ISR write arms: delete that arm's
+P:667  #  `d->warned |= IP30_W_ISR' and it announces on EVERY access instead of once.
+P:668  for _nm, _a in (("latch 28wr", A_CLRISR), ("latch 30wr", A_ISR)):
+P:669      t, alive = session(guest_store(_a, 0x1) + guest_store(_a, 0x1))
+P:670      row(_nm, (str(counted(t, ISRMSG)) if alive else "died"), "1",
+P:671          "TWO accesses at THIS ARM ALONE, so the count attributes to it.  `latch 1x' cannot: it "
+P:672          "visits 0x10020 then 0x10028 and the FIRST access latches, leaving the second arm's "
+P:673          "latch-set never load-bearing -- which is why MF_nolatchset28rd escaped 27/27.")
+P:674  
+P:675  #  Closes ME_nolatchsettick -- the worst of the eight: one guest `sd' arming imask0 bit 50
+P:676  #  would otherwise give AN ANNOUNCE PER TICK, FOREVER.  Guest-drivable floodclass.
+P:677  t, alive = session(guest_store64(A_IMASK0, 1 << 50) + ["step 65536"])
+P:678  row("latch tick", (str(counted(t, TICKMSG)) if alive else "died"), "1",
+P:679      "*** TWO TICKS IN ONE LIFETIME (step 65536 -- MEASURED to fire exactly two). ***  Delete the "
+P:680      "tick's `d->warned |= IP30_W_TICK' and this reads 2, then 3, then forever.  No single-tick "
+P:681      "row can see it: with one tick the latched and unlatched builds are identical.")
+P:682  
+P:683  #  Closes MA_assign20wr -- the ISR->TICK collision direction, which `xbit' runs BACKWARDS.
+P:684  t, alive = session(guest_store64(A_IMASK0, 1 << 50) + ["step 1"]
+P:685                     + guest_store(A_SETISR, 0x1) + ["step 65536"])
+P:686  row("xbit rev", (str(counted(t, TICKMSG)) if alive else "died"), "1",
+P:687      "*** TICK -> ISR -> TICK: the order the product comment's own hazard needs, and the "
+P:688      "OPPOSITE of `xbit'. ***  Under `|=' -> `=' at the ISR arm the assignment CLOBBERS the tick "
+P:689      "bit, so the second tick announces again and this reads 2.  `xbit' runs tick->ISR and stops, "
+P:690      "so it cannot see the clobber -- which is why MA, a ONE-CHARACTER edit, scored 27/27.")
+P:691  
+P:692  #  *** THE MIRROR OF `xbit rev', AND ITS ABSENCE WAS MEASURED: V2_assigntick SCORED 32/32
+P:693  #  AGAINST A CLOSURE THAT CLAIMED BOTH COLLISION DIRECTIONS. ***
+P:694  #
+P:695  #  A CLOBBER CAN ONLY BITE IF THE CLOBBERED CLASS'S BIT WAS ALREADY SET.  `xbit isr' runs
+P:696  #  TICK -> ISR, so when the tick assigns, the ISR bit has never been set, nothing is lost, and
+P:697  #  the row is green on the mutant.  Seeing it needs ISR FIRST:
+P:698  #
+P:699  #      ISR announces -> warned = IP30_W_ISR
+P:700  #      tick ASSIGNS  -> warned = IP30_W_TICK   <- the ISR bit is LOST
+P:701  #      ISR again     -> the guard passes again -> TWO announces where one is correct
+P:702  #
+P:703  #  `xbit rev' is the same idea with the operands swapped (ISR clobbers TICK).  Building one
+P:704  #  direction and not its mirror is the #499 shape -- repaired at the address the mutant used,
+P:705  #  symmetric cell left open -- and it is the SAME defect the opus5 seat diagnosed in the
+P:706  #  ORIGINAL `xbit', reproduced inside the repair for it.
+P:707  #
+P:708  #  The 65536 steps are load-bearing: the tick must fire BETWEEN the two ISR accesses, and the
+P:709  #  first tick of a session is consumed by the first `run_ops'.  Measured, not assumed.
+P:710  t, alive = session(guest_store(A_SETISR, 0x1)
+P:711                     + guest_store64(A_IMASK0, 1 << 50) + ["step 65536"]
+P:712                     + guest_store(A_SETISR, 0x1))
+P:713  row("xbit rev2", (str(counted(t, ISRMSG)) if alive else "died"), "1",
+P:714      "*** ISR -> TICK -> ISR: the mirror of `xbit rev', and the only order in which a TICK-side "
+P:715      "assignment can be seen to clobber the ISR bit. ***  Correct build announces ONCE (the "
+P:716      "latch holds across the tick); make the tick's latch set an ASSIGNMENT and the second ISR "
+P:717      "access announces again, reading 2.  `xbit isr' runs tick-first and is structurally blind "
+P:718      "to it -- V2_assigntick scored 32/32 against it.")
+P:719  
+P:720  
+P:721  # ------------------------------------------------------------------ report
+P:722  CONTROL = "OK"
+P:723  for nm, got, want, _ in rows:
+P:724      if nm in ("live", "devsig") and got != want:
+P:725          CONTROL = "DEAD"
+P:726  
+P:727  print("ip30_abort_probe -- binary=%s label=%s machine=sgi/ip30" % (BIN, LABEL))
+P:728  print("IP30ABORT_CONTROL=%s" % CONTROL)
+P:729  if CONTROL == "DEAD":
+P:730      print("IP30ABORT_RESULT=0/0")
+P:731      print("  *** SETUP FAILED -- the vehicle is not the vehicle. NOT 'no defect'. ***")
+P:732      for nm, got, want, note in rows:
+P:733          print("  %-12s got=%-12s want=%-12s %s" % (nm, got, want, note[:60]))
+P:734      print("IP30ABORT_DONE")
+P:735      raise SystemExit(0)
+P:736  
+P:737  n = 0
+P:738  for nm, got, want, note in rows:
+P:739      ok = (got == want)
+P:740      n += 1 if ok else 0
+P:741      print("  %-12s got=%-12s want=%-12s %s  %s" % (nm, got, want, "ok" if ok else "FAIL", note[:70]))
+P:742  print("IP30ABORT_RESULT=%d/%d" % (n, len(rows)))
+P:743  print("IP30ABORT_DONE")
+
+==== FILE X = check_probe_wiring.py (commit copy), ip30 lines ====
+X:1  line 652:         (CLASS_TOOL, "#533 kill-table mutant applicator (M_head/M_0x16/M_0x2d/M_both/M_above)"),
+X:2  line 653:     "artifacts/landiskaux/detector_20260918/landisk_aux_probe.frozen.py":
+X:3  line 654:         (CLASS_TOOL, "#533 frozen instrument the kill table ran against"),
+X:4  line 655: 
+X:5  line 656:     # -- #531 ip30abortkill ------------------------------------------------------------
+X:6  line 657:     #  ONE detector and twenty-two tools.  The tools are kill-table drivers, FROZEN probe
+X:7  line 658:     #  copies (the instrument a given table actually ran, per the frozen-copy rule) and
+X:8  line 659:     #  one-off measurement scripts.  They are committed because the round's records CITE
+X:9  line 660:     #  them, and a measurement cited in a durable record must live at a durable path.
+X:10  [... lines 661-663 not shown ...]
+X:11  line 664:     #  record is what made the gap visible.  That is the manifest working as designed (an
+X:12  line 665:     #  unlisted file is RED so a new detector cannot arrive unnoticed), not a defect. ***
+X:13  line 666:     #  [#566, 2026-10-18] WIRED: gate_arm.sh (gate 14) runs it and scores every row by name, with its run,
+X:14  line 667:     #  correct, emitted, green and red counts pinned; its EXEMPT entry is DISCHARGED below.
+X:15  line 668:     "artifacts/ip30abortkill/ip30_abort_probe.py":
+X:16  line 669:         (CLASS_DETECTOR, "#531 ip30abortkill: four guest-reachable abort() calls in dev_sgi_ip30.c. "
+X:17  line 670:                          "33 rows, base 33/33, GREEN once the fix is in -- a DETECTOR by this file's own "
+X:18  line 671:                          "definition at the top, and labelled one rather than filed as a `witness' to "
+X:19  line 672:                          "dodge the gate requirement.  *** RAN IN NO GATE until #566 (2026-10-18) wired it into "
+X:20  line 673:                          "gate_arm.sh; its EXEMPT entry is discharged. ***"),
+X:21  line 674:     "artifacts/ip30abortkill/ip30_abort_probe.18row_20260917.frozen.py":
+X:22  line 675:         (CLASS_TOOL, "the FROZEN 18-row instrument table 1 ran against"),
+X:23  line 676:     "artifacts/ip30abortkill/opusF2_20260918/probe.frozen.py":
+X:24  line 677:         (CLASS_TOOL, "frozen instrument for the opus F2 table"),
+X:25  line 678:     "artifacts/ip30abortkill/opusF2_20260918/mutate_table1.py":
+X:26  line 679:         (CLASS_TOOL, "opus F2 kill-table driver, table 1"),
+X:27  line 680:     "artifacts/ip30abortkill/opusF2_20260918/mutate_table2.py":
+X:28  line 681:         (CLASS_TOOL, "opus F2 kill-table driver, table 2"),
+X:29  line 682:     "artifacts/ip30abortkill/opus_killtable_20260917/probe.frozen.py":
+X:30  line 683:         (CLASS_TOOL, "frozen instrument for the opus 2026-09-17 table"),
+X:31  line 684:     "artifacts/ip30abortkill/opus_killtable_20260917/probe19.frozen.py":
+X:32  line 685:         (CLASS_TOOL, "frozen 19-row instrument for the same table"),
+X:33  line 686:     "artifacts/ip30abortkill/opus_killtable_20260917/mutate.py":
+X:34  line 687:         (CLASS_TOOL, "kill-table driver"),
+X:35  line 688:     "artifacts/ip30abortkill/opus_killtable_20260917/mutate2.py":
+X:36  line 689:         (CLASS_TOOL, "kill-table driver"),
+X:37  line 690:     "artifacts/ip30abortkill/opus_killtable_20260917/mutate3.py":
+X:38  line 691:         (CLASS_TOOL, "kill-table driver"),
+X:39  line 692:     "artifacts/ip30abortkill/opus_killtable_20260917/mutate4.py":
+X:40  line 693:         (CLASS_TOOL, "kill-table driver"),
+X:41  line 694:     "artifacts/ip30abortkill/opus_killtable_20260917/mutate5.py":
+X:42  line 695:         (CLASS_TOOL, "kill-table driver"),
+X:43  line 696:     "artifacts/ip30abortkill/opus_killtable_20260917/mutate500.py":
+X:44  line 697:         (CLASS_TOOL, "kill-table driver, the 0x500 arm"),
+X:45  line 698:     "artifacts/ip30abortkill/opus_killtable_20260917/mutate500b.py":
+X:46  line 699:         (CLASS_TOOL, "kill-table driver, the 0x500 arm, second form"),
+X:47  line 700:     "artifacts/ip30abortkill/opus_killtable_20260917/mutate524g.py":
+X:48  line 701:         (CLASS_TOOL, "kill-table driver, the 524g mutant"),
+X:49  line 702:     "artifacts/ip30abortkill/opus_killtable_20260917/isrsem.py":
+X:50  line 703:         (CLASS_TOOL, "one-off: ISR set/clear semantics probe"),
+X:51  line 704:     "artifacts/ip30abortkill/opus_killtable_20260917/latchcount.py":
+X:52  line 705:         (CLASS_TOOL, "one-off: counts announce sites per latch class"),
+X:53  line 706:     "artifacts/ip30abortkill/opus_killtable_20260917/tickcross.py":
+X:54  line 707:         (CLASS_TOOL, "one-off: the tick/ISR latch cross-check"),
+X:55  line 708:     #  *** CLASSED WITNESS, AND THE REASON IS WRITTEN DOWN BECAUSE THE OPPOSITE MOVE IS A
+X:56  line 709:     #  KNOWN DODGE IN THIS VERY FILE. ***  The flagship seat found ungated DETECTORS relabelled
+X:57  line 710:     #  WITNESS here so that the checker would then verify they are ungated -- a check that
+X:58  line 711:     #  cannot fail.  This is not that: #531's shipped detector is `ip30_abort_probe.py` above,
+X:59  line 712:     #  classed DETECTOR and dated-exempt in the open [#566: until it was wired into gate_arm.sh on
+X:60  line 713:     #  2026-10-18; its EXEMPT entry is discharged].  THIS file is a REACHABILITY measurement
+X:61  line 714:     #  -- its own docstring calls itself an "ip30 TICK-ROW BUILDABILITY MEASUREMENT" and asks
+X:62  line 715:     #  whether the FOURTH abort(), inside DEVICE_TICK, can be reached from a STEPPING probe at
+X:63  line 716:     #  all.  It answered a disagreement between two seats by combining them, and the answer is
+X:64  line 717:     #  what made two enumerated cells BUILDABLE: step 1/2/8/1000 -> ONE tick; 65536/70000 ->
+X:65  line 718:     #  TWO; 140000 -> THREE.  Stopping at `step 8' would have disclosed two buildable cells as
+X:66  line 719:     #  unbuildable.  It shows a symptom that the fix removes, which is the witness shape.
+X:67  line 720:     "artifacts/ip30abortkill/tick_20260917/ip30_tick_probe.py":
+X:68  line 721:         (CLASS_WITNESS, "#531 tick-row BUILDABILITY: is the DEVICE_TICK abort() reachable from a stepping probe? MEASURED step 1/2/8/1000 -> ONE tick, 65536/70000 -> TWO, 140000 -> THREE"),
+X:69  line 722:     "artifacts/ip30abortkill/tick_20260917/boundary.py":
+X:70  line 723:         (CLASS_TOOL, "one-off: the tick threshold bisection"),
+X:71  line 724:     "artifacts/ip30abortkill/tick_20260917/smoke.py":
+X:72  line 725:         (CLASS_TOOL, "one-off: smoke check for the tick harness"),
+X:73  line 726:     "artifacts/ip30abortkill/tick_20260917/swcontrol.py":
+X:74  line 727:         (CLASS_TOOL, "one-off: the software control for the tick measurement"),
+X:75  line 728:     "artifacts/ip30abortkill/sigabrt_disposition_20260917.py":
+X:76  line 729:         (CLASS_TOOL, "one-off: SIGABRT-vs-clean-exit disposition check"),
+X:77  line 730: 
+X:78  line 731:     # -- detectors a gate RUNS today (the evidence is derived, not asserted here) ---------
+X:79  line 732:     "sgi_re_rgb_probe.py":         (CLASS_DETECTOR, "#505 RGB GET/PUT byte container"),
+X:80  [... lines 733-3178 not shown ...]
+X:81  line 3179:     #  rlwimi/rldimi blocks on the same -E bareppc -M 64, every row scored by name.  It was dated 2026-10-22,
+X:82  line 3180:     #  after three re-dates by owner ruling (2026-09-18 in eec0f4a3, 2026-09-24, 2026-10-09), and would have
+X:83  line 3181:     #  refused every commit from 2026-10-23 (`d < today').
+X:84  line 3182:     #  Deleted in the SAME edit as the wiring, for the same reason.
+X:85  line 3183:     #  artifacts/ip30abortkill/ip30_abort_probe.py's exemption is DISCHARGED, 2026-10-18 (#566) -- wired into
+X:86  line 3184:     #  gate_arm.sh beside the sgi probes, from its artifacts path, every row scored by name.  It was dated
+X:87  line 3185:     #  2026-09-20 with #531 and re-dated three times (eec0f4a3 to 2026-09-27, 04500deb to 2026-10-15, 7b23b785
+X:88  line 3186:     #  to 2026-10-30), and would have refused every commit from 2026-10-31 (`d < today').
+X:89  line 3187:     #  Deleted in the SAME edit as the wiring, for the same reason.
+
+==== FILE L = regress/lib.sh count() and check() ====
+L:1  count() {
+L:2      [ -f "$1" ] || { echo 0; return; }
+L:3      local c
+L:4      c=$(grep -ac -- "$2" "$1" 2>/dev/null)
+L:5      echo "${c:-0}"
+L:6  }
+L:7  
+L:8  check() {
+L:9      _checks=$((_checks+1))
+L:10      if [ "$2" = "$3" ]; then
+L:11          printf "  ${C_OK}ok${C_OFF}   %-52s %s\n" "$1" "$2"
+L:12      else
+L:13          printf "  ${C_BAD}FAIL${C_OFF} %-52s got=%s want=%s\n" "$1" "$2" "$3"
+L:14          _fails=$((_fails+1))
+L:15      fi
+L:16  }

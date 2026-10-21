@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""ppcrldiclzero -- RUNG-3 WITNESS for X(rldicl) writing zero on every execution.
+"""ppcrldiclzero -- DETECTOR for X(rldicl) writing zero on every execution.
+[argonlate, 2026-10-20: this line and the first printed banner said `RUNG-3 WITNESS', and the
+usage message named ppc_rldicl_witness.py -- the family witness's words, carried across at
+e777ff06 (ppcrldiclbanner).  Section R's MANIFEST classes this file a detector and gate 13
+runs it (#565); the witness of record is
+regress/artifacts/ppcrldiclzero/opus_ppc_rldicl_witness_20260910.py.]
 
 DEFECT.  src/cpus/cpu_ppc_instr.c, X(rldicl):
 
@@ -55,6 +60,14 @@ IBM bit numbering is big-endian, so MASK(b,63) is the LOW (64-b) bits: for b=32
 that is 0x00000000ffffffff, which is why `rldicl rA,rS,0,32' is the canonical
 32-bit zero-extend (`clrldi rA,rS,32', manual :29758).
 EVERY `want' in this probe is computed from those five lines, never from the tree.
+[argonlate, 2026-10-20: TOO BROAD.  True of the rldicl VALUE wants -- the six rows that call
+want_rldicl, and the census's and `naive fix wrong''s comparisons.  The two rldicr controls
+use rldicrx (:29822, MASK(0, e)), and `rc cr0' wants a literal CR0=GT (CR0 is affected when
+Rc=1, :29748-29750); the other control rows want literals, this file's own constants or its
+own counts; and `bits32 rld bad' and `neg apparatus' want the TREE's own decoder text
+(`TODO: rld') and exit status (exit1).  So TEST-FIRST SHAPE's `every want is the
+ARCHITECTURAL value' below is untrue of the non-architectural wants: the decoder text, the
+exit statuses, the disassembly and census counts, and the `yes' and `differs' flags.]
 
 RUNG 3: real PowerPC instructions fetched from guest RAM, decoded by the real
 decoder and executed by the real handler, on the UNMODIFIED in-tree `-E bareppc'.
@@ -98,7 +111,7 @@ import sys
 import time
 
 if len(sys.argv) < 2:
-    sys.stderr.write("usage: ppc_rldicl_witness.py <gxemul> [label]\n")
+    sys.stderr.write("usage: ppc_rldicl_probe.py <gxemul> [label]\n")
     sys.exit(2)
 
 BIN = sys.argv[1]
@@ -183,6 +196,11 @@ def mask_range(b, e):
 #  regress/ppc_rlwimi_probe.py's), and they owe nothing until a row is wired to them: the oracle-correction bound
 #  is one measured red per oracle a ROW consumes.  The red for rlwinm/rlwnm on committed HEAD is
 #  regress/artifacts/ppcrlwhighhalf/witness_committed_20261009/. ***
+#  [argonlate, 2026-10-20: `Every row calls want_rldicl / want_rldicr' is too broad -- eight rows
+#  do (six want_rldicl, two want_rldicr), and the rest want literals, this file's own constants or
+#  counts, or the tree's own text and exit status.  What holds (GPT-6 Astra's wording): the
+#  rldicl/rldicr register-value oracles use want_rldicl / want_rldicr; no row consumes the other
+#  helpers -- want_rldimi, mask32, want_rlwinm and want_rlwimi, as the first sentence says.]
 
 
 def want_rldicl(rs_val, sh, mb):
@@ -386,11 +404,21 @@ def seed(pairs):
     return ["r%d=0x%x" % (r, v) for r, v in pairs]
 
 
-print("ppcrldiclzero RUNG-3 WITNESS -- binary=%s label=%s" % (BIN, LABEL))
+#  [argonlate, 2026-10-20: the next line printed `RUNG-3 WITNESS', and the third printed
+#  `wants derived from ...:29736 (rldiclx), :6878 (ROTL32)' -- both the family witness's words
+#  (opus_ppc_rldicl_witness_20260910.py), carried across at e777ff06.  This file is a detector
+#  (section R's MANIFEST; gate 13 runs it since #565), and no row here consumes rotl32: the
+#  witness's rlwinm and rlwimi rows did, and the CONTRACT above want_rldicl says in its first
+#  sentence that no row in this file consumes those helpers.  :6878 defines ROTL64 too, which
+#  every rldicl and rldicr want uses; the two rldicr controls take their mask from rldicrx,
+#  :29822; and `rc cr0''s CR0 is the Rc=1 record form's, :29748.  The other rows' wants are
+#  literals, counts or the tree's own output, so the line now names what it is true of.]
+print("ppcrldiclzero DETECTOR -- binary=%s label=%s" % (BIN, LABEL))
 print("machine: -E bareppc -M 64 (UNMODIFIED in-tree; MACHINE_DEFAULT_CPU=PPC970,"
       " 64-bit)")
-print("wants derived from _scratchpad/ppc_pem_32and64_2005.txt:29736 (rldiclx),"
-      " :6878 (ROTL32)")
+print("rldicl/rldicr register-value and CR0 wants derived from"
+      " _scratchpad/ppc_pem_32and64_2005.txt:29736 (rldiclx), :29748 (CR0 if Rc=1),"
+      " :29822 (rldicrx), :6878 (ROTL64)")
 print("%-18s %-20s %-20s %-48s %s" % ("row", "got", "want", "note", ""))
 t0 = time.time()
 disasm_checked = 0
@@ -552,7 +580,8 @@ row("disasm total", "%d/%d" % (disasm_ok, disasm_checked),
 #  or into a detector of its own -- that is a decision for those rounds, not this one.
 #
 #  MEASURED: witness 19/27 committed and 24/27 fixed, the five flipped rows being
-#  exactly the ones kept below.  **THIS FILE HAS 19 ROWS, NOT 24** [19-row era: 24 since
+#  exactly the ones kept below [argonlate: ABOVE this block, not below it -- see its end].
+#  **THIS FILE HAS 19 ROWS, NOT 24** [19-row era: 24 since
 #  pass 2, see #565's note below] -- an earlier draft of this note carried the witness's
 #  own post-fix count straight across, which a pass-2 seat caught.  It is 19/19 on the
 #  fix and 14/19 pre-fix (killtable_20260910/SCORES.txt).
@@ -563,6 +592,14 @@ row("disasm total", "%d/%d" % (disasm_ok, disasm_checked),
 #  rldicl_prefix_02af7f3e.log).  The 19-row figures are in killtable_20260910/t1/SCORES.txt;
 #  the bare `killtable_20260910/SCORES.txt' above names no file.  This block also stood
 #  here TWICE, verbatim, from e777ff06 until #565 deleted the copy after the pass-2 rows.]
+#  [argonlate, 2026-10-20: `kept below' is positional and true in no revision on record.  The
+#  five flipped rows -- zx32 rldicl, rot8 rldicl, vac neighbour, census wrong, census zero -- are
+#  rows this file KEPT, as against the sibling rows left in the witness, and they sit ABOVE this
+#  block, which has followed them since the 19-row frozen draft,
+#  killtable_20260910/t1/ppc_rldicl_probe.frozen.py.  The five rows below it are pass 2's, which
+#  the witness does not have, and only three of them flip pre-fix (sh63, sh32, rc cr0:
+#  killtable_20260910/t2/SCORES.txt).  Deleting the second copy did not move this one: it has
+#  had the pass-2 rows below it since e777ff06.]
 
 # ================== ROWS ADDED BY PASS 2, WHICH FOUND TWO TOTAL ESCAPES =========
 #
@@ -614,6 +651,20 @@ row("rc cr0", hex(_crv), hex(0x40000000),
 #  WHAT THIS DETECTOR IS DESIGNED TO CATCH, and what it is NOT.  The boundary below
 #  is MEASURED -- every entry was established by a mutant that was built and scored,
 #  not by reasoning about the row set.
+#  [argonlate, 2026-10-20: NOT EVERY ENTRY.  Built and scored, killtable_20260910/t2/SCORES.txt:
+#  M_ORIG (the mask variable), M_NAIVE (`&' -> `|'), M_NOMASK (the mask ignored entirely), M_MB5
+#  (the `mb' decode's HIGH bit -- the loss of mb5 only; the low five MB bits have no mutant and
+#  are reasoned), M_SH5 (the rotate amount at SH=32 and 63) and M_CR0 (the CR0 result); M_NOAND
+#  (the rotated data discarded, the mask kept) was built and scored too, and no entry below
+#  names it.  SH=8 is M_ROTAMT, against the 19-row instrument only
+#  (pass2_20260910/opus_killtable_SCORES.txt).  The mask bit positions and the mask end bound
+#  share ONE built mutant, M_MASKEND (`63-mb' -> `62-mb': every bit one place over, with an
+#  undefined shift at mb == 63 in its construction); the end bound's clean form, the loop bound
+#  `mb <= 62', was "Recorded rather than re-run" (killtable_20260910/PRETABLE.out) and is
+#  derivation only.  No mutant was built for rotate-versus-shift, the destination width, the
+#  `ra' decode, the rotate amount at SH=0, or any NOT CAUGHT entry: those are reasoned.  The
+#  box came from section 4 of pass2_20260910/opus_pass2_20260910.md, `Measured, the boundary
+#  is', which mixed the two.]
 #
 #  CAUGHT:  the mask variable; the mask bit positions; the mask end bound; `&' -> `|';
 #           the mask ignored entirely; the `mb'-field decode INCLUDING its high bit;
