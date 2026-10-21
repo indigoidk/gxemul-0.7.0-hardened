@@ -25141,6 +25141,19 @@ Fable 5.1, GPT-6 Astra, Grok 4.7).  Each row's ledger `state_note` carries its s
   usage message names `ppc_rldicl_probe.py`); open for the third, `vacuous cell`'s note split across two rows.
 
 
+### 2026-10-20 -- two PowerPC shift rows filed, both witnessed on HEAD 1a59a47e
+
+* **`ppcshiftwide` (HIGH, open)** -- `X(slw)`/`X(srw)`/`X(sraw)` mask the shift amount `& 31`: Book I gives 0 (slw,
+  srw) or 64 sign bits with CA = the sign (sraw) for shift amounts 32..63, the multi-word shift idiom compilers emit for
+  `long long` on 32-bit PowerPC; in the 64-bit build slw and srw also leak into RA's high word.  Rung-3 witness
+  `regress/artifacts/ppcshiftwide/witness_20261020/shift_witness.py`: 3/15 on HEAD (PPC970 and PPC603), the sh4
+  control correct on PPC603.  Argon confirmed all twelve failing rows against Book I and sketched the fixes.
+* **`ppcsrdmissing` (HIGH, open)** -- srd, srad and sradi have no decoder case; a 64-bit guest executing one stops the
+  emulation ("cpu: UNIMPLEMENTED instruction", "emul: All machines stopped").  Witness
+  `regress/artifacts/ppcshiftwide/witness_20261020/srd_witness.py`; the sld control runs.
+* Whether ppcrlwhighhalf's 2026-10-09 owner block ("witness only") reaches these rows is the owner's call.
+
+
 ### 2026-10-21 -- `vmedefaultkill` fixed by `#568`; `vmewidthlanes` widened; three rows filed
 
 * **`vmedefaultkill` (HIGH) -- FIXED by `#568`.**  `dev_vme.c`'s `default:` no longer ends the emulator: the 26

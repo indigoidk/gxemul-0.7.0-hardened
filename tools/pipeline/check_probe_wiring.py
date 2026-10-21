@@ -2901,6 +2901,12 @@ MANIFEST = {
         (CLASS_RESEARCH, "#568 table 2c's leg generator (the repair-diff pass's three GLM legs: M_DFLTIDNZ 29/38, M_DFLTIDZ 36/38, M_DIRODATA equivalent), preserved as evidence"),
     "artifacts/vmedefaultkill/killtable2_20261021/table2d/mk_legs_t2d.py":
         (CLASS_RESEARCH, "#568 table 2d's leg generator (the repair-diff pass's three Argon legs, all 38/38 as predicted: M_ZEROSET and M_DFLTFFC clause (e), M_SETODATA equivalent), preserved as evidence"),
+    #  ppcshiftwide / ppcsrdmissing (filed 2026-10-20, no round yet): the two rung-3 witnesses on HEAD 1a59a47e,
+    #  evidence under regress/artifacts/ppcshiftwide/, not tests.
+    "artifacts/ppcshiftwide/witness_20261020/shift_witness.py":
+        (CLASS_WITNESS, "ppcshiftwide: slw/srw/sraw at shift amounts 32..63 on -E bareppc, PPC970 and PPC603 -- 3/15 on HEAD 1a59a47e (witness_HEAD.out)"),
+    "artifacts/ppcshiftwide/witness_20261020/srd_witness.py":
+        (CLASS_WITNESS, "ppcsrdmissing: srd, srad and sradi stop the emulation on -E bareppc (PPC970); the sld control runs (srd_witness_HEAD.out)"),
     "artifacts/fbctrlcmdkill/pass2_20261018/legs/probe.frozen.py":
         (CLASS_RESEARCH, "#567 the shipped probe's v1 copy run for its in-tree legs, preserved as evidence"),
     "artifacts/fbctrlportkill_20260924/opus549_measured/c3/gen_c3.py":

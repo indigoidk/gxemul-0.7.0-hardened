@@ -1,3 +1,21 @@
+# Records, 2026-10-21: two PowerPC rows filed with rung-3 witnesses -- `ppcshiftwide` (slw/srw/sraw shift amounts 32..63 wrap) and `ppcsrdmissing` (srd/srad/sradi undecoded)
+
+Filed 2026-10-20 by the main loop while drafting `ppcrlwhighhalf`'s brief, witnessed on HEAD `1a59a47e` the same hour, and
+held back from `#568`'s commit by the one-task-at-a-time rule.  Both witnesses are rung 3 on unmodified `-E bareppc`, in
+`regress/artifacts/ppcshiftwide/witness_20261020/`:
+
+* `shift_witness.py` -- 3 of 15 rows on HEAD (`witness_HEAD.out`).  On PPC970 (64-bit) and PPC603 (32-bit), slw and srw
+  with shift 32 return the source and slw with shift 33 returns it shifted by one -- the amount is masked `& 31`, where
+  Book I gives 0 for 32..63; sraw with shift 32 returns the source sign-extended with CA 0, where Book I gives 64 sign
+  bits and CA = the sign.  On PPC970 slw and srw also leak into the high word (the shift-4 control fails there and
+  passes on PPC603).
+* `srd_witness.py` -- srd, srad and sradi stop the emulation (`cpu: UNIMPLEMENTED instruction`, `emul: All machines
+  stopped`) while the sld control runs (`srd_witness_HEAD.out`).
+
+Both HIGH, open, no round yet; whether `ppcrlwhighhalf`'s 2026-10-09 owner block ("witness only") reaches them is the
+owner's call.  Ledger (two rows), `OUTSTANDING_BUGS.md` (one section), `check_probe_wiring.py` (two WITNESS lines),
+`matrix.html`, this block and the witness directory only.
+
 # Records, 2026-10-21: `vmedefaultkill` names its landing commit 2ca79b90, and 2ca79b90's pass-2 receipt
 
 The landing commit 2ca79b90 cannot name itself; this adds it to `vmedefaultkill`'s `commits` field (the row stays HELD on its two questions) and writes the pass-2 receipt precommit section F requires after a commit that touches `src/`.  It also preserves the two records confirmations the commit was gated on -- GPT-6 Astra's CONFIRM WITH CHANGES (7) and Argon's records check (5 broken, all applied), with the dispositions -- under `regress/artifacts/vmedefaultkill/confirm_20261021/`.  Ledger, matrix, this block, `regress/pass2_ledger.tsv` and that directory only.
