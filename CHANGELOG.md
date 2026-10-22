@@ -1,3 +1,34 @@
+# Records, 2026-10-22: the external-fixes research filed -- 126 queue rows from GitHub forks, distro patches and upstream SVN r6522-r6577; two records corrected in place
+
+The external-fixes research is `regress/artifacts/research_20261022/`: the reports `A_github_forks.md`,
+`B_distro_patches.md` and `C_reports_upstream.md`, merged in `TRIAGE.md` (154 still-open defects: 29 filed, 4 filed
+in part, 121 unfiled); the coordinator's measured verdicts, `RECORDS_VERDICTS.md`; and the adjudication,
+`adj_20261022/ADJ_RULINGS.md` (GPT-6 Astra and Grok 4.7; Fable 5.1 held by the owner, recorded NOT FIRED in
+`adj_20261022/fable5.NOT_FIRED.txt`).
+
+* **Filed: 126 open rows, witness `none`** -- the 121 UNFILED rows (T36's row carries the reopened PFAR item), the
+  adjudication's N1-N4, and one owner option (`pristinesecondref`, ADJ_RULINGS.md E).  By class: HOST-STOP 6,
+  GUEST-CORRUPTION 2 (one LATENT here), WRONG-RESULT 89, CPU-STOP 12, HOST-UB 1, HYGIENE/BUILD 15, FEATURE 1;
+  HIGH 8, MED 102, LOW 16.  The adjudication's N5 is `ppcbatppkill`, already filed: recorded there, no second row.
+* **In place:** `letxrestart`, `dfreq`, `mipsbadvpnscale` and `closeassessrows` (its `rtcnarrow` member) carry
+  TRIAGE.md T92-T95; `b120` carries T9; `m88kmxmkill` is dropped as a duplicate of `m88kpsrmxm`, which names it as
+  an alias.
+* **Batch order** (ADJ_RULINGS.md D, replacing TRIAGE.md section d), as QUEUE markers: batch 1-10 = T1, T3, T6, T2,
+  T36, T18, T120, T7, T11, T5; tail = T12, T4, T8, T10, T13, N3.
+* **R2 corrected (L4):** the Round 71B note "m88k PFAR ... REFUTED" in `OUTSTANDING_BUGS.md` is false --
+  `CMMU_PFAR` (m8820x.h:66) is written at memory_m88k.c:399 and :405 and read by the guest through
+  dev_m8820x.c:438.  Reopened under T36's row.
+* **R1 corrected (L4):** commit `39748e3` ("unmodified upstream baseline") carries the fork's `#9` and `#13`, 59
+  generated build products and two crash dumps -- the note beside "Repository cleanup" below gives the measured
+  composition (`regress/artifacts/research_20261022/R1_tree_diff_20261022.txt`).  The commit is not rewritten, and
+  no A/B result is re-attributed.  `gate_ab.sh`'s header label is corrected in its own script commit.
+* **Owed, filed in the follow-up:** no precommit check refuses a duplicate ledger id -- the pretest's duplicate-id
+  controls passed every section (`check_bugfile_sync.py` keys a dict on the id).
+
+Ledger (126 rows, 15 in-place operations on 14 rows), `OUTSTANDING_BUGS.md` (one section, one OPEN LIST head entry, 9
+in-place notes), this file (this block, the note beside "Repository cleanup" and a pointer beside "Rebuilding pristine
+`39748e3`"), `matrix.html` and the research directory only.
+
 # Records, 2026-10-21: the OpenFirmware exit family scoped by Argon -- `ofemulnodata`'s title corrected, the scoping in three rows' notes, `armrebootmagic` filed
 
 Argon (Gemini web, packet-fed; extended thinking off, as since 10-15) read `src/promemul/of.c` whole, the two decoders' magic-word
@@ -23640,7 +23671,7 @@ m88k signed-shift and shift-by-32 UB corrections (#36–40, #46) mattered becaus
 GCC relies on that undefined behaviour. Rebuilding pristine `39748e3` with
 `-O2 -fwrapv -fno-strict-overflow -fno-strict-aliasing` compiles clean (223 objects) and
 still produces nothing but the banner. Whatever fixed luna88k is a real source change
-inside the first hardening commit; narrowing it further would need that commit split.
+inside the first hardening commit; narrowing it further would need that commit split.  *[2026-10-22: "pristine `39748e3`" above is the 0.7.0 import, which carries the fork's `#9` and `#13` (records R1; the "Repository cleanup" note); this result is not re-attributed.]*
 
 ### New coverage: the first non-MIPS rig that checks an answer
 
@@ -24460,6 +24491,22 @@ They cannot have affected any measurement: the build uses explicit object lists 
 wildcards, so no A/B or regression conclusion drawn against `39748e3` is disturbed. The
 import commit is left alone rather than rewritten again; this note is the record that it
 carries two files upstream never shipped.
+
+**[2026-10-22 -- NOT TWO FILES, AND NOT PRISTINE.  Widened beside the record it corrects; the commit is not
+rewritten.]**  Measured against the 0.7.0 release tarball (sha256 `79c4437c...8e83`, the value the research reports
+match to upstream's published sum), `39748e3` differs from the release in two files and carries 61 the release does
+not ship.  `configure` adds the GNU89-inline probe (21 lines at `:565-585`, the fork's `#9`), and
+`src/cpus/generate_arm_r.c` reads `1U << (c-1)` at three sites (`:139`, `:200`, `:279`; the fork's `#13`) where the
+release reads `1 <<`.  The 61 are the two crash dumps above plus 59 generated build products: 50 `src/cpus/tmp_*.c`,
+`devices/autodev.c`, `machines/automachine.c`, six generated font files and `include/ppc_spr_strings.h`.  It also
+lacks 23 release files: seven `Makefile`s under `demos/`, `experiments/` and `test/floatingpoint/`, and 16 `test/`
+install and boot scripts.  Against the archived April-2021 checkout (`C:\DocumentNoSnc\CC\GXEMUL_upstream_2021\root_src`,
+447 files, which holds the two crash dumps too) `src/` differs in `generate_arm_r.c` alone, plus the same 59 build
+products.  So the commit subject's "unmodified upstream baseline" is a wrong label.  No earlier A/B or regression
+result is re-attributed, and `PRISTINE_REF` stays because earlier logs name it; `gate_ab.sh`'s header is corrected
+in its own commit, and a byte-true second reference for future "pristine" claims is filed as an owner option
+(`pristinesecondref`).  (`regress/artifacts/research_20261022/RECORDS_VERDICTS.md` R1; `regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md` E;
+the comparison: `regress/artifacts/research_20261022/R1_tree_diff_20261022.txt`)
 
 ## Sixty-second round (#297) — ftrc converted with a raw C cast, so the guest's answer depended on the host
 

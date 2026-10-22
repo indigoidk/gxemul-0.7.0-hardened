@@ -1,0 +1,59 @@
+From: Jan-Benedict Glaw <jbglaw@lug-owl.de>
+Date: Sun, 22 Sep 2024 16:52:51 +0200
+Subject: Fix tap device support on Linux
+
+---
+ src/net/net_tap.c | 25 +++++++++++++++++++++++++
+ 1 file changed, 25 insertions(+)
+
+diff --git a/src/net/net_tap.c b/src/net/net_tap.c
+index 188276e..d920695 100644
+--- a/src/net/net_tap.c
++++ b/src/net/net_tap.c
+@@ -48,6 +48,11 @@
+ #include "misc.h"
+ #include "net.h"
+ 
++#ifdef __linux__
++#  include <linux/if.h>
++#  include <linux/if_tun.h>
++#endif
++
+ /*
+  *  net_tap_rx_for_nic():
+  *
+@@ -166,7 +171,11 @@ bool net_tap_init(struct net *net, const char *tapdev)
+ 	int fd;
+ 	int one = 1;
+ 
++#ifdef __linux__
++	fd = open("/dev/net/tun", O_RDWR);
++#else
+ 	fd = open(tapdev, O_RDWR);
++#endif
+ 	if (fd < 0) {
+ 		debugmsg(SUBSYS_NET, "tap", VERBOSITY_ERROR,
+ 		    "unable to open tap device '%s': %s",
+@@ -174,6 +183,22 @@ bool net_tap_init(struct net *net, const char *tapdev)
+ 		return false;
+ 	}
+ 
++#ifdef __linux__
++	struct ifreq ifr;
++
++	memset(&ifr, 0, sizeof(ifr));
++	ifr.ifr_flags = IFF_TAP | IFF_NO_PI;
++	strncpy(ifr.ifr_name, tapdev, IFNAMSIZ);
++
++	if (ioctl(fd, TUNSETIFF, &ifr) < 0) {
++		debugmsg(SUBSYS_NET, "tap", VERBOSITY_ERROR,
++		    "unable to attach to "
++		    "tap device '%s': %s", tapdev, strerror(errno));
++		close(fd);
++		return false;
++	}
++#endif
++
+ 	if (ioctl(fd, FIONBIO, &one) < 0) {
+ 		debugmsg(SUBSYS_NET, "tap", VERBOSITY_ERROR,
+ 		    "unable to set non-blocking mode on "

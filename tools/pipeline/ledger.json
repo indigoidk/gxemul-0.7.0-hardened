@@ -3873,7 +3873,7 @@
    ],
    "hold": "R8 - the unknown-command half only",
    "witness": "none yet -- GUEST-REACHABLE and witnessable at rung 3/4, but building the probe needs a build, which the machine embargo forbids. First in line with the other build-blocked rows.",
-   "state_note": "*** L4 WRONG RECORD, CORRECTED IN PLACE 2026-08-27. An adversarial opus pass REFUTED THE MECHANISM THIS ROW STATED BELOW. The defect is real; my explanation of it was false, and the true picture is four different wrong outcomes rather than one. ***\n\n**WHAT I GOT WRONG.** I wrote that `scsi_transfer_alloc()`'s `memset(p, 0, ...)` leaves a status BYTE of 0x00, which the guest reads as GOOD. **`status` is `unsigned char *` (`diskimage.h:196-197`)** -- so the memset leaves `status == NULL` and `status_len == 0`. **There is no zeroed status byte anywhere.** Nothing reads a 0x00 out of that struct. The conclusion happened to hold for one controller, for an entirely different reason.\n\n**WHAT SURVIVES, and it is the structural half:** the `default:` arm is the **only one of 25** that never calls `diskimage__return_default_status_and_message()` or `diskimage__return_check_condition()` -- verified by grepping every case/helper pair -- and it falls through to `return 1`, which the function's own header (`:263-266`) documents as the success token (`2` = expects DATA_OUT, `1` = otherwise ok, `0` = error).\n\n*** THE HONEST STATEMENT: ONE OMISSION, FOUR DIFFERENT WRONG OUTCOMES. ***\n  * **`dev_asc.c` -- guest IS told GOOD**, but via an explicit `else fifo_write(0x00)` fallback at `:1284-1292`, which `git log -S` places in the unmodified upstream 0.7.0 import, NOT a fork change. Right conclusion, wrong reason.\n  * **`dev_mb89352.c` -- REFUTES the 'told success' claim outright.** `data_in == NULL` sets `phase = PH_STAT` (`:284`); the guest's PH_STAT read takes `p = status (NULL), len = 0`, trips the `read longer than buffer?` arm (`:173`) and **sets `cpu->running = 0`**. The guest is not told anything -- the emulated CPU is STOPPED. **Filed separately as [[mb89352halt]].**\n  * **`dev_osiop.c:573-582`** -- `while (... && i < status_len)` with `status_len == 0` writes **no status byte at all**; the guest's destination memory keeps its prior contents.\n  * **`dev_wdc.c` (ATAPI)** -- `atapi_st->status` is read nowhere in the file; `res == 1` with `data_in == NULL` gives `PHASE_COMPLETED` with `WDCS_ERR` unset: a successful packet command.\n\n> **That is a BETTER case than the row originally made, not a weaker one** -- a single omitted completion step producing four distinct wrong behaviours across four controllers. But it is not the claim as written, and the claim as written was the one being ranked.\n\n**A SECOND CONSEQUENCE THE ORIGINAL RECORD MISSED:** the helper also RETIRES LATCHED SENSE (the `#417` fix, `:187-188`). The `default:` arm skips that too -- so an unimplemented command following a failed one leaves `sense_key/asc/ascq` latched, and a follow-up REQUEST SENSE attributes the OLD failure to the command that just ran. That is exactly the regression `#417` was written to remove, reachable by a different door.\n\n**FIX SHAPE, now pinned by the in-tree idiom at `:319-327`:** call the helper, set `status[0] = 0x02` (CHECK CONDITION), then `return 0`. Note `return 0` is **distinguishable on only two of four controllers** -- osiop stops the SCRIPTS engine, wdc completes with a latched warning, while asc and mb89352 do not test for 0 at all -- so the status buffer, not the return value, is what carries the refusal.\n\n--- the original record follows, kept so the correction is checkable ---\n\n*** EVIDENCE 2026-08-27: TRUE, GUEST-REACHABLE, and the highest-severity bare-title row worked so far. Established by reading; the fix idiom ALREADY EXISTS in this file. ***\n\n`src/disk/diskimage_scsicmd.c:1380-1388`, the dispatcher's `default:` arm:\n\n```c\ndefault:\n        debug(\"[ UNIMPLEMENTED SCSI command 0x%02x, disk id=%i\", xferp->cmd[0], id);\n        // exit(1);\n}\ndebug(\" ]\");\nreturn 1;\n```\n\n**Three things go wrong together:**\n1. it logs through `debug()`, which is verbosity-gated and normally invisible;\n2. **it never calls `diskimage__return_default_status_and_message()`** -- every implemented arm does (`:1212`, `:1257`, `:1298`, `:1340`, `:1347`, `:1376`);\n3. it falls through to **`return 1`, the same value a SUCCESSFUL command returns.**\n\n**And the status the guest reads is GOOD, which was checked rather than assumed:** `scsi_transfer_alloc()` ends with `memset(p, 0, sizeof(struct scsi_transfer))` (`diskimage_scsicmd.c:89`), and `dev_asc.c:326-330` frees and reallocates per command. Status 0x00 IS GOOD. **So an unsupported opcode is reported to the guest as a completed, successful command.**\n\n*** THE COMMENTED-OUT `exit(1)` IS THE TELL. *** This site was de-fatalised by commenting out the kill, which removed the death without adding an error path -- the incomplete form of the de-fatalisation this fork otherwise does carefully.\n\n*** THE FIX HAS A TRANSFERRED WARRANT ALREADY IN THIS FILE, found by grepping the tree for the existing idiom rather than reasoning from scratch. *** `diskimage__return_check_condition()` is defined at `:208` and already used for exactly this class at `:823-824` -- `0x05, 0x21`, ILLEGAL REQUEST -- and again at `:909`. **The correct refusal for an unknown opcode is CHECK CONDITION with ILLEGAL REQUEST / INVALID COMMAND OPERATION CODE, and the helper to do it sits three hundred lines above the defect.**\n\n**NOT FIXED: needs a build.** The detector must show the pre-fix build reporting GOOD for an unsupported opcode and CHECK CONDITION after -- and floor clause (b) needs the `return 1` reinstated verbatim. Both are measurements. Queued behind the embargo.\n\n",
+   "state_note": "[2026-10-22] CARRIES the external-fixes research's T9 (regress/artifacts/research_20261022/TRIAGE.md T9; regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md B: not re-filed): WRITE AND VERIFY(10) falls into this row's default arm, so where a controller reports GOOD its data is never written; VERIFY(10) and RESERVE/RELEASE(6/10) are GOOD by accident (report rows A5-20, A5-21, A5-42; rs6000 75010de, https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/75010dedf93747f1c6391430688971a922400418; NetBSD PR pkg/54114, https://gnats.netbsd.org/54114, quotes the SPC answer: CHECK CONDITION, ILLEGAL REQUEST, ASC 0x20).  The per-controller outcomes are this row's own record.  ||  *** L4 WRONG RECORD, CORRECTED IN PLACE 2026-08-27. An adversarial opus pass REFUTED THE MECHANISM THIS ROW STATED BELOW. The defect is real; my explanation of it was false, and the true picture is four different wrong outcomes rather than one. ***\n\n**WHAT I GOT WRONG.** I wrote that `scsi_transfer_alloc()`'s `memset(p, 0, ...)` leaves a status BYTE of 0x00, which the guest reads as GOOD. **`status` is `unsigned char *` (`diskimage.h:196-197`)** -- so the memset leaves `status == NULL` and `status_len == 0`. **There is no zeroed status byte anywhere.** Nothing reads a 0x00 out of that struct. The conclusion happened to hold for one controller, for an entirely different reason.\n\n**WHAT SURVIVES, and it is the structural half:** the `default:` arm is the **only one of 25** that never calls `diskimage__return_default_status_and_message()` or `diskimage__return_check_condition()` -- verified by grepping every case/helper pair -- and it falls through to `return 1`, which the function's own header (`:263-266`) documents as the success token (`2` = expects DATA_OUT, `1` = otherwise ok, `0` = error).\n\n*** THE HONEST STATEMENT: ONE OMISSION, FOUR DIFFERENT WRONG OUTCOMES. ***\n  * **`dev_asc.c` -- guest IS told GOOD**, but via an explicit `else fifo_write(0x00)` fallback at `:1284-1292`, which `git log -S` places in the unmodified upstream 0.7.0 import, NOT a fork change. Right conclusion, wrong reason.\n  * **`dev_mb89352.c` -- REFUTES the 'told success' claim outright.** `data_in == NULL` sets `phase = PH_STAT` (`:284`); the guest's PH_STAT read takes `p = status (NULL), len = 0`, trips the `read longer than buffer?` arm (`:173`) and **sets `cpu->running = 0`**. The guest is not told anything -- the emulated CPU is STOPPED. **Filed separately as [[mb89352halt]].**\n  * **`dev_osiop.c:573-582`** -- `while (... && i < status_len)` with `status_len == 0` writes **no status byte at all**; the guest's destination memory keeps its prior contents.\n  * **`dev_wdc.c` (ATAPI)** -- `atapi_st->status` is read nowhere in the file; `res == 1` with `data_in == NULL` gives `PHASE_COMPLETED` with `WDCS_ERR` unset: a successful packet command.\n\n> **That is a BETTER case than the row originally made, not a weaker one** -- a single omitted completion step producing four distinct wrong behaviours across four controllers. But it is not the claim as written, and the claim as written was the one being ranked.\n\n**A SECOND CONSEQUENCE THE ORIGINAL RECORD MISSED:** the helper also RETIRES LATCHED SENSE (the `#417` fix, `:187-188`). The `default:` arm skips that too -- so an unimplemented command following a failed one leaves `sense_key/asc/ascq` latched, and a follow-up REQUEST SENSE attributes the OLD failure to the command that just ran. That is exactly the regression `#417` was written to remove, reachable by a different door.\n\n**FIX SHAPE, now pinned by the in-tree idiom at `:319-327`:** call the helper, set `status[0] = 0x02` (CHECK CONDITION), then `return 0`. Note `return 0` is **distinguishable on only two of four controllers** -- osiop stops the SCRIPTS engine, wdc completes with a latched warning, while asc and mb89352 do not test for 0 at all -- so the status buffer, not the return value, is what carries the refusal.\n\n--- the original record follows, kept so the correction is checkable ---\n\n*** EVIDENCE 2026-08-27: TRUE, GUEST-REACHABLE, and the highest-severity bare-title row worked so far. Established by reading; the fix idiom ALREADY EXISTS in this file. ***\n\n`src/disk/diskimage_scsicmd.c:1380-1388`, the dispatcher's `default:` arm:\n\n```c\ndefault:\n        debug(\"[ UNIMPLEMENTED SCSI command 0x%02x, disk id=%i\", xferp->cmd[0], id);\n        // exit(1);\n}\ndebug(\" ]\");\nreturn 1;\n```\n\n**Three things go wrong together:**\n1. it logs through `debug()`, which is verbosity-gated and normally invisible;\n2. **it never calls `diskimage__return_default_status_and_message()`** -- every implemented arm does (`:1212`, `:1257`, `:1298`, `:1340`, `:1347`, `:1376`);\n3. it falls through to **`return 1`, the same value a SUCCESSFUL command returns.**\n\n**And the status the guest reads is GOOD, which was checked rather than assumed:** `scsi_transfer_alloc()` ends with `memset(p, 0, sizeof(struct scsi_transfer))` (`diskimage_scsicmd.c:89`), and `dev_asc.c:326-330` frees and reallocates per command. Status 0x00 IS GOOD. **So an unsupported opcode is reported to the guest as a completed, successful command.**\n\n*** THE COMMENTED-OUT `exit(1)` IS THE TELL. *** This site was de-fatalised by commenting out the kill, which removed the death without adding an error path -- the incomplete form of the de-fatalisation this fork otherwise does carefully.\n\n*** THE FIX HAS A TRANSFERRED WARRANT ALREADY IN THIS FILE, found by grepping the tree for the existing idiom rather than reasoning from scratch. *** `diskimage__return_check_condition()` is defined at `:208` and already used for exactly this class at `:823-824` -- `0x05, 0x21`, ILLEGAL REQUEST -- and again at `:909`. **The correct refusal for an unknown opcode is CHECK CONDITION with ILLEGAL REQUEST / INVALID COMMAND OPERATION CODE, and the helper to do it sits three hundred lines above the defect.**\n\n**NOT FIXED: needs a build.** The detector must show the pre-fix build reporting GOOD for an unsupported opcode and CHECK CONDITION after -- and floor clause (b) needs the `return 1` reinstated verbatim. Both are measurements. Queued behind the embargo.\n\n",
    "note": "\n\n*** 2026-09-11 ASSESS (codex GPT-6 Astra at max, 12,054 b).  **DEFECT CONFIRMED -- and THE FILING MISIDENTIFIES WHERE GOOD ORIGINATES, which changes the fix.** ***\n\n**THE HANDLER SETS NOTHING.**  `diskimage_scsicmd.c:1380-1388` is:\n\n    default:\n            debug(\"[ UNIMPLEMENTED SCSI command 0x%02x, disk id=%i\", ...);\n            // exit(1);\n    }\n    debug(\" ]\" NL);\n    return 1;\n\nIt **sets neither status nor message, allocates no response, and leaves latched sense unchanged** -- there is no CHECK CONDITION and no GOOD here.  On a fresh ASC transfer the result is `return 1`, `status == NULL`, `status_len == 0`, `msg_in == NULL`.\n\n*** THE GUEST-VISIBLE GOOD COMES FROM THE CALLER, `dev_asc.c:1284-1287`: ***\n\n    if (d->xferp != NULL && d->xferp->status != NULL)\n            dev_asc_fifo_write(d, d->xferp->status[0]);\n    else\n            dev_asc_fifo_write(d, 0x00);\n\n**A NULL status is SUBSTITUTED with `0x00` -- GOOD** -- and `:1289-1292` does the same for the message, giving COMMAND COMPLETE.  *So the false success is a CALLER DEFAULT filling a hole the handler leaves, not a value the handler chooses.*  The row read it as the handler reporting success, which would have aimed the fix at the wrong statement.\n\n*** AND THE OBVIOUS FIX IS REFUTED: `return 1` MUST BE RETAINED. ***  The documented contract (`:263`) is `2` = DATA_OUT required, `1` = otherwise OK, `0` = error.  **`return 0` propagates failure to the outer controller handler, which DISCONNECTS and FREES the transfer** (`dev_asc.c:1395-1405`: zero sets `STATE_DISCONNECTED`, asserts the disconnect interrupt, resets STEP, frees and nulls `xferp`).  **That discards the transfer through controller failure handling instead of delivering the intended error completion.**\n\n> **So the repair is: KEEP `return 1`, and SUPPLY CHECK CONDITION status.**  *This is the sketch rule again -- a proposed edit is not a fix until it has been run against the enclosing function's real control flow, and here the control flow lives one file away in the caller.*\n\n**THE IN-FILE PRECEDENT IS REAL AND ITS ARGUMENTS ARE WRONG FOR THIS COMMAND.**  `diskimage__return_check_condition()` (`:208`) does allocate status and deliver sense, taking `(key, asc, ascq)` -- **but its existing call sites pass a READ-error tuple, which is not the right error for an unsupported opcode.**  The round owes the correct tuple, not merely the correct helper.\n\n*Also checked and correctly set aside: the missing-target path at `:319` DOES allocate CHECK CONDITION and return 0 -- but it runs BEFORE opcode dispatch, so it neither refutes the existing-target defect nor serves as its precedent.*\n\n**STATUS: the fix is now specified** -- keep `return 1`, call the helper with an unsupported-opcode sense tuple, and pin the oracle on the FIFO byte the caller writes rather than on the handler's return value."
   },
   {
@@ -4993,7 +4993,7 @@
     }
    ],
    "hold_question": "A one-shot deadline is modelled as a repeating rate. The hold says 'a design change, per the stopping rule'. QUESTION: is there a GUEST-OBSERVABLE consequence that makes this a defect rather than a modelling difference? This matters because the carrier records that dfreq's earlier 'no witness of either kind' claim was MEASURED FALSE -- a witness was built in one session. So: what does that witness actually show, and does it show a wrong VALUE reaching the guest or only a different internal representation? If only the latter, documented-only is the honest disposition and the row should say so.",
-   "state_note": "\n\n*** 2026-09-13 CODEX RESEARCH (read-only, gpt-6-astra max): DOCUMENT-ONLY -- see regress/artifacts/codex_research_20260913/dfreq.answer.md.  Premises it corrected are in the entry; the row stays HELD pending the named next step and the batched flagship close pass. ***"
+   "state_note": "[2026-10-22] WIDENED by the external-fixes research (regress/artifacts/research_20261022/TRIAGE.md T93; regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md B): two residuals no row carried -- the host-timer Compare rate ignores that Count runs at CPU/2 (cpu_mips_coproc.c:808-809 at de8c7547), and compare_interrupts_pending is an uncapped int (:422; include/cpu_mips.h:277) that re-asserts IP7 back to back while it stays above 0 (cpu_dyntrans.c:433-436) -- the uncapped-counter shape #442 bounded in dev_footbridge.c only.  Ports: jroark/GXemul 2fa3853 (rate halved, backlog capped at 1), 4729fb6, dabf5ce (report rows A3-26, A3-27; https://github.com/jroark/GXemul/commit/2fa38531d41426151943758faa46a2d3297b8c3f).  The wrap-reprogramming half stays `n1`'s.  witness: none -- research finding, not yet reproduced here.  ||  \n\n*** 2026-09-13 CODEX RESEARCH (read-only, gpt-6-astra max): DOCUMENT-ONLY -- see regress/artifacts/codex_research_20260913/dfreq.answer.md.  Premises it corrected are in the entry; the row stays HELD pending the named next step and the batched flagship close pass. ***"
   },
   {
    "id": "strad",
@@ -37840,13 +37840,13 @@
    "id": "m88kmxmkill",
    "title": "m88kmxmkill  cpu_m88k.c: writing PSR with the MXM (misaligned-access enable) bit set -- by stcr or by rte -- stops the cpu (`m88k_stcr' case M88K_CR_PSR); a supervisor guest reaches it with one instruction",
    "sev": "low",
-   "state": "open",
+   "state": "dropped",
    "opened": "2026-09-06",
    "commits": "",
    "witness": "none",
    "hold_question": null,
    "note": "Documented-only, from #502 pass 1 (disposition F5: 'MXM halt (unreachable: stcr and rte both halt on MXM)' -- the word 'unreachable' there meant the EXCEPTION path cannot set MXM, not that a guest cannot; a supervisor `stcr rX,cr1' with bit MXM set can).  CHECK before ranking: the exact effect (fatal + running = 0, or exit), whether the MC88100 UM defines MXM behaviour the fork could model (misaligned accesses succeed instead of faulting), and whether OpenBSD/luna88k ever sets it (it does not on the rig, which boots).  The graceful-halt class of #502, one bit wide.  Filed 2026-09-06: cited by #502's pass-1 record as a row before it existed (grok, adjudication pass).",
-   "state_note": "",
+   "state_note": "[2026-10-22] DROPPED AS A DUPLICATE -- CONSOLIDATED INTO `m88kpsrmxm` (alias; regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md B T136; regress/artifacts/research_20261022/TRIAGE.md T136 and its records defect R4): both rows describe one defect, a PSR write with MXM set stopping the emulated CPU in cpu_m88k.c's m88k_stcr, and their severities disagreed (low here, MED there).  The carrier keeps MED (guest-kernel CPU stop).  This row's history -- #502's pass-1 citation and the 2026-09-06 filing -- stays here; the carrier names this id as its alias.",
    "entries": []
   },
   {
@@ -47681,7 +47681,8 @@
    "sev": "med",
    "opened": "2026-09-10",
    "title": "THE UNOWNED REMAINDER: 76 guest-reachable error-exit sites across 24 files own no tracker row -- a TRACKING row so the body of work has a denominator and a pointer, not a re-derivation",
-   "note": "FILED 2026-09-10.  Evidence: regress/artifacts/queuetriage/codex_exitaudit_20260910.txt (GPT-6 Astra at max), which enumerated the population properly for the first time.  **This row exists so the next session reads the census instead of re-running it**, which has now happened twice.\n\n*** THE EARLIER FIGURES WERE RIGHT AND THEIR DESCRIPTION WAS WRONG: 370 and 240 count `exit(1)', NOT every `exit()'. ***  Re-derived by removing comments and string literals while preserving line positions, then locating the calls, with an independent character-state lexer returning exactly the same positions:\n\n    src/devices    263 literal `exit('   135 calls after lexical filtering\n    src/cpus       112                    74\n    src/machines    35                    34\n    TOTAL          410                   243   (240 of them exit(1))\n\nLOCATION SPLIT of those 243: 150 runtime handlers and helpers, 80 init/configuration, 13 CPU generators and a standalone experiment.  The debugger is outside that scope and adds three more.\n\nAND BEING INSIDE A RUNTIME FUNCTION IS NOT REACHABILITY.  The 150 split: **98 input-reachable through enabled in-tree wiring**; 33 dead, precluded, or not established reachable; 10 optional instrumentation; 6 unattached or disabled attachments; 2 intentional halt/reboot; 1 host RAM-config check misplaced in an access handler.\n\nOWNERSHIP is an OVERLAY, not a disjoint population -- 22 live exits and 3 others are actively owned (n6 holds eight footbridge sites; alphavmkill one; sgirekills five; lcaisalane and lcabadval eight between them; m88kexit two dead ones).  **A strict open/held filter leaves 83, of which seven belong to in-work LCA repairs, so THE UNOWNED REMAINDER IS 76.**\n\n*** AND ONE OF MY OWN EARLIER QUALIFICATIONS WAS TOO AGGRESSIVE, corrected here: lacking a separate CHILD repair id does not mean lacking an open OWNING row.  `sgirekills' explicitly retains its five command exits.  Conversely an incidental mention in census prose is NOT a repair row. ***\n\nSIX E1 PREDICATES were identified -- a one-to-five-line change with an existing test carrier -- and ALL SIX ARE NOW FILED as their own rows: [[mk48nvramkill]], [[mapledmaaddr]], [[xscaleinten]], [[crimewidthkill]], [[vmedefaultkill]], [[fbctrlportkill]].  **This row therefore tracks the ~70 that remain, and they are E2/E3: real rounds, not quick wins.**  The heaviest concentrations are dev_osiop.c (14), cpu_arm_coproc.c (8 of which one is filed), dev_adb.c (7), dev_dreamcast_g2.c (6), dev_pvr.c and dev_igsfb.c (5 each).\n\nTHE ONE CONSTRAINT THAT GOVERNS EVERY DISPOSITION IN THIS BODY, and it is easy to forget: **memory_rw.c turns a failed device callback into an architectural access exception for MIPS and M88K ONLY.**  Returning zero from an ARM or SH device callback gives NO bus-error delivery, so the FAULT member is unavailable there and a round reaching for it owes the exception path first.  CPU translation and instruction handlers have their own direct mechanisms, which is a separate question.\n\n*** THE LARGEST CONCENTRATION HAS BEEN TRIAGED, 2026-09-10: dev_osiop.c (osiopexits/codex_triage_20260910.txt, GPT-6 Astra at max; 3 cyber flags, ALL MID-STREAM and non-fatal). ***\n\n**THE FILE HAS SIXTEEN EXPLICIT exit() CALLS, NOT FOURTEEN.**  The census's fourteen are all still executable, and two more exist that it did not list -- **and those two are the ones that turn out to be DEAD**, so the census happened to enumerate exactly the live set without saying why.\n\n    (i)   guest register access or guest-started SCRIPTS      **14**  -- one register default,\n                                                                        thirteen sequencer exits\n    (ii)  unconstructible state or impossible branch          **2**\n    (iii) internal failures where stopping is right           **0**\n\n*** POPULATION (iii) BEING EMPTY IS ITSELF THE FINDING, and it is the one that licenses the whole body of work.  NONE of the sixteen checks establishes corrupted host ownership or any other condition that requires terminating.  The seat says the diagnostic wording -- notably 'cannot be combined' -- does NOT turn these into internal assertions, which is the argument a round would otherwise have to make sixteen times. ***\n\nTHE TWO DEAD PATHS, RECORDED WITH THEIR WARRANTS so nobody re-finds them:\n  * the reserved-phase MOVE default -- an earlier equality check forces the instruction phase to match SOCL; initialisation and every implemented transition produce only handled phases; SET/CLEAR do not touch the phase bits; and a direct SOCL write terminates at the REGISTER DEFAULT before another SCRIPTS execution can run.  *That last clause is why this one is dead only while the register default is still fatal -- fixing the register default could REVIVE it, which a round must not miss.*\n  * the outer instruction-class default is **mathematically unreachable**: the switch evaluates `dcmd & 0xc0' and explicitly handles all four possible results.\n\n**AND IT CORRECTED THE AUDIT'S EFFORT RANKING:** the blanket E3 (`preserve command termination, status and interrupt behaviour') OVERSTATES the obligation for the register default and the redundant table-MOVE equality check, because the real status and completion sequence lives in the STATUS and MSG_IN phases, and the backend-failure branches are ALREADY de-fatalised by earlier rounds and sit outside this census.  So two of the nine prescribed rows are cheaper than the audit implied.\n\n*** THE SEVERITY CEILING, ASKED FOR AND ANSWERED PLAINLY: 'no in-tree runnable workload drives this controller's register/SCRIPTS interface.' ***  All fourteen are guest-reachable in principle and NOTHING IN THIS TREE EXERCISES THEM.  That is worth more than a ranking: it means these rounds cannot reach rung 4, and a witness must plant SCRIPTS by hand.\n\nA TRAP NAMED FOR THE FIRST ROW, and it is the kind that makes a one-line repair wrong: the generic byte path STORES BEFORE DISPATCH, and the word path also stores to DNAD and ADDER before reaching the unhandled-register default -- so restoring only `oldreg' would NOT undo those word stores.  And a blanket backed-accept would enable SOCL writes, **which changes the reserved-phase reachability finding above**.  The two interact.\n\nNINE REPAIR ROWS PRESCRIBED covering the fourteen, in priority order: register default; redundant table-MOVE equality check; MOVE phase mismatch; transfer-control handling; MOVE addressing modes; SELECT validation; WAIT RESELECT; register/ALU instructions; MEMORY MOVE.  Not filed individually yet -- filing nine rows for a controller nothing drives would crowd a queue that already holds live guest-reachable kills on machines this project DOES boot."
+   "note": "FILED 2026-09-10.  Evidence: regress/artifacts/queuetriage/codex_exitaudit_20260910.txt (GPT-6 Astra at max), which enumerated the population properly for the first time.  **This row exists so the next session reads the census instead of re-running it**, which has now happened twice.\n\n*** THE EARLIER FIGURES WERE RIGHT AND THEIR DESCRIPTION WAS WRONG: 370 and 240 count `exit(1)', NOT every `exit()'. ***  Re-derived by removing comments and string literals while preserving line positions, then locating the calls, with an independent character-state lexer returning exactly the same positions:\n\n    src/devices    263 literal `exit('   135 calls after lexical filtering\n    src/cpus       112                    74\n    src/machines    35                    34\n    TOTAL          410                   243   (240 of them exit(1))\n\nLOCATION SPLIT of those 243: 150 runtime handlers and helpers, 80 init/configuration, 13 CPU generators and a standalone experiment.  The debugger is outside that scope and adds three more.\n\nAND BEING INSIDE A RUNTIME FUNCTION IS NOT REACHABILITY.  The 150 split: **98 input-reachable through enabled in-tree wiring**; 33 dead, precluded, or not established reachable; 10 optional instrumentation; 6 unattached or disabled attachments; 2 intentional halt/reboot; 1 host RAM-config check misplaced in an access handler.\n\nOWNERSHIP is an OVERLAY, not a disjoint population -- 22 live exits and 3 others are actively owned (n6 holds eight footbridge sites; alphavmkill one; sgirekills five; lcaisalane and lcabadval eight between them; m88kexit two dead ones).  **A strict open/held filter leaves 83, of which seven belong to in-work LCA repairs, so THE UNOWNED REMAINDER IS 76.**\n\n*** AND ONE OF MY OWN EARLIER QUALIFICATIONS WAS TOO AGGRESSIVE, corrected here: lacking a separate CHILD repair id does not mean lacking an open OWNING row.  `sgirekills' explicitly retains its five command exits.  Conversely an incidental mention in census prose is NOT a repair row. ***\n\nSIX E1 PREDICATES were identified -- a one-to-five-line change with an existing test carrier -- and ALL SIX ARE NOW FILED as their own rows: [[mk48nvramkill]], [[mapledmaaddr]], [[xscaleinten]], [[crimewidthkill]], [[vmedefaultkill]], [[fbctrlportkill]].  **This row therefore tracks the ~70 that remain, and they are E2/E3: real rounds, not quick wins.**  The heaviest concentrations are dev_osiop.c (14), cpu_arm_coproc.c (8 of which one is filed), dev_adb.c (7), dev_dreamcast_g2.c (6), dev_pvr.c and dev_igsfb.c (5 each).\n\nTHE ONE CONSTRAINT THAT GOVERNS EVERY DISPOSITION IN THIS BODY, and it is easy to forget: **memory_rw.c turns a failed device callback into an architectural access exception for MIPS and M88K ONLY.**  Returning zero from an ARM or SH device callback gives NO bus-error delivery, so the FAULT member is unavailable there and a round reaching for it owes the exception path first.  CPU translation and instruction handlers have their own direct mechanisms, which is a separate question.\n\n*** THE LARGEST CONCENTRATION HAS BEEN TRIAGED, 2026-09-10: dev_osiop.c (osiopexits/codex_triage_20260910.txt, GPT-6 Astra at max; 3 cyber flags, ALL MID-STREAM and non-fatal). ***\n\n**THE FILE HAS SIXTEEN EXPLICIT exit() CALLS, NOT FOURTEEN.**  The census's fourteen are all still executable, and two more exist that it did not list -- **and those two are the ones that turn out to be DEAD**, so the census happened to enumerate exactly the live set without saying why.\n\n    (i)   guest register access or guest-started SCRIPTS      **14**  -- one register default,\n                                                                        thirteen sequencer exits\n    (ii)  unconstructible state or impossible branch          **2**\n    (iii) internal failures where stopping is right           **0**\n\n*** POPULATION (iii) BEING EMPTY IS ITSELF THE FINDING, and it is the one that licenses the whole body of work.  NONE of the sixteen checks establishes corrupted host ownership or any other condition that requires terminating.  The seat says the diagnostic wording -- notably 'cannot be combined' -- does NOT turn these into internal assertions, which is the argument a round would otherwise have to make sixteen times. ***\n\nTHE TWO DEAD PATHS, RECORDED WITH THEIR WARRANTS so nobody re-finds them:\n  * the reserved-phase MOVE default -- an earlier equality check forces the instruction phase to match SOCL; initialisation and every implemented transition produce only handled phases; SET/CLEAR do not touch the phase bits; and a direct SOCL write terminates at the REGISTER DEFAULT before another SCRIPTS execution can run.  *That last clause is why this one is dead only while the register default is still fatal -- fixing the register default could REVIVE it, which a round must not miss.*\n  * the outer instruction-class default is **mathematically unreachable**: the switch evaluates `dcmd & 0xc0' and explicitly handles all four possible results.\n\n**AND IT CORRECTED THE AUDIT'S EFFORT RANKING:** the blanket E3 (`preserve command termination, status and interrupt behaviour') OVERSTATES the obligation for the register default and the redundant table-MOVE equality check, because the real status and completion sequence lives in the STATUS and MSG_IN phases, and the backend-failure branches are ALREADY de-fatalised by earlier rounds and sit outside this census.  So two of the nine prescribed rows are cheaper than the audit implied.\n\n*** THE SEVERITY CEILING, ASKED FOR AND ANSWERED PLAINLY: 'no in-tree runnable workload drives this controller's register/SCRIPTS interface.' ***  All fourteen are guest-reachable in principle and NOTHING IN THIS TREE EXERCISES THEM.  That is worth more than a ranking: it means these rounds cannot reach rung 4, and a witness must plant SCRIPTS by hand.\n\nA TRAP NAMED FOR THE FIRST ROW, and it is the kind that makes a one-line repair wrong: the generic byte path STORES BEFORE DISPATCH, and the word path also stores to DNAD and ADDER before reaching the unhandled-register default -- so restoring only `oldreg' would NOT undo those word stores.  And a blanket backed-accept would enable SOCL writes, **which changes the reserved-phase reachability finding above**.  The two interact.\n\nNINE REPAIR ROWS PRESCRIBED covering the fourteen, in priority order: register default; redundant table-MOVE equality check; MOVE phase mismatch; transfer-control handling; MOVE addressing modes; SELECT validation; WAIT RESELECT; register/ALU instructions; MEMORY MOVE.  Not filed individually yet -- filing nine rows for a controller nothing drives would crowd a queue that already holds live guest-reachable kills on machines this project DOES boot.",
+   "state_note": "[2026-10-22] QUEUE: three of this class's census lines are in the external-research batch (regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md D): batch 8 of 10 -- dev_mvme187.c:80 and :90 (census line 97), AFTER `mvme187memcoob`'s bounds repair (regress/artifacts/research_20261022/TRIAGE.md T7); batch tail 3 of 6 -- dev_clmpcc.c:164 and :252 (census line 95), after batch 8, the same disposition (regress/artifacts/research_20261022/TRIAGE.md T8; port ajfa 4a01173 patch 05); batch tail 4 of 6 -- ONE dev_osiop.c site (census line 91), named by its round from the reserved ids `osiopselectzero`, `osiopregexit` and `osiopdnadexit`, excluding the 2^24-byte MEMORY MOVE (regress/artifacts/research_20261022/TRIAGE.md T10; ajfa 4a01173 patch 04 with care)."
   },
   {
    "id": "ppcrldiclzero",
@@ -50798,7 +50799,7 @@
    "commits": [],
    "opened": "2026-09-17",
    "title": "dev_mvme187.c:68 indexes a 124-byte struct with a guest offset of up to 255 before the switch, so offsets 124..255 are a 132-byte host OOB read -- today masked by the default arm's exit(1), which is the asicindexcase shape waiting for a de-fatalisation",
-   "state_note": "`dev_mvme187.c:68` indexes a 124-byte struct with a guest-supplied offset of up to 255, **BEFORE the switch and unconditionally on every access including reads**:  `odata = ((uint8_t*)&d->memcreg)[relative_addr];`  The device is registered with length **0x200** at `:127-129`, and `:63-66` folds the high half down (`if (relative_addr & 0x100) { controller = 1; relative_addr &= ~0x100; }`), so the index domain is 0..255.  **sizeof(struct memcreg) is 124** -- DERIVED LOCALLY by counting the 62 `volatile u_char` declarations in `src/include/thirdparty/mvme_memcreg.h` (31 registers, each followed by a 3-byte `xxN[3]` pad), which independently reproduces the hunting seat's figure.  **So offsets 124..255 are a 132-byte host OUT-OF-BOUNDS READ past the struct**, into whatever follows it inside the malloc'd `struct mvme187_data`. REACHABILITY: `machine_mvme88k.c:88` `device_add(machine, \"mvme187\")` -- note this is `machine_mvme88k.c`, NOT `machine_m88k.c`, which the hunting seat named loosely and where my first grep found nothing; I corrected it by locating the constructor rather than by trusting the citation. *** THE REASON THIS IS A RIDER AND NOT A SECOND KILL: the `default:` arm already `exit(1)`s, so TODAY THE OOB VALUE NEVER ESCAPES TO THE GUEST -- the read happens, the process dies, and the kill is already inside `exitunowned76`. ***  **The exposure is what a DE-FATALISATION of that arm would create**, and it is the `asicindexcase` shape exactly: the `exit(1)` is doing duty as the bounds check, so removing the kill without clamping the index converts a host death into a SILENT heap over-read served to the guest as register data.  A round that de-fatalises this file owes the clamp IN THE SAME DIFF -- a bound, not a `case`.  Filed MED so it is queued BEFORE the de-fatalisation round rather than discovered inside it.",
+   "state_note": "[2026-10-22] QUEUE: external-research batch 8 of 10 (regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md D; regress/artifacts/research_20261022/TRIAGE.md T7): the bounds repair FIRST, the exits' disposition after -- the dev_mvme187.c:80 and :90 exits are census line 97 of `exitunowned76`.  Port: ajfa/mvme187-sysv88-gxemul 4a01173 patch 06 supplies the bound, and the recipe shows 187Bug writes memconf, reaching the :80 exit (report row A7-49; https://github.com/ajfa/mvme187-sysv88-gxemul/commit/4a01173afc4beafabbd61ca385bd158d07d4a415).  ||  `dev_mvme187.c:68` indexes a 124-byte struct with a guest-supplied offset of up to 255, **BEFORE the switch and unconditionally on every access including reads**:  `odata = ((uint8_t*)&d->memcreg)[relative_addr];`  The device is registered with length **0x200** at `:127-129`, and `:63-66` folds the high half down (`if (relative_addr & 0x100) { controller = 1; relative_addr &= ~0x100; }`), so the index domain is 0..255.  **sizeof(struct memcreg) is 124** -- DERIVED LOCALLY by counting the 62 `volatile u_char` declarations in `src/include/thirdparty/mvme_memcreg.h` (31 registers, each followed by a 3-byte `xxN[3]` pad), which independently reproduces the hunting seat's figure.  **So offsets 124..255 are a 132-byte host OUT-OF-BOUNDS READ past the struct**, into whatever follows it inside the malloc'd `struct mvme187_data`. REACHABILITY: `machine_mvme88k.c:88` `device_add(machine, \"mvme187\")` -- note this is `machine_mvme88k.c`, NOT `machine_m88k.c`, which the hunting seat named loosely and where my first grep found nothing; I corrected it by locating the constructor rather than by trusting the citation. *** THE REASON THIS IS A RIDER AND NOT A SECOND KILL: the `default:` arm already `exit(1)`s, so TODAY THE OOB VALUE NEVER ESCAPES TO THE GUEST -- the read happens, the process dies, and the kill is already inside `exitunowned76`. ***  **The exposure is what a DE-FATALISATION of that arm would create**, and it is the `asicindexcase` shape exactly: the `exit(1)` is doing duty as the bounds check, so removing the kill without clamping the index converts a host death into a SILENT heap over-read served to the guest as register data.  A round that de-fatalises this file owes the clamp IN THE SAME DIFF -- a bound, not a `case`.  Filed MED so it is queued BEFORE the de-fatalisation round rather than discovered inside it.",
    "entries": [
     {
      "seat": "grok",
@@ -54297,7 +54298,7 @@
      "note": "[NOT A SEAT ANSWER] Filed from #539's pass 1 / pass 2 panels (see the row title for the seat and artifact)."
     }
    ],
-   "state_note": "[2026-10-02] RE-GRADED LOW -> HIGH by #554 from the Astra review campaign (retro, DISPOSITIONS.md:808; the files are under regress/artifacts/astraretro_20260926/ and astraretro_harness_20260926/).  "
+   "state_note": "[2026-10-22] QUEUE: external-research batch tail 1 of 6 (regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md D; regress/artifacts/research_20261022/TRIAGE.md T12): settled DECLINE, narrow.  Provenance: a 2017 pkgsrc patch added both read arms (ryoon e1ce5e9 / 714ef40, https://github.com/ryoon/gxemul/commit/e1ce5e9877dc56f241c0376bc385ebc0340ea24a) and upstream absorbed them -- do not port those commits (regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md F; report rows A6-28, B).  Citation drift: the title's 'HEAD :712, :737' is stale at de8c7547 -- the arms are dev_footbridge.c:732 and :757, the exits :735 and :760 (regress/artifacts/research_20261022/TRIAGE.md R3).  ||  [2026-10-02] RE-GRADED LOW -> HIGH by #554 from the Astra review campaign (retro, DISPOSITIONS.md:808; the files are under regress/artifacts/astraretro_20260926/ and astraretro_harness_20260926/).  "
   },
   {
    "id": "fbm2findings",
@@ -57955,7 +57956,7 @@
    "commits": "",
    "witness": "",
    "hold_question": "",
-   "state_note": "GOVERNING TEXT (from the dispositions file, cut at 400 characters): `ppcbatppkill` HIGH -- PPC: a BAT hit with PP=00, or a store through a read-only BAT, reaches `fatal()` + `exit(1)` (memory_ppc.c `ppc_bat_block` -> `:273-276`) instead of a DSI/ISI (ppc_pem32_rev2_2001.txt:13503-13519). Also precedes the FLAG_NOEXCEPTIONS test, so a debugger `dump` of such a block ends the process",
+   "state_note": "[2026-10-22] RE-FOUND by the external-fixes adjudication as N5 (regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md C; Grok 4.7, adj_20261022/grok_adj.txt): memory_ppc.c:69-73 (the BAT block returns 0 for PP=none, or for a write to a read-only BAT) and the caller's exit at :273-276 are this row's defect, so no second row is filed -- the seat searched for the message text 'TODO: BAT exception', which this row does not quote.  `qhslowifetch`'s fix (return into an ISI already raised) is not this row's fix (regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md B, T6).  ||  GOVERNING TEXT (from the dispositions file, cut at 400 characters): `ppcbatppkill` HIGH -- PPC: a BAT hit with PP=00, or a store through a read-only BAT, reaches `fatal()` + `exit(1)` (memory_ppc.c `ppc_bat_block` -> `:273-276`) instead of a DSI/ISI (ppc_pem32_rev2_2001.txt:13503-13519). Also precedes the FLAG_NOEXCEPTIONS test, so a debugger `dump` of such a block ends the process",
    "entries": [
     {
      "phase": "assess",
@@ -58219,7 +58220,7 @@
    "commits": "",
    "witness": "",
    "hold_question": "",
-   "state_note": "GOVERNING TEXT (from the dispositions file, cut at 400 characters): re deletion breaks the translate-time byte-order premise. * `ppcllscrcexit` HIGH -- `lwarx`/`ldarx` with Rc=1, or `stwcx.`/`stdcx.` with Rc=0, reach `fatal()` + `exit(1)` in `X(llsc)` (cpu_ppc_instr.c:2305-2308, :2331-2334); the decoder keys on xo alone (:4614, :4866-4871). #216 de-fatalised the two memory-fault exits in the same function and left these. * `armmemcpyoverlap` M",
+   "state_note": "[2026-10-22] QUEUE: external-research batch 2 of 10 (regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md D; regress/artifacts/research_20261022/TRIAGE.md T3).  Research: rs6000 d13a974 and 3c00042 fixed only the fault exits in X(llsc), not these Rc-mismatch exits (report row A4-3; https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/d13a974834e6781f7b25af10b9760e78a583b52d); a design is owed.  ||  GOVERNING TEXT (from the dispositions file, cut at 400 characters): re deletion breaks the translate-time byte-order premise. * `ppcllscrcexit` HIGH -- `lwarx`/`ldarx` with Rc=1, or `stwcx.`/`stdcx.` with Rc=0, reach `fatal()` + `exit(1)` in `X(llsc)` (cpu_ppc_instr.c:2305-2308, :2331-2334); the decoder keys on xo alone (:4614, :4866-4871). #216 de-fatalised the two memory-fault exits in the same function and left these. * `armmemcpyoverlap` M",
    "entries": [
     {
      "phase": "assess",
@@ -59429,7 +59430,7 @@
    "commits": "",
    "witness": "",
    "hold_question": "",
-   "state_note": "GOVERNING TEXT (from the dispositions file, cut at 400 characters): CONFIRMED-NEW MED `mipsbadvpnscale` \"R4000 Context/XContext BadVPN2 is scaled by the matched (or last-scanned) TLB entry's page size instead of fixed VA bits 31:13 / 39:13\"",
+   "state_note": "[2026-10-22] WIDENED by the external-fixes research (regress/artifacts/research_20261022/TRIAGE.md T94; regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md B): the R4100 arm of mips_cpu_exception (cpu_mips.c:2078-2088 at de8c7547) writes the page-size-scaled vaddr_vpn2 where VR41xx Context.BadVPN2 is VA[31:11] -- this row's title names the R4000 VA[31:13] form only.  Port: jroark/GXemul a63131b, its R4100 half (report row A3-32; https://github.com/jroark/GXemul/commit/a63131bc577b6ee7c7f10a03fb90a8f389d5008d).  witness: none -- research finding, not yet reproduced here.  ||  GOVERNING TEXT (from the dispositions file, cut at 400 characters): CONFIRMED-NEW MED `mipsbadvpnscale` \"R4000 Context/XContext BadVPN2 is scaled by the matched (or last-scanned) TLB entry's page size instead of fixed VA bits 31:13 / 39:13\"",
    "entries": [
     {
      "phase": "assess",
@@ -59693,7 +59694,7 @@
    "commits": "",
    "witness": "",
    "hold_question": "",
-   "state_note": "GOVERNING TEXT (from the dispositions file, cut at 400 characters): CONFIRMED-NEW MED letxrestart \"LANCE: STOP then STRT does not restore TXON after a transmit abort or MERR -- only INIT does\"",
+   "state_note": "[2026-10-22] WIDENED by the external-fixes research (regress/artifacts/research_20261022/TRIAGE.md T92; regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md B: a filed-in-part residual needs a carrier): STOP does not reset CSR0 to STOP alone (dev_le.c:873-877 at de8c7547; le_register_fix keeps the 'works with Ultrix' variant that clears only IDON, :803-812) -- the half this row's title does not name.  Port: rpajarola/gxemul d1f0720 (https://github.com/rpajarola/gxemul/commit/d1f0720ac94c3a261bbecca8e870addc9c106556; report row A2-9); its author reports Ultrix 4.5 and the BSDs still work with the datasheet behaviour.  witness: none -- research finding, not yet reproduced here.  ||  GOVERNING TEXT (from the dispositions file, cut at 400 characters): CONFIRMED-NEW MED letxrestart \"LANCE: STOP then STRT does not restore TXON after a transmit abort or MERR -- only INIT does\"",
    "entries": [
     {
      "phase": "assess",
@@ -62575,7 +62576,7 @@
    "commits": "",
    "witness": "",
    "hold_question": "",
-   "state_note": "AN ID FOR AN EXISTING PROSE ENTRY of OUTSTANDING_BUGS.md -- no second entry is opened.  GOVERNING TEXT (from the dispositions file, cut at 400 characters): (added by the review pass)  [Astra afile_01, D:726]",
+   "state_note": "[2026-10-22] QUEUE: external-research batch 10 of 10 (regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md D; regress/artifacts/research_20261022/TRIAGE.md T5): the zwrite exit only (dev_pvr.c:1243-1246; the bit at :1225); the sibling exits at :868, :1084 and :1419 keep their own disposition.  Port: upstream r6577(f), Randrianasulu/GXemul 9bfc91e (report rows A1-49, C U11; https://github.com/Randrianasulu/GXemul/commit/9bfc91e).  ||  AN ID FOR AN EXISTING PROSE ENTRY of OUTSTANDING_BUGS.md -- no second entry is opened.  GOVERNING TEXT (from the dispositions file, cut at 400 characters): (added by the review pass)  [Astra afile_01, D:726]",
    "entries": [
     {
      "phase": "assess",
@@ -62848,7 +62849,7 @@
    "commits": "",
    "witness": "",
    "hold_question": "",
-   "state_note": "AN ID FOR AN EXISTING PROSE ENTRY of OUTSTANDING_BUGS.md (lines 2614-2615 scoped to PPC at db8b1a33) -- no second entry is opened.  Where the text comes from: grok/grok_irule_a.txt C11 (conceding in part Astra's ifile_01 finding)",
+   "state_note": "[2026-10-22] QUEUE: external-research batch 3 of 10 (regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md D; regress/artifacts/research_20261022/TRIAGE.md T6).  Reach U on 32-bit PowerPC (regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md B): a user branch to an unmapped address -- memory_ppc.c:314-326 has already raised the ISI and memory_rw.c:259-268 returns failure before cpu_ppc_instr.c:4115-4119 exits.  PPC970, the testppc/bareppc default, never reaches it: it stops first at the 64-bit translation exit (`ppc64xlateexit`).  Port: rs6000 affe8bb + 190cbe5, return into the ISI already raised (report row A4-1; https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/affe8bbaed28c0c5c5e5159eb02a74d5538651ca) -- not the fix for `ppc64xlateexit`, `ppc601xlateexit` or `ppcbatppkill`.  ||  AN ID FOR AN EXISTING PROSE ENTRY of OUTSTANDING_BUGS.md (lines 2614-2615 scoped to PPC at db8b1a33) -- no second entry is opened.  Where the text comes from: grok/grok_irule_a.txt C11 (conceding in part Astra's ifile_01 finding)",
    "entries": [
     {
      "phase": "assess",
@@ -63684,7 +63685,7 @@
    "commits": "",
    "witness": "",
    "hold_question": "",
-   "state_note": "[2026-10-02] THE CENSUS (#557): grok read the 37 closed-no-commit rows no seat had read (regress/artifacts/closeassess_20261002/grok/grok_closedcensus.txt): 20 shipped, 14 nothing owed, 3 work still alive.  Astra confirmed 34 and overturned 3 (regress/artifacts/closeassess_20261002/aconf_census/codex_aconf_census.txt): boilerplateprefix and smhang moved from shipped to alive (smhang's timeout shipped and its standing regression did not; boilerplateprefix's repair was uncommitted), gdromcontractresidual re-scoped.  So: 17 commits fields filled from the twenty (smhang's among them, for the part that shipped) plus xfamscope's, read before the census -- 18 fills; 2 left empty on purpose (asanunbuildable, wiringshghost); boilerplateprefix's filled by the post step with #557's own sha; 14 nothing owed; 5 work still alive -- 4 added as members below, the fifth, boilerplateprefix, landed by #557 itself.  boilerplateprefix and smhang are in both the shipped twenty and the alive five, which is why those three counts sum past 37.  FILLING THE FIELDS BROUGHT THE ROWS UNDER SECTIONS K AND I FOR THE FIRST TIME (the 19:10 precheck): 3 witness fields added and 2 re-shaped, 8 regress reviews held with their questions -- K's witness-presence rule and I's missing-regress rule both key on the commits field, so a closed-with-no-commit row escapes exactly those two (the same precheck also found #556's hrecordowed unattributed, section L, a separate leftover).  MEMBERS NOW (12): m8latch, gcsections, ns16550, pcchalt, wdcstandby, rtcnarrow, scunbacked, m437multi, cmtattr, gdromcontractresidual, smhang, unreadseats23.  A CLASS ROW (a records defect of the ledger).  MEMBERS (8): m8latch, gcsections, ns16550, pcchalt, wdcstandby, rtcnarrow, scunbacked, m437multi.  READ BY NO SEAT (2), closed by the same sweep with no commit: ledgerwitness, cmtattr.  Nothing is re-opened by this row: the audit of each member -- re-open, re-file, or close with a commit -- is its work.  The ruling seat's evidence (grok/grok_grok_irule_d.txt 5 (conceding in part; Astra's ifile_04 raised it)): `CLOSE (assess)` signs off the assess stage. The seven rows whose notes continue past it are still live: `i8253zero` held (`ledger.json:9278`), `idesync` in work (`:12953`), `wdcflood` in work (`:13498`), `landiskdisk` in work (`:13993`), `rtcflood` held (`:15096`), `floodclass` held (`:15480`), `isaorder` held (`:16315`). The sweep's own text, `ledger.json:10393`, closed the bare note and performed no re-check. Eleven is too many. Checked and still undone, with no later carrier: `m8latch` (`dev_m8820x.c:90-97`), `gcsections` (`gate_offline.sh:729`, `:820`), `ns16550` (`dev_ns16550.c:181`), `pcchalt` (no `regress/ppc*.py` page-crossing probe; halt comment only at `cpu_ppc_instr_loadstore.c:63-84`), `wdcstandby` (`WDCC_STANDBY_IMMED` is `0xe0` at `wdcreg.h:138` and still hits `default:` with `WDCE_ABRT` at `dev_wdc.c:1155-1156`), `rtcnarrow` (`dev_vr41xx.c:606` integer-divides `RTCL1_L_HZ / idata` and `:614` ignores the high half; `ledger.json:15084` says the core floor is the wrong fix site), `scunbacked` (`gate_offline.sh:2346-2349` still greps bare `@@SELFCHECK@@` while `diff_rtc_range.c:140` names that token in a comment), `m437multi` (`diskimage.c:1291-1292` still writes only the last overlay, and `:2395-2412` fails the sync if any overlay fsync fails). Checked and left out: `m8sarseq` is carried by open `m8sarrows` (`ledger.json:25702-25704`); `xfamscope`'s two edits are in `gate_crossfamily.sh:173-193` and `:207-218`; `m437rtmp` owes no code, and its scope statement is `OUTSTANDING_BUGS.md:5806-5810` with the `R:` unlink at `diskimage.c:177-182`. One carrier, and this ruling does not re-open the closed rows. Passages 1-3 point here. Passage 4 does not.",
+   "state_note": "[2026-10-22] WIDENED by the external-fixes research (regress/artifacts/research_20261022/TRIAGE.md T95; regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md B): the `rtcnarrow` member also carries the uncapped RTCL1 backlog -- dev_vr41xx.c's timer tick increments pending_timer_interrupts with no cap (:396 at de8c7547), acknowledged only at 0x13e/0x1de (:628-635), the shape #442 bounded in dev_footbridge.c only.  Port: jroark/GXemul bea47e2 (report row A3-17; https://github.com/jroark/GXemul/commit/bea47e2970281b6b0ad50b86f35249b1c2a0c4f5).  witness: none -- research finding, not yet reproduced here.  ||  [2026-10-02] THE CENSUS (#557): grok read the 37 closed-no-commit rows no seat had read (regress/artifacts/closeassess_20261002/grok/grok_closedcensus.txt): 20 shipped, 14 nothing owed, 3 work still alive.  Astra confirmed 34 and overturned 3 (regress/artifacts/closeassess_20261002/aconf_census/codex_aconf_census.txt): boilerplateprefix and smhang moved from shipped to alive (smhang's timeout shipped and its standing regression did not; boilerplateprefix's repair was uncommitted), gdromcontractresidual re-scoped.  So: 17 commits fields filled from the twenty (smhang's among them, for the part that shipped) plus xfamscope's, read before the census -- 18 fills; 2 left empty on purpose (asanunbuildable, wiringshghost); boilerplateprefix's filled by the post step with #557's own sha; 14 nothing owed; 5 work still alive -- 4 added as members below, the fifth, boilerplateprefix, landed by #557 itself.  boilerplateprefix and smhang are in both the shipped twenty and the alive five, which is why those three counts sum past 37.  FILLING THE FIELDS BROUGHT THE ROWS UNDER SECTIONS K AND I FOR THE FIRST TIME (the 19:10 precheck): 3 witness fields added and 2 re-shaped, 8 regress reviews held with their questions -- K's witness-presence rule and I's missing-regress rule both key on the commits field, so a closed-with-no-commit row escapes exactly those two (the same precheck also found #556's hrecordowed unattributed, section L, a separate leftover).  MEMBERS NOW (12): m8latch, gcsections, ns16550, pcchalt, wdcstandby, rtcnarrow, scunbacked, m437multi, cmtattr, gdromcontractresidual, smhang, unreadseats23.  A CLASS ROW (a records defect of the ledger).  MEMBERS (8): m8latch, gcsections, ns16550, pcchalt, wdcstandby, rtcnarrow, scunbacked, m437multi.  READ BY NO SEAT (2), closed by the same sweep with no commit: ledgerwitness, cmtattr.  Nothing is re-opened by this row: the audit of each member -- re-open, re-file, or close with a commit -- is its work.  The ruling seat's evidence (grok/grok_grok_irule_d.txt 5 (conceding in part; Astra's ifile_04 raised it)): `CLOSE (assess)` signs off the assess stage. The seven rows whose notes continue past it are still live: `i8253zero` held (`ledger.json:9278`), `idesync` in work (`:12953`), `wdcflood` in work (`:13498`), `landiskdisk` in work (`:13993`), `rtcflood` held (`:15096`), `floodclass` held (`:15480`), `isaorder` held (`:16315`). The sweep's own text, `ledger.json:10393`, closed the bare note and performed no re-check. Eleven is too many. Checked and still undone, with no later carrier: `m8latch` (`dev_m8820x.c:90-97`), `gcsections` (`gate_offline.sh:729`, `:820`), `ns16550` (`dev_ns16550.c:181`), `pcchalt` (no `regress/ppc*.py` page-crossing probe; halt comment only at `cpu_ppc_instr_loadstore.c:63-84`), `wdcstandby` (`WDCC_STANDBY_IMMED` is `0xe0` at `wdcreg.h:138` and still hits `default:` with `WDCE_ABRT` at `dev_wdc.c:1155-1156`), `rtcnarrow` (`dev_vr41xx.c:606` integer-divides `RTCL1_L_HZ / idata` and `:614` ignores the high half; `ledger.json:15084` says the core floor is the wrong fix site), `scunbacked` (`gate_offline.sh:2346-2349` still greps bare `@@SELFCHECK@@` while `diff_rtc_range.c:140` names that token in a comment), `m437multi` (`diskimage.c:1291-1292` still writes only the last overlay, and `:2395-2412` fails the sync if any overlay fsync fails). Checked and left out: `m8sarseq` is carried by open `m8sarrows` (`ledger.json:25702-25704`); `xfamscope`'s two edits are in `gate_crossfamily.sh:173-193` and `:207-218`; `m437rtmp` owes no code, and its scope statement is `OUTSTANDING_BUGS.md:5806-5810` with the `R:` unlink at `diskimage.c:177-182`. One carrier, and this ruling does not re-open the closed rows. Passages 1-3 point here. Passage 4 does not.",
    "entries": [
     {
      "phase": "assess",
@@ -65234,7 +65235,1268 @@
      "ev": "regress/artifacts/vmedefaultkill/",
      "note": "[NOT A SEAT ANSWER] Filed by GXEMUL [087a90] (main loop) from #568's panels as `m88kpsrmxm` -- the finding and its evidence are in OUTSTANDING_BUGS.md (2026-10-21 section) and regress/artifacts/vmedefaultkill/."
     }
-   ]
+   ],
+   "state_note": "[2026-10-22] ALIAS: `m88kmxmkill` (filed 2026-09-06 from #502's pass 1, the same defect) is consolidated into this row and dropped as its duplicate (regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md B T136; regress/artifacts/research_20261022/TRIAGE.md R4).  MED confirmed (guest-kernel CPU stop).  Research: upstream r6577(g) only warns (Randrianasulu/GXemul 9bfc91e, https://github.com/Randrianasulu/GXemul/commit/9bfc91e; report rows A1-50, C U17); no fork fixes it, so a design is owed (regress/artifacts/research_20261022/TRIAGE.md T136)."
+  },
+  {
+   "id": "m88kscaledbyte",
+   "sev": "HIGH",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "cpus/generate_m88k_loadstore.c table + cpu_m88k_instr.c:X(xmem_slow) -- the generator emits NULL for every scaled byte-size entry; scaled `xmem.bu rD,rS1[rS2]` calls that NULL pointer (host SIGSEGV), scaled `ld.b/ld.bu/st.b` decode to `ic->f == NULL` (CPU stop) -- HOST-STOP",
+   "state_note": "QUEUE: external-research batch 1 of 10 (regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md D).  Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T1 (class HOST-STOP; reach U, user mode; effort: one-line + detector; report rows: A7-29, A7-30, A(c)#1).  Source URLs: https://github.com/ajfa/mvme187-sysv88-gxemul/commit/4a01173afc4beafabbd61ca385bd158d07d4a415.  Our site at de8c7547: src/cpus/generate_m88k_loadstore.c:104-105, :254-257; src/cpus/cpu_m88k_instr.c:2357-2358, :2377-2395, :3608-3629; src/cpus/cpu_dyntrans.c:1906-1908.  Portable fix: yes -- port with a change: ajfa mvme187 4a01173 patch 01 makes scaled byte accesses unscaled but exempts xmem; which change closes the xmem slot is DISPUTED (below).  Filing check (TRIAGE.md): 0 hits for xmem / generate_m88k_loadstore / scaled-byte in OB or ledger; coordinator-confirmed.  Confirmed as classed by both adjudicating seats (regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md A).  Fix shape DISPUTED (D1): GPT-6 Astra -- xmem_slow rebuilds `scaled` from the instruction word, so dropping ajfa's `op != 3` exemption leaves the NULL call; repair the table by mapping the scaled-byte slots to the unscaled byte handlers, keeping the generation suppression; Grok 4.7 -- drop the exemption.  Pass 1 of the round settles it by reading cpu_m88k_instr.c:2357-2395 and generate_m88k_loadstore.c:254.  Do not port the exemption (F).  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "ppcdsformxo",
+   "sev": "HIGH",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "cpu_ppc_instr.c:X(to_be_translated) D/DS-form arm -- primary opcodes 58/62 keep the DS-form XO bits in the displacement, so `ldu`/`lwa` execute as `ld` at EA+1/EA+2 and `stdu` executes as `std` at EA+1 with no RA update -- GUEST-CORRUPTION (misdirected 8-byte stores; wrong loads; 64-bit CPUs, PPC970 is the testppc/bareppc default)",
+   "state_note": "QUEUE: external-research batch 4 of 10 (regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md D).  Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T2 (class GUEST-CORRUPTION; reach U, user mode; effort: small; report rows: A4-13).  Source URLs: https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/9a05a7b0221023cee81965edb6354367a393b107.  Our site at de8c7547: src/cpus/cpu_ppc_instr.c:4277, :4288, :4295, :4307, :4320 (decode re-read for this triage); src/machines/machine_test.c:448-457.  Portable fix: none -- a design is owed (rs6000 9a05a7b only aborts on it: do not port).  Filing check (TRIAGE.md): 0 hits for DS-form / lwa / stdu / ldu.  Confirmed by both adjudicating seats (regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md A): stdu stores at EA+1 and skips the update, ldu/lwa load the wrong data, and no alignment exception exists to intercept it.  Design owed; nothing safe to copy (D4) -- rs6000 9a05a7b only aborts the host (F).  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "wdclbaaddr",
+   "sev": "HIGH",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "devices/dev_wdc.c:wdc__read/wdc__write -- the LBA28 address computation is under `#if 0` and the SDH decode takes the LBA flag from bit 5 (ATA: bit 6), so LBA-mode requests are addressed as cylinder/head/sector -- GUEST-CORRUPTION, LATENT in this tree (wrong-sector reads and writes reach only a guest that ignores IDENTIFY word 49, which this model stores as 0)",
+   "state_note": "QUEUE: external-research batch tail 2 of 6 (regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md D).  Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T4 (class GUEST-CORRUPTION; reach K, guest kernel, firmware or device registers; effort: small; report rows: B F2, B rec.1).  Source URLs: https://cgit.freebsd.org/ports/tree/emulators/gxemul/files/patch-src_devices_dev__wdc.c.  Our site at de8c7547: src/devices/dev_wdc.c:470-476, :562-568, :2015.  Portable fix: partial, or an idea only -- the LBA28 idea of FreeBSD ports patch-src_devices_dev__wdc.c (also DragonFly DPorts), never the patch, which keys on `d->lba` decoded from bit 5.  Filing check (TRIAGE.md): no row; LBA hits are `arcpartlba`, the altctl `&& !d->lba` mutant and `wdccylwrap`'s word-49 note; coordinator-confirmed.  LATENT in this tree (regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md B; Grok 4.7's reading adopted over GPT-6 Astra's present-tense one): IDENTIFY word 49 is stored 0 (dev_wdc.c:374-377), so a guest that honours it never addresses by LBA, and the `#if 0` formula (:470, :562) means `d->lba` is never read for an address.  Live only for a guest that ignores word 49 (report B: FreeBSD 10+; UNVERIFIED here).  The round owes the word-49 decision FIRST, then a bit-6 decode; do not port the FreeBSD/DragonFly patch as a patch -- it keys on bit 5, which a NetBSD CHS 0xa0 sets (B, F).  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "vr41xx1kpage",
+   "sev": "HIGH",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "cpus/cpu_mips_coproc.c:coproc_tlbwri -- a VR41xx TLB write that installs a valid entry with PageMask 0 (a legal 1 KB page) calls `fatal(\"1KB pages don't work with dyntrans\")` then `exit(1)` at two sites (invalidating the old entry, installing the new one); R4100 PageMask writes skip #188's canonicalisation -- HOST-STOP",
+   "state_note": "QUEUE: external-research batch 9 of 10 (regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md D).  Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T11 (class HOST-STOP; reach K, guest kernel, firmware or device registers; effort: small-medium; report rows: A(c) adjacent finding, A6 note A1).  Source URLs: none -- found by the research's own reading (report rows above); no fork carries a fix.  Our site at de8c7547: src/cpus/cpu_mips_coproc.c:2040-2041, :2168-2169, :748-750.  Portable fix: none -- a design is owed (no fork fixes it).  Filing check (TRIAGE.md): 0 hits for the message or a VR41xx 1 KB page; coordinator-confirmed at :2040-2041.  Two exit sites (regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md B): cpu_mips_coproc.c:2040-2041 (invalidating the old entry) and :2168-2169 (installing the new one); reach K (TLB writes are kernel-mode; VR4102-VR4131 are MIPS_R4100).  No fork fixes it, and removing the exits alone does not implement 1 KB-page translation, so the round owes a design (D9).  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "x11cursorclip",
+   "sev": "HIGH",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "console/x11.c:x11_redraw_cursor + devices/dev_fb.c:dev_fb_setcursor -- the cursor is clamped against VRAM size while the X image has the visible size, and `XSubImage` is not clipped, so a cursor below the visible area makes Xlib read past the image -- HOST-STOP (host heap over-read; X11 build run with -X)",
+   "state_note": "QUEUE: external-research batch tail 5 of 6 (regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md D).  Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T13 (class HOST-STOP; reach K*, guest kernel with -X or a similar option; effort: small (~20 lines); report rows: A2-12, A(c)#3).  Source URLs: https://github.com/rpajarola/gxemul/commit/fe69c7bb763d9012ccafbe689cc3617d1684655e.  Our site at de8c7547: src/console/x11.c:247-251; src/devices/dev_fb.c:244-252, :913-914; src/devices/dev_turbochannel.c:250-251.  Portable fix: yes -- port rpajarola fe69c7b; also clamp against the visible size in dev_fb_setcursor.  Filing check (TRIAGE.md): 0 hits for XSubImage / redraw_cursor / setcursor.  Tail position 5 (regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md D).  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "dbgdevremove",
+   "sev": "HIGH",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "core/memory.c:memory_device_remove -- the debugger's `device remove n` with an invalid number calls `exit(1)` -- HOST-STOP (debugger-user input only; not guest-triggered)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T17 (class HOST-STOP; reach C, configuration, debugger, host environment or a non-default build; effort: one-line; report rows: C (b) cross-check finding).  Source URLs: none -- a finding of report C's own cross-check (section b), reported nowhere upstream.  Our site at de8c7547: src/core/memory.c:507-512; src/debugger/debugger_cmds.c:561.  Portable fix: none -- a design is owed.  Filing check (TRIAGE.md): 0 hits.  Reach C (regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md B): debugger-user input, not guest-triggered; HIGH by the class rule only.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "ppccrandcorc",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "cpus/cpu_ppc_instr.c:X(crandc), X(crorc) -- crandc computes NAND and crorc computes NOR instead of BA AND NOT BB / BA OR NOT BB (Book I) -- WRONG-RESULT (wrong condition bits in compiled code)",
+   "state_note": "QUEUE: external-research batch 6 of 10 (regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md D).  Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T18 (class WRONG-RESULT; reach U, user mode; effort: one-line each; report rows: A4-14, A4-15, A(c)#4).  Source URLs: https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/241f5e273caf75599ebb8ebc554e1e9faaacf508, https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/0685c8da85ded843eb8aae952ae0769e0b1b8648.  Our site at de8c7547: src/cpus/cpu_ppc_instr.c:2716-2724, :2743-2751.  Portable fix: yes -- port rs6000 241f5e2, rs6000 0685c8d.  Filing check (TRIAGE.md): 0 hits for crandc/crorc; related filed `ppccrlogicshift` = signed `1 << 31` in the same handlers.  Confirmed by both adjudicating seats (regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md A): unfiled and real.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "ppcintentrymsr",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "cpus/cpu_ppc.c:ppc_exception -- interrupt entry clears only EE, RI and PR; IR, DR, FP, SE, BE, FE0, FE1 and POW stay set and LE is not taken from ILE -- WRONG-RESULT (handlers run translated with FP/trace state of the interrupted context)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T19 (class WRONG-RESULT; reach U, user mode; effort: small; report rows: A4-18).  Source URLs: https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/9bcc860c665aadb9b4ff852667fa5f490f90bf09, https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/0b8e81afd3fc59a0ec237224f94282098f2a0c27, https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/7cb33c85d3d21be36240f586f9b8e4c3c86364ef.  Our site at de8c7547: src/cpus/cpu_ppc.c:335.  Portable fix: yes -- port rs6000 9bcc860, rs6000 0b8e81a, rs6000 7cb33c8 together with the IR/DR flush row.  Filing check (TRIAGE.md): 0 hits for ILE / interrupt-entry MSR.  Port together with the MSR IR/DR flush, which `ppcbatstale` carries in its governing text (TRIAGE.md T96).  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "mipsdivwrap",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "cpus/cpu_mips_instr.c:X(div)/X(ddiv) -- INT_MIN / -1 returns LO=0 (and ddiv HI = dividend) where the manuals give the wrapped quotient with HI=0 -- WRONG-RESULT",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T21 (class WRONG-RESULT; reach U, user mode; effort: one-line each; report rows: A6-5, A issues (CHERI PR#1)).  Source URLs: https://github.com/CTSRD-CHERI/gxemul/commit/1236c18954d858650dcc6267ede063fad1e6df6b, https://github.com/CTSRD-CHERI/gxemul/pull/1.  Our site at de8c7547: src/cpus/cpu_mips_instr.c:1839-1840, :1863-1867.  Portable fix: yes -- port CHERI 1236c18 / CHERI PR#1 (result value only; the host-trap guard is already present).  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "ppclswizero",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "cpus/cpu_ppc_instr.c:X(lswi) -- the unfilled low-order bytes of the last register keep stale data (zero-filled only in MODE_POWER), and the byte assembly uses signed-overflow shifts -- WRONG-RESULT (+ host UB)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T22 (class WRONG-RESULT; reach U, user mode; effort: small; report rows: A4-17, A(b-1) class 1 (lswi shifts)).  Source URLs: https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/3cdc32f0d3ab8f4d33f09a13a02b4c5cb80b3221, https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/e88c21b997c83d816aea2f4806ed05a5723e5492.  Our site at de8c7547: src/cpus/cpu_ppc_instr.c:3056-3059.  Portable fix: yes -- port rs6000 3cdc32f, rs6000 e88c21b.  Filing check (TRIAGE.md): only `mrwstore2` mentions lswi, for partial completion.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "mipscop0cpu",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "cpus/cpu_mips_instr.c COP0-function default arm (#236) -- raises RI without the CU0 check, so user mode gets RI instead of Coprocessor Unusable, and prints an unlatched `fatal()` on every translation -- WRONG-RESULT (+ log flood)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T23 (class WRONG-RESULT; reach U, user mode; effort: small; report rows: A2-64).  Source URLs: https://github.com/rpajarola/gxemul/commit/12306ee4747fd15a0c67cb2ecc3318ff2f7256d4.  Our site at de8c7547: src/cpus/cpu_mips_instr.c:4930-4938.  Portable fix: yes -- port rpajarola 12306ee (cop0 part).  Filing check (TRIAGE.md): `mipscop0tail` covers only the goto-bad arms.  Not a duplicate of `mipscop0tail` (regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md A: it exceeds the row it resembles).  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "ppcisisrr1",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "cpus/cpu_ppc.c:ppc_exception + memory_ppc.c:ppc_translate_v2p -- an ISI sets no SRR1 reason bit (not-found, protection, no-execute) -- WRONG-RESULT",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T25 (class WRONG-RESULT; reach U, user mode; effort: small; report rows: A4-19).  Source URLs: https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/8b0737a40738a47c4dd5e360c482caa5756b2c54, https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/7cb33c85d3d21be36240f586f9b8e4c3c86364ef.  Our site at de8c7547: src/cpus/cpu_ppc.c:327; src/cpus/memory_ppc.c:315-323.  Portable fix: partial, or an idea only -- port with correction: rs6000 8b0737a, rs6000 7cb33c8 (its no-execute/guarded bit is wrong).  Filing check (TRIAGE.md): 0 hits.  Do not port rs6000's no-execute/guarded ISI bit (regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md F).  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "ppcpterc",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "cpus/memory_ppc.c:get_pte_low/ppc_vtp32 -- the hardware table walk never sets the PTE referenced/changed bits -- WRONG-RESULT (guest paging sees stale R/C)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T26 (class WRONG-RESULT; reach U, user mode; effort: medium; report rows: A4-20).  Source URLs: https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/4f9229ea7b224b4b7108d416d8b89bf12bc91022, https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/daa612bde8d1a45d2108088df07f08ab5d4df925.  Our site at de8c7547: src/cpus/memory_ppc.c:131-232; src/cpus/memory_rw.c:745-749.  Portable fix: partial, or an idea only -- port with changes: rs6000 4f9229e, rs6000 daa612b (RW pages must stay read-only in the cache until the first store).  Filing check (TRIAGE.md): only a caution in `mrwstore2`.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "mipsr3010irq",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "cpus/cpu_mips.c / cpu_mips_coproc.c:fpu_unimpl_trap -- the MIPS I R2010/R3010 FPU interrupt is unwired, so enabled IEEE exceptions and unimplemented operations on R3000-class CPUs raise nothing -- WRONG-RESULT",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T27 (class WRONG-RESULT; reach U, user mode; effort: large; report rows: A2-43).  Source URLs: https://github.com/rpajarola/gxemul/commit/8ca85e82c0b16c96b12f79306d3ec1386db9a432.  Our site at de8c7547: src/cpus/cpu_mips.c:258; src/cpus/cpu_mips_coproc.c:1093-1095.  Portable fix: partial, or an idea only -- idea: rpajarola 8ca85e8 (irq_fpu on line 7).  Filing check (TRIAGE.md): prose only: OB:1573, OB:1601 'R3010 interrupt pin unwired'; no id.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "mipsrecipdecode",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "cpus/cpu_mips_coproc.c:fpu_function -- RECIP/RSQRT (0x15/0x16) and MOVCF/MOVZ/MOVN.fmt (0x11-0x13) are undecoded: an ungated `fatal()` per execution and CpU(1) raised with CU1 already set -- WRONG-RESULT (guest re-trap livelock + host log flood)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T30 (class WRONG-RESULT; reach U, user mode; effort: medium; report rows: A6-15, A(c)#5).  Source URLs: https://github.com/TheFausap/gxemul/commit/380649a10c6c6934494e92d21891c5f5dd450b93.  Our site at de8c7547: src/cpus/cpu_mips_coproc.c:1798, :2585-2589.  Portable fix: none -- a design is owed (TheFausap 380649a is dead code: idea only).  Filing check (TRIAGE.md): sibling of the closed #295 class; OB:2030-2046 covers round/ceil/floor only.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "mipscop1xcpu",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "cpus/cpu_mips_instr.c:X(to_be_translated) opcode 0x13 -- COP1X (MADD/MSUB/NMADD/NMSUB.fmt, LWXC1/LDXC1/SWXC1/SDXC1, PREFX) always raises CpU(3) on MIPS IV/64 FPU CPUs -- WRONG-RESULT",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T31 (class WRONG-RESULT; reach U, user mode; effort: medium; report rows: A(c)#5 related gap, A6 note A3).  Source URLs: none -- found by the research's own reading (report rows above); no fork carries a fix.  Our site at de8c7547: src/cpus/cpu_mips_instr.c:5136-5142.  Portable fix: none -- a design is owed.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "mipssyncmips1",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "cpus/cpu_mips_instr.c SPECIAL decode -- SYNC is a NOP at every ISA level; on an R3000 (MIPS I) it must raise RI -- WRONG-RESULT (Mach 3.0's user emulator spins)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T32 (class WRONG-RESULT; reach U, user mode; effort: one-line; report rows: A7-53).  Source URLs: https://github.com/ajfa/mach3-cmu-pmax/commit/5cfc043186490b2cbd8670c0995d02862d36e4ce.  Our site at de8c7547: src/cpus/cpu_mips_instr.c:4675-4677; src/include/opcodes_mips.h:184.  Portable fix: none -- a design is owed (idea from ajfa mach3 5cfc043 README).  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "smpcodeinval",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "cpus/memory_rw.c (end of MEMORY_RW) -- a write invalidates translated code only on the writing CPU, and translate-time write revocation is per-CPU too, so other CPUs keep stale translations -- WRONG-RESULT (stale code with -n > 1)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T35 (class WRONG-RESULT; reach U*, user mode with a non-default option; effort: medium; report rows: A1-33, A(c)#6, C U1).  Source URLs: https://github.com/retroprom/gxemul/commit/55eea37f, https://github.com/retroprom/gxemul/commit/6d83f6da, https://sourceforge.net/p/gxemul/code2/HEAD/log/, https://github.com/skrll/gxemul/commit/a4e2335.  Our site at de8c7547: src/cpus/memory_rw.c:752-760; src/cpus/cpu_dyntrans.c:820-828; src/core/emul.c:492-503.  Portable fix: yes -- port upstream 55eea37f + upstream 6d83f6da (SVN r6557/r6562) after the constructor-store row (or a NULL check: skrll a4e2335 records the segfault); extend translate-time write revocation to all CPUs (upstream stays partial).  Filing check (TRIAGE.md): 0 hits.  Port only after the constructor-time stores move (`cpunewstores`, TRIAGE.md T147) or with a NULL check; upstream's form stays partial without an all-CPU write revocation.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "m88kbuserrregs",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "cpus/memory_rw.c MEM_M88K device-failure arm + devices/dev_luna88k.c case 0x3ffffff0 -- a refused device access raises the access exception without writing the CMMU fault status (PFSR=BERROR) and fault address (PFAR); the LUNA probe address writes PFSR only, no PFAR and no exception -- WRONG-RESULT (the guest's trap handler reads PFSR 0 for a bus error, per the fork's own vmedefaultkill measurement)",
+   "state_note": "QUEUE: external-research batch 5 of 10 (regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md D).  Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T36 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: small; report rows: A1-20, A1-25, A1-48, A(c)#10, C U8).  Source URLs: https://github.com/retroprom/gxemul/commit/4e3e72b1, https://github.com/Randrianasulu/GXemul/commit/9bfc91e, https://github.com/retroprom/gxemul/commit/6cb3514c, https://sourceforge.net/p/gxemul/code2/HEAD/log/.  Our site at de8c7547: src/cpus/memory_rw.c:603-624; src/devices/dev_luna88k.c:624-627.  Portable fix: yes -- port upstream 4e3e72b1 + r6577(e) NULL check + upstream 6cb3514c (SVN r6542/r6547); do not copy the plain-RAM CMMU windows for absent CPUs.  Filing check (TRIAGE.md): no row of its own; context only in `lunadefaultstop` reason (b) and `vmedefaultkill`'s FAULT measurement.  THE CARRIER OF THE REOPENED PFAR ITEM (regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md D5, E; RECORDS_VERDICTS.md R2): OUTSTANDING_BUGS.md's Round 71B note refuted upstream's 'm88k PFAR' fix on a false premise -- CMMU_PFAR is modelled (include/thirdparty/m8820x.h:66; written at memory_m88k.c:399 and :405; guest-read through dev_m8820x.c:438) -- and is corrected in place by this filing; the dev_luna88k.c 0x3ffffff0 half of this row is that item (upstream 6cb3514c, SVN r6547).  Order: before ANY 88K fault round (D5).  The port keeps the original physical address (saved as orig_paddr at memory_rw.c:437; paddr is device-relative from :494), selects the right CMMU, keeps upstream's NULL check, and does not import upstream 4e3e72b1's plain-RAM CMMU windows (D5, F).  `m88kexit` (memory_m88k.c:390-394) is a different row -- not merged (E).  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "mipssubpageram",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "cpus/memory_rw.c MIPS PROM-area fallthrough + devices/dev_mc146818.c init -- sub-page devices in the 0x1fc00000 window (KN02 RTC 0x100 bytes, DZ 0x80 bytes): one access past the registers maps the whole page as RAM and later accesses bypass the device -- WRONG-RESULT (device silently disconnected; NVRAM stores lost)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T37 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: small; report rows: A2-66, A(c)#8).  Source URLs: https://github.com/rpajarola/gxemul/commit/e37235e61de104fc7402793e6bba9fdd7aeb2607.  Our site at de8c7547: src/cpus/memory_rw.c:662-667, :738-750; src/devices/dev_mc146818.c:671-682; src/include/devices.h:167.  Portable fix: yes -- port rpajarola e37235e (register the whole page) or fix the PROM-area fallthrough.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "m88koutsideram",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "cpus/memory_rw.c non-MIPS path beyond RAM -- an 88K access with no RAM or device behind it reads zeros or drops the write instead of raising a bus error -- WRONG-RESULT (SVR4 memory sizing never terminates)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T38 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: small; report rows: A7-33, A1-25).  Source URLs: https://github.com/ajfa/mvme187-sysv88-gxemul/commit/4a01173afc4beafabbd61ca385bd158d07d4a415, https://github.com/retroprom/gxemul/commit/4e3e72b1.  Our site at de8c7547: src/cpus/memory_rw.c:663-713; src/core/memory.c:598-656.  Portable fix: yes -- port ajfa mvme187 4a01173 patch 02 / upstream 4e3e72b1 outside-RAM part; luna88k/OpenBSD boots must be re-checked.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "m88kpsrreserved",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "cpus/cpu_m88k.c:m88k_stcr PSR/EPSR -- reserved bits 27..4 are stored verbatim where the MC88100 ignores writes to them -- WRONG-RESULT (SVR4 resumes processes at spl7)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T39 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: one-line; report rows: A7-24, A(c)#9).  Source URLs: https://github.com/ajfa/mvme187-sysv88-gxemul/commit/4a01173afc4beafabbd61ca385bd158d07d4a415.  Our site at de8c7547: src/cpus/cpu_m88k.c:553, :557; src/cpus/cpu_m88k_instr.c:2249.  Portable fix: yes -- port ajfa mvme187 4a01173 patch 01 mask (it also leaves hard-wired bits 9-4 unmodelled).  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "osiopdmainval",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "devices/dev_osiop.c:write_byte -- SCRIPTS DMA writes guest RAM through the host page without invalidating translated code -- WRONG-RESULT (stale code runs after a DMA load)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T40 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: small; report rows: A7-37).  Source URLs: https://github.com/ajfa/mvme187-sysv88-gxemul/commit/4a01173afc4beafabbd61ca385bd158d07d4a415.  Our site at de8c7547: src/devices/dev_osiop.c:261-277.  Portable fix: yes -- port ajfa mvme187 4a01173 patch 04 (invalidate on DMA write).  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "ppctlbieseg",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "cpus/cpu_ppc_instr.c:X(tlbie) -- invalidates only the exact EA, not the page index in every segment -- WRONG-RESULT",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T41 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: small; report rows: A4-21).  Source URLs: https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/59cc4103f41689f2d4b79626cfda6b9065e6595c, https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/3dafe76542ea0ee67176456cfffbeeeaa98e983c.  Our site at de8c7547: src/cpus/cpu_ppc_instr.c:3930-3935.  Portable fix: yes -- port rs6000 59cc410 (branch-only working form; rs6000 3dafe76).  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "ppcdecwrite",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "cpus/cpu_ppc_instr.c:X(mtspr) DEC -- a software DEC write that flips bit 0 from 0 to 1 does not signal the decrementer exception -- WRONG-RESULT",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T42 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: small; report rows: A4-24).  Source URLs: https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/241f5e273caf75599ebb8ebc554e1e9faaacf508.  Our site at de8c7547: src/cpus/cpu_ppc_instr.c:2807-2810; src/cpus/cpu_dyntrans.c:450-454.  Portable fix: yes -- port rs6000 241f5e2.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "ppcsprg2drop",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "cpus/cpu_ppc_instr.c:X(mtspr_sprg2) -- SPRG2 writes are discarded on 32-bit CPUs (a FreeBSD hack) -- WRONG-RESULT",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T43 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: one-line; report rows: A4-26).  Source URLs: https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/d13a974834e6781f7b25af10b9760e78a583b52d.  Our site at de8c7547: src/cpus/cpu_ppc_instr.c:2811-2818.  Portable fix: yes -- port rs6000 d13a974.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "mipscountread",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "cpus/cpu_mips_coproc.c:coproc_register_read COP0_COUNT -- an MFC0 Count read bumps Count, and a bump that reaches Compare raises IP7 only at the batch end -- WRONG-RESULT (Linux cevt-r4k probe)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T44 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: small; report rows: A3-28).  Source URLs: https://github.com/jroark/GXemul/commit/dc55abccde355926cfbe9f64a5c04867186b2f0b, https://github.com/jroark/GXemul/commit/445d32d1fe895c000ff4a51c589225e31c82054c.  Our site at de8c7547: src/cpus/cpu_mips_coproc.c:590-595; src/cpus/cpu_dyntrans.c:420-441.  Portable fix: yes -- port jroark dc55abc, jroark 445d32d.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "mipscountrate",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "cpus/cpu_dyntrans.c Count update -- Count advances once per instruction instead of once per two cycles, with no per-machine divisor -- WRONG-RESULT (timebase ratio)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T45 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: medium; report rows: A3-29, A3-30).  Source URLs: https://github.com/jroark/GXemul/commit/dabf5ce42e300c0f0c46c3a032b1ae414a54bf48, https://github.com/jroark/GXemul/commit/b0411219afea8ffef07405b6cb817e5e6bfb750e.  Our site at de8c7547: src/cpus/cpu_dyntrans.c:425-426.  Portable fix: yes -- port jroark dabf5ce, jroark b041121 (BE-300 rate is jroark's value).  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "mipscountidle",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "cpus/cpu_dyntrans.c idle path -- WAIT/STANDBY batches subtract N_DYNTRANS_IDLE_BREAK, so Count does not advance while the guest idles -- WRONG-RESULT",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T46 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: small; report rows: A3-31).  Source URLs: https://github.com/jroark/GXemul/commit/45b34df624c82b883d341e818b40b438b4f4af77.  Our site at de8c7547: src/cpus/cpu_dyntrans.c:376-377.  Portable fix: yes -- port jroark 45b34df.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "mipsebase",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "cpus/cpu_mips_coproc.c / cpu_mips.c:mips_cpu_exception -- EBase (CP0 15 sel 1) is not modelled for the Release-2 cores (4KEc, 5KE, 24KEc): mtc0 is dropped with an unlatched fatal(), mfc0 returns PRId, the vector base is hard-wired -- WRONG-RESULT",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T47 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: small; report rows: A7-2).  Source URLs: https://github.com/klx3300/gxemul-hos/commit/8f94a57900ee6385d6fb6fcd09f9320af12a95c2.  Our site at de8c7547: src/cpus/cpu_mips_coproc.c:892-894, :1011-1014, :601, :647; src/cpus/cpu_mips.c:2165-2168.  Portable fix: yes -- port klx3300 8f94a57.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "ns16550iirid",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "devices/dev_ns16550.c DEVICE_TICK / IIR read -- IIR ORs RXRDY and TXRDY flag bits (RX + THRE reads 0x6, the line-status ID) and every IIR read clears THRE -- WRONG-RESULT (shared UART model)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T48 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: small; report rows: A3-34, A5-11, A(c)#7).  Source URLs: https://github.com/jroark/GXemul/commit/2a1a395a693cbcd2f635d88b9204842c88d6b902, https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/f58d6d745800f300eecab01e97d8630c15e20daf, https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/705f50bff202ca43b5c79f1cc3e303e120f26ba4.  Our site at de8c7547: src/devices/dev_ns16550.c:83-104, :212-213.  Portable fix: yes -- port jroark 2a1a395 / rs6000 f58d6d7, rs6000 705f50b (fixed independently twice).  Filing check (TRIAGE.md): `lcaisalane` notes \"IIR read clears TXRDY\" as a disclosure only.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "i8259eoiirr",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "devices/dev_8259.c EOI -- non-specific and specific EOI clear the IRR bit of a still-asserted line -- WRONG-RESULT (lost level-triggered request)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T49 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: one-line; report rows: A5-25, A(c)#11).  Source URLs: https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/ae2240b30a994913d56f904533ee64d0178682ee.  Our site at de8c7547: src/devices/dev_8259.c:107, :122.  Portable fix: yes -- port rs6000 ae2240b.  Filing check (TRIAGE.md): `isaorder` notes the mechanism only.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "i8259icw4",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "devices/dev_8259.c init sequence -- ICW1 SNGL/IC4 are ignored, so with IC4=0 the guest's first OCW1 mask write is swallowed as ICW4 -- WRONG-RESULT",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T50 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: small; report rows: A5-26, A(c)#11).  Source URLs: https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/598ab108cacb56dfbeae33eb463fd2b8c18393dd.  Our site at de8c7547: src/devices/dev_8259.c:183-206.  Portable fix: yes -- port rs6000 598ab10.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "i8259isrnever",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "devices/dev_8259.c + devices/dev_prep.c IACK -- ISR is never set (read-ISR returns 0) and the PReP IACK read has no acknowledge side effect -- WRONG-RESULT",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T51 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: medium; report rows: A5-27, A(c)#11).  Source URLs: https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/598ab108cacb56dfbeae33eb463fd2b8c18393dd, https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/174448c390ede42e884e26bd0b627ab43169dd11.  Our site at de8c7547: src/devices/dev_8259.c:108; src/devices/dev_prep.c:52-62.  Portable fix: yes -- port rs6000 598ab10, rs6000 174448c.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "eaglecfglanes",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "devices/dev_eagle.c:DEVICE_ACCESS 0xCF8/0xCFC -- byte/halfword config accesses at 0xCFD-0xCFF read 0 or are dropped, and a narrow write at 0xCFC is passed on as a zero-extended dword -- WRONG-RESULT (prep, mvmeppc)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T52 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: small; report rows: A5-31).  Source URLs: https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/eb4c571747357b394ec15fc2b9f9a31efb999ef5, https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/b31c0ea143918753ce51bed8a7a4fbee2e5db63c.  Our site at de8c7547: src/devices/dev_eagle.c:65-76.  Portable fix: yes -- port rs6000 eb4c571, rs6000 b31c0ea.  Filing check (TRIAGE.md): sibling `macepciwidth` covers dev_sgi_ip32 only.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "pckbcledparam",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "devices/dev_pckbc.c:dev_pckbc_command -- the Set-LEDs parameter byte is parsed as a new command (non-zero bytes get RESEND) -- WRONG-RESULT",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T53 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: small; report rows: A5-12).  Source URLs: https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/d2ff00eb9d9dc8e8b660672c9a155a8131cb2b20, https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/c861ff6d1909a97715eddf7d30b8d8cabd352519.  Our site at de8c7547: src/devices/dev_pckbc.c:820-823, :812-818, :901-905.  Portable fix: yes -- port rs6000 d2ff00e, rs6000 c861ff6.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "pckbcselftest",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "devices/dev_pckbc.c controller 0xA9 / 0xAA and keyboard 0xFF -- 0xA9 queues no reply and self-test/reset do not flush the output queues -- WRONG-RESULT (guest polls to timeout)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T54 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: small; report rows: A5-13).  Source URLs: https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/9bda09a28df39f3208c0577c05723b8e254b7252, https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/ca2377fa6c8c1c81eb0df9c578a9461ea08c0a2b, https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/c861ff6d1909a97715eddf7d30b8d8cabd352519.  Our site at de8c7547: src/devices/dev_pckbc.c:1056-1061, :883-900.  Portable fix: yes -- port rs6000 9bda09a, rs6000 ca2377f, rs6000 c861ff6 (not the IBM-specific extra 0xB2).  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "pckbcauxecho",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "devices/dev_pckbc.c 0xD4/0xD3 -- a byte written to the aux device is echoed into the keyboard stream -- WRONG-RESULT",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T55 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: small; report rows: A5-15).  Source URLs: https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/d2ff00eb9d9dc8e8b660672c9a155a8131cb2b20, https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/94e3ed46472d2c17ffb5eaa2d58aa5ce7b1dae5a.  Our site at de8c7547: src/devices/dev_pckbc.c:1077-1085, :792-807.  Portable fix: yes -- port routing part of rs6000 d2ff00e, rs6000 94e3ed4.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "mc146818reg63",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "devices/dev_mc146818.c:mc146818_update_time -- DEC register 63 (NVRAM) is overwritten with the year on every time read -- WRONG-RESULT (NVRAM byte clobbered)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T56 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: small; report rows: A2-34).  Source URLs: https://github.com/rpajarola/gxemul/commit/871e551340226bdc3ed3c3b1c9e0e1fea824aa70.  Our site at de8c7547: src/devices/dev_mc146818.c:258, :272, :529.  Portable fix: yes -- port rpajarola 871e551.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "mc146818uie",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "devices/dev_mc146818.c tick -- no once-a-second UF with a UIE interrupt (only a polled UF hack) -- WRONG-RESULT",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T57 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: small; report rows: A2-36).  Source URLs: https://github.com/rpajarola/gxemul/commit/871e551340226bdc3ed3c3b1c9e0e1fea824aa70.  Our site at de8c7547: src/devices/dev_mc146818.c:357-379.  Portable fix: yes -- port rpajarola 871e551.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "lesarom",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "devices/dev_le.c:DEVICE_ACCESS(le) -- the station-address ROM is not decoded at its slot+0x180000 alias and bytes 6-7 carry MAC copies instead of the ESAR checksum -- WRONG-RESULT",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T58 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: small; report rows: A2-8).  Source URLs: https://github.com/rpajarola/gxemul/commit/0c1e6d122a418955b36a2788a4dc9aaa5f4bbb2a.  Our site at de8c7547: src/devices/dev_le.c:955-956, :1027, :1086-1093.  Portable fix: yes -- port rpajarola 0c1e6d1.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "lermd3fcs",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "devices/dev_le.c:le_rx -- RMD3 counts len+4 but only len bytes are copied, so the last 4 bytes of the guest buffer are stale -- WRONG-RESULT",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T59 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: one-line; report rows: A2-10).  Source URLs: https://github.com/rpajarola/gxemul/commit/d1f0720ac94c3a261bbecca8e870addc9c106556.  Our site at de8c7547: src/devices/dev_le.c:598.  Portable fix: yes -- port rpajarola d1f0720.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "leloopback",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "devices/dev_le.c:le_tx -- loopback mode (LOOP/INTL) is not modelled, so self-test frames go out to the network or tap -- WRONG-RESULT",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T60 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: medium; report rows: A2-11).  Source URLs: https://github.com/rpajarola/gxemul/commit/d1f0720ac94c3a261bbecca8e870addc9c106556.  Our site at de8c7547: src/devices/dev_le.c:438, :74.  Portable fix: yes -- port rpajarola d1f0720.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "lecsrmask",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "devices/dev_le.c:le_register_write -- CSR1-3 store all 16 bits (implemented-bit masks missing) -- WRONG-RESULT",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T61 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: one-line; report rows: A2-26).  Source URLs: https://github.com/rpajarola/gxemul/commit/e108b546b2e6217ad30bb688b4cbb029755ce230.  Our site at de8c7547: src/devices/dev_le.c:884-886.  Portable fix: yes -- port rpajarola e108b54.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "asccfg1id",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "devices/dev_asc.c:DEVICE_ACCESS(asc) -- CFG1's low 3 bits are forced to 7 on every access -- WRONG-RESULT",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T62 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: one-line; report rows: A2-22).  Source URLs: https://github.com/rpajarola/gxemul/commit/bee311c1f3107283beb0e577173a640f18968eab.  Our site at de8c7547: src/devices/dev_asc.c:1135-1136.  Portable fix: yes -- port rpajarola bee311c.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "ascselatn",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "devices/dev_asc.c:dev_asc_select -- DMA select-with-ATN takes the message bytes from the FIFO only and copies the whole transfer count as the CDB -- WRONG-RESULT (Ultrix 3.1D)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T63 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: small; report rows: A2-63).  Source URLs: https://github.com/rpajarola/gxemul/commit/12306ee4747fd15a0c67cb2ecc3318ff2f7256d4.  Our site at de8c7547: src/devices/dev_asc.c:909, :987-997.  Portable fix: yes -- port rpajarola 12306ee.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "ioasic3minscsi",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "machines/machine_pmax.c 3MIN arm + devices/dev_dec_ioasic.c -- the 3MIN 53C94 has no DMA path through the IOASIC, so DMA lands in the asc's private buffer -- WRONG-RESULT (3MIN SCSI; write direction not assessed)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T64 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: medium; report rows: A2-23).  Source URLs: https://github.com/rpajarola/gxemul/commit/bee311c1f3107283beb0e577173a640f18968eab.  Our site at de8c7547: src/machines/machine_pmax.c:309-310; src/devices/dev_dec_ioasic.c:83-90.  Portable fix: yes -- port rpajarola bee311c.  Filing check (TRIAGE.md): 0 hits for IOASIC / 3MIN.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "ioasicintrclr",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "devices/dev_dec_ioasic.c IOASIC_INTR write -- the write clears every bit set in the value, including the devices' read-only lines -- WRONG-RESULT",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T65 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: one-line; report rows: A2-25).  Source URLs: https://github.com/rpajarola/gxemul/commit/e108b546b2e6217ad30bb688b4cbb029755ce230.  Our site at de8c7547: src/devices/dev_dec_ioasic.c:261-265.  Portable fix: yes -- port rpajarola e108b54.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "ioasicesar",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "devices/dev_dec_ioasic.c -- station-address ROM reads return a synthetic pattern -- WRONG-RESULT",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T66 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: small; report rows: A2-27).  Source URLs: https://github.com/rpajarola/gxemul/commit/e108b546b2e6217ad30bb688b4cbb029755ce230.  Our site at de8c7547: src/devices/dev_dec_ioasic.c:415.  Portable fix: yes -- port rpajarola e108b54.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "ioasic3minscc",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "devices/dev_dec_ioasic.c -- 3MIN SCC transmit/receive DMA is under `#if 0` -- WRONG-RESULT (Ultrix 4.5 serial console waits forever)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T67 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: medium; report rows: A2-47).  Source URLs: https://github.com/rpajarola/gxemul/commit/7aeae85458685ce7628f0ca5b6bcf9ebe611f393.  Our site at de8c7547: src/devices/dev_dec_ioasic.c:180-258.  Portable fix: yes -- port rpajarola 7aeae85.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "sccwr0ptr",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "devices/dev_scc.c:DEVICE_ACCESS(scc) -- the WR0 register pointer is the whole byte & 15 and WR0 commands are not decoded -- WRONG-RESULT",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T68 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: small; report rows: A2-29).  Source URLs: https://github.com/rpajarola/gxemul/commit/2dfd6ec32be07d7dd38a707f66742de3e2023ed3.  Our site at de8c7547: src/devices/dev_scc.c:402-405.  Portable fix: yes -- port rpajarola 2dfd6ec.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "sccintpend",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "devices/dev_scc.c -- RR3 and data reads clear all interrupt-pending bits, one WR1 governs both channels, special-condition-only mode interrupts per character, WR9 is stored per channel -- WRONG-RESULT",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T69 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: medium; report rows: A2-30).  Source URLs: https://github.com/rpajarola/gxemul/commit/2dfd6ec32be07d7dd38a707f66742de3e2023ed3, https://github.com/rpajarola/gxemul/commit/7aeae85458685ce7628f0ca5b6bcf9ebe611f393, https://github.com/rpajarola/gxemul/commit/a99af56307177bf32c0e789360fb36212b47225f.  Our site at de8c7547: src/devices/dev_scc.c:379-388, :432-435, :215-216, :201, :454.  Portable fix: yes -- port rpajarola 2dfd6ec, rpajarola 7aeae85, rpajarola a99af56.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "sccloopback",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "devices/dev_scc.c -- local loopback routes characters through the keyboard remap onto the keyboard line -- WRONG-RESULT",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T70 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: small; report rows: A2-31).  Source URLs: https://github.com/rpajarola/gxemul/commit/2dfd6ec32be07d7dd38a707f66742de3e2023ed3, https://github.com/rpajarola/gxemul/commit/a99af56307177bf32c0e789360fb36212b47225f.  Our site at de8c7547: src/devices/dev_scc.c:447-451, :282-285, :128-134.  Portable fix: yes -- port rpajarola 2dfd6ec, rpajarola a99af56.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "sccresets",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "devices/dev_scc.c -- WR9 resets, Send Abort, the Tx underrun/EOM latch, the BRG zero-count interrupt and WR4 async reset are not modelled -- WRONG-RESULT (KN02-BA PROM tests)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T71 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: medium; report rows: A2-32).  Source URLs: https://github.com/rpajarola/gxemul/commit/2dfd6ec32be07d7dd38a707f66742de3e2023ed3, https://github.com/rpajarola/gxemul/commit/a99af56307177bf32c0e789360fb36212b47225f.  Our site at de8c7547: src/devices/dev_scc.c (absent features).  Portable fix: yes -- port rpajarola 2dfd6ec, rpajarola a99af56.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "scc3minlines",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "devices/dev_scc.c -- 3MIN line mapping: every channel goes to lk201_tx_data, so keyboard commands reach the console and mouse input is dropped -- WRONG-RESULT",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T72 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: small; report rows: A2-33).  Source URLs: https://github.com/rpajarola/gxemul/commit/5d3e9ee0884c1a0e2eed6e1ec77ce9ba85d9f0de.  Our site at de8c7547: src/devices/dev_scc.c:445, :128-134.  Portable fix: yes -- port rpajarola 5d3e9ee.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "tcemptyslot",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "devices/dev_turbochannel.c:DEVICE_ACCESS -- empty-slot reads at 0x3e0-0x4ff return zero with no bus error on every model -- WRONG-RESULT (KN02-BA PROM reports a bad option ROM per empty slot)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T73 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: small; report rows: A2-45).  Source URLs: https://github.com/rpajarola/gxemul/commit/042b61b040deedf4c1aafb361a563fdc4f9eedb9.  Our site at de8c7547: src/devices/dev_turbochannel.c:143-149.  Portable fix: yes -- port rpajarola 042b61b.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "pmaxsystype",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "machines/machine_pmax.c environment + promemul/dec_prom.c:dec_jumptable_func -- no `systype` variable (Ultrix 3.1D panics) and the old jump table's close() at 0x50 returns -1 -- WRONG-RESULT",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T74 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: small; report rows: A2-65).  Source URLs: https://github.com/rpajarola/gxemul/commit/12306ee4747fd15a0c67cb2ecc3318ff2f7256d4.  Our site at de8c7547: src/machines/machine_pmax.c:935-940; src/promemul/dec_prom.c:186-195.  Portable fix: yes -- port rpajarola 12306ee.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "cdcapround",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "disk/diskimage.c:diskimage_recalc_size -- CD-ROM and tape capacity is rounded up to whole 16x63 cylinders, so reading the whole medium returns up to ~0.5 MB of zeros -- WRONG-RESULT",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T75 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: small; report rows: A2-56).  Source URLs: https://github.com/rpajarola/gxemul/commit/97531580519d0606f48964da695004fed08be123.  Our site at de8c7547: src/disk/diskimage.c:302-303.  Portable fix: yes -- port rpajarola 9753158.  Filing check (TRIAGE.md): related `b126` is a different recalc heuristic.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "scsimodeselhdr",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "disk/diskimage_scsicmd.c MODE SELECT -- only NetBSD's exact header is accepted; anything else prints an unlatched `fatal()` hex dump -- WRONG-RESULT (+ log flood; OSF/1, Ultrix)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T76 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: small; report rows: A2-61).  Source URLs: https://github.com/rpajarola/gxemul/commit/d685ed0fb10b82c22d1d5331e1f6e4cb46d64eba, https://github.com/rpajarola/gxemul/commit/39f3fbfac4e2fedca2b3688ceaad845466bdac54.  Our site at de8c7547: src/disk/diskimage_scsicmd.c:1306-1337.  Portable fix: yes -- port rpajarola d685ed0, rpajarola 39f3fbf keeping #133's 256..8192 bound.  Filing check (TRIAGE.md): `stalelbsbound` is a different MODE SELECT defect.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "scsievpd",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "disk/diskimage_scsicmd.c INQUIRY -- EVPD requests get standard INQUIRY data instead of a VPD page -- WRONG-RESULT",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T77 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: small; report rows: A5-17).  Source URLs: https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/554e135a564bd029d4a6dc38341b82fd0879ea20, https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/24cb943fd42dbb1fa6285d6a7e1dab89b8a1b6f8.  Our site at de8c7547: src/disk/diskimage_scsicmd.c:363-367.  Portable fix: yes -- port rs6000 554e135, rs6000 24cb943.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "scsimodesensepc",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "disk/diskimage_scsicmd.c MODE SENSE -- page control PC=1/2/3 returns current values with an unlatched `fatal()` per command -- WRONG-RESULT (+ log flood)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T78 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: small; report rows: A5-19).  Source URLs: https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/9ef1d3ea8ec6fb2a9e1621c6dfc8cb0fd065cb67, https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/24cb943fd42dbb1fa6285d6a7e1dab89b8a1b6f8.  Our site at de8c7547: src/disk/diskimage_scsicmd.c:591-593.  Portable fix: yes -- port rs6000 9ef1d3e, rs6000 24cb943.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "dc7085cts",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "devices/dev_dc7085.c MSR read -- CTS is not reported on lines 2/3 -- WRONG-RESULT (OSF/1 console hangs up)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T79 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: one-line; report rows: A2-60, A(c)#13).  Source URLs: https://github.com/rpajarola/gxemul/commit/807d80bf5be49ec5ef4d2f590904bea23bd11966.  Our site at de8c7547: src/devices/dev_dc7085.c:261-262.  Portable fix: yes -- port rpajarola 807d80b.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "dc7085trdy",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "devices/dev_dc7085.c:DEVICE_TICK -- an early return while TRDY is set skips receive processing (RDONE) -- WRONG-RESULT (Mach 3.0 keyboard input ignored)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T80 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: one-line; report rows: A7-52, A(c)#13).  Source URLs: https://github.com/ajfa/mach3-cmu-pmax/commit/5cfc043186490b2cbd8670c0995d02862d36e4ce.  Our site at de8c7547: src/devices/dev_dc7085.c:149-150.  Portable fix: yes -- port ajfa mach3 5cfc043 patch; Ultrix and NetBSD/pmax must be re-checked.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "natconnfail",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "net/net_ip.c:net_ip_tcp/net_tcp_rx_avail -- a failed outgoing NAT connect() is reported to the guest as connected and then closed -- WRONG-RESULT",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T81 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: small; report rows: A2-53, A(c)#12).  Source URLs: https://github.com/rpajarola/gxemul/commit/1c18c2b1ddb90a62cd27c4873b436511d730383d.  Our site at de8c7547: src/net/net_ip.c:594-601, :1520-1552.  Portable fix: yes -- port rpajarola 1c18c2b.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "natdhcpreply",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "net/net_ip.c:net_ip_broadcast_dhcp -- the reply lacks option 53 (message type) and puts the server address in giaddr instead of siaddr -- WRONG-RESULT (strict DHCP clients ignore it)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T82 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: small; report rows: A3-38).  Source URLs: https://github.com/jroark/GXemul/commit/ba17c36283c56403734ba34fcdf3522c655c5335.  Our site at de8c7547: src/net/net_ip.c:1074, :1109-1110, :1123-1139.  Portable fix: yes -- port jroark ba17c36.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "osiopcalltemp",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "devices/dev_osiop.c JUMP/CALL -- CALL does not save the return address in TEMP while RETURN jumps to TEMP -- WRONG-RESULT",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T83 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: one-line; report rows: A7-39).  Source URLs: https://github.com/ajfa/mvme187-sysv88-gxemul/commit/4a01173afc4beafabbd61ca385bd158d07d4a415.  Our site at de8c7547: src/devices/dev_osiop.c:859, :810.  Portable fix: yes -- port ajfa mvme187 4a01173 patch 04.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "osiopsigp",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "devices/dev_osiop.c -- an ISTAT SIGP write stops the script instead of waking WAIT RESELECT; CTEST2's SIGP mirror, the selection-timeout STO bit and SFBR are not modelled -- WRONG-RESULT",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T84 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: medium; report rows: A7-40).  Source URLs: https://github.com/ajfa/mvme187-sysv88-gxemul/commit/4a01173afc4beafabbd61ca385bd158d07d4a415.  Our site at de8c7547: src/devices/dev_osiop.c:1063-1083, :1043-1051, :693-700.  Portable fix: yes -- port ajfa mvme187 4a01173 patch 04.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "osiopwidelanes",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "devices/dev_osiop.c:dev_osiop_access -- a wide access to byte registers is not split into byte lanes (it now warns and stops the script) -- WRONG-RESULT",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T85 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: small; report rows: A7-41).  Source URLs: https://github.com/ajfa/mvme187-sysv88-gxemul/commit/4a01173afc4beafabbd61ca385bd158d07d4a415.  Our site at de8c7547: src/devices/dev_osiop.c:1155-1167.  Portable fix: yes -- port ajfa mvme187 4a01173 patch 04.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "clmpccmsvr",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "devices/dev_clmpcc.c -- MSVR does not report CD/DSR/CTS, and the IACK context (STK/CAR) and EOI restore are not modelled -- WRONG-RESULT (SVR4 /dev/console does not open)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T86 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: small; report rows: A7-43).  Source URLs: https://github.com/ajfa/mvme187-sysv88-gxemul/commit/4a01173afc4beafabbd61ca385bd158d07d4a415.  Our site at de8c7547: src/devices/dev_clmpcc.c:175-177, :224-234.  Portable fix: yes -- port ajfa mvme187 4a01173 patches 05/06.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "mk48multibyte",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "devices/dev_mk48txx.c access -- multi-byte NVRAM accesses read or write a single byte -- WRONG-RESULT (187Bug checksums)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T87 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: small; report rows: A7-47).  Source URLs: https://github.com/ajfa/mvme187-sysv88-gxemul/commit/4a01173afc4beafabbd61ca385bd158d07d4a415.  Our site at de8c7547: src/devices/dev_mk48txx.c:84-85, :121.  Portable fix: yes -- port ajfa mvme187 4a01173 patch 06.  Filing check (TRIAGE.md): `mk48nvramkill`, closed, was the 0x1ff0-0x1ff7 exit.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "mk48clock",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "devices/dev_mk48txx.c -- the time-of-day registers refresh only at init and on a READ 0-to-1 transition -- WRONG-RESULT (clock does not run)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T88 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: small; report rows: A7-48).  Source URLs: https://github.com/ajfa/mvme187-sysv88-gxemul/commit/4a01173afc4beafabbd61ca385bd158d07d4a415.  Our site at de8c7547: src/devices/dev_mk48txx.c:165, :129-135.  Portable fix: yes -- port ajfa mvme187 4a01173 patch 06 (NVRAM file backing is a feature).  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "mb89352scmd",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "devices/dev_mb89352.c SCMD decode -- the command is matched on the whole byte instead of bits 7:5 (no RST_ATN/SET_ATN) and transfers are accepted only with PROG_XFR -- WRONG-RESULT (variants reach the halting default arm)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T89 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: small; report rows: A1-24, A1-27, C U9(b)).  Source URLs: https://github.com/retroprom/gxemul/commit/a1cafe7c, https://github.com/retroprom/gxemul/commit/922fc86b, https://sourceforge.net/p/gxemul/code2/HEAD/log/.  Our site at de8c7547: src/devices/dev_mb89352.c:364, :409-410, :527-535.  Portable fix: yes -- port the decode part of upstream a1cafe7c + upstream 922fc86b (SVN r6544/r6546/r6550).  Filing check (TRIAGE.md): `qhmbunimplstops` covers only the resulting halt.  Not a duplicate of `qhmbunimplstops` (regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md A: it exceeds the row it resembles).  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "mb89352bfint",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "devices/dev_mb89352.c -- the BUS FREE interrupt (PCTL_BFINT_ENAB) is a TODO -- WRONG-RESULT",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T90 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: small; report rows: A1-27, C U9(a)).  Source URLs: https://github.com/retroprom/gxemul/commit/a1cafe7c.  Our site at de8c7547: src/devices/dev_mb89352.c:107.  Portable fix: yes -- port upstream a1cafe7c.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "mb89352psns",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "devices/dev_mb89352.c -- PSNS writes are stored instead of going to SDGC, and BUS_REL does not clear PSNS -- WRONG-RESULT",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T91 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: small; report rows: A1-27, C U9(c)).  Source URLs: https://github.com/retroprom/gxemul/commit/a1cafe7c.  Our site at de8c7547: src/devices/dev_mb89352.c:562-569.  Portable fix: yes -- port upstream a1cafe7c.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "pccmosnmi",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "devices/dev_pccmos.c:DEVICE_ACCESS index port -- the index is stored without masking bit 7 (NMI disable), so such a guest misses RTC registers 0x00-0x0d -- WRONG-RESULT",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T99 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: one-line; report rows: A5-28).  Source URLs: https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/bb3294595335d7c2480b7662f2d021d67a6a5436.  Our site at de8c7547: src/devices/dev_pccmos.c:74.  Portable fix: yes -- port the masking of rs6000 bb32945.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "pcicfgaddrlow",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "devices/bus_pci.c:bus_pci_decompose_1 -- CONFIG_ADDRESS keeps bits 1:0 in the register number and every unaligned select prints an unlatched `fatal()` -- WRONG-RESULT",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T100 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: one-line; report rows: A5-30).  Source URLs: https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/eb4c571747357b394ec15fc2b9f9a31efb999ef5.  Our site at de8c7547: src/devices/bus_pci.c:77-82.  Portable fix: yes -- port rs6000 eb4c571.  Filing check (TRIAGE.md): `pciaddrreadclobber` is a different 0xcf8 defect.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "eaglememctl",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "devices/bus_pci.c:PCIINIT(eagle) -- MPC105 memory-controller registers (0x80-0x94, 0xA0, 0xC0) read 0 and ignore writes -- WRONG-RESULT (borders on a feature)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T101 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: small; report rows: A5-32).  Source URLs: https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/72075be06ca641fb3fa6e08d26770c16b346d2b9, https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/711d6fc47333b919fc69a01e3d573f31d97645d4, https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/b31c0ea143918753ce51bed8a7a4fbee2e5db63c.  Our site at de8c7547: src/devices/bus_pci.c:1336-1346.  Portable fix: yes -- port rs6000 72075be, rs6000 711d6fc, rs6000 b31c0ea.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "pckbcgetid",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "devices/dev_pckbc.c KBC_GETID -- always answers AB 41 regardless of translation mode -- WRONG-RESULT (minor)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T102 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: one-line; report rows: A5-14).  Source URLs: https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/94e3ed46472d2c17ffb5eaa2d58aa5ce7b1dae5a.  Our site at de8c7547: src/devices/dev_pckbc.c:848-861.  Portable fix: yes -- port rs6000 94e3ed4.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "bt459retrace",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "devices/dev_bt459.c -- the retrace interrupt fires every 500 ticks instead of ~72 Hz of emulated time, ports are not mirrored through the 1 MB window, cursor colours are 8-bit, no TEST comparator -- WRONG-RESULT",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T103 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: medium; report rows: A2-13).  Source URLs: https://github.com/rpajarola/gxemul/commit/26ac95ada7afb76bff19024645f3edfe315208ea.  Our site at de8c7547: src/devices/dev_bt459.c:574, :576, :386-388.  Portable fix: yes -- port rpajarola 26ac95a.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "rarpaddr",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "net/net.c:net_arp RARP arm -- the reply assigns 10.0.0.0 when MAC byte 5 is below 0x10 -- WRONG-RESULT (minor)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T104 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: one-line; report rows: A2-59).  Source URLs: https://github.com/rpajarola/gxemul/commit/a4f5ea2dc20970c0da2935e466a2cdf43bc0885d.  Our site at de8c7547: src/net/net.c:250-254.  Portable fix: yes -- port rpajarola a4f5ea2 (embedded fix).  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "mipspromemulexc",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "cpus/cpu_mips_instr.c:X(promemul) + core/memory.c helpers -- PROM-emulation helpers access guest memory with CACHE_DATA and X(promemul) sets pc = RA unconditionally, discarding any exception a helper raised -- WRONG-RESULT",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T105 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: small; report rows: A5-33).  Source URLs: https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/e7b01c8e5604c7778006b690bf93a60ed5e3cfdd, https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/127befb78030438c471a6e8cb2b9315755b9847a.  Our site at de8c7547: src/core/memory.c:695-939; src/cpus/cpu_mips_instr.c:2653-2656.  Portable fix: partial, or an idea only -- idea: rs6000 e7b01c8, rs6000 127befb (failing the PROM call is the better fix).  Filing check (TRIAGE.md): 0 hits; `mipssyscallprom` is a different X(promemul) defect.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "mc146818settime",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "devices/dev_mc146818.c REGB / time registers -- a guest-set time reverts to host time on the next read; no alarm (AIE) -- WRONG-RESULT",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T106 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: medium; report rows: A2-35, A5-29).  Source URLs: https://github.com/rpajarola/gxemul/commit/871e551340226bdc3ed3c3b1c9e0e1fea824aa70, https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/380c6beb4eeca16618420c64e8b9ab84672b663e, https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/2010a1b7ea608b2b07171cca278f3ca420c1e5b4.  Our site at de8c7547: src/devices/dev_mc146818.c:459-463, :536-540.  Portable fix: partial, or an idea only -- idea: rpajarola 871e551, rs6000 380c6be (has a `month_days[-1]` bug), rs6000 2010a1b.  Filing check (TRIAGE.md): 0 hits.  Do not port rs6000 380c6be's `month_days[-1]` (regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md F).  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "vr4131regmap",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "devices/dev_vr41xx.c:DEVICE_ACCESS(vr41xx) -- one register layout is decoded for every VR41xx model; on the VR4131 (BE-300) ETIME/ECMP/RTCL1/GIU live elsewhere and GIUINTSTAT +0x148/+0x14a is not write-one-to-clear -- WRONG-RESULT (VR4131 only)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T109 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: medium; report rows: A3-15, A3-16).  Source URLs: https://github.com/jroark/GXemul/commit/53c5910ef57cd52e5d515c28f7a9c48b45dbfaf5, https://github.com/jroark/GXemul/commit/10c05b9d625ba92bd5d46b921d241c0cdb2963bb, https://github.com/jroark/GXemul/commit/0eb2fcdb9fc4825afc815b8dbf8b3daa64fe3a2a.  Our site at de8c7547: src/devices/dev_vr41xx.c:545-549, :580-645.  Portable fix: partial, or an idea only -- port with a source check: jroark 53c5910, jroark 10c05b9, jroark 0eb2fcd (offsets are jroark's; no VR41xx manual is local).  Filing check (TRIAGE.md): 0 hits.  Do not port jroark's VR4131 register map as if it were a manual (regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md F).  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "vr4131hibernate",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "cpus/cpu_mips_instr.c COP0 HIBERNATE -- VR4131 HIBERNATE resumes at the next instruction instead of waking through the cold-reset vector -- WRONG-RESULT (R4100 only)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T110 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: small; report rows: A3-24).  Source URLs: https://github.com/jroark/GXemul/commit/ab31d059d06f93d67e57d08f8dd3478e2d4520c9.  Our site at de8c7547: src/cpus/cpu_mips_instr.c:4892-4915.  Portable fix: partial, or an idea only -- port jroark ab31d05 (semantics rest on jroark's manual citation).  Filing check (TRIAGE.md): 0 hits.  Do not port jroark's HIBERNATE vector as if it were a manual (regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md F).  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "intenablelatency",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "cpus/cpu_arm_instr.c:X(msr) + cpus/cpu_m88k.c:m88k_stcr (PSR) -- re-enabling interrupts does not check for a pending interrupt; delivery waits for the next translation block, so a short enable window loses the interrupt -- WRONG-RESULT (lost interrupts)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T111 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: small-medium; report rows: C R19).  Source URLs: https://www.helenos.org/ticket/362.  Our site at de8c7547: src/cpus/cpu_dyntrans.c:206-215; src/cpus/cpu_arm_instr.c:822-867; src/cpus/cpu_m88k_instr.c:839-850; src/cpus/cpu_m88k.c:522-554.  Portable fix: none -- a design is owed (the fork's own model: MIPS mtc0 Status and SH ldc sr deliver at once).  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "tapeeofzero",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "disk/diskimage_scsicmd.c READ (tape) + diskimage.c -- feof() is tested before the read, so a read ending exactly at a tape file's end returns GOOD with a zero block before the filemark, and a short final record returns GOOD zero-padded with no ILI/residue -- WRONG-RESULT (zero data delivered as records)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T112 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: small-medium; report rows: A2-5).  Source URLs: https://github.com/rpajarola/gxemul/commit/7cb101698a22aa028c0aaeb34fdd5fd3c10e8187.  Our site at de8c7547: src/disk/diskimage_scsicmd.c:36-41, :805; src/disk/diskimage.c:1347-1357, :1627-1628.  Portable fix: none -- a design is owed (rpajarola 7cb1016 sidesteps it with SIMH tapes).  Filing check (TRIAGE.md): 0 hits for tape / filemark / feof.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "emulflushcpu0",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "core/emul.c run loop -- console/X11 flushing is paced by the boot CPU's instruction count, so output stalls if CPU 0 stops while other CPUs run -- WRONG-RESULT (low)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T113 (class WRONG-RESULT; reach K*, guest kernel with -X or a similar option; effort: small; report rows: C U22).  Source URLs: https://sourceforge.net/p/gxemul/code2/HEAD/log/.  Our site at de8c7547: src/core/emul.c:1019-1024 (idle path :999-1017).  Portable fix: yes -- port SVN r6532/r6555 (flush by wall-clock time).  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "vr4131siuinuse",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "devices/dev_vr41xx.c:dev_vr41xx_init -- the VR4131 on-chip SIU is registered with the default in_use=1, so two ns16550 handles race for host stdin on the BE-300 -- WRONG-RESULT (lost console input)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T114 (class WRONG-RESULT; reach C, configuration, debugger, host environment or a non-default build; effort: one-line; report rows: A3-11).  Source URLs: https://github.com/jroark/GXemul/commit/3c3d5cbfa23ce58718d6c1c348f44587b35c0911.  Our site at de8c7547: src/devices/dev_vr41xx.c:777-781; src/devices/device.c:266.  Portable fix: yes -- port jroark 3c3d5cb (embedded: the extra on-chip SIU registered as not in use).  Filing check (TRIAGE.md): 0 hits.  The extra SIU registered as not in use is a portable one-line fact (regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md F).  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "x11keycodes",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "console/x11.c:x11_check_events_machine -- hard-coded pre-evdev keycodes: cursor/Home/End/PgUp/PgDn send nothing under evdev servers and several F-key sequences are wrong -- WRONG-RESULT (host input, -X)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T115 (class WRONG-RESULT; reach C, configuration, debugger, host environment or a non-default build; effort: small; report rows: A2-20).  Source URLs: https://github.com/rpajarola/gxemul/commit/1a27ff9330bbbde12fb174c1b529fb8a1211387c.  Our site at de8c7547: src/console/x11.c:839-900.  Portable fix: yes -- port rpajarola 1a27ff9.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "be300fbbpp",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "machines/machine_hpcmips.c BE-300 arm -- the framebuffer is declared 15 bpp while the subtype reports 16 bpp -- WRONG-RESULT (host display only)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T116 (class WRONG-RESULT; reach C, configuration, debugger, host environment or a non-default build; effort: one-line; report rows: A3-12).  Source URLs: https://github.com/jroark/GXemul/commit/3c3d5cbfa23ce58718d6c1c348f44587b35c0911.  Our site at de8c7547: src/machines/machine_hpcmips.c:80.  Portable fix: yes -- port jroark 3c3d5cb (embedded).  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "dyntransnoexc",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "cpus/memory_rw.c device arm -- DM_DYNTRANS_OK device pages are inserted into the translation table even under NO_EXCEPTIONS (debugger/PROM accesses warm guest translations) -- WRONG-RESULT (low)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T117 (class WRONG-RESULT; reach C, configuration, debugger, host environment or a non-default build; effort: one-line; report rows: A5-34).  Source URLs: https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/39928570d44eebb7e996bf0c2a027d35cb118735.  Our site at de8c7547: src/cpus/memory_rw.c:526-581.  Portable fix: yes -- port rs6000 3992857.  Filing check (TRIAGE.md): mechanism note in prose at OB:4583-4587, no id.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "netmacdup",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "net/net_misc.c MAC generation -- MACs derive from serial number and NIC count, so they repeat across processes and wrap after 8 NICs or 16 serial numbers -- WRONG-RESULT (duplicate MACs when bridged)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T118 (class WRONG-RESULT; reach C, configuration, debugger, host environment or a non-default build; effort: small; report rows: C R10).  Source URLs: https://sourceforge.net/p/gxemul/mailman/.  Our site at de8c7547: src/net/net_misc.c:98-124.  Portable fix: partial, or an idea only -- port with a fix: gxemul-devel 2023-03-28 (Glaw patch) (its debug fprintf dereferences before the NULL check).  Filing check (TRIAGE.md): 0 hits.  Do not port Glaw's MAC patch as a patch (regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md F).  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "mips4kcfpu",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "include/mips_cpu_types.h -- 4Kc/4KEc/5Kc/5KE are modelled with an FPU (Config1.FP=1) though the cores have none -- WRONG-RESULT (fidelity)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T119 (class WRONG-RESULT; reach C, configuration, debugger, host environment or a non-default build; effort: small; report rows: A6-37, B (older pkgsrc 2017)).  Source URLs: https://github.com/ryoon/gxemul/commit/4fa3c09854822618d0d61628d5d9f2dda393fc28, https://github.com/ryoon/gxemul/commit/94ef4b01c490d5cbb77e10ae6b34d972c10c0c5f.  Our site at de8c7547: src/include/mips_cpu_types.h:101-104; src/cpus/cpu_mips_coproc.c:106; src/machines/machine_evbmips.c:165.  Portable fix: partial, or an idea only -- do not port as-is: ryoon 4fa3c09, ryoon 94ef4b0 (Config1.FP and evbmips' default 5Kc must change with it).  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "mipsprimundec",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "cpus/cpu_mips_instr.c:X(to_be_translated) primary switch -- opcodes with no case (JALX 0x1d, LWC2 0x32, LDC2 0x36, SWC2 0x3a, SWC3 0x3b, SDC2 0x3e; 0x1e off R5900; LWC3 below ISA IV) reach `default: goto bad`, which clears cpu->running -- CPU-STOP (any privilege, every MIPS machine incl. the pmax/arc rigs)",
+   "state_note": "QUEUE: external-research batch 7 of 10 (regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md D).  Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T120 (class CPU-STOP; reach U, user mode; effort: small; report rows: A3-13, A7-3, A6 note A2, A(c)#2).  Source URLs: https://github.com/klx3300/gxemul-hos/commit/366d5cc51b807b311a3bb26e07851b42e651806f, https://github.com/jroark/GXemul/commit/3c3d5cbfa23ce58718d6c1c348f44587b35c0911.  Our site at de8c7547: src/cpus/cpu_mips_instr.c:5708, :5552-5581; src/cpus/cpu_dyntrans.c:1983-2014.  Portable fix: yes -- port with change: klx3300 366d5cc (RI) -- the COP2/COP3 load/store forms owe CpU (the #236/#309 idiom); jroark 3c3d5cb implements JALX for MIPS16 only.  Filing check (TRIAGE.md): 0 hits for JALX/LWC2/SWC2/LDC2/SDC2/SWC3; `mipscop0tail` covers COP0 arms only.  Batch 7: both adjudicating seats rank it next after T18 (regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md D7).  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "m88kcarryundec",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "cpus/cpu_m88k_instr.c register-form decode -- triadic opcodes 0x71-0x77 (add.ci/.co/.cio, signed sub with overflow trap, sub.ci/.co/.cio) have no case and reach `goto bad` -- CPU-STOP (any privilege; includes the manual's `sub.co r0,r0,r0` idiom)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T121 (class CPU-STOP; reach U, user mode; effort: small; report rows: A1-57, A7-25, A(c)#9, C U7).  Source URLs: https://github.com/Randrianasulu/GXemul/commit/9bfc91e, https://github.com/ajfa/mvme187-sysv88-gxemul/commit/4a01173afc4beafabbd61ca385bd158d07d4a415.  Our site at de8c7547: src/cpus/cpu_m88k_instr.c:3660-3716, :3815; src/cpus/cpu_dyntrans.c:2014.  Portable fix: yes -- port r6577(n) X(sub) for 0x74; design the carry forms 0x71-0x73 / 0x75-0x77 (absent upstream too).  Filing check (TRIAGE.md): 0 hits; nearest umbrella `cpusexitsweep`.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "ppctwundec",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "cpus/cpu_ppc_instr.c:X(to_be_translated) -- twi (primary 3) and tw (31/4) are undecoded -- CPU-STOP (Linux/ppc MMIO accessors issue `twi`)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T122 (class CPU-STOP; reach U, user mode; effort: small-medium; report rows: A4-7, A(c)#4).  Source URLs: https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/02815906ef3d7a969aa5919885fa08e359a2b52c, https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/6ac4dc4d64b06b80d6554dd9e8c725b04993decb, https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/8bcf95a20ad8285503b81a2796f8430dd513cf10, https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/ef62ef623c8c57b276f42e58c99dd9771063f5ec.  Our site at de8c7547: src/cpus/cpu_ppc_instr.c:5426, :5172; src/include/cpu_ppc.h:252-257.  Portable fix: yes -- port rs6000 0281590, rs6000 6ac4dc4, rs6000 8bcf95a, rs6000 ef62ef6 (also needs a program vector).  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "ppclswxundec",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "cpus/cpu_ppc_instr.c -- lswx/stswx (31/533, 31/661) are undecoded (not even defined in opcodes_ppc.h) -- CPU-STOP",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T123 (class CPU-STOP; reach U, user mode; effort: small; report rows: A4-8).  Source URLs: https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/8bcf95a20ad8285503b81a2796f8430dd513cf10, https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/3cdc32f0d3ab8f4d33f09a13a02b4c5cb80b3221.  Our site at de8c7547: src/cpus/cpu_ppc_instr.c:5172, :4874-4888.  Portable fix: yes -- port rs6000 8bcf95a, rs6000 3cdc32f.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "ppccrnandundec",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "cpus/cpu_ppc_instr.c XL decode -- crnand (19/225) is defined but missing from the CR case list -- CPU-STOP",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T124 (class CPU-STOP; reach U, user mode; effort: one-line; report rows: A4-9).  Source URLs: https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/2ec64fdde77aa73187fd80592679ea3f44e46fa2.  Our site at de8c7547: src/cpus/cpu_ppc_instr.c:4512-4531.  Portable fix: yes -- port rs6000 2ec64fd.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "ppcdcbiundec",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "cpus/cpu_ppc_instr.c cache-op group -- dcbi (31/470) is undecoded, including in user mode where it is a privileged instruction -- CPU-STOP",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T125 (class CPU-STOP; reach U, user mode; effort: one-line; report rows: A4-11).  Source URLs: https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/3762e129146664c0ac8d4433f111e736c1da37c0, https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/3cdc32f0d3ab8f4d33f09a13a02b4c5cb80b3221.  Our site at de8c7547: src/cpus/cpu_ppc_instr.c:5172, :4782-4791.  Portable fix: yes -- port rs6000 3762e12, rs6000 3cdc32f.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "m88kzeroword",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "cpus/cpu_m88k_instr.c -- instruction word 0x00000000 (`xmem.bu r0,r0,0`) is sent to `goto bad` -- CPU-STOP (SVR4's IPL runs through zero padding)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T126 (class CPU-STOP; reach U, user mode; effort: one-line; report rows: A7-28).  Source URLs: https://github.com/ajfa/mvme187-sysv88-gxemul/commit/4a01173afc4beafabbd61ca385bd158d07d4a415.  Our site at de8c7547: src/cpus/cpu_m88k_instr.c:3047-3048.  Portable fix: yes -- port ajfa mvme187 4a01173 patch 01.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "m88kwtbit",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "cpus/cpu_m88k_instr.c ld/st register form -- the .wt bit (bit 7) halts (\"wt bit not yet implemented\") -- CPU-STOP",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T127 (class CPU-STOP; reach U, user mode; effort: one-line; report rows: A7-31).  Source URLs: https://github.com/ajfa/mvme187-sysv88-gxemul/commit/4a01173afc4beafabbd61ca385bd158d07d4a415.  Our site at de8c7547: src/cpus/cpu_m88k_instr.c:3606-3614.  Portable fix: UNVERIFIED -- port ajfa mvme187 4a01173 patch 01 (treating .wt as a cache hint is the recipe's claim, not the manual's).  Filing check (TRIAGE.md): 0 hits.  Port confidence UNVERIFIED (regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md B): legal MC88100 `.wt` semantics are not established and the recipe is not an authority; do not port `.wt`-as-a-hint (F).  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "ppcoeundec",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "cpus/cpu_ppc_instr.c XO decode -- the OE=1 forms and `addc.` are undecoded (the oe_bit check is dead code) -- CPU-STOP",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T128 (class CPU-STOP; reach U, user mode; effort: small-medium; report rows: A4-10).  Source URLs: https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/93b20502079f2b3b6732940fc1ae89e22b3b7ba4, https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/e88c21b997c83d816aea2f4806ed05a5723e5492.  Our site at de8c7547: src/cpus/cpu_ppc_instr.c:5062-5137.  Portable fix: partial, or an idea only -- partial: rs6000 93b2050, rs6000 e88c21b (OE set incomplete; do not port its CA rewrite).  Filing check (TRIAGE.md): 0 hits.  Do not port rs6000's CA rewrite (regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md F).  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "ppcupdatera0",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "cpus/cpu_ppc_instr.c update-form load/store -- RA=0 (\"TODO: ra=0 && update?\") halts -- CPU-STOP (invalid forms)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T130 (class CPU-STOP; reach U, user mode; effort: small; report rows: A4-12).  Source URLs: https://github.com/prozacchiwawa/gxemul-rs6000-860/commit/241f5e273caf75599ebb8ebc554e1e9faaacf508.  Our site at de8c7547: src/cpus/cpu_ppc_instr.c:4338-4342, :4995-4999.  Portable fix: partial, or an idea only -- idea: rs6000 241f5e2.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "mipsmovciundec",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "cpus/cpu_mips_instr.c SPECIAL decode -- MOVCI (movf/movt, funct 0x01; not even defined in opcodes_mips.h) falls to `goto bad` -- CPU-STOP (MIPS IV CPUs)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T131 (class CPU-STOP; reach U, user mode; effort: small; report rows: A(c)#5 related gap, A6 note A3).  Source URLs: none -- found by the research's own reading (report rows above); no fork carries a fix.  Our site at de8c7547: src/cpus/cpu_mips_instr.c:4679; src/include/opcodes_mips.h:170.  Portable fix: none -- a design is owed.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "dcgdromabort",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "promemul/dreamcast.c:dreamcast_emul -- GD-ROM BIOS r7 outside 0-4 (e.g. GDROM_ABORT_COMMAND = 8), unknown r6 and the sibling syscall groups go to `bad:`, which clears cpu->running -- CPU-STOP",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T132 (class CPU-STOP; reach K, guest kernel, firmware or device registers; effort: one-line (r7=8) / small (siblings); report rows: A1-52, C U12).  Source URLs: https://github.com/Randrianasulu/GXemul/commit/9bfc91e.  Our site at de8c7547: src/promemul/dreamcast.c:303-325, :268, :295, :382-388.  Portable fix: yes -- port r6577(i) for GDROM_ABORT_COMMAND; the sibling arms need the same treatment.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "armmmufaultlog",
+   "sev": "LOW",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "cpus/memory_arm.c:arm_translate_v2p_mmu -- two `fatal()` lines per guest page fault unless -q -- HYGIENE (guest-drivable host log flood)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T139 (class HYGIENE; reach U, user mode; effort: one-line; report rows: A1-41, C U20).  Source URLs: https://github.com/retroprom/gxemul/commit/bc914bbe, https://sourceforge.net/p/gxemul/code2/HEAD/log/.  Our site at de8c7547: src/cpus/memory_arm.c:261-266.  Portable fix: yes -- port upstream bc914bbe (SVN r6575).  Filing check (TRIAGE.md): mentioned only as the symptom in `armvecrecurse`'s witness.  Not a duplicate of `armvecrecurse` (regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md A: it exceeds the row it resembles).  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "ppcexcfatal",
+   "sev": "LOW",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "cpus/cpu_ppc.c:ppc_exception + memory_ppc.c:ppc_translate_v2p -- one `fatal()` line per exception (decrementer, syscall) and per translation fault unless -q -- HYGIENE (guest-drivable host log flood)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T140 (class HYGIENE; reach U, user mode; effort: one-line; report rows: A1-10, C U21).  Source URLs: https://github.com/retroprom/gxemul/commit/6d2d8bf0, https://sourceforge.net/p/gxemul/code2/HEAD/log/.  Our site at de8c7547: src/cpus/cpu_ppc.c:329-331; src/cpus/memory_ppc.c:302-305.  Portable fix: yes -- port upstream 6d2d8bf0 (SVN r6532) at INFO level.  Filing check (TRIAGE.md): `mrwstore2` says \"SIBLING FILED\" for memory_ppc.c:302-305 but no row or OB entry carries it; `floodclass` censuses device files.  Not a duplicate (regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md A).  This row is the carrier `mrwstore2`'s 'SIBLING FILED' claim about memory_ppc.c:302-305 never had (TRIAGE.md R5).  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "mb89352fmtargs",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "devices/dev_mb89352.c:DEVICE_ACCESS -- the \"unimplemented LEN\" message has three conversions and two arguments (debugmsg_cpu has no format attribute) -- HOST-UB (guest-triggered undefined behaviour in the host, just before the halt; a crash is not established)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T141 (class HOST-UB; reach K, guest kernel, firmware or device registers; effort: one-line; report rows: A1-22, A(c)#15).  Source URLs: https://github.com/retroprom/gxemul/commit/8f4c717f.  Our site at de8c7547: src/devices/dev_mb89352.c:305-309; src/include/misc.h:270.  Portable fix: yes -- port upstream 8f4c717f.  Filing check (TRIAGE.md): 0 hits.  Class HOST-UB, at least MED (regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md B): guest-triggered host undefined behaviour, not hygiene; a crash is not established.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "ascbugprintf",
+   "sev": "LOW",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "devices/dev_asc.c DATA_IN multi-transfer -- a bare `printf(\"WARNING!!!!!!!!! BUG!!!!...\")` on every split data-in with a DMA controller -- HYGIENE (guest-repeatable host log line; ARC)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T142 (class HYGIENE; reach K, guest kernel, firmware or device registers; effort: one-line; report rows: A2-48).  Source URLs: https://github.com/rpajarola/gxemul/commit/7aeae85458685ce7628f0ca5b6bcf9ebe611f393.  Our site at de8c7547: src/devices/dev_asc.c:519-522.  Portable fix: yes -- port rpajarola 7aeae85.  Filing check (TRIAGE.md): \"swept and left\" list at OB:2345; no id.  Not a duplicate of the 'swept and left' list (regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md A: it exceeds the row it resembles).  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "cpurunningtype",
+   "sev": "LOW",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "cpus/cpu.c:cpu_new -- `bool running` is registered as SETTINGS_TYPE_UINT8, so a debugger assignment can store a byte other than 0/1 -- HYGIENE (debugger-only UB)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T143 (class HYGIENE; reach C, configuration, debugger, host environment or a non-default build; effort: one-line; report rows: A1-17).  Source URLs: https://github.com/retroprom/gxemul/commit/6f477da8.  Our site at de8c7547: src/cpus/cpu.c:93; src/core/settings.c:223-224.  Portable fix: yes -- port upstream 6f477da8.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "bpstringarg",
+   "sev": "LOW",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "machines/machine.c:machine_add_breakpoint_string -- ignores its `str` argument and duplicates optarg -- HYGIENE (latent; the only caller passes optarg)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T144 (class HYGIENE; reach C, configuration, debugger, host environment or a non-default build; effort: one-line; report rows: C (b) cross-check finding).  Source URLs: none -- a finding of report C's own cross-check (section b), reported nowhere upstream.  Our site at de8c7547: src/machines/machine.c:281-282; src/core/main.c:439.  Portable fix: none -- a design is owed (trunk deleted the function).  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "dbgmakedep",
+   "sev": "LOW",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "debugger/Makefile.skel -- the rule `debugger.c: debugger_cmds.c` has no recipe, so editing debugger_cmds.c never rebuilds debugger.o (measured by report A) -- HYGIENE/BUILD (stale-binary hazard)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T145 (class HYGIENE/BUILD; reach B, build only; effort: one-line; report rows: A2-16, A(c)#14).  Source URLs: https://github.com/rpajarola/gxemul/commit/3e8f2fd70a9a96478bff1dc7fee61cc0e6872123.  Our site at de8c7547: src/debugger/Makefile.skel:13.  Portable fix: yes -- port rpajarola 3e8f2fd.  Filing check (TRIAGE.md): `depsrm` covers src/cpus only.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "alphamakedep",
+   "sev": "LOW",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "cpus/Makefile.skel -- cpu_alpha.o lacks a dependency on the generated tmp_alpha_misc.c -- HYGIENE/BUILD",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T146 (class HYGIENE/BUILD; reach B, build only; effort: one-line; report rows: A1-6, C U18).  Source URLs: https://github.com/retroprom/gxemul/commit/587f438a, https://sourceforge.net/p/gxemul/code2/HEAD/log/.  Our site at de8c7547: src/cpus/Makefile.skel:24-25; src/cpus/cpu_alpha_instr.c:742.  Portable fix: yes -- port upstream 587f438a (SVN r6531).  Filing check (TRIAGE.md): bears on `depsrm`.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "cpunewstores",
+   "sev": "LOW",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "cpus/cpu_mips.c:mips_cpu_new, cpu_arm.c:arm_cpu_new, cpu_alpha.c:alpha_cpu_new -- guest-memory stores are issued before the CPU is in machine->cpus[]; the ARM one plants the OpenFirmware SWI word 0xef8c64be at RAM top-8 (its address field has no reader; the word routes to `ofemulnodata`'s exit) -- HYGIENE (latent; prerequisite for the SMP row)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T147 (class HYGIENE; reach C, configuration, debugger, host environment or a non-default build; effort: small; report rows: A1-36, A1-40, A1-54, A1-60, B P2, B rec.5, C U2).  Source URLs: https://github.com/retroprom/gxemul/commit/d2462ba6, https://github.com/retroprom/gxemul/commit/77708717, https://github.com/skrll/gxemul/commit/a4e2335, https://github.com/NetBSD/pkgsrc/blob/trunk/emulators/gxemul/patches/patch-src_cpus_cpu__arm.c, https://github.com/Randrianasulu/GXemul/commit/9bfc91e.  Our site at de8c7547: src/cpus/cpu_mips.c:294-304; src/cpus/cpu_arm.c:181-188; src/cpus/cpu_alpha.c:99-103; src/core/emul.c:492-503.  Portable fix: yes -- port upstream d2462ba6, upstream 77708717 (= skrll a4e2335, pkgsrc patch-src_cpus_cpu__arm.c), r6577(k).  Filing check (TRIAGE.md): `#555` settled only the MIPS word's survival, OB:1895.  Reach C, not build-only (regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md B).  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "singlestepdecl",
+   "sev": "LOW",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "debugger/debugger.c vs cpus/generate_head.c -- single_step_breakpoint is defined `volatile int` and declared `extern int` in every generated head -- HYGIENE (latent cross-TU UB)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T148 (class HYGIENE; reach B, build only; effort: one-line; report rows: A1-11).  Source URLs: https://github.com/retroprom/gxemul/commit/6d2d8bf0.  Our site at de8c7547: src/debugger/debugger.c:73; src/cpus/generate_head.c:119.  Portable fix: yes -- port upstream 6d2d8bf0 (bool in both).  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "tlbwrrandom",
+   "sev": "LOW",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "cpus/cpu_mips_coproc.c:coproc_tlbwri -- TLBWR takes its index from host random() -- HYGIENE (non-deterministic runs; OpenBSD linker warning)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T149 (class HYGIENE; reach K, guest kernel, firmware or device registers; effort: small; report rows: A1-35, C U25).  Source URLs: https://github.com/retroprom/gxemul/commit/90db505f, https://sourceforge.net/p/gxemul/code2/HEAD/log/.  Our site at de8c7547: src/cpus/cpu_mips_coproc.c:1949.  Portable fix: yes -- port upstream 90db505f (SVN r6563) keeping #190's WIRED guard.  Filing check (TRIAGE.md): 0 hits.  Reach K, not build-only (regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md B): TLBWR selects its index at run time.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "configurerpath",
+   "sev": "LOW",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "configure X11 probes -- adds -Wl,-rpath for /usr/X11R6/lib, /usr/X11R7/lib and /usr/local/lib -- HYGIENE/BUILD (packaging policy)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T150 (class HYGIENE/BUILD; reach B, build only; effort: one-line; report rows: B R4, B RO3).  Source URLs: https://src.fedoraproject.org/rpms/gxemul/blob/rawhide/f/gxemul.spec, https://abf.io/import/gxemul.  Our site at de8c7547: configure:336, :351, :366.  Portable fix: yes -- port Fedora gxemul.spec (gxemul-0.7.0-no-rpath.patch) / ROSA import/gxemul.  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "shsyncodisasm",
+   "sev": "LOW",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "cpus/cpu_sh.c:sh_cpu_disassemble_instr -- 0x00ab is not disassembled as synco -- HYGIENE (cosmetic)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T151 (class HYGIENE; reach C, configuration, debugger, host environment or a non-default build; effort: one-line; report rows: B P5).  Source URLs: https://github.com/NetBSD/pkgsrc/blob/trunk/emulators/gxemul/patches/patch-src_cpus_cpu__sh.c.  Our site at de8c7547: cpu_sh.c (no synco).  Portable fix: yes -- port pkgsrc patch-src_cpus_cpu__sh.c.  Filing check (TRIAGE.md): 0 hits.  Reach C, not build-only (regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md B).  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "pmax3minslotnr",
+   "sev": "LOW",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "machines/machine_pmax.c 3MIN arm -- option slots 1 and 2 are registered as slot 0 (feeds only a debug message) -- HYGIENE (cosmetic)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T152 (class HYGIENE; reach C, configuration, debugger, host environment or a non-default build; effort: one-line; report rows: A2-46).  Source URLs: https://github.com/rpajarola/gxemul/commit/042b61b040deedf4c1aafb361a563fdc4f9eedb9.  Our site at de8c7547: src/machines/machine_pmax.c:330, :338.  Portable fix: yes -- port rpajarola 042b61b.  Filing check (TRIAGE.md): 0 hits.  Reach C, not build-only (regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md B).  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "gcc16unused",
+   "sev": "LOW",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "file/file_ecoff.c (+ file_elf.c, file_macho.c) -- set-but-unused locals (s_nlnno and others) fail GCC 16 with -Werror (--debug builds) -- HYGIENE/BUILD",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T153 (class HYGIENE/BUILD; reach B, build only; effort: small; report rows: C R22, B (older)).  Source URLs: https://bugs.gentoo.org/976428.  Our site at de8c7547: src/file/file_ecoff.c:197, :483; configure:455-461.  Portable fix: none -- a design is owed (delete or void the dead locals).  Filing check (TRIAGE.md): 0 hits.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "shsyncofeature",
+   "sev": "LOW",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "cpus/cpu_sh_instr.c decoder -- SH-4A SYNCO (0x00ab) raises the illegal-instruction exception on the modelled SH-4 (#314) while GCC 14 NetBSD/landisk userland contains it; also an unlatched `fatal()` per translation -- FEATURE (compatibility; owner decision)",
+   "state_note": "Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T154 (class FEATURE; reach U, user mode; effort: one-line; report rows: B P6, B rec.3, A1-63).  Source URLs: https://github.com/NetBSD/pkgsrc/blob/trunk/emulators/gxemul/patches/patch-src_cpus_cpu__sh__instr.c, https://codeberg.org/user3412/gxemul-fork/commit/040d951.  Our site at de8c7547: src/cpus/cpu_sh_instr.c:242-246, :4273-4279.  Portable fix: yes -- port pkgsrc patch-src_cpus_cpu__sh__instr.c / Codeberg 040d951 if the owner adopts the NOP.  Filing check (TRIAGE.md): as a behaviour question (#314 resolved the halt, OB:1899-1903.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "m88kxmemr0",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "cpus/cpu_m88k_instr.c:X(to_be_translated) xmem decode -- an xmem whose destination is r0 is decoded as a NOP in both decoder forms, so the memory write half of the exchange and its access semantics are dropped -- WRONG-RESULT",
+   "state_note": "Filed 2026-10-22 from the external-fixes adjudication: regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md C, N1 (GPT-6 Astra, adj_20261022/codex_resadj.txt); not a TRIAGE.md row (report A row A7-28 notes the NOP in passing) (class WRONG-RESULT; reach U, user mode).  Our site at de8c7547: src/cpus/cpu_m88k_instr.c:3045-3046 (immediate form), :3657-3658 (register form).  Portable fix: none found -- a design is owed (upstream 0.7.0, the ajfa recipe and this fork all decode it as a NOP).  Manual: _scratchpad/mc88100.txt:6435 (xmem exchanges, a load AND a store).  Not resolved by `m88kzeroword` (TRIAGE.md T126, the zero-word halt).  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "m88kxmemusr",
+   "sev": "MED",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "cpus/cpu_m88k_instr.c:X(xmem_slow) -- the handler takes the .usr bit from 0x80 while the register-form decoder takes .usr from 0x100 and treats 0x80 as .wt, so an xmem's user/supervisor address space follows the wrong bit -- WRONG-RESULT",
+   "state_note": "Filed 2026-10-22 from the external-fixes adjudication: regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md C, N2 (GPT-6 Astra, adj_20261022/codex_resadj.txt); not a TRIAGE.md row (class WRONG-RESULT; reach U, user mode).  Our site at de8c7547: src/cpus/cpu_m88k_instr.c:2359 (handler), :3604-3607 (decoder).  Portable fix: none found -- a design is owed.  The manual's encoding table (_scratchpad/mc88100.txt:6488-6514, the U field) does not render bit positions cleanly in the text extraction; the finding rests on the seat's reading of the two code sites, which disagree with each other.  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "ppc64xlateexit",
+   "sev": "HIGH",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "cpus/memory_ppc.c:ppc_translate_v2p -- a translated access on a 64-bit CPU prints `TODO: ppc 64-bit translation` and calls exit(1); on PPC970, the testppc/bareppc default CPU, the first access with MSR IR or DR set ends the host process -- HOST-STOP",
+   "state_note": "QUEUE: external-research batch tail 6 of 6 (regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md D).  Filed 2026-10-22 from the external-fixes adjudication: regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md C, N3 (Grok 4.7, adj_20261022/grok_adj.txt): found while checking T6, absent from TRIAGE.md's 154 (class HOST-STOP; reach K, guest kernel, firmware or device registers).  Our site at de8c7547: src/cpus/memory_ppc.c:285-288 (the bits != 32 arm of :280-289); default CPU at src/machines/machine_test.c:448-457.  Portable fix: none -- a large design (a 64-bit page-table walker), not a small round.  File, do not fold into `qhslowifetch`: that row's fix (return into the ISI already raised) is not this row's fix (ADJ_RULINGS.md B T6, D tail 6).  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "ppc601xlateexit",
+   "sev": "HIGH",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "cpus/memory_ppc.c:ppc_translate_v2p -- on a CPU flagged PPC_601 every translated access prints `TODO: 601` and calls exit(1) -- HOST-STOP",
+   "state_note": "Filed 2026-10-22 from the external-fixes adjudication: regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md C, N4 (Grok 4.7, adj_20261022/grok_adj.txt); not a TRIAGE.md row (class HOST-STOP; reach K*, guest kernel with -X or a similar option).  Our site at de8c7547: src/cpus/memory_ppc.c:263-266; ppc_bat() repeats the exit at :96-99; the PPC601 model is src/include/cpu_ppc.h:78, and no src/machines/*.c names it as a default CPU (grep).  Portable fix: none -- a design is owed.  Reached when a guest sets MSR IR or DR on a CPU selected as PPC601 (real mode returns at :258-261 first).  The `qhslowifetch` fix is not this row's fix (ADJ_RULINGS.md B T6).  witness: none -- research finding, not yet reproduced here."
+  },
+  {
+   "id": "pristinesecondref",
+   "sev": "LOW",
+   "opened": "2026-10-22",
+   "state": "open",
+   "witness": "none",
+   "commits": "",
+   "title": "regress/gate_ab.sh, gate_upstream.sh and build_asan.sh -- their 'pristine' baseline is commit 39748e3c, which is not byte-identical to the 0.7.0 release (configure's GNU89-inline probe, three `1U <<` sites in generate_arm_r.c, 61 extra and 23 missing files) -- owner option: a byte-true second reference for future 'pristine' claims, PRISTINE_REF kept -- HYGIENE (records/harness)",
+   "state_note": "Filed 2026-10-22 by the external-fixes adjudication as an OWNER OPTION (regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md E (GPT-6 Astra); regress/artifacts/research_20261022/RECORDS_VERDICTS.md R1).  Our site at de8c7547: regress/gate_ab.sh:4, :37; regress/gate_upstream.sh:46; regress/build_asan.sh:56.  Owner option: a second reference whose tree is byte-identical to the release tarball (sha256 79c4437c...8e83), used for new 'pristine' claims; PRISTINE_REF stays because earlier logs name it.  Filed as an owner option, not a defect: no earlier A/B result is re-attributed (E).  The label correction is in CHANGELOG.md (records) and in gate_ab.sh's header (its own script commit).  witness: none -- an owner option, not a defect; RECORDS_VERDICTS.md R1 and the R1 tree comparison are its record."
   }
  ],
  "state_semantics": {

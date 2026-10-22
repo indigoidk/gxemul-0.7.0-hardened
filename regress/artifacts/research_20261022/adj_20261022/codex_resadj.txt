@@ -1,0 +1,93 @@
+VERDICT: AMEND -- Retain the leading defects, correct T1’s ineffective port prescription, revise the batch dependencies, and amend the baseline record and completeness claims.
+
+**Q1. Classes, severity and filing**
+
+The principal crash and corruption classifications survive source review. The qualifications matter:
+
+| Rows | Ruling |
+|---|---|
+| T1, T3 | Retain user-mode HOST-STOP/HIGH. Both paths exist in this fork. |
+| T5–T8, T10–T12 | Retain guest-kernel HOST-STOP. MVME187 actually installs MEMC, clmpcc and osiop; Dreamcast’s renderer is reachable without `-X`. These are not phantom dependencies on external forks. |
+| T13 | Retain conditional host-memory-safety risk, K*. The visible-image/VRAM bounds mismatch is established; a locally measured Xlib over-read or crash is not. |
+| T14 | Retain construction-time HOST-STOP, C. DEC 3000/300 is advertised and its interrupt wiring is wrong. |
+| T15 | Retain build-dependent host UB/crash. Say “observed with the recorded compiler at `-O0/-O1`,” rather than asserting those are the only affected builds. |
+| T16, T17 | Retain host-environment/debugger failures, C. They are not guest-triggered host deaths. |
+| T2, T4, T9 | Retain GUEST-CORRUPTION, with the qualifications below. |
+
+For **T2**, the decoder really retains the DS-form low bits and omits the update/sign-extension distinctions. The generic memory path does not rescue this through an alignment exception: it performs the incorrectly addressed access. For **T4**, both read and write address calculations disable LBA handling. For **T9**, retain the controller-specific outcomes: ASC synthesizes GOOD, mb89352 stops, osiop leaves the status destination unchanged, and ATAPI completes without an error. The existing `b120` governing record already describes those differences. [PPC decoder](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:4295), [PPC memory access](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr_loadstore.c:174), [WDC](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:470), [b120 record](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/ledger.json:3753).
+
+Specific amendments:
+
+- **T136:** consolidate `m88kmxmkill` and `m88kpsrmxm`, preserving both histories and an alias. MED is appropriate for the guest-kernel CPU stop; the LOW classification is inconsistent with its demonstrated effect.
+- **Reach corrections:** T149 is **K**, because TLBWR executes the replacement selection at runtime. T147 is **C**, construction-time. T151 and T152 are **C**, runtime disassembly/construction diagnostics. None is build-only.
+- **T141:** the missing variadic argument is guest-triggered host UB. Give it a substantive safety severity, at least MED, rather than treating it as cosmetic hygiene. A host crash is not established.
+- **T11:** the exit at `:2040–2041` concerns invalidating the old entry; the new-entry installation exit is `:2168–2169`. Cite both accurately.
+- **T127:** the CPU stop is real, but legal MC88100 `.wt` semantics and a portable implementation are not established. Change the port confidence from Y to P/UNVERIFIED. The recipe is insufficient authority for treating the bit as a harmless hint.
+
+I found no additional demonstrated duplicate among the checked UNFILED candidates. In particular, T23 exceeds `mipscop0tail`’s scope; T89 exceeds `qhmbunimplstops`’s stop-policy scope; T139/T140 are not carried by the device-diagnostic `floodclass`; and T142 is a different ASC diagnostic. T4 is not `arcpartlba` or `wdccylwrap`.
+
+However, **filing 121 UNFILED rows does not cover every unfiled obligation**. T92–T95 explicitly contain unfiled residuals despite being PART. Assign those residuals to an expanded existing row or a separate carrier. Also account for the omitted findings below before treating the counts as complete.
+
+**Q2. First batch**
+
+I recommend this order:
+
+**T1 → T3 → T4 → T2 → T36 → T6 → T11 → T7 → T12 → T5**
+
+The changes have concrete reasons:
+
+- T3 is a narrow user-mode host exit; T4 silently damages disk addressing and has an adaptable implementation. Both warrant moving ahead of T2’s larger decode-design obligation.
+- **Bring T36 into the batch before rounds choosing an 88K FAULT response.** Raising the exception without valid CMMU fault state is incomplete. It need not precede T1’s unrelated table repair.
+- Move T11 forward because its host exit is live on supported hpcmips machines, while retaining “design owed.” Removing an exit alone does not implement 1 KB-page translation.
+- Keep T7 early: its bounds repair is precise, and removing exits must not leave the preceding out-of-bounds read exposed.
+- Bring T12 forward because its disposition is already settled and narrow.
+- Defer T8 and T10. Their reach is real, but their proposed ports contain broader device-behavior changes. T10 must name the exact site selected for its first round.
+
+Put T13 next, followed by consideration of T18 and T120 before broad device families. Retain T9’s hold; its existing four-controller analysis should be the starting evidence, not forgotten and rediscovered. Discharge T14’s obsolete `hpcabort` dependency.
+
+**T1’s proposed port needs a decisive correction.** Dropping ajfa’s `op != 3` exemption changes only decoder-local `scaled`. The xmem decoder passes the original instruction word, and `xmem_slow` reconstructs `scaled` from that word. The NULL call therefore remains.
+
+Use the shared table repair: map scaled-byte slots to the existing unscaled-byte handlers. Preserve the function-generation suppression; removing that suppression would emit duplicate function names. [Decoder](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_m88k_instr.c:3654), [xmem handler](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_m88k_instr.c:2357), [table generation](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/generate_m88k_loadstore.c:254).
+
+For T36, preserve the original physical address, select the instruction/data CMMU correctly, and retain the NULL check. Device dispatch has already converted `paddr` into a device-relative offset; assigning that offset to PFAR would introduce another wrong result. [Address preservation](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:437).
+
+**Q3. Records corrections and A-tree disposition**
+
+**Both corrections are right in conclusion. R1’s supporting details require amendment.**
+
+The frozen comparisons establish:
+
+- **Three** changed `1U <<` sites in `generate_arm_r.c`: 139, 200 and 279.
+- **59 extra source-tree files versus `root_src`:** 50 `tmp_*.c` files, `autodev.c`, `automachine.c`, six generated font files and `ppc_spr_strings.h`.
+- **61 extras versus frozen upstream `743170f0`:** those 59 plus two `grep.exe.stackdump` files. Those stackdumps also exist in `root_src`, explaining the differing counts.
+- The `configure` difference can be settled locally: the baseline contains the GNU89-inline probe absent from frozen upstream. File modification dates are not provenance evidence.
+
+Thus “two sites,” “59 files all named tmp,” and “61 generated files” are inaccurate descriptions. The report’s frozen comparison material supports correcting them. [Report A comparison](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/research_20261022/A_github_forks.md:680).
+
+**Re-baseline future comparisons that claim pristine upstream.** Preserve historical results under the actual identity of their modified baseline. Correct the current labels immediately, then establish a release-verified A tree with any required build adaptations recorded separately. A provenance note alone is sufficient only if the gate explicitly changes its claim to comparison against that historical modified baseline. It cannot sustain the existing “unmodified upstream” claim.
+
+Do not rewrite the historical commit or retroactively attribute its results to a replacement tree. Behavioral equivalence has not been established by this read-only adjudication. [gate_ab baseline selection](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_ab.sh:37).
+
+**R2 is correct in both reason and conclusion.** PFAR is modeled, written and guest-readable. Independently, the LUNA probe sets PFSR without PFAR, and the generic device-failure path omits the fault-register updates. Correct the false refutation and carry the work under T36, without creating another duplicate. [PFAR writes](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_m88k.c:399), [guest register arm](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_m8820x.c:438), [LUNA omission](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_luna88k.c:624).
+
+**Q4. Additional material not to port wholesale**
+
+Beyond the two recorded cautions:
+
+- **RS/6000 CPU bundles:** reject the DS-form host-abort change, defective carry rewrites, TGPR-dropping MSR mask, broad dyntrans branch-target abort, and incompatible softfloat changes. Correct T25’s SRR1 reason bit. Extract T6’s justified fetch-failure behavior from its broader source changes. [Report A, PPC findings](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/research_20261022/A_github_forks.md:881).
+- **RTC and platform workarounds:** the proposed RTC implementation permits `month_days[-1]`. Do not generalize IBM keyboard replies, PReP-specific assertions, or serial-register workarounds. [Device findings](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/research_20261022/A_github_forks.md:946).
+- **MIPS/FPU:** reject CHERI’s ties-away `round()`, COP2-as-NOP workaround, the misplaced signed-overflow guard in unsigned division, dead RECIP/RSQRT code presented as a fix, and trunk’s unconditional floating-point divide-zero exception. Preserve the existing WIRED guard. [MIPS findings](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/research_20261022/A_github_forks.md:1008), [upstream cautions](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/research_20261022/C_reports_upstream.md:107).
+- **88K/device recipes:** do not import absent-CPU CMMU windows as RAM. Ajfa’s osiop patch also ignores bus-operation failures and contains an uncapped copy through an eight-byte temporary. These are additional reasons to review individual hunks; they are not demonstrated vulnerabilities in our unchanged tree.
+- **Network patches:** Debian’s TAP variant can leave a truncated interface name unterminated; Glaw’s MAC patch dereferences before checking NULL. [Distro report](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/research_20261022/B_distro_patches.md:162), [MAC finding](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/research_20261022/C_reports_upstream.md:137).
+
+T4 also needs consistent SDH readback and sufficiently wide LBA arithmetic. T35 must respect T147’s constructor dependency and cover translation-time revocation across CPUs. T154 remains an explicit compatibility choice.
+
+The evidence discredits particular implementations and blanket porting, not entire authors or repositories.
+
+**Additional findings**
+
+1. **Missing xmem-to-r0 defect:** both decoder forms replace the exchange with NOP, dropping the memory write and its required access semantics. Report A notices this, but TRIAGE does not carry it separately. File the user-reachable omitted-write defect; T126’s removal of the zero-word halt does not resolve it. [Decoder](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_m88k_instr.c:3045), [manual](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/mc88100.txt:6435).
+
+2. **Independent xmem `.usr` mismatch:** the handler reads `0x80`, whereas the decoder identifies `.usr` with `0x100` and rejects `0x80` as `.wt`. File the resulting wrong address-space/privilege semantics separately. [Handler](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_m88k_instr.c:2359), [decoder](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_m88k_instr.c:3604).
+
+I read the complete packet and checked source, records, manuals and frozen patches. No builds, project scripts, probes or tests were run; no files were changed.

@@ -1,0 +1,87 @@
+I will check the premises against the tree at `de8c7547`, starting with the 14 host-stop and 3 guest-corruption rows and the two records corrections. The batch order and “do not port” list come after those measurements.The ledger is in place. Next I read the host-stop and guest-corruption sites in our tree, and the two records the coordinator says were measured.VERDICT: AMEND — four of the seventeen high rows are the wrong class or the wrong reach in this tree, and one host exit the survey never listed sits on the default PowerPC CPU.
+VERDICT: AMEND — keep T1, T3, T2, and T6; put T36 ahead of any 88K round that raises a data-access exception; drop T4 and the unnamed T10 site from the first ten; add T18 and T120.
+VERDICT: AMEND — R2 is confirmed here. R1's difference from the archived upstream source is confirmed at HEAD; the pin that the edit lives inside commit `39748e3c` was not re-measured. Disposition is a provenance note. Do not retarget `gate_ab` and do not rewrite that commit.
+VERDICT: AMEND — besides the two recorded cautions, do not port the FreeBSD WDC patch, the rs6000 DS-form abort, the ajfa `xmem` exemption, or the ajfa SCRIPTS copy of up to 2^24 bytes.
+
+The tree checked is `GXEMUL-SEC` source as it sits now. `fatal()` only prints (`src/core/debugmsg.c:384-390`). A host stop below is an `exit`, `abort`, a null call, or a trap.
+
+## Q1 — classes and severities
+
+Guest-reachable host stops in this tree:
+
+| Row | What the source does | Class |
+|---|---|---|
+| T1 | Register-form scaled byte `xmem` calls a NULL table slot. `generate_m88k_loadstore.c:104-105` and `:254-257` leave that slot NULL. `cpu_m88k_instr.c:3655` sends `xmem` to `xmem_slow`, and `:2395` calls the pointer with no test. Immediate `xmem` forces `scaled = 0` (`:2368-2370`), so it does not take this path. | HOST-STOP, user mode. The scaled `ld.b`/`st.b` half is not this: `cpu_dyntrans.c:1906-1908` sees `ic->f == NULL` and `goto bad`, which sets `cpu->running = 0` (`:2014`). That half is CPU-STOP. |
+| T3 | `lwarx`/`ldarx` with Rc=1 and `stwcx.`/`stdcx.` with Rc=0 still `exit(1)` (`cpu_ppc_instr.c:2305-2307`, `:2331-2333`). | HOST-STOP, user mode. Already `ppcllscrcexit`. |
+| T5 | `!zwrite` is `exit(1)` (`dev_pvr.c:1243-1245`). The bit is a guest display-list bit. | HOST-STOP, Dreamcast. Reach K is fair. |
+| T6 | A failed instruction read `exit(1)` (`cpu_ppc_instr.c:4115-4119`). On 32-bit PowerPC, `memory_ppc.c:314-326` has already raised ISI and returned 0, and `memory_rw.c:259-268` returns failure. A user branch to an unmapped address takes that path. | HOST-STOP. Reach is U on 32-bit, not K. It is not the PPC970 path. See below. |
+| T7 | `dev_mvme187.c:128` maps `0x200` bytes. `memcreg` is 31 registers of 4 bytes, 124 bytes (`mvme_memcreg.h:31-98`). `:68` reads that struct before the switch, after stripping bit `0x100`. Offsets 124..255 are off the end, then `:90` `exit(1)`. Memconf write `:80` also exits. | HOST-STOP, MVME187 guest. Real. |
+| T8 | STCR other than `0x0b` (`dev_clmpcc.c:161-164`) and the default arm (`:246-252`) `exit(1)`. | HOST-STOP, MVME187 guest. Real. |
+| T10 | Block MOVE exits at `dev_osiop.c:406`, `:411`, `:418`, `:423`. | HOST-STOP, guest SCSI script. Real. The row is a family, not one site. |
+| T11 | `cpu_mips_coproc.c:2031-2041`: R4100 with PageMask 0 and a valid TLB entry `exit(1)`. VR4102 through VR4131 are `MIPS_R4100` (`mips_cpu_types.h:78-83`). PageMask writes on R4100 skip `#188` (`:750-776`). TLB writes are kernel. | HOST-STOP, reach K. Real. Unfiled. |
+| T12 | SDRAM base reads `exit(1)` at `dev_footbridge.c:735` and `:760`. | HOST-STOP, guest read. Already `fbsdrampair`, disposition DECLINE. |
+
+Not guest-reachable, and not the same tier:
+
+* **T14** aborts while building DEC 3000/300 (`machine_alpha.c:69-71`, `interrupt.c:190-198`). No guest is running.
+* **T15** is the `115200 / d->divisor` argument at `dev_ns16550.c:180-181`. `OUTSTANDING_BUGS.md:6146-6174` already measured SIGFPE at `-O0`/`-O1` and survival under the shipped `-O3` flags. In the build this tree ships, it is undefined behaviour, not a host kill. Do not file it again as one.
+* **T16** retries `select` on every error and does not rebuild `rfds` (`console.c:289-294`). Host file-descriptor hang. Not a guest instruction.
+* **T17** `memory_device_remove` `exit(1)` on a bad index (`memory.c:509-511`). Debugger input.
+
+Guest corruption:
+
+* **T2 holds, for `stdu`.** Opcodes `0x3a` and `0x3e` are one primary opcode each (`opcodes_ppc.h:230`, `:238`). The decoder takes `imm = (int16_t)iword` (`cpu_ppc_instr.c:4295`) and treats both as plain `ld`/`std` of 8 bytes (`:4307`, `:4320`) with update never set. DS-form XO lives in the low two bits, so `stdu` stores 8 bytes at EA+1 and does not update RA. The unaligned store is performed (`cpu_ppc_instr_loadstore.c:163-174`); this tree has no PowerPC alignment exception. `ldu` and `lwa` are wrong results of the same decode (`lwa` is also the wrong width). PPC970 is the testppc/bareppc default (`machine_test.c:450`, `:456`; `cpu_ppc.h:87` says 64-bit). Real-mode code reaches this. A PPC970 guest that turns translation on does not: it dies first in the hole below.
+* **T4 is latent, not a live image corruption.** Word 49 is stored as 0 (`dev_wdc.c:374-377`), and `wdccylwrap`'s own note already says that means CHS is the only advertised capacity. The LBA formula is inside `#if 0` (`:470-476`, `:562-568`), so `d->lba` is never read for an address. The bit-5 decode (`:2015`) does nothing until that formula is turned on. Filing the row is right. Calling it present-tense guest corruption, and ranking it with the host kills, is not. It is not `wdccylwrap` and not `arcpartlba`.
+* **T9 must not be filed again.** `b120` is already "an unknown command is reported to the guest as success", held. WRITE AND VERIFY has no `case` and falls into that same default arm (`diskimage_scsicmd.c:1380-1384`), which sets no status. `dev_asc.c:1284-1287` then pushes `0x00`. The lost write is that held row applied to a data command, not a second defect. On other controllers the same missing status stops the CPU, so one GUEST-CORRUPTION label does not cover every controller.
+
+`crandc` is NAND (`cpu_ppc_instr.c:2722`) and `crorc` is NOR (`:2749`), identical to `crnor` (`:2758`). `ppccrlogicshift` is only the signed `1 << (31-bt)` in those handlers. T18 really is unfiled.
+
+**Found while checking T6, and absent from the 154.** `memory_ppc.c:280-288`: if `bits != 32`, translated access prints `TODO: ppc 64-bit translation` and `exit(1)`. The BAT scan above it runs only for 32-bit. PPC970 is 64-bit, so the first access with MSR IR or DR set kills the host. No `OUTSTANDING_BUGS.md` or ledger row contains that message. Two neighbours in the same function are also unfiled: `TODO: 601` (`:263-265` in the older brief's numbering; the exit is still in this function) and `TODO: BAT exception` when a matching BAT returns 0 for PP=none or a write to a read-only BAT (`memory_ppc.c:69-73` returns 0; the caller exits). The BAT one is a 32-bit guest protection failure that never raises DSI. File all three. Do not treat T6's "return into the ISI" as the fix for any of them.
+
+## Q2 — the batch
+
+T36 before any 88K fault round: yes. `memory_rw.c:614-622` raises the data-access exception and does not write PFSR or PFAR. The translation path does write them (`memory_m88k.c:382-405`), which is why the register is live, and why a bus error still leaves the handler with PFSR 0. The LUNA probe at `dev_luna88k.c:624-627` writes PFSR=`BERROR` and neither PFAR nor an exception. A round that replaces `exit(1)` with `return 0` delivers that empty fault. T1 does not do that. T7's bounds check does not. T7's exit removal does, if the removal is an exception.
+
+Proposed ten, in order:
+
+1. **T1** — user-mode null call. One generator change. Drop ajfa's `xmem` exemption; that exemption is the crash.
+2. **T3** — filed user-mode `exit(1)`. The rc-bit cases are illegal forms; the round is the disposition, not a port.
+3. **T6** — 32-bit only, reach U. Returning lets the ISI that `memory_ppc.c` already raised proceed. Say in the row that PPC970 does not get here.
+4. **T2** — `stdu` corruption. Mask the DS-form XO and decode it. Nothing safe exists to copy.
+5. **T36** — bus-error PFSR/PFAR, before any later 88K exception round. Upstream r6542/r6547 is the shape. Do not take the plain-RAM CMMU windows.
+6. **T18** — `crandc`/`crorc`, one line each, user mode, a real port.
+7. **T120** — primary opcodes with no case hit `cpu_mips_instr.c:5708` `goto bad` and stop the CPU on every MIPS machine, including pmax and arc. JALX and the COP2/COP3 load/store opcodes have no case. Wider than T11, and the `#236`/`#309` exception idiom is already the house style.
+8. **T5** — the one zwrite `exit(1)` upstream already replaced. Leave the other three PVR exits in their own rows.
+9. **T7 bound only** — stop the off-struct read. Leave the two `exit(1)`s until the disposition is chosen, and if that disposition is an exception, T36 is already in.
+10. **T11** — confirmed hpcmips host exit, no port exists, so the round owes the design.
+
+Drop **T4** out of this ten. Queue the row. Do not implement it until word 49 is an explicit decision, and do not key the formula on `d->lba` as this tree defines it. Drop **T10** until a single site is named and the 2^24-byte MEMORY MOVE is excluded. **T8** can follow T7 once its exit disposition is the same choice. **T9** stays out, and stays `b120`.
+
+The new PPC970 translation exit is a host kill on the default CPU, and it is a large design (a page-table walker), not a tenth small round. File it. Do not pretend it is T6.
+
+## Q3 — the records
+
+**R2 is right in reason and in conclusion.** `OUTSTANDING_BUGS.md:1896-1898` says PFAR is not modelled and appears nowhere in `src/`. `CMMU_PFAR` is `m8820x.h:66`. It is cleared at `memory_m88k.c:399` and set at `:405`. The guest reads it at `dev_m8820x.c:438`. The refutation is false. Reopen it as the T36 row and correct the note in place, quoting the three sites. The bus-error arm still does not update the register, so the defect is live. The `m88kexit` row is a different thing: the `CMMU_PFSR_SUCCESS` `exit(1)` at `memory_m88k.c:390-394`, already judged unreachable. Do not merge them.
+
+**R1, the part this pass could see.** Archived `root_src\cpus\generate_arm_r.c` has a signed `1 << (c-1)` at lines 139, 200, and 279. This tree has `1U <<` at the same three lines. `gate_ab.sh:4` still says `39748e3` is unmodified upstream 0.7.0, and `:37` still archives that commit as the A tree. This pass could not run `git show 39748e3c:src/cpus/generate_arm_r.c`, so the claim that the `1U` edit and the 59 `tmp_*.c` files are inside that commit, rather than a later one, is still the coordinator's measurement. `CHANGELOG.md:24451-24462` already records other non-upstream files swept into `39748e3` and refuses to rewrite the import.
+
+**Disposition: provenance note only.** Put it in the `gate_ab.sh` header and next to that CHANGELOG note: the A tree is `39748e3`, it is not a byte-faithful 0.7.0 tarball, the `1U` change does not change generator output, and the pre-seeded `tmp_*.c` files are build products the tarball does not ship. Do not rewrite `39748e3`. Do not point `PRISTINE_REF` at a new commit. Old A/B logs name that ref, and the `1U` change does not move guest-visible results. A byte-true tree, if anyone needs one later, is a second ref.
+
+## Q4 — do not port
+
+Already recorded, and right: do not copy trunk's removal of a CPU stop while trunk's default is to stop on every error-level message (`#261`). Do not take the SDE Linux tap `strcpy`.
+
+Also do not take:
+
+* The FreeBSD/DragonFly `dev_wdc.c` patch as a patch. It consults `d->lba`. This tree sets that flag from SDH bit 5 (`dev_wdc.c:2015`). A CHS write of `0xa0` sets bit 5. Applying the patch would address those CHS requests as LBA.
+* rs6000 `9a05a7b`, which aborts on the DS-form opcodes. That turns T2's bad store into a host exit.
+* ajfa `4a01173` patch 01's rule that scaled byte `xmem` stays exempt. That is T1.
+* The same commit's patch 04 MEMORY MOVE of up to 2^24 bytes per script instruction, and its treatment of the `.wt` bit as a cache hint (T127). The hint is the patch's claim.
+* rs6000's CA rewrite on the OE forms (T128), its no-execute/guarded ISI bit (T25), `month_days[-1]` (T106), and the softfloat model (T34).
+* Upstream `4e3e72b1`'s plain-RAM CMMU windows for CPUs that are not there (T36, T134).
+* Any upstream deletion of an `exit(1)` whose correctness depends on error-level messages stopping the CPU (T135, T138).
+* The Glaw MAC patch's `fprintf` of a pointer before the NULL test (T118).
+* ryoon `e1ce5e9` / `714ef40`. Those commits added the footbridge read exits. `fbsdrampair` is already DECLINE.
+* jroark's VR4131 register map (T109) and HIBERNATE vector (T110) as if they were a manual. No VR41xx manual is in this tree. `in_use=0` on the extra SIU (T114) is a local one-line fact and can be ported.
+
+rs6000 and the ajfa MVME187 series are useful diffs with known-bad hunks inside them. Take a hunk after reading it. Do not take either repository as a correct GXemul.

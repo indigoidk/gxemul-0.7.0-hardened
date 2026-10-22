@@ -18,6 +18,33 @@
 > why. Rounds 60–65 (#295–#300) cleared the entire floating-point feasibility queue;
 > what follows is what they left, plus what they found on the way.
 >
+> ### OPEN -- filed 2026-10-22 from the external-fixes research: the first batch of ten rounds and its six-row
+> ### tail, in the adjudicated order
+>
+> `regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md` section D replaces `TRIAGE.md` section (d).  The
+> rows are filed in the 2026-10-22 section at the end of this file, and each carries its QUEUE marker in its ledger
+> `state_note`.
+>
+> 1. `m88kscaledbyte` (HIGH, new) -- m88k scaled byte ld/st/xmem use NULL table slots; a user-mode xmem calls a NULL
+>    function in the host.  T1; the fix shape is disputed and pass 1 settles it.
+> 2. `ppcllscrcexit` (HIGH) -- lwarx/ldarx with Rc=1 and stwcx./stdcx. with Rc=0 exit the host.  T3; design owed.
+> 3. `qhslowifetch` (HIGH) -- a failed slow-path instruction fetch exits the host; user-reachable on 32-bit PowerPC.
+>    T6; PPC970 stops first at `ppc64xlateexit`.
+> 4. `ppcdsformxo` (HIGH, new) -- DS-form XO bits: ldu/lwa/stdu run as ld/std at EA+1/+2.  T2; design owed.
+> 5. `m88kbuserrregs` (MED, new) -- 88K bus errors carry no PFSR/PFAR; the carrier of the reopened PFAR item.  T36;
+>    before any 88K fault round.
+> 6. `ppccrandcorc` (MED, new) -- crandc/crorc compute NAND/NOR.  T18.
+> 7. `mipsprimundec` (MED, new) -- MIPS primary opcodes with no case stop the CPU, from user mode.  T120.
+> 8. `mvme187memcoob` (MED) -- the MEMC host over-read: the bounds repair first, then the dev_mvme187.c exits that
+>    `exitunowned76` carries.  T7.
+> 9. `vr41xx1kpage` (HIGH, new) -- VR41xx 1 KB-page TLB writes exit the host at two sites.  T11; design owed.
+> 10. `pvrrenderexit` (HIGH) -- the zwrite exit only.  T5.
+>
+> Tail, in order: (1) `fbsdrampair`, T12, DECLINE, narrow; (2) `wdclbaaddr`, T4, latent here -- the word-49 decision
+> first; (3) `exitunowned76`'s dev_clmpcc.c exits, T8, after item 8 with the same disposition; (4) one dev_osiop.c site
+> of `exitunowned76`, T10, not the 2^24-byte MEMORY MOVE; (5) `x11cursorclip`, T13; (6) `ppc64xlateexit`, N3, a large
+> design.  T9 is not re-filed: `b120` carries it.
+>
 > ### OPEN -- filed 2026-09-11 from `#524` pass D: a cheap way to get more assertions per session
 > ### silently moves every assertion after the first onto the FAST path
 >
@@ -378,7 +405,7 @@
 > `X(tbnd)` handler), so no INSTRUCTION raises BOUNDS_CHECK_VIOLATION (7); only a supervisor tb0/tb1/tcnd naming 7 reaches it,
 > which is why `implemented = is_trap` at BOUNDS is EQUIVALENT today (re-run M_TRAPONLY when tbnd lands).  **`m88kmxmkill`** (LOW)
 > -- a supervisor `stcr` (or `rte`) writing PSR with MXM set stops the cpu (`m88k_stcr`, case M88K_CR_PSR): the graceful-halt class
-> of #502, one bit wide.  **`m88ksfrzfatal`** (LOW, floodclass instance) -- the SFRZ re-route's `fatal("[ SFRZ already set in PSR
+> of #502, one bit wide.  *[2026-10-22: dropped as a duplicate -- consolidated into `m88kpsrmxm` (alias), ADJ_RULINGS.md B T136.]*  **`m88ksfrzfatal`** (LOW, floodclass instance) -- the SFRZ re-route's `fatal("[ SFRZ already set in PSR
 > => ERROR ]")` is unlatched and guest-drivable (supervisor-only: any non-trap fault inside a handler); pre-existing, reachable by
 > five more classes since #502 -- MISALIGNED, UNIMPLEMENTED, PRIVILEGE, DIV0, OVERFLOW; BOUNDS and ERROR have only trap raise routes, which the
 > `if (!is_trap)` branch holding the `fatal()` excludes (pass-4 Fable seat; count corrected by codex, pass 5 -- this said seven).  All four filed 2026-09-06; the first three were CITED by #502's pass-1 record
@@ -1260,6 +1287,9 @@
 >   source-demonstrable — an accumulated periodic callback count means a Compare write clears
 >   IP7 only momentarily, giving a wrong guest-readable Cause and an extra interrupt — but it
 >   is **not end-to-end measured**. Documented-only under the stopping rule.
+>   *[2026-10-22, research TRIAGE.md T93: widened -- the host-timer Compare rate ignores that Count runs at CPU/2
+>   (`cpu_mips_coproc.c:808-809`), and the pending count is an uncapped `int` (`:422`) that re-fires IP7 back to
+>   back; ports jroark 2fa3853, 4729fb6, dabf5ce.  The wrap-reprogramming half stays `n1`'s.]*
 > - **`armbdt`** — ARM block transfer disagrees about an unaligned base. **REAL.** With
 >   `U=0`, the masked fast path is right and the raw slow path is wrong. Controlling text is
 >   **LDM(1) p. A4-37 and STM(1) p. A4-190**, read from `_scratchpad/ddi0100i.txt:7954`
@@ -1896,6 +1926,14 @@
 > - ~~**m88k `PFAR`**~~ — **REFUTED as a defect: the register is not modelled at all.**
 >   `PFAR` appears nowhere in `src/`. That is a missing feature, not a wrong behaviour, and
 >   there is no reproducer to write for it.
+>   **[2026-10-22 -- THIS REFUTATION IS FALSE, in its reason and in its conclusion; corrected in place, the
+>   original kept above.]**  The register IS modelled: `CMMU_PFAR` (`src/include/thirdparty/m8820x.h:66`, the CMMU
+>   P-bus fault address register) is written at `src/cpus/memory_m88k.c:399` (`= 0`) and `:405` (`= pfar`) and is
+>   guest-readable through `src/devices/dev_m8820x.c:438`; "nowhere" came from a search for a CPU control-register
+>   spelling.  Upstream's fix (`6cb3514c`, SVN r6547: the LUNA 0x3ffffff0 probe should also set PFAR) targets a LIVE
+>   defect, reopened under `m88kbuserrregs` (TRIAGE.md T36, filed in the 2026-10-22 section at the end of this
+>   file).  `m88kexit` (`memory_m88k.c:390-394`) is a different row.  (`regress/artifacts/research_20261022/RECORDS_VERDICTS.md` R2;
+>   `regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md` E)
 > - ~~**SH `synco` (0x00ab) is undecoded and HALTS the emulator**~~ — **RESOLVED, much
 >   wider than filed, as #314 (round 79).** The premise recorded here was wrong twice over:
 >   `synco` is an SH-4A instruction and this tree models no SH-4A core (landisk is an
@@ -10406,7 +10444,7 @@ One seat called my *"someone already decided the kill was wrong"* inference over
 A second **settled it by measurement**: `git log -L 676,700:src/devices/dev_dreamcast_gdrom.c`
 returns **exactly one commit — `39748e3 Import GXemul 0.7.0 (unmodified upstream
 baseline)`.** The commented-out `exit(1)` is verbatim upstream; **this fork has never
-touched those lines.** "Already half-fixed" is false.
+touched those lines.** "Already half-fixed" is false.  *[2026-10-22: that subject's "unmodified" is a wrong label -- the import carries the fork's `#9` and `#13` (CHANGELOG.md "Repository cleanup"; records R1) -- but `dev_dreamcast_gdrom.c` is byte-identical to the 0.7.0 release, so this refutation stands.]*
 
 **And the real explanation is stronger than the one I invented.** Three lines later,
 `GDROM_STAT` (`:695-696`) has its commented-out exit in the **WRITE** branch — the
@@ -22938,7 +22976,7 @@ is absolute).
 ### THE RETRO -- 185 rows (wave 1, the emulator source)
 
 #### `ppcbatppkill` (HIGH) -- PPC: a BAT hit with PP=00, or a store through a read-only BAT, reaches fatal()+exit(1) instead of a DSI/ISI
-batch 1b -- `regress/artifacts/astraretro_20260926/DISPOSITIONS.md`
+batch 1b -- `regress/artifacts/astraretro_20260926/DISPOSITIONS.md`  [re-found 2026-10-22 as the adjudication's N5: memory_ppc.c:69-73 and the caller's exit at :273-276 -- no second row]
 
 #### `ppcfmasingle` (HIGH) -- PPC opcode-59 fnmadds/fnmsubs (and their Rc forms) are undecoded and stop the emulator (cpu_ppc_instr.c:5197-5218); fmadds/fmsubs are ALREADY FILED in prose (OUTSTANDING_BUGS.md:1705, :1712) -- cross-reference, do not double-file
 batch 1b -- `regress/artifacts/astraretro_20260926/DISPOSITIONS.md`  [title corrected: Astra afile_01, D:24-27]
@@ -23202,7 +23240,7 @@ batch 3a, `cpum88kinstr:F3` -- `regress/artifacts/astraretro_20260926/DISPOSITIO
 batch 3a, `cpum88kinstr:F7` -- `regress/artifacts/astraretro_20260926/DISPOSITIONS.md`
 
 #### `mipsbadvpnscale` (MED) -- R4000 Context/XContext BadVPN2 is scaled by the matched (or last-scanned) TLB entry's page size instead of fixed VA bits 31:13 / 39:13
-batch 3b, `cpumips:F1` -- `regress/artifacts/astraretro_20260926/DISPOSITIONS.md`
+batch 3b, `cpumips:F1` -- `regress/artifacts/astraretro_20260926/DISPOSITIONS.md`  [widened 2026-10-22, research TRIAGE.md T94: the R4100 arm (cpu_mips.c:2078-2088) wants VA[31:11]; port jroark a63131b]
 
 #### `mipssubmin` (MED) -- SUB/DSUB test overflow on the NEGATED subtrahend: MIN-MIN traps, 0-MIN does not
 batch 3b, `cpumipsinstr:F5` -- `regress/artifacts/astraretro_20260926/DISPOSITIONS.md`
@@ -23232,7 +23270,7 @@ batch 3e, `devosiop:F2` -- `regress/artifacts/astraretro_20260926/DISPOSITIONS.m
 batch 3e, `devle:F1` -- `regress/artifacts/astraretro_20260926/DISPOSITIONS.md`
 
 #### `letxrestart` (MED) -- LANCE: STOP then STRT does not restore TXON after a transmit abort or MERR -- only INIT does
-batch 3e, `devle:F2` -- `regress/artifacts/astraretro_20260926/DISPOSITIONS.md`
+batch 3e, `devle:F2` -- `regress/artifacts/astraretro_20260926/DISPOSITIONS.md`  [widened 2026-10-22, research TRIAGE.md T92: also STOP does not reset CSR0 to STOP alone (dev_le.c:873-877); port rpajarola d1f0720]
 
 #### `letxshortage` (MED) -- LANCE: a host-owned TX continuation (OWN clear) that is not yet available leaves the partial frame pending with no BUFF, no TINT and TXON still set
 batch 3e, `devle:F3` -- `regress/artifacts/astraretro_20260926/DISPOSITIONS.md`  [title corrected: Astra afile_01, D:687, :695]
@@ -24068,7 +24106,7 @@ the prose: 4139-4145 (line numbers of this file as of commit `db8b1a33`) -- `reg
 #### `closeassessrows` (MED, a CLASS row: a records defect of the LEDGER, found while checking which rows carry this file's prose) -- the 2026-08-27 sweep closed CLOSE (assess) rows that still name undone work, and each member needs a re-open decision
 **What it is.**  On 2026-08-27 one sweep closed ledger rows that carried the adjudicator's note `CLOSE (assess)` -- "on the adjudicator's recorded authority", with "no independent re-verification of the underlying defect" (each row's own `state_note`).  That note signs off a row's ASSESS STAGE: seven rows carry it while held or in work.  For the 8 members below the grok seat found the work the row names NOT done and carried by no other row.  **Nothing is re-opened by this row or by `#555`**: whether each member is re-opened, re-filed or closed with a commit is this row's work, one decision per member.  Each member's ledger row carries a note saying so.
 
-**Members (8):** `m8latch`, `gcsections`, `ns16550`, `pcchalt`, `wdcstandby`, `rtcnarrow`, `scunbacked`, `m437multi`.
+**Members (8):** `m8latch`, `gcsections`, `ns16550`, `pcchalt`, `wdcstandby`, `rtcnarrow`, `scunbacked`, `m437multi`.  *[2026-10-22, research TRIAGE.md T95: `rtcnarrow` also carries the uncapped RTCL1 backlog -- `dev_vr41xx.c:396` increments the pending count with no cap, acknowledged only at `:628-635`; port jroark bea47e2.]*
 
 **Read by no seat (2):** `ledgerwitness`, `cmtattr` -- closed by the same sweep with no commit; they belong to this row's audit.
 
@@ -25186,7 +25224,7 @@ Fable 5.1, GPT-6 Astra, Grok 4.7).  Each row's ledger `state_note` carries its s
   misaligned-access exception MASK: when set, a misaligned access does not trap and the processor rounds the address
   down to a consistent boundary.  Named on `#568`'s pass 1 (Fable) as an unmodelled divergence and adjudicated FILE,
   LOW, before anyone read the arm; the arm halts, so it is filed MED.  Whether an in-tree guest sets MXM is not
-  established -- the reachability question that ranks it.
+  established -- the reachability question that ranks it.  *[2026-10-22: alias `m88kmxmkill` (filed 2026-09-06 from #502, the same halt) is consolidated here; MED confirmed -- ADJ_RULINGS.md B T136.]*
 
 ### 2026-10-21 -- the of.c exit family scoped (Argon); `ofemulnodata`'s title corrected; `armrebootmagic` filed
 
@@ -25201,3 +25239,427 @@ Fable 5.1, GPT-6 Astra, Grok 4.7).  Each row's ledger `state_note` carries its s
   (`cpu->running = 0`) on every ARM machine at any privilege level; `machine_cats.c` plants it as the cats PROM's
   reboot entry.  One user-mode instruction stops the emulated CPU instead of taking the SWI it encodes.  No
   witness yet (READ at 7f48ea10).
+
+### 2026-10-22 -- the external-fixes research filed: 126 rows from GitHub forks, distro patches and upstream SVN r6522-r6577 (8 HIGH, 102 MED, 16 LOW)
+
+The external-fixes research of 2026-10-22 (`regress/artifacts/research_20261022/`): three reports -- `A_github_forks.md`
+(46 repositories, 367 rows), `B_distro_patches.md` (18 distributions, 28 patch files) and `C_reports_upstream.md`
+(upstream SVN r6522-r6577, the mailing lists and trackers; 61 findings) -- merged in `TRIAGE.md` into 154 still-open
+defects: 29 already filed, 4 filed in part, 121 unfiled.  The coordinator's measured verdicts are `RECORDS_VERDICTS.md`;
+the adjudication (GPT-6 Astra and Grok 4.7; Fable 5.1 held by the owner) is `adj_20261022/ADJ_RULINGS.md`, which amended
+classes and reach, added four defects (N1-N4; its N5 is `ppcbatppkill`, already filed), filed one owner option and set
+the batch order.  This section files 126 rows -- 8 HIGH, 102 MED, 16 LOW -- all open with witness `none`: each is a
+research finding, not yet reproduced here.  Elsewhere in this file, by the same filing: the four filed-in-part residuals
+widen `letxrestart`, `dfreq`, `mipsbadvpnscale` and `closeassessrows` (its `rtcnarrow` member); `m88kmxmkill` is
+consolidated into `m88kpsrmxm`; `ppcbatppkill` records N5; the Round 71B m88k PFAR refutation is corrected in place; the
+batch order is in the OPEN LIST head.  T9 is not re-filed: `b120` carries it.  Each row's sources, sites and port notes
+are in its ledger `state_note`.
+
+**HIGH -- host stops and guest corruption (8)**
+
+* **`m88kscaledbyte` (HIGH, open)** -- new.  cpus/generate_m88k_loadstore.c table + cpu_m88k_instr.c:X(xmem_slow) -- the
+  generator emits NULL for every scaled byte-size entry; scaled `xmem.bu rD,rS1[rS2]` calls that NULL pointer (host
+  SIGSEGV), scaled `ld.b/ld.bu/st.b` decode to `ic->f == NULL` (CPU stop) -- HOST-STOP.  TRIAGE.md T1; report rows
+  A7-29, A7-30, A(c)#1; port: yes (ajfa mvme187 4a01173).  Batch 1 of 10 (fix shape disputed; pass 1 settles it).
+* **`ppcdsformxo` (HIGH, open)** -- new.  cpu_ppc_instr.c:X(to_be_translated) D/DS-form arm -- primary opcodes 58/62
+  keep the DS-form XO bits in the displacement, so `ldu`/`lwa` execute as `ld` at EA+1/EA+2 and `stdu` executes as `std`
+  at EA+1 with no RA update -- GUEST-CORRUPTION (misdirected 8-byte stores; wrong loads; 64-bit CPUs, PPC970 is the
+  testppc/bareppc default).  TRIAGE.md T2; report rows A4-13; port: none -- a design is owed.  Batch 4 of 10 (design
+  owed).
+* **`wdclbaaddr` (HIGH, open)** -- new.  devices/dev_wdc.c:wdc__read/wdc__write -- the LBA28 address computation is
+  under `#if 0` and the SDH decode takes the LBA flag from bit 5 (ATA: bit 6), so LBA-mode requests are addressed as
+  cylinder/head/sector -- GUEST-CORRUPTION, LATENT in this tree (wrong-sector reads and writes reach only a guest that
+  ignores IDENTIFY word 49, which this model stores as 0).  TRIAGE.md T4; report rows B F2, B rec.1; port: partial, or
+  an idea only (FreeBSD ports patch-src_devices_dev__wdc.c).  Batch tail 2 of 6 (latent here: the word-49 decision
+  first).
+* **`vr41xx1kpage` (HIGH, open)** -- new.  cpus/cpu_mips_coproc.c:coproc_tlbwri -- a VR41xx TLB write that installs a
+  valid entry with PageMask 0 (a legal 1 KB page) calls `fatal("1KB pages don't work with dyntrans")` then `exit(1)` at
+  two sites (invalidating the old entry, installing the new one); R4100 PageMask writes skip #188's canonicalisation --
+  HOST-STOP.  TRIAGE.md T11; report rows A(c) adjacent finding, A6 note A1; port: none -- a design is owed.  Batch 9 of
+  10 (two exit sites; design owed).
+* **`x11cursorclip` (HIGH, open)** -- new.  console/x11.c:x11_redraw_cursor + devices/dev_fb.c:dev_fb_setcursor -- the
+  cursor is clamped against VRAM size while the X image has the visible size, and `XSubImage` is not clipped, so a
+  cursor below the visible area makes Xlib read past the image -- HOST-STOP (host heap over-read; X11 build run with
+  -X).  TRIAGE.md T13; report rows A2-12, A(c)#3; port: yes (rpajarola fe69c7b).  Batch tail 5 of 6.
+* **`dbgdevremove` (HIGH, open)** -- new.  core/memory.c:memory_device_remove -- the debugger's `device remove n` with
+  an invalid number calls `exit(1)` -- HOST-STOP (debugger-user input only; not guest-triggered).  TRIAGE.md T17; report
+  rows C (b) cross-check finding; port: none -- a design is owed.
+* **`ppc64xlateexit` (HIGH, open)** -- new.  cpus/memory_ppc.c:ppc_translate_v2p -- a translated access on a 64-bit CPU
+  prints `TODO: ppc 64-bit translation` and calls exit(1); on PPC970, the testppc/bareppc default CPU, the first access
+  with MSR IR or DR set ends the host process -- HOST-STOP.  ADJ_RULINGS.md C N3 (Grok 4.7); port: none.  Batch tail 6
+  of 6 (a large design).
+* **`ppc601xlateexit` (HIGH, open)** -- new.  cpus/memory_ppc.c:ppc_translate_v2p -- on a CPU flagged PPC_601 every
+  translated access prints `TODO: 601` and calls exit(1) -- HOST-STOP.  ADJ_RULINGS.md C N4 (Grok 4.7); port: none.
+
+**MED -- wrong results (89)**
+
+* **`ppccrandcorc` (MED, open)** -- new.  cpus/cpu_ppc_instr.c:X(crandc), X(crorc) -- crandc computes NAND and crorc
+  computes NOR instead of BA AND NOT BB / BA OR NOT BB (Book I) -- WRONG-RESULT (wrong condition bits in compiled code).
+  TRIAGE.md T18; report rows A4-14, A4-15, A(c)#4; port: yes (rs6000 241f5e2, rs6000 0685c8d).  Batch 6 of 10.
+* **`ppcintentrymsr` (MED, open)** -- new.  cpus/cpu_ppc.c:ppc_exception -- interrupt entry clears only EE, RI and PR;
+  IR, DR, FP, SE, BE, FE0, FE1 and POW stay set and LE is not taken from ILE -- WRONG-RESULT (handlers run translated
+  with FP/trace state of the interrupted context).  TRIAGE.md T19; report rows A4-18; port: yes (rs6000 9bcc860, rs6000
+  0b8e81a, rs6000 7cb33c8).
+* **`mipsdivwrap` (MED, open)** -- new.  cpus/cpu_mips_instr.c:X(div)/X(ddiv) -- INT_MIN / -1 returns LO=0 (and ddiv HI
+  = dividend) where the manuals give the wrapped quotient with HI=0 -- WRONG-RESULT.  TRIAGE.md T21; report rows A6-5, A
+  issues (CHERI PR#1); port: yes (CHERI 1236c18, CHERI PR#1).
+* **`ppclswizero` (MED, open)** -- new.  cpus/cpu_ppc_instr.c:X(lswi) -- the unfilled low-order bytes of the last
+  register keep stale data (zero-filled only in MODE_POWER), and the byte assembly uses signed-overflow shifts --
+  WRONG-RESULT (+ host UB).  TRIAGE.md T22; report rows A4-17, A(b-1) class 1 (lswi shifts); port: yes (rs6000 3cdc32f,
+  rs6000 e88c21b).
+* **`mipscop0cpu` (MED, open)** -- new.  cpus/cpu_mips_instr.c COP0-function default arm (#236) -- raises RI without the
+  CU0 check, so user mode gets RI instead of Coprocessor Unusable, and prints an unlatched `fatal()` on every
+  translation -- WRONG-RESULT (+ log flood).  TRIAGE.md T23; report rows A2-64; port: yes (rpajarola 12306ee).
+* **`ppcisisrr1` (MED, open)** -- new.  cpus/cpu_ppc.c:ppc_exception + memory_ppc.c:ppc_translate_v2p -- an ISI sets no
+  SRR1 reason bit (not-found, protection, no-execute) -- WRONG-RESULT.  TRIAGE.md T25; report rows A4-19; port: partial,
+  or an idea only (rs6000 8b0737a, rs6000 7cb33c8).
+* **`ppcpterc` (MED, open)** -- new.  cpus/memory_ppc.c:get_pte_low/ppc_vtp32 -- the hardware table walk never sets the
+  PTE referenced/changed bits -- WRONG-RESULT (guest paging sees stale R/C).  TRIAGE.md T26; report rows A4-20; port:
+  partial, or an idea only (rs6000 4f9229e, rs6000 daa612b).
+* **`mipsr3010irq` (MED, open)** -- new.  cpus/cpu_mips.c / cpu_mips_coproc.c:fpu_unimpl_trap -- the MIPS I R2010/R3010
+  FPU interrupt is unwired, so enabled IEEE exceptions and unimplemented operations on R3000-class CPUs raise nothing --
+  WRONG-RESULT.  TRIAGE.md T27; report rows A2-43; port: partial, or an idea only (rpajarola 8ca85e8).
+* **`mipsrecipdecode` (MED, open)** -- new.  cpus/cpu_mips_coproc.c:fpu_function -- RECIP/RSQRT (0x15/0x16) and
+  MOVCF/MOVZ/MOVN.fmt (0x11-0x13) are undecoded: an ungated `fatal()` per execution and CpU(1) raised with CU1 already
+  set -- WRONG-RESULT (guest re-trap livelock + host log flood).  TRIAGE.md T30; report rows A6-15, A(c)#5; port: none
+  -- a design is owed.
+* **`mipscop1xcpu` (MED, open)** -- new.  cpus/cpu_mips_instr.c:X(to_be_translated) opcode 0x13 -- COP1X
+  (MADD/MSUB/NMADD/NMSUB.fmt, LWXC1/LDXC1/SWXC1/SDXC1, PREFX) always raises CpU(3) on MIPS IV/64 FPU CPUs --
+  WRONG-RESULT.  TRIAGE.md T31; report rows A(c)#5 related gap, A6 note A3; port: none -- a design is owed.
+* **`mipssyncmips1` (MED, open)** -- new.  cpus/cpu_mips_instr.c SPECIAL decode -- SYNC is a NOP at every ISA level; on
+  an R3000 (MIPS I) it must raise RI -- WRONG-RESULT (Mach 3.0's user emulator spins).  TRIAGE.md T32; report rows
+  A7-53; port: none -- a design is owed.
+* **`smpcodeinval` (MED, open)** -- new.  cpus/memory_rw.c (end of MEMORY_RW) -- a write invalidates translated code
+  only on the writing CPU, and translate-time write revocation is per-CPU too, so other CPUs keep stale translations --
+  WRONG-RESULT (stale code with -n > 1).  TRIAGE.md T35; report rows A1-33, A(c)#6, C U1; port: yes (upstream 55eea37f,
+  upstream 6d83f6da, SVN r6557/r6562).
+* **`m88kbuserrregs` (MED, open)** -- new.  cpus/memory_rw.c MEM_M88K device-failure arm + devices/dev_luna88k.c case
+  0x3ffffff0 -- a refused device access raises the access exception without writing the CMMU fault status (PFSR=BERROR)
+  and fault address (PFAR); the LUNA probe address writes PFSR only, no PFAR and no exception -- WRONG-RESULT (the
+  guest's trap handler reads PFSR 0 for a bus error, per the fork's own vmedefaultkill measurement).  TRIAGE.md T36;
+  report rows A1-20, A1-25, A1-48, A(c)#10, C U8; port: yes (upstream 4e3e72b1, r6577, upstream 6cb3514c).  Batch 5 of
+  10: before any 88K fault round; the carrier of the reopened PFAR item.
+* **`mipssubpageram` (MED, open)** -- new.  cpus/memory_rw.c MIPS PROM-area fallthrough + devices/dev_mc146818.c init --
+  sub-page devices in the 0x1fc00000 window (KN02 RTC 0x100 bytes, DZ 0x80 bytes): one access past the registers maps
+  the whole page as RAM and later accesses bypass the device -- WRONG-RESULT (device silently disconnected; NVRAM stores
+  lost).  TRIAGE.md T37; report rows A2-66, A(c)#8; port: yes (rpajarola e37235e).
+* **`m88koutsideram` (MED, open)** -- new.  cpus/memory_rw.c non-MIPS path beyond RAM -- an 88K access with no RAM or
+  device behind it reads zeros or drops the write instead of raising a bus error -- WRONG-RESULT (SVR4 memory sizing
+  never terminates).  TRIAGE.md T38; report rows A7-33, A1-25; port: yes (ajfa mvme187 4a01173, upstream 4e3e72b1).
+* **`m88kpsrreserved` (MED, open)** -- new.  cpus/cpu_m88k.c:m88k_stcr PSR/EPSR -- reserved bits 27..4 are stored
+  verbatim where the MC88100 ignores writes to them -- WRONG-RESULT (SVR4 resumes processes at spl7).  TRIAGE.md T39;
+  report rows A7-24, A(c)#9; port: yes (ajfa mvme187 4a01173).
+* **`osiopdmainval` (MED, open)** -- new.  devices/dev_osiop.c:write_byte -- SCRIPTS DMA writes guest RAM through the
+  host page without invalidating translated code -- WRONG-RESULT (stale code runs after a DMA load).  TRIAGE.md T40;
+  report rows A7-37; port: yes (ajfa mvme187 4a01173).
+* **`ppctlbieseg` (MED, open)** -- new.  cpus/cpu_ppc_instr.c:X(tlbie) -- invalidates only the exact EA, not the page
+  index in every segment -- WRONG-RESULT.  TRIAGE.md T41; report rows A4-21; port: yes (rs6000 59cc410, rs6000 3dafe76).
+* **`ppcdecwrite` (MED, open)** -- new.  cpus/cpu_ppc_instr.c:X(mtspr) DEC -- a software DEC write that flips bit 0 from
+  0 to 1 does not signal the decrementer exception -- WRONG-RESULT.  TRIAGE.md T42; report rows A4-24; port: yes (rs6000
+  241f5e2).
+* **`ppcsprg2drop` (MED, open)** -- new.  cpus/cpu_ppc_instr.c:X(mtspr_sprg2) -- SPRG2 writes are discarded on 32-bit
+  CPUs (a FreeBSD hack) -- WRONG-RESULT.  TRIAGE.md T43; report rows A4-26; port: yes (rs6000 d13a974).
+* **`mipscountread` (MED, open)** -- new.  cpus/cpu_mips_coproc.c:coproc_register_read COP0_COUNT -- an MFC0 Count read
+  bumps Count, and a bump that reaches Compare raises IP7 only at the batch end -- WRONG-RESULT (Linux cevt-r4k probe).
+  TRIAGE.md T44; report rows A3-28; port: yes (jroark dc55abc, jroark 445d32d).
+* **`mipscountrate` (MED, open)** -- new.  cpus/cpu_dyntrans.c Count update -- Count advances once per instruction
+  instead of once per two cycles, with no per-machine divisor -- WRONG-RESULT (timebase ratio).  TRIAGE.md T45; report
+  rows A3-29, A3-30; port: yes (jroark dabf5ce, jroark b041121).
+* **`mipscountidle` (MED, open)** -- new.  cpus/cpu_dyntrans.c idle path -- WAIT/STANDBY batches subtract
+  N_DYNTRANS_IDLE_BREAK, so Count does not advance while the guest idles -- WRONG-RESULT.  TRIAGE.md T46; report rows
+  A3-31; port: yes (jroark 45b34df).
+* **`mipsebase` (MED, open)** -- new.  cpus/cpu_mips_coproc.c / cpu_mips.c:mips_cpu_exception -- EBase (CP0 15 sel 1) is
+  not modelled for the Release-2 cores (4KEc, 5KE, 24KEc): mtc0 is dropped with an unlatched fatal(), mfc0 returns PRId,
+  the vector base is hard-wired -- WRONG-RESULT.  TRIAGE.md T47; report rows A7-2; port: yes (klx3300 8f94a57).
+* **`ns16550iirid` (MED, open)** -- new.  devices/dev_ns16550.c DEVICE_TICK / IIR read -- IIR ORs RXRDY and TXRDY flag
+  bits (RX + THRE reads 0x6, the line-status ID) and every IIR read clears THRE -- WRONG-RESULT (shared UART model).
+  TRIAGE.md T48; report rows A3-34, A5-11, A(c)#7; port: yes (jroark 2a1a395, rs6000 f58d6d7, rs6000 705f50b).
+* **`i8259eoiirr` (MED, open)** -- new.  devices/dev_8259.c EOI -- non-specific and specific EOI clear the IRR bit of a
+  still-asserted line -- WRONG-RESULT (lost level-triggered request).  TRIAGE.md T49; report rows A5-25, A(c)#11; port:
+  yes (rs6000 ae2240b).
+* **`i8259icw4` (MED, open)** -- new.  devices/dev_8259.c init sequence -- ICW1 SNGL/IC4 are ignored, so with IC4=0 the
+  guest's first OCW1 mask write is swallowed as ICW4 -- WRONG-RESULT.  TRIAGE.md T50; report rows A5-26, A(c)#11; port:
+  yes (rs6000 598ab10).
+* **`i8259isrnever` (MED, open)** -- new.  devices/dev_8259.c + devices/dev_prep.c IACK -- ISR is never set (read-ISR
+  returns 0) and the PReP IACK read has no acknowledge side effect -- WRONG-RESULT.  TRIAGE.md T51; report rows A5-27,
+  A(c)#11; port: yes (rs6000 598ab10, rs6000 174448c).
+* **`eaglecfglanes` (MED, open)** -- new.  devices/dev_eagle.c:DEVICE_ACCESS 0xCF8/0xCFC -- byte/halfword config
+  accesses at 0xCFD-0xCFF read 0 or are dropped, and a narrow write at 0xCFC is passed on as a zero-extended dword --
+  WRONG-RESULT (prep, mvmeppc).  TRIAGE.md T52; report rows A5-31; port: yes (rs6000 eb4c571, rs6000 b31c0ea).
+* **`pckbcledparam` (MED, open)** -- new.  devices/dev_pckbc.c:dev_pckbc_command -- the Set-LEDs parameter byte is
+  parsed as a new command (non-zero bytes get RESEND) -- WRONG-RESULT.  TRIAGE.md T53; report rows A5-12; port: yes
+  (rs6000 d2ff00e, rs6000 c861ff6).
+* **`pckbcselftest` (MED, open)** -- new.  devices/dev_pckbc.c controller 0xA9 / 0xAA and keyboard 0xFF -- 0xA9 queues
+  no reply and self-test/reset do not flush the output queues -- WRONG-RESULT (guest polls to timeout).  TRIAGE.md T54;
+  report rows A5-13; port: yes (rs6000 9bda09a, rs6000 ca2377f, rs6000 c861ff6).
+* **`pckbcauxecho` (MED, open)** -- new.  devices/dev_pckbc.c 0xD4/0xD3 -- a byte written to the aux device is echoed
+  into the keyboard stream -- WRONG-RESULT.  TRIAGE.md T55; report rows A5-15; port: yes (rs6000 d2ff00e, rs6000
+  94e3ed4).
+* **`mc146818reg63` (MED, open)** -- new.  devices/dev_mc146818.c:mc146818_update_time -- DEC register 63 (NVRAM) is
+  overwritten with the year on every time read -- WRONG-RESULT (NVRAM byte clobbered).  TRIAGE.md T56; report rows
+  A2-34; port: yes (rpajarola 871e551).
+* **`mc146818uie` (MED, open)** -- new.  devices/dev_mc146818.c tick -- no once-a-second UF with a UIE interrupt (only a
+  polled UF hack) -- WRONG-RESULT.  TRIAGE.md T57; report rows A2-36; port: yes (rpajarola 871e551).
+* **`lesarom` (MED, open)** -- new.  devices/dev_le.c:DEVICE_ACCESS(le) -- the station-address ROM is not decoded at its
+  slot+0x180000 alias and bytes 6-7 carry MAC copies instead of the ESAR checksum -- WRONG-RESULT.  TRIAGE.md T58;
+  report rows A2-8; port: yes (rpajarola 0c1e6d1).
+* **`lermd3fcs` (MED, open)** -- new.  devices/dev_le.c:le_rx -- RMD3 counts len+4 but only len bytes are copied, so the
+  last 4 bytes of the guest buffer are stale -- WRONG-RESULT.  TRIAGE.md T59; report rows A2-10; port: yes (rpajarola
+  d1f0720).
+* **`leloopback` (MED, open)** -- new.  devices/dev_le.c:le_tx -- loopback mode (LOOP/INTL) is not modelled, so
+  self-test frames go out to the network or tap -- WRONG-RESULT.  TRIAGE.md T60; report rows A2-11; port: yes (rpajarola
+  d1f0720).
+* **`lecsrmask` (MED, open)** -- new.  devices/dev_le.c:le_register_write -- CSR1-3 store all 16 bits (implemented-bit
+  masks missing) -- WRONG-RESULT.  TRIAGE.md T61; report rows A2-26; port: yes (rpajarola e108b54).
+* **`asccfg1id` (MED, open)** -- new.  devices/dev_asc.c:DEVICE_ACCESS(asc) -- CFG1's low 3 bits are forced to 7 on
+  every access -- WRONG-RESULT.  TRIAGE.md T62; report rows A2-22; port: yes (rpajarola bee311c).
+* **`ascselatn` (MED, open)** -- new.  devices/dev_asc.c:dev_asc_select -- DMA select-with-ATN takes the message bytes
+  from the FIFO only and copies the whole transfer count as the CDB -- WRONG-RESULT (Ultrix 3.1D).  TRIAGE.md T63;
+  report rows A2-63; port: yes (rpajarola 12306ee).
+* **`ioasic3minscsi` (MED, open)** -- new.  machines/machine_pmax.c 3MIN arm + devices/dev_dec_ioasic.c -- the 3MIN
+  53C94 has no DMA path through the IOASIC, so DMA lands in the asc's private buffer -- WRONG-RESULT (3MIN SCSI; write
+  direction not assessed).  TRIAGE.md T64; report rows A2-23; port: yes (rpajarola bee311c).
+* **`ioasicintrclr` (MED, open)** -- new.  devices/dev_dec_ioasic.c IOASIC_INTR write -- the write clears every bit set
+  in the value, including the devices' read-only lines -- WRONG-RESULT.  TRIAGE.md T65; report rows A2-25; port: yes
+  (rpajarola e108b54).
+* **`ioasicesar` (MED, open)** -- new.  devices/dev_dec_ioasic.c -- station-address ROM reads return a synthetic pattern
+  -- WRONG-RESULT.  TRIAGE.md T66; report rows A2-27; port: yes (rpajarola e108b54).
+* **`ioasic3minscc` (MED, open)** -- new.  devices/dev_dec_ioasic.c -- 3MIN SCC transmit/receive DMA is under `#if 0` --
+  WRONG-RESULT (Ultrix 4.5 serial console waits forever).  TRIAGE.md T67; report rows A2-47; port: yes (rpajarola
+  7aeae85).
+* **`sccwr0ptr` (MED, open)** -- new.  devices/dev_scc.c:DEVICE_ACCESS(scc) -- the WR0 register pointer is the whole
+  byte & 15 and WR0 commands are not decoded -- WRONG-RESULT.  TRIAGE.md T68; report rows A2-29; port: yes (rpajarola
+  2dfd6ec).
+* **`sccintpend` (MED, open)** -- new.  devices/dev_scc.c -- RR3 and data reads clear all interrupt-pending bits, one
+  WR1 governs both channels, special-condition-only mode interrupts per character, WR9 is stored per channel --
+  WRONG-RESULT.  TRIAGE.md T69; report rows A2-30; port: yes (rpajarola 2dfd6ec, rpajarola 7aeae85, rpajarola a99af56).
+* **`sccloopback` (MED, open)** -- new.  devices/dev_scc.c -- local loopback routes characters through the keyboard
+  remap onto the keyboard line -- WRONG-RESULT.  TRIAGE.md T70; report rows A2-31; port: yes (rpajarola 2dfd6ec,
+  rpajarola a99af56).
+* **`sccresets` (MED, open)** -- new.  devices/dev_scc.c -- WR9 resets, Send Abort, the Tx underrun/EOM latch, the BRG
+  zero-count interrupt and WR4 async reset are not modelled -- WRONG-RESULT (KN02-BA PROM tests).  TRIAGE.md T71; report
+  rows A2-32; port: yes (rpajarola 2dfd6ec, rpajarola a99af56).
+* **`scc3minlines` (MED, open)** -- new.  devices/dev_scc.c -- 3MIN line mapping: every channel goes to lk201_tx_data,
+  so keyboard commands reach the console and mouse input is dropped -- WRONG-RESULT.  TRIAGE.md T72; report rows A2-33;
+  port: yes (rpajarola 5d3e9ee).
+* **`tcemptyslot` (MED, open)** -- new.  devices/dev_turbochannel.c:DEVICE_ACCESS -- empty-slot reads at 0x3e0-0x4ff
+  return zero with no bus error on every model -- WRONG-RESULT (KN02-BA PROM reports a bad option ROM per empty slot).
+  TRIAGE.md T73; report rows A2-45; port: yes (rpajarola 042b61b).
+* **`pmaxsystype` (MED, open)** -- new.  machines/machine_pmax.c environment + promemul/dec_prom.c:dec_jumptable_func --
+  no `systype` variable (Ultrix 3.1D panics) and the old jump table's close() at 0x50 returns -1 -- WRONG-RESULT.
+  TRIAGE.md T74; report rows A2-65; port: yes (rpajarola 12306ee).
+* **`cdcapround` (MED, open)** -- new.  disk/diskimage.c:diskimage_recalc_size -- CD-ROM and tape capacity is rounded up
+  to whole 16x63 cylinders, so reading the whole medium returns up to ~0.5 MB of zeros -- WRONG-RESULT.  TRIAGE.md T75;
+  report rows A2-56; port: yes (rpajarola 9753158).
+* **`scsimodeselhdr` (MED, open)** -- new.  disk/diskimage_scsicmd.c MODE SELECT -- only NetBSD's exact header is
+  accepted; anything else prints an unlatched `fatal()` hex dump -- WRONG-RESULT (+ log flood; OSF/1, Ultrix).
+  TRIAGE.md T76; report rows A2-61; port: yes (rpajarola d685ed0, rpajarola 39f3fbf).
+* **`scsievpd` (MED, open)** -- new.  disk/diskimage_scsicmd.c INQUIRY -- EVPD requests get standard INQUIRY data
+  instead of a VPD page -- WRONG-RESULT.  TRIAGE.md T77; report rows A5-17; port: yes (rs6000 554e135, rs6000 24cb943).
+* **`scsimodesensepc` (MED, open)** -- new.  disk/diskimage_scsicmd.c MODE SENSE -- page control PC=1/2/3 returns
+  current values with an unlatched `fatal()` per command -- WRONG-RESULT (+ log flood).  TRIAGE.md T78; report rows
+  A5-19; port: yes (rs6000 9ef1d3e, rs6000 24cb943).
+* **`dc7085cts` (MED, open)** -- new.  devices/dev_dc7085.c MSR read -- CTS is not reported on lines 2/3 -- WRONG-RESULT
+  (OSF/1 console hangs up).  TRIAGE.md T79; report rows A2-60, A(c)#13; port: yes (rpajarola 807d80b).
+* **`dc7085trdy` (MED, open)** -- new.  devices/dev_dc7085.c:DEVICE_TICK -- an early return while TRDY is set skips
+  receive processing (RDONE) -- WRONG-RESULT (Mach 3.0 keyboard input ignored).  TRIAGE.md T80; report rows A7-52,
+  A(c)#13; port: yes (ajfa mach3 5cfc043).
+* **`natconnfail` (MED, open)** -- new.  net/net_ip.c:net_ip_tcp/net_tcp_rx_avail -- a failed outgoing NAT connect() is
+  reported to the guest as connected and then closed -- WRONG-RESULT.  TRIAGE.md T81; report rows A2-53, A(c)#12; port:
+  yes (rpajarola 1c18c2b).
+* **`natdhcpreply` (MED, open)** -- new.  net/net_ip.c:net_ip_broadcast_dhcp -- the reply lacks option 53 (message type)
+  and puts the server address in giaddr instead of siaddr -- WRONG-RESULT (strict DHCP clients ignore it).  TRIAGE.md
+  T82; report rows A3-38; port: yes (jroark ba17c36).
+* **`osiopcalltemp` (MED, open)** -- new.  devices/dev_osiop.c JUMP/CALL -- CALL does not save the return address in
+  TEMP while RETURN jumps to TEMP -- WRONG-RESULT.  TRIAGE.md T83; report rows A7-39; port: yes (ajfa mvme187 4a01173).
+* **`osiopsigp` (MED, open)** -- new.  devices/dev_osiop.c -- an ISTAT SIGP write stops the script instead of waking
+  WAIT RESELECT; CTEST2's SIGP mirror, the selection-timeout STO bit and SFBR are not modelled -- WRONG-RESULT.
+  TRIAGE.md T84; report rows A7-40; port: yes (ajfa mvme187 4a01173).
+* **`osiopwidelanes` (MED, open)** -- new.  devices/dev_osiop.c:dev_osiop_access -- a wide access to byte registers is
+  not split into byte lanes (it now warns and stops the script) -- WRONG-RESULT.  TRIAGE.md T85; report rows A7-41;
+  port: yes (ajfa mvme187 4a01173).
+* **`clmpccmsvr` (MED, open)** -- new.  devices/dev_clmpcc.c -- MSVR does not report CD/DSR/CTS, and the IACK context
+  (STK/CAR) and EOI restore are not modelled -- WRONG-RESULT (SVR4 /dev/console does not open).  TRIAGE.md T86; report
+  rows A7-43; port: yes (ajfa mvme187 4a01173).
+* **`mk48multibyte` (MED, open)** -- new.  devices/dev_mk48txx.c access -- multi-byte NVRAM accesses read or write a
+  single byte -- WRONG-RESULT (187Bug checksums).  TRIAGE.md T87; report rows A7-47; port: yes (ajfa mvme187 4a01173).
+* **`mk48clock` (MED, open)** -- new.  devices/dev_mk48txx.c -- the time-of-day registers refresh only at init and on a
+  READ 0-to-1 transition -- WRONG-RESULT (clock does not run).  TRIAGE.md T88; report rows A7-48; port: yes (ajfa
+  mvme187 4a01173).
+* **`mb89352scmd` (MED, open)** -- new.  devices/dev_mb89352.c SCMD decode -- the command is matched on the whole byte
+  instead of bits 7:5 (no RST_ATN/SET_ATN) and transfers are accepted only with PROG_XFR -- WRONG-RESULT (variants reach
+  the halting default arm).  TRIAGE.md T89; report rows A1-24, A1-27, C U9(b); port: yes (upstream a1cafe7c, upstream
+  922fc86b, SVN r6544/r6546/r6550).
+* **`mb89352bfint` (MED, open)** -- new.  devices/dev_mb89352.c -- the BUS FREE interrupt (PCTL_BFINT_ENAB) is a TODO --
+  WRONG-RESULT.  TRIAGE.md T90; report rows A1-27, C U9(a); port: yes (upstream a1cafe7c).
+* **`mb89352psns` (MED, open)** -- new.  devices/dev_mb89352.c -- PSNS writes are stored instead of going to SDGC, and
+  BUS_REL does not clear PSNS -- WRONG-RESULT.  TRIAGE.md T91; report rows A1-27, C U9(c); port: yes (upstream
+  a1cafe7c).
+* **`pccmosnmi` (MED, open)** -- new.  devices/dev_pccmos.c:DEVICE_ACCESS index port -- the index is stored without
+  masking bit 7 (NMI disable), so such a guest misses RTC registers 0x00-0x0d -- WRONG-RESULT.  TRIAGE.md T99; report
+  rows A5-28; port: yes (rs6000 bb32945).
+* **`pcicfgaddrlow` (MED, open)** -- new.  devices/bus_pci.c:bus_pci_decompose_1 -- CONFIG_ADDRESS keeps bits 1:0 in the
+  register number and every unaligned select prints an unlatched `fatal()` -- WRONG-RESULT.  TRIAGE.md T100; report rows
+  A5-30; port: yes (rs6000 eb4c571).
+* **`eaglememctl` (MED, open)** -- new.  devices/bus_pci.c:PCIINIT(eagle) -- MPC105 memory-controller registers
+  (0x80-0x94, 0xA0, 0xC0) read 0 and ignore writes -- WRONG-RESULT (borders on a feature).  TRIAGE.md T101; report rows
+  A5-32; port: yes (rs6000 72075be, rs6000 711d6fc, rs6000 b31c0ea).
+* **`pckbcgetid` (MED, open)** -- new.  devices/dev_pckbc.c KBC_GETID -- always answers AB 41 regardless of translation
+  mode -- WRONG-RESULT (minor).  TRIAGE.md T102; report rows A5-14; port: yes (rs6000 94e3ed4).
+* **`bt459retrace` (MED, open)** -- new.  devices/dev_bt459.c -- the retrace interrupt fires every 500 ticks instead of
+  ~72 Hz of emulated time, ports are not mirrored through the 1 MB window, cursor colours are 8-bit, no TEST comparator
+  -- WRONG-RESULT.  TRIAGE.md T103; report rows A2-13; port: yes (rpajarola 26ac95a).
+* **`rarpaddr` (MED, open)** -- new.  net/net.c:net_arp RARP arm -- the reply assigns 10.0.0.0 when MAC byte 5 is below
+  0x10 -- WRONG-RESULT (minor).  TRIAGE.md T104; report rows A2-59; port: yes (rpajarola a4f5ea2).
+* **`mipspromemulexc` (MED, open)** -- new.  cpus/cpu_mips_instr.c:X(promemul) + core/memory.c helpers -- PROM-emulation
+  helpers access guest memory with CACHE_DATA and X(promemul) sets pc = RA unconditionally, discarding any exception a
+  helper raised -- WRONG-RESULT.  TRIAGE.md T105; report rows A5-33; port: partial, or an idea only (rs6000 e7b01c8,
+  rs6000 127befb).
+* **`mc146818settime` (MED, open)** -- new.  devices/dev_mc146818.c REGB / time registers -- a guest-set time reverts to
+  host time on the next read; no alarm (AIE) -- WRONG-RESULT.  TRIAGE.md T106; report rows A2-35, A5-29; port: partial,
+  or an idea only (rpajarola 871e551, rs6000 380c6be, rs6000 2010a1b).
+* **`vr4131regmap` (MED, open)** -- new.  devices/dev_vr41xx.c:DEVICE_ACCESS(vr41xx) -- one register layout is decoded
+  for every VR41xx model; on the VR4131 (BE-300) ETIME/ECMP/RTCL1/GIU live elsewhere and GIUINTSTAT +0x148/+0x14a is not
+  write-one-to-clear -- WRONG-RESULT (VR4131 only).  TRIAGE.md T109; report rows A3-15, A3-16; port: partial, or an idea
+  only (jroark 53c5910, jroark 10c05b9, jroark 0eb2fcd).
+* **`vr4131hibernate` (MED, open)** -- new.  cpus/cpu_mips_instr.c COP0 HIBERNATE -- VR4131 HIBERNATE resumes at the
+  next instruction instead of waking through the cold-reset vector -- WRONG-RESULT (R4100 only).  TRIAGE.md T110; report
+  rows A3-24; port: partial, or an idea only (jroark ab31d05).
+* **`intenablelatency` (MED, open)** -- new.  cpus/cpu_arm_instr.c:X(msr) + cpus/cpu_m88k.c:m88k_stcr (PSR) --
+  re-enabling interrupts does not check for a pending interrupt; delivery waits for the next translation block, so a
+  short enable window loses the interrupt -- WRONG-RESULT (lost interrupts).  TRIAGE.md T111; report rows C R19; port:
+  none -- a design is owed.
+* **`tapeeofzero` (MED, open)** -- new.  disk/diskimage_scsicmd.c READ (tape) + diskimage.c -- feof() is tested before
+  the read, so a read ending exactly at a tape file's end returns GOOD with a zero block before the filemark, and a
+  short final record returns GOOD zero-padded with no ILI/residue -- WRONG-RESULT (zero data delivered as records).
+  TRIAGE.md T112; report rows A2-5; port: none -- a design is owed.
+* **`emulflushcpu0` (MED, open)** -- new.  core/emul.c run loop -- console/X11 flushing is paced by the boot CPU's
+  instruction count, so output stalls if CPU 0 stops while other CPUs run -- WRONG-RESULT (low).  TRIAGE.md T113; report
+  rows C U22; port: yes (SVN r6532/r6555).
+* **`vr4131siuinuse` (MED, open)** -- new.  devices/dev_vr41xx.c:dev_vr41xx_init -- the VR4131 on-chip SIU is registered
+  with the default in_use=1, so two ns16550 handles race for host stdin on the BE-300 -- WRONG-RESULT (lost console
+  input).  TRIAGE.md T114; report rows A3-11; port: yes (jroark 3c3d5cb).
+* **`x11keycodes` (MED, open)** -- new.  console/x11.c:x11_check_events_machine -- hard-coded pre-evdev keycodes:
+  cursor/Home/End/PgUp/PgDn send nothing under evdev servers and several F-key sequences are wrong -- WRONG-RESULT (host
+  input, -X).  TRIAGE.md T115; report rows A2-20; port: yes (rpajarola 1a27ff9).
+* **`be300fbbpp` (MED, open)** -- new.  machines/machine_hpcmips.c BE-300 arm -- the framebuffer is declared 15 bpp
+  while the subtype reports 16 bpp -- WRONG-RESULT (host display only).  TRIAGE.md T116; report rows A3-12; port: yes
+  (jroark 3c3d5cb).
+* **`dyntransnoexc` (MED, open)** -- new.  cpus/memory_rw.c device arm -- DM_DYNTRANS_OK device pages are inserted into
+  the translation table even under NO_EXCEPTIONS (debugger/PROM accesses warm guest translations) -- WRONG-RESULT (low).
+  TRIAGE.md T117; report rows A5-34; port: yes (rs6000 3992857).
+* **`netmacdup` (MED, open)** -- new.  net/net_misc.c MAC generation -- MACs derive from serial number and NIC count, so
+  they repeat across processes and wrap after 8 NICs or 16 serial numbers -- WRONG-RESULT (duplicate MACs when bridged).
+  TRIAGE.md T118; report rows C R10; port: partial, or an idea only (gxemul-devel 2023-03-28 (Glaw patch)).
+* **`mips4kcfpu` (MED, open)** -- new.  include/mips_cpu_types.h -- 4Kc/4KEc/5Kc/5KE are modelled with an FPU
+  (Config1.FP=1) though the cores have none -- WRONG-RESULT (fidelity).  TRIAGE.md T119; report rows A6-37, B (older
+  pkgsrc 2017); port: partial, or an idea only (ryoon 4fa3c09, ryoon 94ef4b0).
+* **`m88kxmemr0` (MED, open)** -- new.  cpus/cpu_m88k_instr.c:X(to_be_translated) xmem decode -- an xmem whose
+  destination is r0 is decoded as a NOP in both decoder forms, so the memory write half of the exchange and its access
+  semantics are dropped -- WRONG-RESULT.  ADJ_RULINGS.md C N1 (GPT-6 Astra); port: none found.
+* **`m88kxmemusr` (MED, open)** -- new.  cpus/cpu_m88k_instr.c:X(xmem_slow) -- the handler takes the .usr bit from 0x80
+  while the register-form decoder takes .usr from 0x100 and treats 0x80 as .wt, so an xmem's user/supervisor address
+  space follows the wrong bit -- WRONG-RESULT.  ADJ_RULINGS.md C N2 (GPT-6 Astra); port: none found.
+
+**MED -- CPU stops (12)**
+
+* **`mipsprimundec` (MED, open)** -- new.  cpus/cpu_mips_instr.c:X(to_be_translated) primary switch -- opcodes with no
+  case (JALX 0x1d, LWC2 0x32, LDC2 0x36, SWC2 0x3a, SWC3 0x3b, SDC2 0x3e; 0x1e off R5900; LWC3 below ISA IV) reach
+  `default: goto bad`, which clears cpu->running -- CPU-STOP (any privilege, every MIPS machine incl. the pmax/arc
+  rigs).  TRIAGE.md T120; report rows A3-13, A7-3, A6 note A2, A(c)#2; port: yes (klx3300 366d5cc, jroark 3c3d5cb).
+  Batch 7 of 10.
+* **`m88kcarryundec` (MED, open)** -- new.  cpus/cpu_m88k_instr.c register-form decode -- triadic opcodes 0x71-0x77
+  (add.ci/.co/.cio, signed sub with overflow trap, sub.ci/.co/.cio) have no case and reach `goto bad` -- CPU-STOP (any
+  privilege; includes the manual's `sub.co r0,r0,r0` idiom).  TRIAGE.md T121; report rows A1-57, A7-25, A(c)#9, C U7;
+  port: yes (r6577).
+* **`ppctwundec` (MED, open)** -- new.  cpus/cpu_ppc_instr.c:X(to_be_translated) -- twi (primary 3) and tw (31/4) are
+  undecoded -- CPU-STOP (Linux/ppc MMIO accessors issue `twi`).  TRIAGE.md T122; report rows A4-7, A(c)#4; port: yes
+  (rs6000 0281590, rs6000 6ac4dc4, rs6000 8bcf95a).
+* **`ppclswxundec` (MED, open)** -- new.  cpus/cpu_ppc_instr.c -- lswx/stswx (31/533, 31/661) are undecoded (not even
+  defined in opcodes_ppc.h) -- CPU-STOP.  TRIAGE.md T123; report rows A4-8; port: yes (rs6000 8bcf95a, rs6000 3cdc32f).
+* **`ppccrnandundec` (MED, open)** -- new.  cpus/cpu_ppc_instr.c XL decode -- crnand (19/225) is defined but missing
+  from the CR case list -- CPU-STOP.  TRIAGE.md T124; report rows A4-9; port: yes (rs6000 2ec64fd).
+* **`ppcdcbiundec` (MED, open)** -- new.  cpus/cpu_ppc_instr.c cache-op group -- dcbi (31/470) is undecoded, including
+  in user mode where it is a privileged instruction -- CPU-STOP.  TRIAGE.md T125; report rows A4-11; port: yes (rs6000
+  3762e12, rs6000 3cdc32f).
+* **`m88kzeroword` (MED, open)** -- new.  cpus/cpu_m88k_instr.c -- instruction word 0x00000000 (`xmem.bu r0,r0,0`) is
+  sent to `goto bad` -- CPU-STOP (SVR4's IPL runs through zero padding).  TRIAGE.md T126; report rows A7-28; port: yes
+  (ajfa mvme187 4a01173).
+* **`m88kwtbit` (MED, open)** -- new.  cpus/cpu_m88k_instr.c ld/st register form -- the .wt bit (bit 7) halts ("wt bit
+  not yet implemented") -- CPU-STOP.  TRIAGE.md T127; report rows A7-31; port: UNVERIFIED (ajfa mvme187 4a01173).
+* **`ppcoeundec` (MED, open)** -- new.  cpus/cpu_ppc_instr.c XO decode -- the OE=1 forms and `addc.` are undecoded (the
+  oe_bit check is dead code) -- CPU-STOP.  TRIAGE.md T128; report rows A4-10; port: partial, or an idea only (rs6000
+  93b2050, rs6000 e88c21b).
+* **`ppcupdatera0` (MED, open)** -- new.  cpus/cpu_ppc_instr.c update-form load/store -- RA=0 ("TODO: ra=0 && update?")
+  halts -- CPU-STOP (invalid forms).  TRIAGE.md T130; report rows A4-12; port: partial, or an idea only (rs6000
+  241f5e2).
+* **`mipsmovciundec` (MED, open)** -- new.  cpus/cpu_mips_instr.c SPECIAL decode -- MOVCI (movf/movt, funct 0x01; not
+  even defined in opcodes_mips.h) falls to `goto bad` -- CPU-STOP (MIPS IV CPUs).  TRIAGE.md T131; report rows A(c)#5
+  related gap, A6 note A3; port: none -- a design is owed.
+* **`dcgdromabort` (MED, open)** -- new.  promemul/dreamcast.c:dreamcast_emul -- GD-ROM BIOS r7 outside 0-4 (e.g.
+  GDROM_ABORT_COMMAND = 8), unknown r6 and the sibling syscall groups go to `bad:`, which clears cpu->running --
+  CPU-STOP.  TRIAGE.md T132; report rows A1-52, C U12; port: yes (r6577).
+
+**MED -- host undefined behaviour a guest triggers (1)**
+
+* **`mb89352fmtargs` (MED, open)** -- new.  devices/dev_mb89352.c:DEVICE_ACCESS -- the "unimplemented LEN" message has
+  three conversions and two arguments (debugmsg_cpu has no format attribute) -- HOST-UB (guest-triggered undefined
+  behaviour in the host, just before the halt; a crash is not established).  TRIAGE.md T141; report rows A1-22, A(c)#15;
+  port: yes (upstream 8f4c717f).
+
+**LOW -- hygiene, build and records (15)**
+
+* **`armmmufaultlog` (LOW, open)** -- new.  cpus/memory_arm.c:arm_translate_v2p_mmu -- two `fatal()` lines per guest
+  page fault unless -q -- HYGIENE (guest-drivable host log flood).  TRIAGE.md T139; report rows A1-41, C U20; port: yes
+  (upstream bc914bbe, SVN r6575).
+* **`ppcexcfatal` (LOW, open)** -- new.  cpus/cpu_ppc.c:ppc_exception + memory_ppc.c:ppc_translate_v2p -- one `fatal()`
+  line per exception (decrementer, syscall) and per translation fault unless -q -- HYGIENE (guest-drivable host log
+  flood).  TRIAGE.md T140; report rows A1-10, C U21; port: yes (upstream 6d2d8bf0, SVN r6532).
+* **`ascbugprintf` (LOW, open)** -- new.  devices/dev_asc.c DATA_IN multi-transfer -- a bare `printf("WARNING!!!!!!!!!
+  BUG!!!!...")` on every split data-in with a DMA controller -- HYGIENE (guest-repeatable host log line; ARC).
+  TRIAGE.md T142; report rows A2-48; port: yes (rpajarola 7aeae85).
+* **`cpurunningtype` (LOW, open)** -- new.  cpus/cpu.c:cpu_new -- `bool running` is registered as SETTINGS_TYPE_UINT8,
+  so a debugger assignment can store a byte other than 0/1 -- HYGIENE (debugger-only UB).  TRIAGE.md T143; report rows
+  A1-17; port: yes (upstream 6f477da8).
+* **`bpstringarg` (LOW, open)** -- new.  machines/machine.c:machine_add_breakpoint_string -- ignores its `str` argument
+  and duplicates optarg -- HYGIENE (latent; the only caller passes optarg).  TRIAGE.md T144; report rows C (b)
+  cross-check finding; port: none -- a design is owed.
+* **`dbgmakedep` (LOW, open)** -- new.  debugger/Makefile.skel -- the rule `debugger.c: debugger_cmds.c` has no recipe,
+  so editing debugger_cmds.c never rebuilds debugger.o (measured by report A) -- HYGIENE/BUILD (stale-binary hazard).
+  TRIAGE.md T145; report rows A2-16, A(c)#14; port: yes (rpajarola 3e8f2fd).
+* **`alphamakedep` (LOW, open)** -- new.  cpus/Makefile.skel -- cpu_alpha.o lacks a dependency on the generated
+  tmp_alpha_misc.c -- HYGIENE/BUILD.  TRIAGE.md T146; report rows A1-6, C U18; port: yes (upstream 587f438a, SVN r6531).
+* **`cpunewstores` (LOW, open)** -- new.  cpus/cpu_mips.c:mips_cpu_new, cpu_arm.c:arm_cpu_new, cpu_alpha.c:alpha_cpu_new
+  -- guest-memory stores are issued before the CPU is in machine->cpus[]; the ARM one plants the OpenFirmware SWI word
+  0xef8c64be at RAM top-8 (its address field has no reader; the word routes to `ofemulnodata`'s exit) -- HYGIENE
+  (latent; prerequisite for the SMP row).  TRIAGE.md T147; report rows A1-36, A1-40, A1-54, A1-60, B P2, B rec.5, C U2;
+  port: yes (upstream d2462ba6, upstream 77708717, skrll a4e2335).
+* **`singlestepdecl` (LOW, open)** -- new.  debugger/debugger.c vs cpus/generate_head.c -- single_step_breakpoint is
+  defined `volatile int` and declared `extern int` in every generated head -- HYGIENE (latent cross-TU UB).  TRIAGE.md
+  T148; report rows A1-11; port: yes (upstream 6d2d8bf0).
+* **`tlbwrrandom` (LOW, open)** -- new.  cpus/cpu_mips_coproc.c:coproc_tlbwri -- TLBWR takes its index from host
+  random() -- HYGIENE (non-deterministic runs; OpenBSD linker warning).  TRIAGE.md T149; report rows A1-35, C U25; port:
+  yes (upstream 90db505f, SVN r6563).
+* **`configurerpath` (LOW, open)** -- new.  configure X11 probes -- adds -Wl,-rpath for /usr/X11R6/lib, /usr/X11R7/lib
+  and /usr/local/lib -- HYGIENE/BUILD (packaging policy).  TRIAGE.md T150; report rows B R4, B RO3; port: yes (Fedora
+  gxemul.spec (gxemul-0.7.0-no-rpath.patch), ROSA import/gxemul).
+* **`shsyncodisasm` (LOW, open)** -- new.  cpus/cpu_sh.c:sh_cpu_disassemble_instr -- 0x00ab is not disassembled as synco
+  -- HYGIENE (cosmetic).  TRIAGE.md T151; report rows B P5; port: yes (pkgsrc patch-src_cpus_cpu__sh.c).
+* **`pmax3minslotnr` (LOW, open)** -- new.  machines/machine_pmax.c 3MIN arm -- option slots 1 and 2 are registered as
+  slot 0 (feeds only a debug message) -- HYGIENE (cosmetic).  TRIAGE.md T152; report rows A2-46; port: yes (rpajarola
+  042b61b).
+* **`gcc16unused` (LOW, open)** -- new.  file/file_ecoff.c (+ file_elf.c, file_macho.c) -- set-but-unused locals
+  (s_nlnno and others) fail GCC 16 with -Werror (--debug builds) -- HYGIENE/BUILD.  TRIAGE.md T153; report rows C R22, B
+  (older); port: none -- a design is owed.
+* **`pristinesecondref` (LOW, open)** -- new.  regress/gate_ab.sh, gate_upstream.sh and build_asan.sh -- their
+  'pristine' baseline is commit 39748e3c, which is not byte-identical to the 0.7.0 release (configure's GNU89-inline
+  probe, three `1U <<` sites in generate_arm_r.c, 61 extra and 23 missing files) -- owner option: a byte-true second
+  reference for future 'pristine' claims, PRISTINE_REF kept -- HYGIENE (records/harness).  ADJ_RULINGS.md E (GPT-6
+  Astra); RECORDS_VERDICTS.md R1; port: an owner option.
+
+**LOW -- feature (1)**
+
+* **`shsyncofeature` (LOW, open)** -- new.  cpus/cpu_sh_instr.c decoder -- SH-4A SYNCO (0x00ab) raises the
+  illegal-instruction exception on the modelled SH-4 (#314) while GCC 14 NetBSD/landisk userland contains it; also an
+  unlatched `fatal()` per translation -- FEATURE (compatibility; owner decision).  TRIAGE.md T154; report rows B P6, B
+  rec.3, A1-63; port: yes (pkgsrc patch-src_cpus_cpu__sh__instr.c, Codeberg 040d951).

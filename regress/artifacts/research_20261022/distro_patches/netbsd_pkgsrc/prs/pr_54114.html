@@ -1,0 +1,259 @@
+<!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML 3.2//EN">
+<html><head>
+<link rel="home" href="//www.NetBSD.org/">
+<link rel="find" href="//www.NetBSD.org/support/query-pr.html">
+<link rel="contents" href="/summary/">
+<link rel="index" href="/summary/">
+<link rel="made" href="mailto:www@NetBSD.org">
+<link rel="copyright" href="//www.NetBSD.org/about/disclaimer.html">
+<link rel="stylesheet" href="//www.NetBSD.org/support/gnats.css" type="text/css">
+<link rel="canonical" href="https://gnats.NetBSD.org/54114">
+<title>NetBSD Problem Report #54114:
+pmax on gxemul hangs with &quot;UNIMPLEMENTED SCSI command&quot;                                                                          
+</title>
+</head>
+
+<body bgcolor="#FFFFFF" text="#000000">
+<h1>NetBSD Problem Report #54114</h1>
+
+<pre>
+From gson@gson.org  Thu Apr 11 07:22:49 2019
+Return-Path: &lt;gson@gson.org&gt;
+Received: from mail.netbsd.org (mail.netbsd.org [199.233.217.200])
+	(using TLSv1.2 with cipher ECDHE-RSA-AES256-GCM-SHA384 (256/256 bits))
+	(Client CN &quot;mail.NetBSD.org&quot;, Issuer &quot;mail.NetBSD.org CA&quot; (not verified))
+	by mollari.NetBSD.org (Postfix) with ESMTPS id 99EA07A14F
+	for &lt;gnats-bugs@gnats.NetBSD.org&gt;; Thu, 11 Apr 2019 07:22:49 +0000 (UTC)
+Message-Id: &lt;20190411072245.3D65898A843@guava.gson.org&gt;
+Date: Thu, 11 Apr 2019 10:22:45 +0300 (EEST)
+From: gson@gson.org (Andreas Gustafsson)
+Reply-To: gson@gson.org (Andreas Gustafsson)
+To: gnats-bugs@NetBSD.org
+Subject: pmax on gxemul hangs with &quot;UNIMPLEMENTED SCSI command&quot;
+X-Send-Pr-Version: 3.95
+
+<b>&gt;Number:</b>         54114
+<b>&gt;Category:</b>       pkg
+<b>&gt;Synopsis:</b>       pmax on gxemul hangs with &quot;UNIMPLEMENTED SCSI command&quot;
+<b>&gt;Confidential:</b>   no
+<b>&gt;Severity:</b>       serious
+<b>&gt;Priority:</b>       medium
+<b>&gt;Responsible:</b>    pkg-manager
+<b>&gt;State:</b>          closed
+<b>&gt;Class:</b>          sw-bug
+<b>&gt;Submitter-Id:</b>   net
+<b>&gt;Arrival-Date:</b>   Thu Apr 11 07:25:00 +0000 2019
+<b>&gt;Closed-Date:</b>    Thu Apr 11 14:13:19 +0000 2019
+<b>&gt;Last-Modified:</b>  Thu Apr 11 14:13:19 +0000 2019
+<b>&gt;Originator:</b>     Andreas Gustafsson
+<b>&gt;Release:</b>        NetBSD-current, source date 2019.04.11.00.17.44
+<b>&gt;Organization:</b>
+
+<b>&gt;Environment:</b>
+Architecture: mips
+Machine: pmax
+<b>&gt;Description:</b>
+
+Testing NetBSD-current/pmax under gxemul 0.6.1, the install RAMDISK
+kernel kernel now hangs after printing the lines
+
+  [   1.0000000] asc0 at tc0 slot 5 offset 0x0: NCR53C94, 25MHz, SCSI ID 7
+  [   1.0000000] scsibus0 at asc0: 8 targets, 8 luns per target
+  [   1.0039142] scsibus0: waiting 2 seconds for devices to settle...
+  [ UNIMPLEMENTED SCSI command 0xa3, disk id=0 ]
+
+The &quot;UNIMPLEMENTED SCSI command&quot; message comes from gxemul.  The
+problem appeared some time between source dates 2019.03.04.05.37.08
+and 2019.04.08.00.47.21.
+
+Full log at:
+
+  http://www.gson.org/netbsd/bugs/build/pmax/2019/2019.04.11.00.17.44/install.log
+
+<b>&gt;How-To-Repeat:</b>
+
+<b>&gt;Fix:</b>
+
+<b>&gt;Release-Note:</b>
+
+<b>&gt;Audit-Trail:</b>
+
+Responsible-Changed-From-To: port-pmax-maintainer-&gt;kardel
+Responsible-Changed-By: martin@NetBSD.org
+Responsible-Changed-When: Thu, 11 Apr 2019 07:40:31 +0000
+Responsible-Changed-Why:
+Over to commiter - could you please have a look and check whether their
+emulation is broken for this optional comand?
+
+
+From: Frank Kardel &lt;kardel@netbsd.org&gt;
+To: gnats-bugs@netbsd.org, port-pmax-maintainer@netbsd.org,
+ netbsd-bugs@netbsd.org, gnats-admin@netbsd.org, martin@NetBSD.org,
+ Andreas Gustafsson &lt;gson@gson.org&gt;
+Cc: 
+Subject: Re: port-pmax/54114 (pmax on gxemul hangs with &quot;UNIMPLEMENTED SCSI
+ command&quot;)
+Date: Thu, 11 Apr 2019 10:42:07 +0200
+
+ This is a multi-part message in MIME format.
+ --------------B669724083F666E045C14F1C
+ Content-Type: text/plain; charset=utf-8; format=flowed
+ Content-Transfer-Encoding: 8bit
+
+ I looked at the emulator and it follows a very straightforward but 
+ non-standards compliant strategy:
+
+          switch (xferp-&gt;cmd[0]) {
+
+          [ case ..... ]
+
+          default:
+                  fatal(&quot;[ UNIMPLEMENTED SCSI command 0x%02x, disk id=%i 
+ ]\n&quot;,
+                      xferp-&gt;cmd[0], id);
+                  exit(1);
+          }
+
+ Exiting the emulator in not an option here.
+
+ To quote the SPC-4 SCSI Primary Command standard:
+
+     Section 2.4.1 CDB usage and structure
+
+     [...§4] If a device server receives a CDB containing
+     an operation code that is invalid or not supported, the device
+     server shall terminate the command with
+     CHECK CONDITION status, with the sense key set to ILLEGAL REQUEST,
+     and the additional sense code set
+     to INVALID COMMAND OPERATION CODE.
+
+ Correctly refusing unimplemented SCSI CDB commands is one of the basic 
+ operations of a device server.
+
+
+ On 04/11/19 09:40, martin@NetBSD.org wrote:
+ &gt; Synopsis: pmax on gxemul hangs with &quot;UNIMPLEMENTED SCSI command&quot;
+ &gt;
+ &gt; Responsible-Changed-From-To: port-pmax-maintainer-&gt;kardel
+ &gt; Responsible-Changed-By: martin@NetBSD.org
+ &gt; Responsible-Changed-When: Thu, 11 Apr 2019 07:40:31 +0000
+ &gt; Responsible-Changed-Why:
+ &gt; Over to commiter - could you please have a look and check whether their
+ &gt; emulation is broken for this optional comand?
+ &gt;
+ &gt;
+ &gt;
+
+
+Responsible-Changed-From-To: kardel-&gt;pkgsrc-users
+Responsible-Changed-By: kardel@NetBSD.org
+Responsible-Changed-When: Thu, 11 Apr 2019 09:00:48 +0000
+Responsible-Changed-Why:
+emulator is incomplete with respect to SCSI spec.
+should be fixed in emulator
+
+
+Responsible-Changed-From-To: pkgsrc-users-&gt;pkg-manager
+Responsible-Changed-By: wiz@NetBSD.org
+Responsible-Changed-When: Thu, 11 Apr 2019 09:17:38 +0000
+Responsible-Changed-Why:
+pkg-manager is responsible for pkg bugs (make it one while here)
+
+
+From: &quot;Christos Zoulas&quot; &lt;christos@netbsd.org&gt;
+To: gnats-bugs@gnats.NetBSD.org
+Cc: 
+Subject: PR/54114 CVS commit: pkgsrc/emulators/gxemul
+Date: Thu, 11 Apr 2019 08:50:30 -0400
+
+ Module Name:	pkgsrc
+ Committed By:	christos
+ Date:		Thu Apr 11 12:50:30 UTC 2019
+
+ Modified Files:
+ 	pkgsrc/emulators/gxemul: Makefile distinfo
+ Added Files:
+ 	pkgsrc/emulators/gxemul/patches: patch-src_disk_diskimage__scsicmd.cc
+
+ Log Message:
+ PR/54114: Ignore unimplemented scsi commands.
+
+
+ To generate a diff of this commit:
+ cvs rdiff -u -r1.63 -r1.64 pkgsrc/emulators/gxemul/Makefile
+ cvs rdiff -u -r1.56 -r1.57 pkgsrc/emulators/gxemul/distinfo
+ cvs rdiff -u -r0 -r1.1 \
+     pkgsrc/emulators/gxemul/patches/patch-src_disk_diskimage__scsicmd.cc
+
+ Please note that diffs are not public domain; they are subject to the
+ copyright notices on the relevant files.
+
+From: Andreas Gustafsson &lt;gson@gson.org&gt;
+To: christos@NetBSD.org
+Cc: gnats-bugs@netbsd.org, martin@netbsd.org, kardel@netbsd.org
+Subject: Re: PR/54114 CVS commit: pkgsrc/emulators/gxemul
+Date: Thu, 11 Apr 2019 16:52:25 +0300
+
+ Christos Zoulas wrote:
+ &gt;  PR/54114: Ignore unimplemented scsi commands.
+
+ The install now succeeds.  Thanks to martin@, kardel@ and christos@ for the
+ quick analysis and fix.
+
+ Christos, will you upstream your patch?  Emailing it to
+ gxemul-devel@lists.sourceforge.net should work.
+ -- 
+ Andreas Gustafsson, gson@gson.org
+
+State-Changed-From-To: open-&gt;closed
+State-Changed-By: gson@NetBSD.org
+State-Changed-When: Thu, 11 Apr 2019 14:13:19 +0000
+State-Changed-Why:
+Fixed.
+
+
+<b>&gt;Unformatted:</b>
+</pre>
+<hr>
+
+<table width="100%"><tr>
+<td>
+  <table><tr>
+  <td>
+    <a href="//www.NetBSD.org/">
+    <img src="//www.NetBSD.org/images/NetBSD-flag.png" border="0"
+            width="90" height="90" alt=""></a>
+  </td><td>
+    <a href="//www.NetBSD.org/">
+    <img src="//www.NetBSD.org/images/empty.gif" border="0"
+            width="1" height="1" alt="NetBSD ">Home</a>
+  </td>
+  </tr></table>
+</td><td>
+  <table><tr>
+  <td>
+    <a href="//www.NetBSD.org/support/query-pr.html">
+    <img src="//www.NetBSD.org/images/NetBSD-flag.png" border="0"
+            width="90" height="90" alt=""></a>
+  </td><td>
+    <a href="//www.NetBSD.org/support/query-pr.html">
+    <img src="//www.NetBSD.org/images/empty.gif" border="0"
+            width="1" height="1" alt="NetBSD ">PR Database Search</a>
+  </td>
+  </tr></table>
+</td>
+</table>
+
+<hr>
+<address>
+  <small>
+  <a href="//www.NetBSD.org/cgi-bin/feedback.cgi">(Contact us)</a>
+  $NetBSD: query-full-pr,v 1.51 2026/08/10 02:28:17 riastradh Exp $<br>
+  $NetBSD: gnats_config.sh,v 1.10 2026/05/13 22:00:09 riastradh Exp $<br>
+  <a href="//www.NetBSD.org/about/disclaimer.html">Copyright &copy; 1994-2026
+  The NetBSD Foundation, Inc.  ALL RIGHTS RESERVED.</a>
+  </small>
+</address>
+
+</body>
+</html>
