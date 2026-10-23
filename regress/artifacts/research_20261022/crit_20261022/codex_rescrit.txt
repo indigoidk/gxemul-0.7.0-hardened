@@ -1,0 +1,140 @@
+VERDICT: OPEN -- Astra’s T1 repair is correct; PPC fault-delivery dependencies and incomplete VR41xx subpage support prevent approving all six as ready fix rounds.
+
+Read the complete packet and checked the source at `de8c7547`, project rules, relevant manuals and preserved records. Nothing was built, executed or modified. The rows below are obligations, not measurements made today.
+
+**Q1 — T1: repair the table; both changes are not needed**
+
+Astra is right. The decoder passes the original instruction word to `xmem_slow`, which independently reconstructs `scaled` and uses it for both load and store dispatch. Changing decoder-local `scaled` cannot repair those lookups. Also, the current decoder contains **no `op != 3` exemption**: that belongs to the proposed port. See [xmem_slow](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_m88k_instr.c:2348) and the [decoder](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_m88k_instr.c:3654).
+
+Map valid scaled-byte table entries to their corresponding unscaled-byte handlers. Keep the function-generation suppression: the naming function deliberately omits `_scaled` for byte operations, so removing that suppression produces duplicate definitions. The separate table-generation rejection is the part to change. See [generator](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/generate_m88k_loadstore.c:254).
+
+The round owes:
+
+- **Floor:** pre-fix red; verbatim restoration of the table defect; an identity `xmem` body that retires without exchanging anything; and repair-null variants that retain selection but omit the required mapping or effect. Observe both the returned byte and the memory write, including neighboring-byte preservation. Survival alone is insufficient.
+- **DEPENDS-ON:** byte/nonbyte × scaled/unscaled, preserving the dominating exclusions for signed stores, immediate `.usr`, and immediate scaled entries. There are **24 valid repaired entries**: `{unsigned load, signed load, store} × {LE, BE} × {ordinary, .usr} × {PC-sync, no-PC-sync}`, with byte/scaled/register-offset fixed. Check each against its corresponding unscaled entry. This finite table census does not require an arbitrary register/value cross-product.
+- **Accept controls:** unscaled bytes, scaled wider operations, and ordinary immediate forms remain correct.
+- **Cheapest rung-3 attempt:** an ordinary RAM exchange through real instruction decoding on an existing, unmodified 88K machine, checking register and memory effects and continuation. A boot is unnecessary.
+
+N1 (`xmem` to r0 discarded) and N2 (`.usr` misdecoded inside the helper) remain separate defects. In particular, table coverage of `.usr` entries is not proof that decoder-driven `.usr xmem` reaches them correctly.
+
+For **every round below**, the same applicable floor, bounded DEPENDS-ON enumeration, de-escalation accept rows, gate failure propagation, and documented rung-3 attempt remain owed. An offline fixture is a detector, not a guest-path witness.
+
+**Q2 — T36: coherent bus-error metadata before exception delivery**
+
+Within the existing refused-device-access arm:
+
+- Select **CMMU 0 for instruction access, CMMU 1 for data access**.
+- If that pointer exists, write `PFSR = CMMU_PFSR_BERROR << 16`—`0x00030000`—and `PFAR = orig_paddr`.
+- Keep the NULL check around **the register writes only**. Deliver the appropriate CPU access exception outside it.
+- Retain the existing exception-suppression condition.
+
+One citation in the packet needs correction: [`memory_rw.c:437`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:437) **saves** the original physical address; line 494 makes `paddr` device-relative. Neither that relative address nor the virtual address belongs in this bus-error PFAR.
+
+LUNA’s special probe needs the same coherent behavior. Its [current case](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_luna88k.c:624) writes only data PFSR and returns success. Have it report failure through the repaired generic path, which owns the metadata and exception. Do not import the plain-RAM windows for absent CMMUs.
+
+R2 does **not** justify changing existing translation-fault PFAR values to virtual addresses. The cited `memory_m88k.c` sites prove PFAR is modeled; they deliberately distinguish descriptor-address faults and write-protection behavior. Correct the false record and repair the missing **bus-error** PFAR.
+
+Required observations are data-read, data-write and instruction refusals; correct CMMU/status/address; translated VA differing from PA; nonzero device base; absent CMMU; suppressed exceptions; successful accesses; and LUNA’s special case. The detector must distinguish omitted register writes, wrong addresses, wrong CMMU selection and missing exception delivery.
+
+OpenBSD `badaddr()` supplies a recovery compatibility row, **not a sufficient metadata oracle**: its special recovery path can bypass ordinary trap handling. Explicit guest-visible PFSR/PFAR observations are needed.
+
+**Preserve #568’s disposition.** Named unimplemented VME registers continue to decline with their latched announcements. Unmatched accesses continue to fault, now with complete metadata. The [preserved FAULT measurement](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/vmedefaultkill/measure_20261009/run_FAULT.out:6) establishes the missing metadata; it does not prove that correcting it makes named-register faults acceptable. OpenBSD also checks the faulting context and recovery state. Keep the seven established compatibility sites and the existing 38-row detector, adding metadata checks for actual faults.
+
+**Q3 — T2: decode DS forms explicitly; preserve supported unaligned RAM behavior**
+
+For DS forms only, separate the low two XO bits and clear them **before sign-extending the displacement**. Ordinary D-form immediates must remain untouched.
+
+| Primary opcode | XO | Form | Transfer | Base update |
+|---|---:|---|---|---|
+| `0x3a` | 0 | `ld` | 8 bytes | None |
+| `0x3a` | 1 | `ldu` | 8 bytes | After successful access |
+| `0x3a` | 2 | `lwa` | 4 bytes, sign-extended to 64 bits | None |
+| `0x3e` | 0 | `std` | 8 bytes | None |
+| `0x3e` | 1 | `stdu` | 8 bytes | After successful access |
+
+Other XO values are reserved. `ldu` forbids RA=0 and RA=RT. `stdu` forbids RA=0, but RA=RS is valid: store the old source value, then update RA. Distinguish invalid forms explicitly rather than executing them as plain `ld`/`std`.
+
+The existing handler machinery supplies the required width, sign and update behavior, including [update after successful memory access](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr_loadstore.c:174).
+
+**A blanket alignment exception is not part of this repair.** The [local PowerPC manual](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem_32and64_2005.txt:11974) permits ordinary misaligned integer operations either to trap or to split, depending on implementation. This tree deliberately supports the latter path through #430/#431. Preserve it for ordinary supported RAM. Clearing XO bits does not ensure natural alignment: the base can be unaligned, and DS displacement has only four-byte granularity.
+
+No vetted external repair was established. Reject rs6000 `9a05a7b`’s host abort.
+
+Rows must distinguish every legal form, signed and zero/nonzero displacements, both `lwa` signs and its four-byte width, exact store destinations, neighboring bytes, update/nonupdate, valid source/base aliasing, invalid/reserved forms, and suppressed base update on access failure. Include ordinary D-form controls.
+
+The rung-3 attempt can use the actual PPC970 `testppc` machine in untranslated RAM, with guest-produced register and memory results. It does not depend on implementing the 64-bit MMU.
+
+**Q4 — N3/N4/N5: separate containment from architectural implementation**
+
+**N5 has a precise repair and should come first.** A BAT protection denial must produce:
+
+- Data access: DSI, DAR containing the effective address, protection status and the appropriate store indication.
+- Instruction access: ISI with the protection cause in SRR1.
+
+It must neither continue to the page walker nor become a PPC603 software-TLB-miss exception. The [manual explicitly distinguishes these cases](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem_32and64_2005.txt:13610).
+
+Also, **N5 is already filed as `ppcbatppkill`**, at [OUTSTANDING_BUGS.md:22940](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md:22940). Correct the adjudication’s “new defect” classification.
+
+**Full N3 is a FEATURE:** PPC970 translation needs segment/SLB machinery as well as page translation. Removing its exit is a smaller containment fix, not implementation of that feature. The minimum containment policy rejects the access without transferring data or installing a successful translation, delivers a controlled guest exception, and identifies the unsupported operation with a bounded diagnostic.
+
+However, a blanket “DSI/ISI because translation is unavailable” is a **synthetic emulator policy**, not universally correct architectural classification. An SLB miss requires an instruction/data **segment** exception, as [Book III states](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_oea_book3_v201.txt:1802). The packet’s demand for “the architectural exception” therefore remains open until that distinction is designed.
+
+**N4 similarly separates containment from 601 MMU support.** Removing its first check merely exposes another 601 exit in [`ppc_bat()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_ppc.c:96). Later-model BAT handling cannot simply be presumed correct for the 601.
+
+Three existing dependencies block a naïve exit-to-exception replacement:
+
+1. **T19:** [`ppc_exception()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc.c:318) leaves IR/DR enabled, then resolves the exception PC. A cold vector can re-enter the failing translation.
+2. **T96 / `ppcbatstale`:** relocation changes need translation-cache coherence; clearing MSR bits alone is insufficient.
+3. **T6:** the instruction-fetch caller [still exits after `memory_rw` reports failure](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:4115), even if an exception was delivered.
+
+The repaired failure path must also honor `FLAG_NOEXCEPTIONS` before changing architectural state, initialize its failure classification, and install ISI status where `ppc_exception()` cannot overwrite it.
+
+Each round owes exception-state and continuation observations, no unintended transfer, instruction/data and load/store partitions, exception suppression, relevant CPU/relocation states, and supported-access controls. N5 additionally owes its permission and privilege/validity partitions. Rung-3 attempts must exercise actual exception delivery, including a cold vector path; host survival alone proves too little.
+
+Order: shared prerequisites, **N5**, **N3 containment**, **N4 containment**. Full MMU implementations remain separate.
+
+**Q5 — T11: complete subpage support is the correctness repair**
+
+Choose complete 1 KB support to close the defect correctly. Rejecting PageMask zero as illegal invents architectural behavior: zero represents a legal 1 KB page in the VR4100 specification. See the indexed Table 4-9 of the [NEC VR4100 manual](https://ftpmirror.your.org/pub/misc/bitsavers/components/nec/mips/Vr4100-um_199601.pdf).
+
+The premise “implement 1 KB translation” needs refinement: [the slow translator already handles it](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_mips_v2p.c:281). Missing support includes cache granularity and invalidation. `memory_rw` can cache a whole host page, and [instruction dyntrans independently rounds and caches whole pages](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:739). A translator-only change is insufficient. Link the existing `subpagecache` record.
+
+A latched decline is only an explicitly labeled interim containment policy. Dropping a legal TLB write can preserve stale mappings and corrupt guest behavior. Moreover, the [installation-site exit](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips_coproc.c:2165) occurs **after the new entry has been assigned**. Returning there does not decline the write. Any interim decline must make its decision before state mutation and cannot claim architectural correctness.
+
+Both exit sites owe independent reinstatement coverage. Required partitions include old/new entry transitions, indexed/random writes, even/odd validity combinations, larger-page and other-CPU controls, neighboring subpage mappings and permissions, data and instruction accesses, replacement/invalidation, ASID/global behavior, and dirty/invalid exceptions. Observe actual translation effects to reject an identity TLB-write implementation.
+
+Attempt rung 3 through normal privileged execution on unmodified hpcmips. **Do not claim an independent pre-fix guest witness for the old-entry exit without proving how that state is reached:** the first ordinary valid 1 KB installation already stops at the new-entry site. A seeded fixture may cover the old site but remains a detector. After support exists, restoring only the old exit can be tested following a successful installation.
+
+**Q6 — T4: advertise implemented LBA28, with decode and readback repaired together**
+
+Yes: once supported ATA media commands implement LBA correctly, advertise **word 49 bit 9, `0x0200`**. Keep DMA unadvertised, and do not indiscriminately apply ATA-disk capabilities to ATAPI.
+
+The design must include:
+
+- SDH **bit 6** for LBA, bit 4 for drive, low nibble for head/LBA high bits.
+- Matching SDH readback. Remove the old `sectorsize << 6` overlap; merely changing the write-side bit is incomplete.
+- Zero-based LBA arithmetic combining the low SDH nibble, cylinder-high, cylinder-low and sector registers.
+- Unsigned 64-bit arithmetic **before multiplication by 512**. LBA28 byte offsets require 37 bits; assigning an overflowing `int` expression to `uint64_t` does not repair it.
+- Truthful words 60–61 and an explicit accessible-capacity limit.
+
+Both [read addressing](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:459) and write addressing need repair. Re-enabling their disabled formulas alone retains the arithmetic-width defect.
+
+**#407 permits this change explicitly.** Its [test contract](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_wdc_identify.c:5711) requires re-authoring the word-49 row in the same change when LBA is implemented. Preserve historical measurements; update the current contract and detector.
+
+Rows must cover NetBSD’s CHS convention—including its bit-5-set requests—and an LBA-aware guest selecting LBA after IDENTIFY. Check actual read data and independently anchored write destinations, neighboring sectors, mode changes between commands, supported read/write variants, drive selection, field carries, offsets beyond 32-bit byte range, and capacity boundaries. A same-path write/read round trip alone can conceal an identically wrong address calculation.
+
+The rung-3 attempt belongs on an existing WDC-equipped machine with controller signature and liveness controls. NetBSD CHS and LBA-guest compatibility observations are both owed; neither substitutes for the other.
+
+**Q7 — Order and round boundaries**
+
+Recommended order:
+
+1. **T1**, limited to valid table aliases and exchange behavior.
+2. **T36**, before any subsequent 88K round relying on fault delivery.
+3. **T2**, without a general alignment-policy rewrite.
+4. **PPC exception/cache/fetch prerequisites**, then **N5 → N3 containment → N4 containment**.
+5. **T11 with the necessary subpage-cache work**.
+6. **T4**, including advertisement, decode, addressing, readback and detector updates together.
+7. **Full N3 translation feature**; 601 MMU implementation separately.
+
+T1 can precede T36 because its chosen repair restores a valid operation rather than replacing it with a fault. Keep N1/N2 separate unless deliberately widening scope. T36’s generic and LUNA paths can share a round if both are witnessed and use the same metadata oracle. T11 cannot close correctly while leaving the cache-granularity defect underneath it. N3/N4/N5 may share fault-delivery infrastructure, but their distinct architectural claims and regression obligations must remain explicit.

@@ -25663,3 +25663,16 @@ are in its ledger `state_note`.
   illegal-instruction exception on the modelled SH-4 (#314) while GCC 14 NetBSD/landisk userland contains it; also an
   unlatched `fatal()` per translation -- FEATURE (compatibility; owner decision).  TRIAGE.md T154; report rows B P6, B
   rec.3, A1-63; port: yes (pkgsrc patch-src_cpus_cpu__sh__instr.c, Codeberg 040d951).
+### 2026-10-22 -- follow-up to the external-fixes filing (13233723): the critical-items adjudication preserved; two rows filed
+
+The design adjudication of the research filing's six critical items (GPT-6 Astra and Grok 4.7; Fable 5.1 held by the
+owner, recorded NOT FIRED) is preserved at `regress/artifacts/research_20261022/crit_20261022/` -- the packet, both
+answers and the merged `CRIT_RULINGS.md` (the agreed designs and the order T1, T36, T2, N5, T11, T4; N3 a feature; N4
+unscheduled).  The filing's own pretest record and gap list are at `.../filing_20261022/`.  Two rows from them:
+
+* **`dupidcheck` (LOW, open)** -- no precommit section refuses a duplicate ledger row id; both duplicate-id negative
+  controls of the filing's pretest stayed green everywhere (`filing_20261022/PRETEST.md`).  Remedy: an id-uniqueness
+  check, its own harness round with two negative controls.
+* **`mipspagemaskdead` (LOW, open)** -- `src/cpus/memory_mips_v2p.c:293` `case 0x00007ff:` is unreachable under
+  `PAGEMASK_MASK_R4100`; the live 1 KB path is the `pmask == 0` arm (`:282-289`).  Found by Grok 4.7 on the
+  critical-items adjudication (`crit_20261022/grok_crit.txt`, Q5); hygiene, to be settled by the VR41xx 1 KB round.

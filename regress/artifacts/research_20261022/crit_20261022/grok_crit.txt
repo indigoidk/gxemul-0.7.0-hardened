@@ -1,0 +1,119 @@
+I'll settle the six designs by reading the cited sites and the round rules, and I'll treat any repair that looks easy to finish as the one that needs the hardest check.T1's two repairs disagree about where `scaled` is computed. I'll read the other five sites the same way before settling the order.The bus-error path is clearer now. Next I’ll read the PowerPC, MIPS TLB, and IDE sites before writing the verdict.The first pass left the repair designs open. I am reading the two sites that were not opened — the MIPS PageMask exits and the IDE LBA path — and checking the premises the earlier seats treated as settled.VERDICT: SETTLED -- Astra on T1 (the table alias, the generator suppression kept); T36 writes `BERROR<<16` and the saved physical address; N3 stays a feature and keeps its exit.
+
+No build was run. Every site below was read at HEAD `de8c7547`.
+
+## Q1. T1 — Astra. The decoder exemption is not in this tree, and dropping it would not remove the call
+
+`xmem_slow` (`cpu_m88k_instr.c:2357-2359`, call at `:2395`, store slot at `:2411-2426`) rebuilds `scaled` from bit `0x200` of the raw word the decoder stored in `ic->arg[0]` (`:3655-3656`). The decoder-local `scaled` at `:3608` is used by `ld`/`st` (`:3627`) and `lda` (`:3641`) only. There is no `op != 3` in this file. That exemption lives in the unported ajfa recipe. Clearing `scaled` in the decoder leaves the NULL call in place.
+
+The repair is one change in the table printer. `generate_m88k_loadstore.c:254-257` emits `NULL` for `size == 0 && scaledness`. Delete that `continue` and let `:259-262` call `print_function_name`. `:80-81` already omits `_scaled` when `size == 0`, so the name is the existing unscaled byte function. Keep the generation early-return at `:104-105`. Removing it emits a second definition of that same name. Do not edit the decoder. Scale factor 1 makes the alias the architecture, not a decline.
+
+The same arm also covers scaled `ld.b` / `ld.bu` / `st.b`. Those take a NULL `ic->f` and stop the CPU in the dyntrans NULL check, a different death from xmem's unguarded call, same slots, same change. N1 (`xmem` to r0 decoded as `nop` at `:3657-3658`) and N2 (handler reads `.usr` as `0x80` at `:2359`; the decoder's `.usr` is `0x100` at `:3604`, and `0x80` is `.wt`, which `goto bad`s at `:3611` before `xmem_slow`) are not this round. Scaled half and word keep scale 2 and 4.
+
+The arm is reached only after `:249-252`, so `registeroffset` is already 1, and after `:239-242`, so `store && signedness` stays NULL. `cpu_m88k.c:130` forces big-endian, and xmem always adds `ENDIANNESS` (16). For `size == 0` the name printer emits `_le` for both endian values, so endianness is not a floor axis. Immediate xmem forces `scaled = 0` (`:2368-2370`).
+
+Floor, channel is the exchanged byte:
+
+- (a) Pre-fix: scaled `xmem.bu` rD≠0, rS2≠0, bit 9 set, bits 11:10 = 00, bit 7 clear, on unmodified `testm88k`. Host dies at the load call.
+- (b) Verbatim: put `NULL` back at that one arm. It covers the load index and the store index. A load-only alias moves the death to `:2426`, so the row must be the completed exchange.
+- (c) Identity body: decode, retire, write neither rD nor memory.
+- (d) Guard kept, name not emitted. The cells the arm distinguishes: `no_pc_sync` × {load, store} (xmem sets it, `ld`/`st` do not; `&& no_pc_sync` leaves scaled `ld.b` dead, `&& !no_pc_sync` leaves xmem dead); one signed scaled `ld.b` (xmem never sets `SIGNEDNESS`); one `.usr` scaled `ld.b` or `st.b` (a legal `xmem.usr` still indexes the non-usr slot, which is N2).
+
+Accept, because a wrong alias is silent: the exchanged byte is exactly `rS1+rS2`, neighbours unchanged (kills a word or scale-4 alias); rD is the old byte zero-extended; an unscaled byte `xmem` still exchanges at `rS1+rS2`; a scaled word `xmem` still uses scale 4 where `rS2*4` differs from `rS2`. The growth mutant is widening `size == 0` so a scaled half or word slot is aliased to the byte function.
+
+Rung-3: cold debugger, unmodified `testm88k`, real decode, real `memory_rw` into RAM. One scaled byte `xmem`, one unscaled byte `xmem`, one scaled word `xmem`. Liveness is the unscaled exchange of a known byte. Not a direct call of `xmem_slow`.
+
+## Q2. T36 — write `BERROR<<16` and `orig_paddr` on the faulting CMMU; the LUNA case returns 0
+
+The premise that line 437 has already made `paddr` device-relative is reversed. `:437` saves `orig_paddr = paddr` while `paddr` is still the physical address. The subtraction is `:494`. By the failure arm (`:603-623`) `paddr` is the device offset. PFAR gets `(uint32_t)orig_paddr`.
+
+On `res <= 0 && !no_exceptions`, under `MEM_M88K`, before `m88k_exception`:
+
+- `cmmu = cpu->cd.m88k.cmmu[cache == CACHE_INSTRUCTION ? 0 : 1]`, the same index as `memory_m88k.c:112` (0 instruction, 1 data).
+- If non-NULL: `reg[CMMU_PFSR] = CMMU_PFSR_BERROR << 16` (`3<<16`, `0x00030000`) and `reg[CMMU_PFAR] = (uint32_t)orig_paddr`.
+- The NULL check wraps only those two writes. `m88k_exception` stays outside it. Do not clear the sibling. The page-fault path does (`memory_m88k.c:383-384`); the bus-error write does not. Do not touch `:399` (PFAR = 0 on write protection) or the `exit` at `:390-394`.
+
+`dev_luna88k.c:624-627` writes PFSR on the data CMMU with no NULL check and no PFAR, then `break`s into `return 1` at `:930`, so the access succeeds and no exception is raised. Replace that body with `return 0` and delete the PFSR store. The common arm then writes the right CMMU and raises the exception. Do not delete the case. `default:` (`:909-924`) sets `cpu->running = 0` and returns 0, and `memory_rw.c:591-592` then returns failure before the exception arm. Do not port `DEV_RAM_FAIL`, the beyond-RAM hunk that comments the exception out, or the plain-RAM CMMU windows.
+
+`#568` is unchanged as a decline. The 26 named-but-unimplemented VME registers still return success. Population-1 faults gain PFSR `0x00030000` and PFAR equal to the VME physical address. `regress/vme_default_probe.py` pins PC `0x18`, DMA0, DMT0, and decline-versus-fault. It does not read PFSR, so those oracles stay green. Do not add a `PFSR == 0` assertion, and do not turn population 2 into a fault.
+
+The pin is not `badaddr()`. In OpenBSD 2.2 `eh.S`, `badaddr` sets `FLAG_IGNORE_DATA_EXCEPTION` and `Data_Precheck` (`eh.S:312`) branches to `ignore_data_exception` before any PFSR read. A `badaddr()`-only row stays green when the exception is raised and the PFSR write is gone. The reader is `trap.c:326-335`: `(frame->dpfsr >> 16 & 7) == 3` and `sxip` inside `guarded_access_start..end`. A raw `3` in the low bits fails that extract. `CMMU_PFAR` (`m882xx.h:50`) is defined and has no reader under `sys/arch/mvme88k`; the fault address `trap.c` uses is the data unit's DMA0. PFAR is still the register upstream writes and the guest can `ld` it at CMMU offset `0x10c`.
+
+Rows: a guest `ld` of the data CMMU at `0x108` and `0x10c` after a population-1 VME load on unmodified mvme187, field `(>>16)&7` equal to 3, PFAR equal to `orig_paddr`. A second cell reads `cmmu[0]` after an instruction fetch. A (d) mutant that stores the device offset fails because the VME base is not 0. A (d) mutant that writes only `cmmu[0]` on a data access fails the data-CMMU read. A (d) mutant that stores raw 3 fails the field extract. An accept row: a population-2 decline still returns success and does not write PFSR. Clause (c) is a memory-path round: an absent device, recorded by construction. The stronger boot witness is `sxip` inside the guarded window recovering at `guarded_access_bad`; the register `ld` is the cheap one. Every later 88K round whose repair is "return 0 and raise data-access" depends on this writer. T1 does not.
+
+## Q3. T2 — mask the DS XO; five legal forms; no alignment exception; nothing to port
+
+`cpu_ppc_instr.c:4295` takes `imm = (int16_t)iword` and `:4307` / `:4320` treat primary opcodes `0x3a` and `0x3e` as one form each: 8 bytes, no update. Book I (the local `ppc_uisa_book1_v201` text) gives XO in bits 30:31 and the displacement as `EXTS(DS || 0b00)`.
+
+For every legal XO, `imm = (int16_t)(iword & ~3)`.
+
+| opcode | XO | form | width | update |
+|---|---|---|---|---|
+| 58 | 0 | `ld` | 8, zero-extend | no |
+| 58 | 1 | `ldu` | 8 | yes |
+| 58 | 2 | `lwa` | 4, sign-extend (`size=2`, `zero=0`; the cast is `cpu_ppc_instr_loadstore.c:119-120`) | no |
+| 62 | 0 | `std` | 8 | no |
+| 62 | 1 | `stdu` | 8 | yes |
+
+`ldu` with RA=0 already hits `:4338-4341` (`goto bad`) once `update` is set. `ldu` with RA=RT is invalid in Book I and is not checked. This round does not add that check: the only refusal on hand is `goto bad`, a CPU-stop, and this tree's exception list (`cpu_ppc.h:252-257`) has no program exception. Left disclosed. Reserved XO (58/3, 62/2, 62/3) must not fall through as `ld`/`std`. They take the same `goto bad` an unrecognized opcode already takes. One row: opcode 58 with XO=3 does not load 8 bytes and does not update RA.
+
+Unaligned accesses stay as `#431` left them. `cpu_ppc_instr_loadstore.c` performs the access; there is no PPC alignment vector. The EA+1 store is the decoder, and it disappears once the low two bits are masked. A genuinely unaligned EA (RA not a multiple of 8, DS a multiple of 4) is still performed. Do not port rs6000 `9a05a7b`. The same arms fire on 32-bit CPUs, where 58/62 are not the 32-bit ISA. Disclosed, not fixed here. XO=0 `ld`/`std` are already right and are the accept side.
+
+The witness runs with MSR IR and DR clear. On PPC970 a translated access dies in the N3 exit before the store is observable. `testppc` defaults to PPC970 (`machine_test.c:450`). With translation off, `memory_ppc.c:258-261` is the identity map.
+
+Floor: (a) `stdu` with XO=1, DS nonzero, RA≠0, 8-aligned EA, stores at EA+1 and leaves RA unchanged. (b) Restore `(int16_t)iword` and `update=0` for opcode 62. (c) Identity body: decode, retire, memory and RA unchanged. (d) Three nulls of the same guard: displacement masked but `update` left 0 (RA unchanged); `update` set but the raw `int16_t` kept (store at EA+1); `lwa` left at `size=3` (the neighbour word is consumed). Accept: XO=0 `std` still stores the whole doubleword at EA and does not write RA. A growth mutant that adds 1 to XO=0 reds that row. `lwa` oracle: a negative word, sign-extended, the next 4 bytes a sentinel.
+
+Rung-3: cold debugger, unmodified `testppc`, translation off, real decode, real `memory_rw` into RAM. One `stdu`, one `ldu`, one `lwa`, one XO=0 `std`. Liveness is an `stw` of a known word.
+
+## Q4. N3 is a feature. N5 is the small round. N4 stays its own exit
+
+`ppc_translate_v2p` (`memory_ppc.c:245`): IR/DR clear returns identity (`:258-261`). `PPC_601` then `exit(1)` (`:263-266`, N4). `bits == 32` calls `ppc_bat`; `res > 0` returns; `res == 0` `exit(1)` (`:273-276`, N5). `res == -1` falls through to `ppc_vtp32`. `bits != 32` prints `TODO: ppc 64-bit translation` and `exit(1)` (`:285-288`, N3). The DSI/ISI arm is `:299-324`. `match` is assigned only on the 32-bit path (`:281`). On the 64-bit path it is uninitialized, and the DSI arm reads it (`:317`).
+
+N3 is a page-table walker (`htaborg = sdr1 & 0xfffffffffffc0000`, commented at `:286`). It is not a fix round. Deleting the exit is not a safe decline: control falls into the DSI arm with `match` uninitialized, and even if `match` were set to 0 every IR/DR-on access would report a miss, including addresses a real PTE would hit. PPC970 is the `testppc`/`bareppc` default, so that is every guest that turns translation on. The exit stays until the walker exists. Do not fold it into T6. T6's "return into the ISI already raised" is a different predicate. What N3 owes today is the feature record, not a detector.
+
+N5 first, and it is not "delete the exit". `res == 0` is a BAT protection hit (`ppc_bat_block:68-73`: PP none, or a write to PP read-only). Falling through calls `ppc_vtp32`, so a PTE can grant an access the BAT denied. On `res == 0`, raise the protection exception and return, without the walker. Non-603: the existing arm, `DSISR_PROTECT`, plus `DSISR_STORE` on a write, DAR = vaddr; an instruction access is ISI and writes neither. `PPC_603` must not take the software-miss vectors at `:307-313`. Those are for a no-hit. A 603 BAT deny raises DSI/ISI the same way. `res == -1` still walks. `res > 0` still returns the BAT translation. 64-bit CPUs never enter this arm.
+
+N5 floor: (a) a write through a read-only BAT on a 32-bit non-601 CPU kills the host; (b) the `exit(1)` put back at `res == 0`; (c) a build with the BAT block compiled out, by construction; (d) `res == 0` kept but the body still exits, or the body raises DSI with `DSISR_NOTFOUND`, or an instruction exception on a data store. Accept: a read/write BAT hit translates even when no PTE matches. Growth: treating `res == -1` as a protection fault skips the walker; a row with no BAT match and a 32-bit PTE hit must still translate. The witness is unmodified `mvmeppc` subtype `mvme5500` (`PPC750`, 32-bit, not `PPC_603`, not `PPC_601`). `testppc` never reaches N5. Not a direct call of `ppc_bat`.
+
+N4 is separate. `ppc_bat` has its own 601 exit (`:96-99`) and its own `bits != 32` exit (`:92-95`). Removing only `:263` moves the death into `ppc_bat`. No machine defaults to `PPC601`; the name is selectable. There is no 601 BAT or segment code. The exit stays. Not merged with N5.
+
+## Q5. T11 — let the existing 1 KB lookup run, and do not cache it
+
+Both exits are real and R4100-only. `dpmask == 0x7ff` is possible only because the R4100 arm ORs `0x07ff` (`:2031-2032`, `:2159-2160`). Every other CPU ORs `0x1fff`. Site 1 (`:2037-2042`) runs while invalidating the old entry, before the new one is written. Site 2 (`:2165-2170`) runs after `mask`/`hi`/`lo` are stored (`:2149-2152`), and only if the new entry has V set in lo0 or lo1. A V=0 1 KB entry does not exit. Fixing only site 2 moves the death to site 1 on the next `tlbwi` that replaces the entry. Both go in one round.
+
+PageMask 0 is the 1 KB encoding on this CPU. The PageMask write skips `#188`'s canonicalization when `rev == MIPS_R4100` (`:750`). Rejecting it with an exception invents a trap this CPU does not raise. Dropping the entry and announcing turns a legal mapping into a refill. The slow path already treats a stored mask of 0 as the minimum page: `PAGEMASK_SHIFT_R4100` is 11 (`cop0.h:88`), so the `pmask == 0` arm (`memory_mips_v2p.c:282-289`) uses pageshift 10 and `pfn_shift` 10 (`:90`). That is the live 1 KB path. `case 0x00007ff:` (`:293`) is unreachable: a nonzero mask under `PAGEMASK_MASK_R4100` (`0x7f800`) cannot OR back down to `0x7ff`. The header's "only supports 4 KB pages" is the dyntrans limit, not a missing lookup. No VR4131 manual was opened; the witness below checks the in-tree formula `PFN<<10`.
+
+Deleting the exits alone is the bad finish. `psize == 0x1000` already skips the fast install (`:2248`). The next access is translated at 1 KB and then `memory_rw.c:746` caches a 4 KB dyntrans entry, because the MIPS translator returns 1 or 2 and never `MEMORY_NOT_FULL_PAGE`. ARM does set that bit for a 1 KB page (`memory_arm.c:235`). The 4100 return ORs `MEMORY_NOT_FULL_PAGE` when the matched pageshift is less than 12. A 4 KB R4100 page (stored mask `0x1800`, `dpmask 0x1fff`, pageshift 12) stays cached. `if (!ok)` at `memory_rw.c:259` treats any nonzero return as success, so the bit does not look like a fault.
+
+Floor: (a) a valid PageMask-0 `tlbwi` on unmodified `hpcmips` (VR4131 or VR4121; `testmips` defaults to 5KE) kills the host; (b) each `exit(1)` put back, as two cells; (c) identity, the `tlbwi` retires and the entry is not installed; (d) the exits removed but `MEMORY_NOT_FULL_PAGE` not returned. The kill for (d) is the neighbour 1 KB inside the same 4 KB: unmapped or a different PFN, served from the cached host page. Accept: a 4 KB `tlbwi` on the same CPU still translates and is cached. A V=0 1 KB write does not exit and does not install a mapping. Growth: setting the bit for every `pmask == 0` on a non-4100 CPU makes every 4 KB page uncached; the 4 KB accept row on an R4000-class CPU kills that. The replacement write is part of the witness, or site 1 is never reached.
+
+Rung-3: cold debugger, real `tlbwi`, real `memory_rw`. One valid 1 KB entry, a load of the mapped kilobyte (byte matches `PFN<<10`), a load of the next kilobyte that must miss or hit a different PFN, then a 4 KB `tlbwi` over the same index. Liveness is the 4 KB load. Not a direct call of `coproc_tlbwri`.
+
+## Q6. T4 — advertise bit 9 in the same change; decode bit 6; 28-bit LBA; `#407` is rewritten, not a ban
+
+Word 49 stays `00 00` (`dev_wdc.c:376-377`). The comment's `0x200` is bit 9, stored in the high byte `[2*49+0]`. Once the offset path is live, that byte becomes `0x02`. The low byte stays 0. Bit 8 is DMA, which this device does not do. Leaving the zero in place after the offset works is the latent bug in the other direction: a guest that honours word 49 never uses the path just implemented. `#407` is a constraint on the diff. `row_no_lba_claim` in `regress/diff_wdc_identify.c` asserts both bytes are 0, and its comment says a future LBA implementation re-authors that row in the same change. The round does that. A one-character set of the low byte to 2, the mutant `#407` was written to catch, still reds.
+
+`wd_sdh` (`:2014-2017`) puts bits 7:6 in `sectorsize` and bit 5 in `d->lba`. ATA's LBA flag is bit 6. `sectorsize` is not an ATA field; it is read back and printed, and the CHS formula uses `d->head`. The compiled-out formula (`:470-474`, `:562-566`) is the right LBA28 assembly: `(head & 0xf) << 24 | cyl << 8 | sector`, sector not decremented, `cyl = cyl_hi*256 + cyl_lo`. It is a signed `int` multiply by 512. LBA28 times 512 is 37 bits, so the multiply is `(uint64_t)512 * (uint64_t)` of a `uint32_t` assembled with ORs. 28 bits. LBA48 is not this round. Both `wdc__read` and `wdc__write`. Do not port the FreeBSD patch. It keys on bit 5, and a CHS `0xA0` has bit 5 set.
+
+Readback currently echoes the wrong split, and both classic values round-trip by accident: `0xA0` and `0xE0` come back as themselves (`:2008`). A readback-only row does not kill the bit-5 latch. The kill is the disk offset. Readback still has to echo the written byte, including obsolete bits 7 and 5, so a NetBSD `0xA0` reads back `0xA0` (bit 6 clear) and an LBA `0xE0` reads back with bit 6 set. Do not force bits 7 and 5 to 1.
+
+Rows, both through the guest register path on the existing malta IDE witness shape (`wdc_altoffset_probe.py`: unmodified `evbmips -e malta`, image attached, KSEG1 `0xffffffffb80001f0`):
+
+- CHS: SDH `0xA0`, cylinder 1, head 0, sector 1. The bytes come from the CHS offset (`heads * sectors_per_track` sectors in), not from LBA 257. Drive bit `0xB0` still selects drive 1.
+- LBA: SDH `0xE0`, LBA `0x01020304` (all four lanes nonzero). READ returns the pattern at `512 * 0x01020304`, not the CHS interpretation of those same registers. A count of 2 checks the running offset. WRITE then reads back. IDENTIFY word 49, through the data-port transmit, is `0x0200`.
+- (a) pre-fix the LBA READ returns the CHS bytes, and word 49 is 0. (b) `#if 0` put back at both sites, and bit 5 restored at the one decode. (c) the offset expression replaced by the CHS expression while `d->lba` is still parsed. (d) bit 6 decoded but only `wdc__read` updated; the WRITE row reds. Also the `#407` low-byte mutant. Accept: SDH `0xA0` with sector 1, cylinder 0, head 0 still reads offset 0.
+
+Rung-3 is that malta guest, real `sb`/`lbu`, real `memory_rw`. Liveness is the existing cyl_lo/cyl_hi readback. The FIFO-versus-RAM signature those probes already use still applies.
+
+## Q7. Order within these six
+
+1. T1. No dependency. One generator arm.
+2. T36. Before any later 88K round whose repair raises data-access. One round: the common writer and the LUNA `return 0`. Splitting them leaves the probe either succeeding with a stale PFSR or stopping the CPU.
+3. T2. Independent of T36. The witness keeps IR/DR clear, so it does not wait on N3.
+4. N5. The one PPC exception round that has a real predicate and an existing vector. Not folded into N3 or T6. Witness is `mvme5500`, not `testppc`.
+5. T11. Both exits and the cache bit, one round. Splitting the exits leaves site 1 alive.
+6. T4. Latent until word 49 and the offset move together. Not in front. `#407`'s row is part of this diff.
+
+N3 is filed as a feature and is not scheduled as a fix. N4 is not scheduled. T1 is not merged with N1 or N2. T2 is not merged with N3.
+
+Also seen while reading, and not given a new id: `match` is uninitialized if the N3 exit is removed; `case 0x00007ff` in the MIPS walker is dead code; `0xA0` and `0xE0` both round-trip through the wrong SDH split, so a readback oracle cannot carry T4; the LUNA `default:` plus `memory_rw.c:591` swallows the exception if the probe case is deleted.
