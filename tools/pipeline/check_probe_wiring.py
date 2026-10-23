@@ -3305,7 +3305,10 @@ EXEMPT = {
     #  #550 (2026-09-25, re-dated individually by owner ruling 2026-09-24): one harness round gives an `-E alpha -e alphabook1' session a gate home and discharges
     #  all four Alpha probes at once (each already prints its tokens and sends quit), so the four
     #  are ONE decision, dated within days of each other rather than a week apart.
-    "alpha_tbi_probe.py":          ("2026-10-22",
+    #  Re-dated 2026-10-22 -> 2026-11-06 on 2026-10-23 by owner ruling, in its own commit (the 04f3e7c0 shape): it came
+    #  due with the Alpha gate home still owed and refused every commit, #569's landing first.  A re-date is not a
+    #  discharge; the gate that owes it is unchanged below.
+    "alpha_tbi_probe.py":          ("2026-11-06",
                                     "no gate runs an Alpha guest session (gate 9 only "
                                     "constructs them); gate_crossfamily.sh "
                                     "is the named home and giving it one is a harness "
