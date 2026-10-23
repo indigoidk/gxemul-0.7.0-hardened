@@ -1,7 +1,10 @@
 #!/bin/bash
 # GATE 7 -- three-way A/B against pristine 0.7.0 and the pre-batch fork.
 #
-#   pristine   39748e3   unmodified upstream GXemul 0.7.0
+#   pristine   39748e3   the 0.7.0 import -- NOT byte-identical to the release: it carries #9 (configure's
+#                        GNU89-inline probe) and #13 (three 1U << sites in generate_arm_r.c) plus
+#                        generated build products (CHANGELOG.md, 'Repository cleanup'; records R1,
+#                        2026-10-22).  Kept as the ref because earlier logs name it.
 #   prebatch   2ffc91e   the fork immediately before the current batch
 #   HEAD                 what is being shipped
 #
