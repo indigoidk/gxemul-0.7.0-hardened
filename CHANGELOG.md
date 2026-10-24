@@ -1,3 +1,17 @@
+# Records, 2026-10-24: `m88kbuserrregs` names its landing commit c8fcb5ff, and c8fcb5ff's committed-tree proofs and pass-2 receipt
+
+`#570` landed as `c8fcb5ffc85b1a3f14bad24da5ebf074eda9f11b`.  Committed-tree proofs: `git ls-tree c8fcb5ff regress/m88k_buserr_probe.py` -> `100644 blob 5a03354acbc090c36c4fe43744178dad18e2b3c9` (the
+detector, documentation revision 2b, mode 100644 -- a `.py` probe, run by `gate_arm.sh`); the committed
+`regress/gate_arm.sh` blob md5 is `f04fad2c589f9eb10f4a4fc3dc5896d9` and the committed `tools/pipeline/check_probe_wiring.py` blob md5 is `2a98b470969f0d49d748c3b18790d71b`,
+each equal to the round's staged copy (`regress/artifacts/m88kbuserrregs/table1_20261023/staged/gate_arm.sh.txt`,
+`staged/check_probe_wiring.py.txt` -- the HEAD-based copies carrying only this round's insertions; the working tree's
+foreign hunks were not committed); `git diff --numstat c8fcb5ff^ c8fcb5ff` on those two files = `31 0 regress/gate_arm.sh; 15 0 tools/pipeline/check_probe_wiring.py`.  Pass-2 receipt:
+`pass2_20261023/` (Astra, Grok, GLM 5.3, Argon via agy -- SHIP WITH CHANGES; DeepSeek Q1-2 DO NOT SHIP on a claim the
+adjudication rejected; `f2/codex_t36f2.txt` -- AMEND, no floor breach); the pre-commit repair `repair1_20261024/`.  The
+row's `commits` field now names `c8fcb5ff`; its state stays `held` for Fable 5.1 with its question.
+
+Ledger (one field), this block, the `regress/pass2_ledger.tsv` receipt line and `matrix.html` only.
+
 # `#570` (m88kbuserrregs): a refused m88k device access raised the access exception without recording the bus error in the CMMU -- PFSR (BERROR) and PFAR (the physical address) are now written on the faulting side's CMMU, LUNA-88K's probe address faults through the same arm instead of being served 0, and a 31-row rung-3 detector gates it in gate 14
 
 **The defect** (`m88kbuserrregs`, MED; filed 2026-10-22 from the external-fixes research, T36 of its batch; the carrier
