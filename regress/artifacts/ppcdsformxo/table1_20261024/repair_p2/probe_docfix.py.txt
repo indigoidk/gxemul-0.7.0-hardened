@@ -1,0 +1,59 @@
+"""#571 pass-2 repair: docstring/comment-only edits to regress/ppc_dsform_probe.py (no code path changes).
+
+Each replacement asserts its old text occurs exactly once.  Run from anywhere; prints the unified diff, the new
+md5 and line count.  Backup of the frozen (measured) file kept beside the script.
+"""
+import difflib, hashlib, io, os, shutil, sys
+
+SEC = "C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC"
+P = SEC + "/regress/ppc_dsform_probe.py"
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+old = io.open(P, encoding="utf-8", newline="").read()
+assert hashlib.md5(old.encode("utf-8")).hexdigest() == "0266228894811ba6c51cff82585753c9", "not the frozen probe"
+shutil.copy2(P, os.path.join(HERE, "ppc_dsform_probe.py.frozen_0266228"))
+
+PAIRS = [
+ # K1 -- the names-cap comment stated a false boundary (Astra Q3 K1, Grok Q3(a), GLM Q34 (a), DeepSeek Q34 (a)).
+ ("    #  14, not 15: gate 13 pins each row as `^name  ' (two spaces) inside this %-16s column.\n",
+  "    #  14 is a margin: gate 13 pins each row as `^name  ' (two spaces) inside this %-16s column,\n"
+  "    #  which gives a 15-character name its two spaces as well (16 misses); the cap stays one under.\n"),
+ # Astra Q4 (S8/R10): \"leave RA alone\" needs the RT = RA qualification.
+ ("    the displacement), the width and extension of the transfer, and whether RA is written (ldu\n"
+  "    and stdu write EA; ld, lwa and std leave RA alone); the expected bytes at every store's\n"
+  "    destination, and for stdu the seeded bytes around it; the three reserved XO encodings stop\n",
+  "    the displacement), the width and extension of the transfer, and whether RA is written (ldu\n"
+  "    and stdu write EA; ld, lwa and std perform no base update -- a load with RT = RA still\n"
+  "    changes that register through its destination write, which no row drives); the expected\n"
+  "    bytes at every store's destination, and for the ordinary stdu (DS != 0, RA != RS) the seeded\n"
+  "    bytes around it (`stdu neigh'; the other stores' flanks are printed, not graded); the three\n"
+  "    reserved XO encodings stop\n"),
+ # Astra Q4 (A5/F1/S8) + Grok Q2(e): RT = EA holds on a successful access only.
+ ("    * ldu with RA = RT (an invalid form; after the fix it leaves RT = EA; not checked);\n",
+  "    * ldu with RA = RT (an invalid form; after the fix, when the access succeeds, it leaves\n"
+  "      RT = EA -- the handler returns before the update on a failed access; not checked);\n"),
+ # GLM Q12 Q2(e) + Astra Q2(e): the sign-of-DS x RA joints and the reserved corners are mentioned nowhere.
+ ("    * lwa of a word whose bit 31 is clear;\n",
+  "    * the sign of DS crossed with RA -- a negative DS at RA = 0 and a positive DS at RA != 0\n"
+  "      for ld, ldu, std and stdu, and any negative DS for lwa -- and the reserved encodings at\n"
+  "      DS = 0 or RA = 0: the case bodies read neither the sign of DS nor RA, so these are not\n"
+  "      floor cells; not rowed;\n"
+  "    * lwa of a word whose bit 31 is clear;\n"),
+]
+new = old
+for a, b in PAIRS:
+    n = new.count(a)
+    assert n == 1, "old text occurs %d times: %r" % (n, a[:70])
+    new = new.replace(a, b)
+io.open(P, "w", encoding="utf-8", newline="").write(new)
+diff = "".join(difflib.unified_diff(old.splitlines(True), new.splitlines(True),
+                                    "a/regress/ppc_dsform_probe.py (md5 0266228894811ba6c51cff82585753c9)",
+                                    "b/regress/ppc_dsform_probe.py", n=2))
+io.open(os.path.join(HERE, "probe_docfix.diff"), "w", encoding="utf-8", newline="").write(diff)
+sys.stdout.write(diff)
+print("NEW md5 %s  lines %d  bytes %d" % (hashlib.md5(new.encode("utf-8")).hexdigest(), new.count("\n"), len(new.encode("utf-8"))))
+# every change is inside the module docstring or a comment: assert no code token changed
+import re
+strip = lambda t: "\n".join(l for l in re.sub(r'(?s)^#!.*?"""(.*?)"""', '"""DOC"""', t, count=1).splitlines() if not l.strip().startswith("#"))
+assert strip(old) == strip(new), "a non-docstring, non-comment line changed"
+print("CODE UNCHANGED: docstring/comment-only edit verified")

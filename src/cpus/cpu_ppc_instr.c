@@ -4304,7 +4304,26 @@ X(to_be_translated)
 		case PPC_HI6_LHZU: load=1; size=1; update=1; break;
 		case PPC_HI6_LWZ:  load=1; size=2; break;
 		case PPC_HI6_LWZU: load=1; size=2; update=1; break;
-		case PPC_HI6_LD:   load=1; size=3; break;
+		case PPC_HI6_LD:
+			/*  #571: DS form -- bits 30:31 are XO, the displacement is
+			    DS || 0b00.  The committed decode kept XO in the displacement
+			    and gave every XO the ld flags, so ldu/lwa ran as ld at
+			    EA+1/EA+2 with no update.  One masked imm feeds both the
+			    table index (imm==0) and ic->arg[2] below.  Reserved XO 3
+			    takes the arm's bare goto bad (the common tail announces it);
+			    ldu with RA=0 now reaches the existing ra==0 && update guard.
+			    Opcodes 58/62 are illegal on 32-bit implementations; the same
+			    source builds the MODE32 decoder and no width test is added
+			    here (disclosed).  The shared imm assignment above is unchanged.  */
+			imm = (int16_t)(iword & ~3);
+			load = 1; size = 3;
+			switch (iword & 3) {
+			case 0:	break;			/*  ld  */
+			case 1:	update = 1; break;	/*  ldu: RA <- EA  */
+			case 2:	size = 2; zero = 0; break;	/*  lwa: sign-extended word  */
+			default: goto bad;		/*  reserved encoding  */
+			}
+			break;
 		case PPC_HI6_LFD:  load=1; size=3; fp=1;ic->f=instr(lfd);break;
 		case PPC_HI6_LFDU: load=1; size=3; fp=1; update=1;
 				   ic->f=instr(lfdu); break;	/*  #310  */
@@ -4317,7 +4336,17 @@ X(to_be_translated)
 		case PPC_HI6_STHU: size=1; update=1; break;
 		case PPC_HI6_STW:  size=2; break;
 		case PPC_HI6_STWU: size=2; update=1; break;
-		case PPC_HI6_STD:  size=3; break;
+		case PPC_HI6_STD:
+			/*  #571: DS form, as for PPC_HI6_LD above: stdu ran as std at
+			    EA+1 with no update; XO 2 and 3 are reserved.  */
+			imm = (int16_t)(iword & ~3);
+			size = 3;
+			switch (iword & 3) {
+			case 0:	break;			/*  std  */
+			case 1:	update = 1; break;	/*  stdu: RA <- EA  */
+			default: goto bad;		/*  reserved encodings  */
+			}
+			break;
 		case PPC_HI6_STFD: size=3; fp=1; ic->f = instr(stfd); break;
 		case PPC_HI6_STFDU: size=3; fp=1; update=1;
 				   ic->f = instr(stfdu); break;	/*  #310  */

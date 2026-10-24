@@ -1,0 +1,69 @@
+VERDICT: NOT READY — Q3(a) session/header set is not fully specified from the packet, and Q4(2) identifies an unfiled guest-visible defect outside this round’s scope.
+
+All claims below are DERIVED from the packet unless marked NOT CHECKABLE.
+
+## Q3 — detector shape and gate home
+
+### (a) Detector sessions and header changes
+
+**Sessions needed (minimum):**
+- Main loads session: `ld` (C1), `ldu` (C4), `lwa` (C8), `lwz` control, `live`.  
+- Stores session: `std` (C13), `stdu` (C15), possibly `stdu` RA=RS (C18).  
+- One session each for illegal XO words: 58/3 (C12), 62/2 (C19), 62/3 (C20) — each must be last in its session because `goto bad` stops the CPU (P15, S6).  
+- One session each for RA=0 update words after repair: `ldu` RA=0 (C6), `stdu` RA=0 (C17) — same stop reason.  
+- A 32-bit session only if Q1(e) adds a width test (C24).  
+- Census observations (`unassemble`) can be performed within the load/store sessions without executing the words; they do not require separate sessions unless the disassembler is changed and the oracle is re-pinned.
+
+**Total:** 2 main sessions + 3 illegal-XO + 2 RA=0 + possibly 1 32-bit = **7 or 8 sessions**. Order: loads first, then stores, then illegal/RA=0 sessions (each isolated), 32-bit last if present.
+
+**Header changes required before moving to detector:**
+- CONTRACT must add store forms, illegal XO, RA=0 update, 32-bit if applicable.  
+- NOT CLAIMED must list any remaining uncovered cells (e.g., 32-bit if disclosed, translation on, indexed forms).  
+- SYMPTOM set must include store red rows and any new reds from illegal/RA=0.  
+- `PPC_DSFORM_RESULT` count and `RED=` list must be updated to the new row total.  
+- Census expectations must be re-pinned if the disassembler joins (R16).
+
+### (b) Gate home
+
+**Gate 13 (`gate_ppc.sh`)** is correct — it is the PowerPC gate and already runs three PPC probes on `bareppc` before `need_file NetBSD`.  
+**Placement:** after the three existing register-to-register probes (`ppc_rlwimi_probe.py`, `ppc_rldimi_probe.py`, `ppc_rldicl_probe.py`) but before the `need_file "$IMAGES/netbsd401-macppc-GENERIC"` line.  
+**Cost:** all four probes share the same early skip points (`need_exec PMAX`, `python3`). Placing the new probe after the existing three means it is skipped only if those prerequisites are missing, but the existing three are skipped in that case anyway. No additional cost.
+
+### (c) MANIFEST lines
+
+**Right**, provided:
+- The witness copy is committed under `artifacts/ppcdsformxo/witness_20261024/ppc_dsform_probe.py`.  
+- `ppc_dsform_dummy.bin` is not a `.py` and will not be seen by the checker.  
+- Kill-table drivers and frozen copies are stored as `*.py.txt` / `*.sh.txt` as in #570.
+
+### (d) Row-identity pinning
+
+Additions needed:
+- **A liveness row per session that ends in `goto bad`** (illegal XO, RA=0 update, 32-bit width test) so a dead run fails by construction (R2). The shipped `ppc_rldicl_probe.py` puts its 32-bit `goto bad` word last after a liveness `li` (9.5).  
+- **Pin `RED=0` post-fix** (the gate already pins red count to 0 in #570).  
+- Keep `RESULT=` both halves pinned, `CONTROL=OK`, `SYMPTOM=ABSENT`, and every row by name via `count "$LOG" "^$v  .*ok$"` = 1.
+
+### (e) Ledger witness term
+
+**Right**, with the condition that the witness directory is committed and the script filename matches `ppc_dsform_probe.py`. The term is `probe:regress/artifacts/ppcdsformxo/witness_20261024/ppc_dsform_probe.py` (rung 3).
+
+### (f) What else must stay green
+
+- The **NetBSD-image-gated rounding probe (138 rows)** in gate 13 uses FP D-form instructions (`lfs`, `stfs`, `lfd`, `stfd` and update forms) and goes through the same edited arm. It **must be re-run** after the fix.  
+- The three register-to-register probes (`rlwimi`, `rldimi`, `rldicl`) likely do not execute D-form loads/stores, but they should still run as part of gate 13 regression.  
+- No other PowerPC D-form consumer is identifiable from the packet (NOT CHECKABLE whether other rigs exist).
+
+## Q4 — standing licence
+
+### Candidate (1): Disassembler fold
+
+- **Severity:** LOW — guest-invisible, affects debugger and probe cross-check only.  
+- **Witness:** already present in the witness’s `unassemble` census (shows `ld` with folded displacement for `ldu`/`lwa`).  
+- **Scope:** out of scope for this round under R17 (different site, different semantic class: debugger vs CPU execute path). Must be filed separately.
+
+### Candidate (2): `ldx`, `ldux`, `lwax`, `lwaux` missing
+
+- **Real and unfiled** — no ledger row names them (packet states grep found none).  
+- **Severity:** MEDIUM — guest-visible CPU stop for legal 64-bit indexed loads; `stdx`/`stdux` are implemented, so the asymmetry is a defect.  
+- **Witness:** none currently; a simple probe placing `ldx` would show `goto bad` (CPU stop) while `stdx` works.  
+- **Scope:** out of scope under R17 (different site: opcode 31 indexed forms, not DS-form). Must be filed separately.

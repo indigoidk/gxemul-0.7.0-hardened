@@ -1,0 +1,150 @@
+DETECTOR_FREEZE -- regress/ppc_dsform_probe.py, round #571 (ppcdsformxo), written 2026-10-24
+
+probe md5:   0266228894811ba6c51cff82585753c9
+probe bytes: 40883
+probe lines: 836  (LF only: 0 CR bytes)
+ast check:   python -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" regress/ppc_dsform_probe.py
+             exit status 0, output: (none)
+witness:     regress/artifacts/ppcdsformxo/witness_20261024/ppc_dsform_probe.py untouched, md5 5e96b69df49ac82e10b3118780899549; its MANIFEST.md5 verifies 6 of 6
+
+N = 39
+
+ROW NAMES, in emission order (the gate's name list is this list):
+ld value
+ld RA after
+ld ds0 value
+ld ra0 value
+ldu value
+ldu RA after
+ldu ds0 value
+lwa value
+lwa RA after
+lwa ds0 value
+lwa ra0 value
+lwz value
+lwz odd
+live
+std value
+std RA after
+std ds0 value
+std ra0 value
+stdu value
+stdu neigh
+stdu RA after
+stdu ds0 value
+stdu alias val
+stdu alias RA
+stw odd
+st live
+xo58_3 live
+xo58_3 bad
+xo62_2 live
+xo62_2 bad
+xo62_3 live
+xo62_3 bad
+ldu ra0 live
+ldu ra0 bad
+stdu ra0 live
+stdu ra0 bad
+unasm census
+word pins
+neg apparatus
+
+CONTROL (22 rows; green before and after the fix):
+  ld value, ld RA after, ld ds0 value, ld ra0 value, lwa RA after, lwz value, lwz odd, live, std value, std RA after, std ds0 value, std ra0 value, stw odd, st live, xo58_3 live, xo62_2 live, xo62_3 live, ldu ra0 live, stdu ra0 live, unasm census, word pins, neg apparatus
+SYMPTOM (17 rows; red under the committed decode):
+  ldu value, ldu RA after, ldu ds0 value, lwa value, lwa ds0 value, lwa ra0 value, stdu value, stdu neigh, stdu RA after, stdu ds0 value, stdu alias val, stdu alias RA, xo58_3 bad, xo62_2 bad, xo62_3 bad, ldu ra0 bad, stdu ra0 bad
+
+SESSIONS (eight), each `-E bareppc -M 64', debugger-stepped once per placed word:
+  1. loads     27 words  regions 0x20000..0x200ff = 0x00 + 1*k; 0x7000..0x700f = 0x80 + 2*k; stop word none; li r9 last
+  2. stores    50 words  regions 0x21000..0x210bf = 0x00 + 1*k; 0x70f0..0x711f = 0x10 + 1*k; stop word none; li r9 last
+  3. xo58_3     4 words  regions 0x20000..0x2003f = 0x00 + 1*k; stop word LAST: e894fff3 (opcode 58, XO 3, RA r20 = 0x20020, disp -16)
+  4. xo62_2     9 words  regions 0x21000..0x2101f = 0x00 + 1*k; stop word LAST: f894ffd2 (opcode 62, XO 2, RA r20 = 0x21040, disp -48), window dumped
+  5. xo62_3     9 words  regions 0x21000..0x2101f = 0x00 + 1*k; stop word LAST: f894ffd3 (opcode 62, XO 3, RA r20 = 0x21040, disp -48), window dumped
+  6. ldu ra0    2 words  regions 0x0..0x1f = 0x60 + 1*k; stop word LAST: e8800011 (opcode 58, XO 1, RA 0, disp 16)
+  7. stdu ra0   7 words  regions 0x0..0x1f = 0x60 + 1*k; stop word LAST: f8800011 (opcode 62, XO 1, RA 0, disp 16), window dumped
+  8. neg      the loads commands against -E nosuchmachine (row `neg apparatus', exit1/-0x1)
+  placed words in the seven guest sessions: 108 (CENSUS_WORDS = 108; the census row's want is 108/108)
+  word pins: the loads session's words for ld, ldu, lwa encode to e894ff90,e8b5ffa1,e8d6000a
+
+NOTES (dispositions, no measurement of gxemul is claimed here):
+  * `lwa ra0 value' is a SYMPTOM row, not a control.  It is opcode 58 with XO 2, so under the committed
+    decode it loads the doubleword at 0x7006; BUILD_SPEC section 10 item 2's "gains nothing red from
+    these eight (XO 0 is correct on BASE)" does not hold for it.  Section 4's 18 symptom rows were 11 plus
+    seven stop rows; 10b leaves five stop rows, so 16, plus `lwa ra0 value' = 17.  Predicted from this
+    source for the BASE binary: PPC_DSFORM_RESULT=22/39, CONTROL=OK, SYMPTOM=PRESENT 17/17 (a
+    prediction for prefix_BASE.out, not a measurement).
+  * Row names: the loads and stores liveness rows keep section 3's names (`live', `st live'); the five
+    stop sessions carry their session prefix (section 10 item 8).  Every name is at most 14 characters;
+    the probe asserts it (`len(name) <= 14', commented with the gate pin).
+  * The 0x7000 window counts by two, so no value read from it is also a value of the 0x20000 pattern.
+  * Word order: in the loads and stores sessions the RA = 0 words are the last words before li (loads:
+    lwa ra0, then ld ra0; stores: std ra0), so a variant that makes one of them a stopping word (L9a:
+    ld ra0 and std ra0 reach the RA = 0 update guard; L10: lwa ra0 first) leaves the fewest words unrun.
+  * PRETABLE.out section 4 names L5, L8a, L8b and L9b for `lwa ra0 value'.  Read from this source the row is
+    also red on BASE and under L3, L4b and L7 (L3 and L4b leave it an 8-byte load from 0x7006, L7 a word load
+    from 0x7006), and L9b (an extra +1 on the XO-0 forms) does not reach it (XO 2).
+  * Store sources are built by the guest with lis, ori, sldi (rldicr r,r,32,31; opcode 30), oris and
+    ori; none of those words is opcode 58 or 62, and the census covers them.
+  * Interface: ppc_dsform_probe.py <gxemul> [label] [workdir].  workdir receives the transcripts
+    RAW_<label>_<session>.txt; without it they go to the private tempfile.mkdtemp directory, removed in
+    `finally:'.  Gate 13 passes "$LOGDIR/ppc_dsform".
+  * A missing binary raises from subprocess (no sentinel), as the witness did: L5b's expectation.  An
+    emulator that exits mid-session (L8c) returns normally; that session's rows read as absent (-0x1)
+    and go red, CONTROL=FAIL, and the sentinel is printed.  Per session the probe prints
+    how=, unimplemented=, todo_ra0= and internal_error= (the count of `PPC: invalid(): INTERNAL ERROR').
+  * Logic check of the probe's Python only (not gxemul): a scratchpad stand-in that answers the
+    debugger commands (fake_gxemul.py, in the session scratchpad t2/writer/) gave 39/39 with Book I
+    semantics and 22/39 with exactly the 17 SYMPTOM rows red under committed-decode semantics, its
+    three witness rows reproducing WITNESS_headbin.out's got values; gate 13's new block, run on those
+    two outputs with stubbed check/count, scored 53 of 53 checks green and 31 of 53 respectively.
+
+=== ADDENDUM 2026-10-24 10:2x -- after pass 2 (seven seats, PASS2_RULINGS.md in ../pass2_20261024/); written by the main loop ===
+1. REVISION.  Every run in this directory before this addendum -- BASELINE.out, prefix_BASE.out, fixed.out, the sixteen legs,
+   gate13_20261024.out -- measured the detector at md5 0266228894811ba6c51cff82585753c9 (836 lines, 40,883 bytes).  The SHIPPED
+   regress/ppc_dsform_probe.py is md5 59e83491a5819a599c610b1aa8e8b847 (845 lines, 41,610 bytes): a DOCSTRING/COMMENT-ONLY
+   revision made at 10:11 (repair_p2/probe_docfix.diff, applied by repair_p2/probe_docfix.py.txt, which also verified that
+   every non-docstring, non-comment line is identical; the measured revision is kept verbatim at
+   repair_p2/ppc_dsform_probe.measured_0266228.py.txt).  What changed, and why (pass-2 finding ids): the row() comment's
+   names-cap reason (K1: the %-16s column gives a 15-character name two spaces as well, 16 misses; the measured revision said
+   a 15-character name misses the pin, which is false); the CLAIMED sentence ("ld, lwa and std perform no base update", with
+   the RT = RA qualification; the flank claim scoped to the ordinary stdu, F19); NOT CLAIMED bullet 1 (RT = EA on a
+   successful access, F19); one NEW NOT CLAIMED bullet -- the sign of DS crossed with RA and the reserved encodings at DS = 0
+   or RA = 0 are not floor cells and not rowed (F19).  No row, want, word or session changed.
+2. RE-MEASURED on the shipped revision (repair_p2/remeasure.out, 10:15-10:16): prefix_BASE2.out on the BASE binary 3cd0501c =
+   22/39 CONTROL=OK SYMPTOM=PRESENT 17/17, its RED line byte-identical to prefix_BASE.out's; fixed2.out on build/gxemul
+   a142d92a = 39/39 ABSENT RED=none; gate 13 alone (gate13b_20261024.out) = PASS 193 checks, REGRESS_PASS, the #571 block all
+   ok, the detector log gate13b_ppc_dsform.log 39 rows green with the sentinel last.  The sixteen leg scores in SCORES.txt
+   stand as the record of the behaviour: the diff cannot reach them, and the identical clause-(a) red set is the measured check
+   of that claim.  (D1 in PASS2_RULINGS.md: Astra and Grok ruled EDIT; GLM's cost argument is recorded there.)
+3. CORRECTION, quoting what it corrects.  Line 58 above reads "SESSIONS (eight), each `-E bareppc -M 64', debugger-stepped
+   once per placed word:".  Item 8 of that list is `-E nosuchmachine`, the negative apparatus, which exits before any step.
+   Seven guest sessions run on bareppc; the eighth is the negative control (K2; Astra Q3 K2).
+
+4. CORRECTION of item 1 above (F2, Astra): "Every run in this directory before this addendum" is too wide -- prefix_BASE2.out,
+   fixed2.out and gate13b_20261024.out (10:15-10:16) also preceded the addendum and measured the SHIPPED revision.  Read item 1
+   as: the TABLE's runs -- prefix_BASE.out, fixed.out, fixed_witness8.out, the sixteen legs and gate13_20261024.out -- measured
+   md5 0266228...; BASELINE.out records provenance (the freeze), not a detector run.
+
+5. REVISION 2 (F2, 10:42).  Both adjudicators (Astra adj/codex_t2p2adj.txt F19; Grok adj/grok_t2p2adj.txt F19) found the
+   first revision's new NOT CLAIMED bullet carried a FALSE warrant -- "the case bodies read neither the sign of DS nor RA":
+   the mask copies the DS sign bit into imm; what the bodies lack is a BRANCH on it, and they do not read ra.  The bullet now
+   says so (Grok's sentence) and also discloses Astra's F26 cells (stdu with RA = RS at DS = 0; the reserved encodings at a
+   positive DS) as remaining non-floor coverage debt.  ONE hunk, docstring only (repair_p2/probe_docfix2.diff, applied by
+   repair_p2/probe_docfix2.py.txt with the same code-identity check; revision 1 kept at
+   repair_p2/ppc_dsform_probe.rev1_59e83491.py.txt).  SHIPPED: md5 3efd8cbec746b8224c32d6827b42db46, 847 lines, 41,811 bytes.
+   RE-MEASURED (repair_p2/remeasure3.out, 10:42-10:44): prefix_BASE3.out 22/39 CONTROL=OK SYMPTOM=PRESENT 17/17, RED line
+   byte-identical to prefix_BASE.out's; fixed3.out 39/39 ABSENT RED=none; gate 13 alone (gate13c_20261024.out) PASS 193 checks,
+   REGRESS_PASS, detector log gate13c_ppc_dsform.log 39 rows green, sentinel last.  The sixteen leg scores stand.
+
+6. REVISION 3 (the final exact-text clearance, adj/final/codex_t2final.txt item 1; 11:00).  Revision 2's parenthesis said the
+   common tail "tests only imm == 0 and ra == 0 && update"; it also tests ra == 0 to select the zero base (cpu_ppc_instr.c,
+   the `if (ra == 0) ic->arg[1] = &cpu->cd.ppc.zero` below the guard).  One line, docstring only (repair_p2/probe_docfix3.diff;
+   revision 2 kept at repair_p2/ppc_dsform_probe.rev2_3efd8cbe.py.txt).  SHIPPED: md5 e0a1e67eb0283abccde3bbd53952487a, 848
+   lines, 41,889 bytes.  RE-MEASURED (repair_p2/remeasure_r3.out, 10:58-11:00): prefix_BASE_r3.out 22/39 CONTROL=OK SYMPTOM=PRESENT
+   17/17, RED line byte-identical to prefix_BASE.out's; fixed_r3.out 39/39 ABSENT RED=none; gate 13 alone (gate13r3_20261024.out)
+   PASS 193 checks, REGRESS_PASS, detector log gate13r3_ppc_dsform.log 39 rows green, sentinel last.
+   TWO CORRECTIONS of earlier items, quoting them (the same clearance): item 4's list "prefix_BASE.out, fixed.out,
+   fixed_witness8.out, the sixteen legs and gate13_20261024.out -- measured md5 0266228..." wrongly includes
+   fixed_witness8.out, which ran the frozen WITNESS (md5 5e96b69df49ac82e10b3118780899549), not the detector; the addendum
+   header's "after pass 2 (seven seats, ...)" means seven answers from FIVE reviewing seats.

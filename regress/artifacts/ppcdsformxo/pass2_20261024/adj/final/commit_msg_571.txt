@@ -1,0 +1,83 @@
+#571 ppcdsformxo: the PowerPC decoder folded the DS-form XO bits into the displacement, so ldu/lwa ran as ld at EA+1/EA+2 and stdu ran as std at EA+1 with no update -- opcodes 58 and 62 now decode their five forms, reserved encodings and RA=0 update forms stop the cpu, a 39-row rung-3 detector in gate 13
+
+src/cpus/cpu_ppc_instr.c (+31/-2, two hunks): in X(to_be_translated)'s D/DS-form arm the `case PPC_HI6_LD:` and
+`case PPC_HI6_STD:` bodies of the inner switch re-assign the shared imm to (int16_t)(iword & ~3) -- EXTS(DS || 0b00),
+so the table index (imm == 0) and ic->arg[2] both see the masked displacement -- and dispatch on iword & 3: 58 -> ld
+(XO 0), ldu (XO 1, update), lwa (XO 2, size 2 and zero 0: the existing sign-extending word handler, slot 10 of the
+generated table), XO 3 -> the arm's bare goto bad; 62 -> std (XO 0), stdu (XO 1, update), XO 2 and 3 -> goto bad.  No
+handler changes (every form selects a slot tmp_ppc_loadstore.c already holds; none reaches ppc_instr_invalid).  Two
+behaviour changes besides the displacement: a reserved XO, which executed as ld/std at EA+2/EA+3, now stops the cpu
+through the common tail (UNIMPLEMENTED instruction, printed under single-step too; nothing is delivered to the guest --
+the tree has no Program interrupt); ldu/stdu with RA = 0, which executed at the absolute address EXTS(DS || XO) with no
+update, now reach the arm's existing ra == 0 && update guard.  ldu with RA = RT (an invalid form) is disclosed, not
+checked, as the sibling update loads do; stdu with RA = RS is valid and stores the old RS.  32-bit CPUs: opcodes 58/62
+are illegal there (PEM :6253); before and after this fix a 32-bit cpu decodes them through the same arm (one source builds
+both decoders; the MODE32 table holds real doubleword handlers); no width test this round -- filed as ppc64on32gate.
+The shared `imm = (int16_t)iword;` and the other 22 opcodes of the arm are untouched.  Byte-identical in est/.
+
+regress/ppc_dsform_probe.py (new, 848 lines, md5 e0a1e67eb0283abccde3bbd53952487a; frozen and MEASURED at 836 lines,
+md5 0266228894811ba6c51cff82585753c9 -- the shipped file differs by three docstring/comment-only revisions made on pass 2,
+its adjudication and the final clearance, table1_20261024/repair_p2/probe_docfix.diff, probe_docfix2.diff and
+probe_docfix3.diff, each verified code-identical and re-measured: prefix_BASE2/3/_r3 22/39 with the identical red set,
+fixed2/3/_r3 39/39, gate 13 PASS 193 each time): the detector, promoted from the
+rung-3 witness (frozen byte-identical at regress/artifacts/ppcdsformxo/witness_20261024/ppc_dsform_probe.py, md5
+5e96b69d; RED on HEAD 5/8).  Seven debugger-stepped guest sessions on the unmodified bareppc -M 64 (PPC970) and one negative session: loads (the three
+witness words; ld/ldu/lwa at DS = 0; ld/lwa with RA = 0 from a seeded low window; lwz +8 and lwz +6, the D-form control
+whose displacement has non-zero low bits), stores (std, stdu, stdu at DS = 0, stdu rA,DS(rA), std at DS = 0, std with RA = 0 (two words; their joint cell is not claimed),
+stw +6; every destination read back by the debugger's dump over EA-1..EA+11, the flanks graded for the ordinary stdu only; eight
+distinct source bytes except the alias store's, which is its old base), five stop
+sessions (58/XO 3, 62/XO 2, 62/XO 3, ldu and stdu with RA = 0 -- a liveness li then the word LAST), the bogus-machine
+control; every word from the probe's encoder; a census of all 108 placed words against the tree's CURRENT disassembler
+text with the expected XO from a label-keyed map and the three witness words pinned to literals; row names <= 14 by
+assert (a margin: the gate's %-16s column gives a 15-character name its two spaces as well).  39 rows, 22 controls, 17 symptom rows; contract in the docstring.
+
+regress/gate_ppc.sh (+41/-1): the #571 block after the #565 block and before the NetBSD need_file, on -E bareppc -M 64
+(the gate title names the block);
+every protocol key counted once in any form and once in its accepted form, the sentinel once and last, every row by
+name, the census at 108/108, rows run / green / red pinned 39 / 39 / 0.
+tools/pipeline/check_probe_wiring.py (+2): ppc_dsform_probe.py CLASS_DETECTOR (gate 13, 39 rows) and the frozen
+witness copy CLASS_RESEARCH -- it asserts the repaired property and is green post-fix, so by the checker's own WITNESS/DETECTOR
+line (:55-57) it is a preserved instrument, not a witness; HEAD's MANIFEST classes an earlier round's post-fix-green frozen witness (m88kbuserrregs) and
+#539's post-fix entries WITNESS against that line, filed as wiringwitnessclass -- landed as the HEAD blob plus the two keys
+(table1_20261024/staged/check_probe_wiring.py.txt); the working-tree file carries a peer's uncommitted lines and is not staged.  tools/precommit_check.sh: SCORE_CLAIMS_MANIFEST 38 -> 39 with its dated line.
+
+Measured (regress/artifacts/ppcdsformxo/table1_20261024/): the detector frozen BEFORE its first run (BASELINE.out,
+DETECTOR_FREEZE.txt); pre-fix on the BASE binary prefix_BASE.out 22/39, CONTROL=OK, SYMPTOM=PRESENT 17/17 (every red
+names the misdirected address, the shifted window or the missing stop) -- the store half's clause-(a) artifact;
+fixed.out 39/39 ABSENT; the frozen witness fixed_witness8.out 8/8 ABSENT; PRETABLE.out before table 1;
+PREDICTIONS.txt before every leg; SCORES.txt: 16 variant legs + the absent binary, all red -- clause (b) L3 both cases
+reinstated 22/39, L4b/L4c one case 31/39 and 30/39; clause (c) measured at L5_identity.out 17/39 CONTROL=FAIL (the
+no-op handler for both opcodes), L5b no sentinel; clause (d) L6a/L6b update dropped 37/39 and 36/39, L7 raw
+displacement 27/39, L8a/L8b lwa width and extension nulled 36/39 each, L8c lwa size 3 with zero 0 = an emulator exit on
+the loads session (25/39, recorded on the session line, sentinel present); growth L9a 33/39, L9b 33/39, L10 31/39,
+L11 the mask on the shared assignment 37/39 (the two D-form scope rows), L12a/L12b a reserved test opened 38/39 each;
+fourteen legs at their written prediction, L9a and L10 two rows redder (the session-liveness rows: a word with RA = 0
+that the variant turns into an update form refuses and stops its session -- L9a at the ld ra0 word, L10 at the lwa ra0
+word, both store sessions at std ra0) -- prediction misses, no detector miss.  Two-part clearance CLEAN + FRESH on
+build/, build-asan/ and /tmp/gxsec-build (CLEARANCE.out); est/ source tree, part 2 N/A.  Gate 13 alone: PASS, 193
+checks, REGRESS_PASS -- the #571 block 53/53, rlwimi 28/28, rldimi 29/29, rldicl 24/24, the image-gated rounding probe
+green (gate13_20261024.out; the gate's detector log preserved as gate13_ppc_dsform.log).
+
+Panel (owner roster 2026-10-23/24): pass 1 on the design brief -- GPT-6 Astra (ultra), Grok 4.7 (xhigh), Gemini 4 Argon
+through agy (file-reading), GLM 5.3 and DeepSeek v4-pro (packet-fed, Q1-2 / Q3-4 firings): five READY WITH CHANGES,
+DeepSeek NOT READY twice (a 32-bit width test: ruled option (i), disclose; the store rows: specified and measured);
+31 dispositions and eight disputes in pass1_20261024/PASS1_RULINGS.md; adjudicated by Astra (AMEND, eleven dispositions
+amended -- A3, A6, A9/B9, B2, B7, B10, B11/B13, B12, C4, Q3, Q5, written as BUILD_SPEC.md section 10's eight items --
+its own (ii) and all-22-labels claims withdrawn) and by Grok (AMEND; the one adjudicator disagreement -- the
+DS = 0 x RA = 0 refusal cells -- ruled for Grok on the carrier's pass-11 bound; the padded-column trap raised on the row
+names, names capped at 14 -- a margin, measured at pass-2 drafting: a 15-character name still gets its two spaces).  Fable 5.1 HELD by the owner with its question on the row; kimi, minimax and the Opus seat
+deliberately not fired.  Pass 2 on the diff: the same five seats, seven answers, all LAND WITH CHANGES -- twenty-eight
+numbered findings (pass2_20261024/PASS2_RULINGS.md F1-F28) whose required changes concern records, comments and contract
+wording -- no product-code defect; the probe's false
+names-cap comment corrected in place in a docstring/comment-only revision (D1, re-measured: prefix_BASE2 22/39 with the
+identical red set, fixed2 39/39, gate 13 PASS 193); the STD comment left as written (D2, Grok's dissent carried); Argon's
+Q2 described rows and legs that exist nowhere in the round (F25) and is credited for Q1 only.  F2 adjudication (adj/):
+Astra AMEND -- the decoder and the measured floor stand; four accepted dispositions (F19, F20, F21, F26) left incomplete record repairs, all applied; two defects of the repair's own records corrected (DETECTOR_FREEZE's over-wide sentence, the roster count); the chain closed with zero floor breaches over the probe diff's three hunks, the gate diff's two hunks and the three re-measured runs; LANDING: GO WITH THE CHANGES NAMED; Grok AMEND -- the product diff and the detector's behaviour stand; two accepted repairs were wrong records: the docstring's sign warrant (replaced in the second docstring/comment-only revision: the bodies copy the DS sign into imm and never branch on it, and do not read RA) and sev=RESEARCH on ppc64on32gate (OVERTURNED on the precedent's meaning: severity left unset); PRETABLE :31 quoted in the erratum; the floor chain closes; LANDING: GO WITH THE CHANGES NAMED.  Astra's exact-text readings of the landed texts (`adj/final/codex_t2final*.txt`): reading 1 named twelve record corrections -- ten completed, one left incomplete and one wrongly rejected (the frozen witness copy's MANIFEST class: the checker's WITNESS/DETECTOR line governs, the copy asserts the repaired property, so it is CLASS_RESEARCH, and the mis-classed precedents are filed as wiringwitnessclass); reading 2 named ten -- nine applied, one (the stale count sentences) left incomplete; reading 3 named seven, applied; each later reading is recorded in PASS2_RULINGS.md, and the reading that says GO is the clearance this commit rests on.
+
+Filed: ppcdisasmxo (LOW), ppcdisasmfpupd (LOW), ppcldxabsent (MED), ppc64on32gate (design; severity unset), wiringwitnessclass
+(LOW, records; from the final clearance).  Ledger row
+ppcdsformxo -> held (witness probe:regress/artifacts/ppcdsformxo/witness_20261024/ppc_dsform_probe.py, the loads;
+prefix_BASE.out for the store half); CHANGELOG round block; OUTSTANDING_BUGS.md's OPEN LIST line and a dated section;
+matrix.html and fable_queue.md regenerated from the ledger.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>

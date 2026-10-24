@@ -1,0 +1,90 @@
+VERDICT: NOT READY -- Q1(e) must add a 32-bit width test for opcodes 58/62, and Q2(a) must define store rows on the base binary before the fix lands.
+
+Q1: Repair correct for five forms and illegal XO, but incomplete without a 32-bit width test; disassembler should be filed, not joined.  
+Q2: Floor set missing C21/C22 and C24 (if width test added); store rows C15/C19/C20 must be specified; DS=0 rows are floor.
+
+---
+
+## Q1 — Repair completeness and correctness
+
+**(a) Five forms with existing flags**  
+READ from 8.2/8.7/8.8 and S7/S8. The flag combinations map to slots 15/31 (`ld`), 47/63 (`ldu`), 10/26 (`lwa`), 7/23 (`std`), 39/55 (`stdu`). None reach slots 11/27/43/59 (`ppc_instr_invalid`). P3 confirmed.  
+P1: DERIVED. `imm = (int16_t)(iword & ~3)` is correct for all DS and XO. Clearing the two lowest bits removes XO; the cast to `int16_t` sign-extends from bit 15 of the low halfword, which corresponds to DS MSB (instruction bit 16). Enumeration for DS = -8192, -1, 0, 1, 8191 × XO 0..3 yields exactly `EXTS(DS || 0b00)`. No cell differs.  
+P2: DERIVED. On PPC970 the `_0` half is unobservable by value because `LS_GENERIC_N` always adds `(int32_t)ic->arg[2]` regardless of the `_0` flag (8.7). The only observable effect is the value of `ic->arg[2]`. Therefore the assignment must occur before `ic->arg[2] = (ssize_t)imm;`; the table index can use either masked or raw `imm` without changing 64-bit behavior. The record should state the assignment sits before both uses for safety on 32-bit and for clarity.
+
+**(b) Where masked displacement must be visible**  
+DERIVED from P2. The only inputs where the two uses could differ are those with XO ≠ 0 and raw `imm` non-zero but masked `imm` zero (i.e., DS=0, XO≠0). On 64-bit, both uses then produce EA = RA+0 because the generic handler adds `ic->arg[2]`; the table index choice is unobservable. On 32-bit, the `_0` flag may matter if a width test is added, so the masked value must be assigned before the table index. The design text does not explicitly guarantee this ordering; the round’s record must state that `imm = (int16_t)(iword & ~3)` is executed before both the table index and `ic->arg[2]` assignment.
+
+**(c) Illegal XO values**  
+READ S3/S5/S6. `goto bad` is the tree’s only disposition for an illegal instruction; it stops the CPU, prints `UNIMPLEMENTED instruction`, and delivers nothing to the guest. Under R12 this is FAULT (option 5) with no latch needed because the CPU stops on first occurrence. The arm’s existing RA=0 guard prints `fatal("TODO: ra=0 && update?\n")` before `goto bad`; the illegal-XO arm should print a similar message outside read-ahead to distinguish it from an unrecognized opcode. No other member of the option set is available.
+
+**(d) Invalid update forms**  
+READ P4/P5. RA=0: existing guard `if (ra == 0 && update) goto bad;` triggers once repair sets `update=1`, changing execution to CPU stop. That is correct under S3 (invalid form yields boundedly undefined results or illegal instruction handler; tree lacks Program interrupt).  
+RA=RT (`ldu`): DERIVED from P4. The generic handler loads into RT, then updates RA (=RT) to EA, so RT ends holding EA. This matches Book I “boundedly undefined results” for an invalid form. The sibling update loads also lack RA=RT checks (8.2), so “disclosed, not checked” is consistent. Astra’s “distinguish invalid forms explicitly” should be read as covering reserved XO, not RA=RT, because the literal sentence refers to “executing them as plain `ld`/`std`”. The design does not treat valid `stdu` RA=RS as invalid; P4 confirms the handler stores the old RS value before updating RA, which is correct.
+
+**(e) 32-bit CPUs**  
+READ S9/S11/S12. PEM :6253 makes 58/62 illegal on 32-bit. Today they execute as 8-byte `ld`/`std`; after repair without a width test they would execute `ldu`/`lwa`/`stdu` on 32-bit, which is still illegal and guest-visible. The tree’s own opcode-30 idiom (`rld*`) prints a fatal message and `goto bad` (8.5). Under R13 this is a transferred warrant. I choose **option (ii)**: add a width test for opcodes 58/62 before the switch, using the `rld*` idiom. This is within R17 (same site, same semantic class) and requires a 32-bit session row (C24). It adds a floor axis `bits == 32`. The row shape is 9.5’s `bits32` rows: a 32-bit CPU session with a liveness instruction, then an opcode-58/62 word that reaches `goto bad`.
+
+**(f) Alignment**  
+READ P8/S14. The design does not assume 4- or 8-aligned EA; the generic handler performs any byte address. No row needs an aligned EA. Preserve unaligned support as #431 left it.
+
+**(g) Disassembler**  
+DERIVED from R17/R16. The disassembler shares the fold but is guest-invisible and a different code path. Joining it would require re-pinning the census oracle (R16) and may violate R17 (not same semantic class as execution). I recommend **filing** the disassembler as a separate finding, not this round. The detector’s contract must state the census is an observation of current decoder text and cannot attest XO or form.
+
+**(h) Anything else**  
+No missing design element beyond the width test and store witness rows. CHANGELOG/tags/ledger witness are Q3(e).
+
+---
+
+## Q2 — Detector rows
+
+**(a) Clause (a) for both halves**  
+READ section 2. Load half: witness already red on `ldu value`, `ldu RA after`, `lwa value` (C4, C8).  
+Store half: nothing measured. Need rows on base binary:
+- **C15** (`stdu`, DS≠0, RA≠0, RA≠RS): expect 8-byte store at EA and RA←EA; pre-fix stores at EA+1 and RA unchanged. Observable: reload destination with a correct `ld` XO=0 and compare to expected pattern; show neighboring bytes unchanged. Source value must have eight distinct bytes.
+- **C19** (`62/2`, illegal): expect no memory change and `goto bad`; pre-fix stores at EA+2. Observable: memory unchanged, RT/RA unchanged, stop message.
+- **C20** (`62/3`, illegal): same, pre-fix stores at EA+3.
+- **C13** (`std`, XO=0) is the accept control, not red pre-fix.
+
+**(b) Clause (b)**  
+Sites per P13: displacement assignment, `case LD`, `case STD` (plus width test if added). Verbatim reinstatement of HEAD’s arm reds C4, C5, C8, C10, C12, C15, C16, C19, C20, and any row with XO≠0. No row reds for wrong reason; illegal XO rows pre-fix execute, not stop.
+
+**(c) Clause (c)**  
+Use identity body (decode, retire, no memory/register writes). Record form: `(c): by construction via <row/pin>, leg not run`. Pin: the gate’s per-row `count "$LOG" "^$v  .*ok$"` = 1; on a dead run many rows print not-ok, causing count 0. Predicted dead run score: liveness and unasm census may still pass, but load/store value/update rows fail; `PPC_DSFORM_PROBE_DONE` still prints because identity body retires.
+
+**(d) DEPENDS-ON enumeration**  
+Check section 7. Missing/mislabelled:
+- **C21/C22** are FLOOR (R18). The displacement edit’s guard is opcode ∈ {58,62}; the false branch includes all other D-form opcodes. Must prove non-58/62 displacements with low bits nonzero are unchanged. Add one D-form load and one D-form store row with nonzero low bits.
+- **C5/C10/C16** (DS=0) are FLOOR. Body tests `imm==0` via table index; on 64-bit the `_0` flag is unobservable but `ic->arg[2]` differs, so address changes are observable. Owe rows with DS=0, XO≠0.
+- **C6/C17** (RA=0 update) are FLOOR. Body tests `ra==0 && update`.
+- **C18** (`stdu` RA=RS) is (e). Body does not test RA=RS; generic handler already correct.
+- **C7** (`ldu` RA=RT) is (e) per CRIT; body does not test.
+- **C24** becomes FLOOR if width test added (Q1(e)).
+- **C26** (access failure) is (e); no access fails on bareppc with translation off.
+- **C3, C2, C9, C11, C14** remain (e); not floor axes.
+- **C23** FP D-forms are (e); body tests `fp` but repair path never sets it for 58/62.
+
+**(e) Variants**  
+- “displacement masked but update left 0”: reds C4, C15 on RA-after.
+- “update set but raw int16_t kept”: reds C4, C8, C12, C15, C19, C20 on value/destination.
+- “lwa left at size=3”: reds C8/C10 on value (full doubleword instead of sign-extended word).
+- “growth mutant adds 1 to XO=0”: reds C1 or C13 on RA-after (ld becomes ldu, std becomes stdu).
+None is a floor breach if at least one row reds per variant; otherwise disclosed debt.
+
+**(f) Controls**  
+`ld value` (C1) and `std` (C13) are sufficient XO-0 controls; no DS=0 or RA=0 control owed. Keep `lwz` control? Replace it with C21 (D-form load, nonzero low bits) and add C22 (D-form store) to prove scope.
+
+**(g) Anchor rule**  
+Loads: counting pattern anchors offset. Stores: reload destination with a correct load (`ld` XO=0) and compare to expected pattern; show neighboring bytes unchanged. Source value must have eight distinct bytes to catch off-by-one. “If every address shifted by one byte, which row reds?” — C15 reds because reloaded destination pattern mismatches at EA+1.
+
+**(h) Rule D2**  
+N/A. No relational compare against constant among predicates; all are equality/truth tests (`case`, `==`, `&&`).
+
+**(i) Channel lines**  
+Update rows C4, C15 must use DS≠0 (DS=0 update invisible). Illegal-XO rows C12/C19/C20 must sit last in their own session (CPU stops). `lwa` positive word (C9) is (e); negative word (C8) already covers sign extension.
+
+**(j) Unassemble census**  
+Disassembler filed, so census remains observation; contract states it cannot attest XO. Expected mnemonic should be the tree’s current text (`ld`/`std`), not intended form, to avoid matching a wrong XO on both sides.
+
+**(k) Bounded?**  
+With floor cells enumerated above and no ask-again yet, row set is closed over diff. One ask-again remains under R15.

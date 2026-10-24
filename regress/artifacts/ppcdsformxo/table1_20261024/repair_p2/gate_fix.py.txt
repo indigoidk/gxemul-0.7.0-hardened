@@ -1,0 +1,40 @@
+"""#571 pass-2 repair: comment + title edits to regress/gate_ppc.sh (K2 session-count wording; F12 gate title).
+No check line changes.  Asserts each old text occurs once; prints the diff; refreshes the staged copy."""
+import difflib, hashlib, io, os, shutil
+
+SEC = "C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC"
+P = SEC + "/regress/gate_ppc.sh"
+STAGED = SEC + "/regress/artifacts/ppcdsformxo/table1_20261024/staged/gate_ppc.sh.txt"
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+old = io.open(P, encoding="utf-8", newline="").read()
+assert hashlib.md5(old.encode("utf-8")).hexdigest().startswith("d361db09"), "WT gate_ppc.sh is not the measured d361db09"
+assert old == io.open(STAGED, encoding="utf-8", newline="").read(), "staged copy != WT before the edit"
+shutil.copy2(P, os.path.join(HERE, "gate_ppc.sh.measured_d361db09"))
+
+PAIRS = [
+ ('gate_begin "gate 13: PowerPC FP conversion + FPSCR (#304/#305/#324-#330) + rlwimi/rldimi/rldicl"\n',
+  'gate_begin "gate 13: PowerPC FP conversion + FPSCR (#304/#305/#324-#330) + rlwimi/rldimi/rldicl + #571 DS-form"\n'),
+ ("# the reason the rlwimi block gives: `-E bareppc -M 64' needs no image, so a red row is recorded first.  Eight\n"
+  "# debugger-stepped sessions (loads, stores and five stop sessions, each stop word last) and one bogus-machine\n"
+  "# session; the rung-3 witness of the loads (regress/artifacts/ppcdsformxo/witness_20261024/) is NOT run here.\n",
+  "# the reason the rlwimi block gives: `-E bareppc -M 64' needs no image, so a red row is recorded first.  Seven\n"
+  "# debugger-stepped guest sessions (loads, stores and five stop sessions, each stop word last) plus one\n"
+  "# bogus-machine session that exits before any step -- eight in all; the rung-3 witness of the loads\n"
+  "# (regress/artifacts/ppcdsformxo/witness_20261024/) is NOT run here.\n"),
+]
+new = old
+for a, b in PAIRS:
+    n = new.count(a)
+    assert n == 1, "old text occurs %d times: %r" % (n, a[:70])
+    new = new.replace(a, b)
+io.open(P, "w", encoding="utf-8", newline="").write(new)
+io.open(STAGED, "w", encoding="utf-8", newline="").write(new)
+diff = "".join(difflib.unified_diff(old.splitlines(True), new.splitlines(True), "a/regress/gate_ppc.sh (d361db09)", "b/regress/gate_ppc.sh", n=1))
+io.open(os.path.join(HERE, "gate_fix.diff"), "w", encoding="utf-8", newline="").write(diff)
+print(diff)
+# no check/count/need_* line changed
+import re
+code = lambda t: "\n".join(l for l in t.splitlines() if l.strip() and not l.strip().startswith("#") and not l.startswith("gate_begin"))
+assert code(old) == code(new), "a non-comment, non-title line changed"
+print("NEW md5 %s  (staged copy refreshed; comment + title only)" % hashlib.md5(new.encode("utf-8")).hexdigest())

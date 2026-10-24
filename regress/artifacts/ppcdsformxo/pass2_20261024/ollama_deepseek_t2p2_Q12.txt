@@ -1,0 +1,101 @@
+VERDICT: LAND WITH CHANGES -- product diff and detector valid; record fixes needed (K1,K2,K3,K5,K6,K8,K9,K10,K11,K13,K14 as L4)  
+Q1: repair matches A1-A4/A9; no bad slot reached; comments accurate but K7 terse  
+Q2: floor discharged; no vacuuous row; L5 identity body correct; K3 gate sentence wrong; ask-again returns no unobserved floor cell  
+
+## Q1 — THE DIFF
+
+**(a)**  
+READ from §1.1/1.2. The repair is exactly as specified: mask `(int16_t)(iword & ~3)` inside both case bodies, dispatch on `iword & 3`, per-form flags, `goto bad` for reserved XO. No other code moved.
+
+DERIVED table index enumeration (S7):  
+`index = size + 4*zero + 8*load + (imm==0?16:0) + 32*update`
+
+| Form | DS≠0 | DS=0 | A1 slots |
+|---|---|---|---|
+| ld   | 15   | 31   | 15/31 |
+| ldu  | 47   | 63   | 47/63 |
+| lwa  | 10   | 26   | 10/26 |
+| std  | 7    | 23   | 7/23 |
+| stdu | 39   | 55   | 39/55 |
+
+None reaches 11/27/43/59. **Pass.**
+
+**(b)**  
+DERIVED from S6 and §1.2. A `goto bad` inside the nested `switch (iword & 3)` reaches the same `bad:` label as the arm’s other `goto bad` sites. Difference: the default `goto bad` skips the guard’s `fatal("TODO: ra=0 && update?\n")` message, which the RA=0 update path prints before jumping. In read-ahead both return immediately.  
+State set before the jump (`load`, `size`, re-assigned `imm`, `ic->f = NULL`) does not outlive it: `bad:` clears `ic->f = TO_BE_TRANSLATED`, then either returns or sets `cpu->running = 0`. **Pass.**
+
+**(c)**  
+READ the two comments. Every sentence is accurate against the code and §4 measurements.  
+K7: the STD comment’s “as for PPC_HI6_LD above” likely carries the `stdu` RA=0 stop, but it is terse. Not a product defect; a record improvement (L4).  
+No withdrawn census appears. **Pass with note.**
+
+**(d)**  
+DERIVED. The contract’s NOT CLAIMED bullet fully states A6/A9: illegal on 32-bit, same arm, MODE32 real doubleword handlers, legal forms select them, reserved/RA=0 updates stop, no width test. The comment’s short sentence is sufficient beside that contract bullet. CHANGELOG draft exact wording not fully inlined; no indication it omits the MODE32 twin. **Pass.**
+
+**(e)**  
+DERIVED. After F1 moved the mask into the case bodies, two `#571` tags—one per case body—is correct. No missing tag. **Pass.**
+
+## Q2 — THE DETECTOR AND THE TABLE
+
+**(a)**  
+DERIVED mapping of floor cells to rows or NOT CLAIMED:
+
+- Five stop sessions → `xo58_3 bad`, `xo62_2 bad`, `xo62_3 bad`, `ldu ra0 bad`, `stdu ra0 bad` (+ live rows).  
+- F1’s five single-axis marginals → `ld ds0 value`, `ld ra0 value`, `lwa ra0 value`, `std ds0 value`, `std ra0 value`.  
+- RA rows for XO-0 and `lwa` at DS≠0 → `ld RA after`, `lwa RA after`, `std RA after`, `ldu RA after`, `stdu RA after`.  
+- DS=0 value rows → `ld/ldu/lwa/std/stdu ds0 value`.  
+- D-form scope controls → `lwz odd`, `stw odd`.  
+- Clause (b) → L3, L4b, L4c; clause (c) → L5; clause (d) → L6a-L8c; growth → L9a-L12b.  
+- DS=0 × RA=0 joints → NOT CLAIMED bullet.  
+- `ldu` RA=RT → NOT CLAIMED.  
+- `lwa` positive word → NOT CLAIMED.  
+- 32-bit CPU, translation on, indexed forms, access fail, disassembler → NOT CLAIMED.
+
+No enumerated cell has neither a row nor a NOT CLAIMED bullet. **Pass.**
+
+**(b)**  
+DERIVED from §4.2/4.3. L9a and L10 misses are correctly explained: under those legs RA=0 XO-0 words become refusals, stop the sessions before the liveness `li`, so `live` and `st live` red. OBS session lines show the early stops. No leg is red for a reason other than the one under test. L8c is scored exactly as B10 amended requires: emulator termination, CONTROL=FAIL, sentinel present. **Pass.**
+
+**(c)**  
+DERIVED. No row is vacuuous. The five stop-session `live` rows, `unasm census`, `word pins`, `neg apparatus` are labelled apparatus in PRETABLE. `lwz value` is a control row with no product leg.  
+K6: PRETABLE’s original channel for `lwa ra0 value` is outdated (names L9b which does not reach it). That is a wrong record (L4), but the row itself varies under many legs and is not vacuuous. **Pass with record fix.**
+
+**(d)**  
+DERIVED. `(c): measured at L5_identity.out` is the correct medium and record form under R2.  
+K3: SCORES.txt’s L5b sentence “the gate’s sentinel pin reds” is wrong—`need_exec` skips gate 13 before the block runs if the binary is absent. This does not touch clause (c), which is recorded on L5. Wrong record (L4). **Pass with record fix.**
+
+**(e)**  
+DERIVED ask-again coverage:
+
+| Cell | Status | Row / NOT CLAIMED |
+|---|---|---|
+| 58/XO0 `ld`, DS≠0 RA≠0 | OBSERVED | `ld value`, `ld RA after` |
+| 58/XO0, DS≠0 RA=0 | OBSERVED | `ld ra0 value` |
+| 58/XO0, DS=0 RA≠0 | OBSERVED | `ld ds0 value` |
+| 58/XO0, DS=0 RA=0 | UNOBSERVED | NOT CLAIMED joint |
+| 58/XO1 `ldu`, DS≠0 RA≠0 | OBSERVED | `ldu value`, `ldu RA after` |
+| 58/XO1, DS≠0 RA=0 | OBSERVED | `ldu ra0 bad` |
+| 58/XO1, DS=0 RA≠0 | OBSERVED | `ldu ds0 value` |
+| 58/XO1, DS=0 RA=0 | UNOBSERVED | NOT CLAIMED joint |
+| 58/XO1, RA=RT | UNOBSERVED | NOT CLAIMED |
+| 58/XO2 `lwa`, DS≠0 RA≠0 | OBSERVED | `lwa value`, `lwa RA after` |
+| 58/XO2, DS≠0 RA=0 | OBSERVED | `lwa ra0 value` |
+| 58/XO2, DS=0 RA≠0 | OBSERVED | `lwa ds0 value` |
+| 58/XO2, DS=0 RA=0 | UNOBSERVED | NOT CLAIMED joint |
+| 58/XO2, bit31=1 | OBSERVED | `lwa value` |
+| 58/XO2, bit31=0 | UNOBSERVED | NOT CLAIMED |
+| 58/XO3 reserved | OBSERVED | `xo58_3 bad` |
+| 62/XO0 `std`, DS≠0 RA≠0 | OBSERVED | `std value`, `std RA after` |
+| 62/XO0, DS≠0 RA=0 | OBSERVED | `std ra0 value` |
+| 62/XO0, DS=0 RA≠0 | OBSERVED | `std ds0 value` |
+| 62/XO0, DS=0 RA=0 | UNOBSERVED | NOT CLAIMED joint |
+| 62/XO1 `stdu`, DS≠0 RA≠0 | OBSERVED | `stdu value`, `stdu RA after`, `stdu alias` |
+| 62/XO1, DS≠0 RA=0 | OBSERVED | `stdu ra0 bad` |
+| 62/XO1, DS=0 RA≠0 | OBSERVED | `stdu ds0 value` |
+| 62/XO1, DS=0 RA=0 | UNOBSERVED | NOT CLAIMED joint |
+| 62/XO1, RA=RS | OBSERVED | `stdu alias val`, `stdu alias RA` |
+| 62/XO2/3 reserved | OBSERVED | `xo62_2 bad`, `xo62_3 bad` |
+| 32-bit CPU | UNOBSERVED | NOT CLAIMED |
+| Translation on, MSR SF, high EA, page cross, indexed, access fail, disassembler | UNOBSERVED | NOT CLAIMED |
+
+Positive DS for `stdu` with RA≠0 is unobserved, but the body does not partition on sign of DS; it only partitions zero vs nonzero. Therefore no change confined to the two case bodies can leave all 39 rows green while altering only that cell. No undisclosed floor cell exists. **Ask-again returns nothing.**

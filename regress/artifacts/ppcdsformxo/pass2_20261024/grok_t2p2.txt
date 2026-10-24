@@ -1,0 +1,125 @@
+I'll read the rest of the brief first, then check the premises against the tree rather than ratifying them.The product claims and the K-checks are the parts I will re-derive from the tree. I am reading the arm, the table, the detector, and the rulings those claims rest on.VERDICT: LAND WITH CHANGES -- the repair, the 39-row detector, the kill table and the gate pins hold; correct the wrong records below before the landing commit.
+Q1: Repair matches A1–A4; the ten slots are 15/31, 47/63, 10/26, 7/23, 39/55 and none is 11/27/43/59; `goto bad` is the common tail; the STD comment omits the `stdu` RA=0 stop; two `#571` tags are the right count.
+Q2: Every floor cell is rowed or named in NOT CLAIMED; L9a and L10 are redder by `live` and `st live` because the RA=0 XO-0 word stops the session; no leg is red for another reason; L8c matches B10; clause (c) is the identity body.
+Q3: The gate pins match B12; K1’s stated boundary is false (a 15-character name matches the pin; 16 misses); K2, K3, K5, K8, K9, K10 and K11 are wrong records; land the HEAD-based MANIFEST, not the working-tree file.
+Q4: C1–C3 ids, severities and citations hold; the C4 drafts add LOW and pre-authorize a uniform sweep, and they drop the `extsw` qualification; BUILD_REPORT omits that census and the no-boot sentence.
+
+## Q1 — the diff
+
+**(a) READ.** Working-tree `src/cpus/cpu_ppc_instr.c`. The shared assignment at :4295 is still `imm = (int16_t)iword`, with `load = 0; zero = 1; size = 0; update = 0; fp = 0; ic->f = NULL`. Only the `PPC_HI6_LD` and `PPC_HI6_STD` bodies changed. Each body reassigns `imm = (int16_t)(iword & ~3)` and switches on `iword & 3`. `PPC_HI6_LD` is `0x3a` (58) and `PPC_HI6_STD` is `0x3e` (62) in `src/include/opcodes_ppc.h`.
+
+Index = `size + 4*zero + 8*load + (imm==0 ? 16 : 0) + 32*update`. Incoming `zero` is 1.
+
+| form | flags after the body | DS ≠ 0 | DS = 0 |
+|---|---|---|---|
+| ld (XO 0) | load 1, size 3, zero 1, update 0 | 3+4+8 = 15 | 31 |
+| ldu (XO 1) | same, update 1 | 47 | 63 |
+| lwa (XO 2) | load 1, size 2, zero 0, update 0 | 2+8 = 10 | 26 |
+| std (XO 0) | load 0, size 3, zero 1, update 0 | 3+4 = 7 | 23 |
+| stdu (XO 1) | same, update 1 | 39 | 55 |
+
+The invalid slots are load, zero 0, size 3: 3+8 = 11, plus 16 = 27, plus 32 = 43, plus both = 59. None of the ten values is one of those four. READ of `ppc32_loadstore[]` at `tmp_ppc_loadstore.c:1923-1987`: slot 7 `std`, 10 `lwa`, 11 `invalid`, 15 `ld`, 23 `std_0`, 26 `lwa_0`, 31 `ld_0`, 39 `stdu`, 47 `ldu`, 55 `stdu_0`, 59 `invalid`, 63 `ldu_0`. The 64-bit table has the same positions under `ppc_instr_` names (A1). Reserved XO takes `goto bad` before the table.
+
+Clearing the low two bits of the halfword never touches its sign bit, so `(int16_t)(iword & ~3)` is EXTS(DS || 0b00) for every DS and every XO. The mask is inside both case bodies (A9/B9). The other 22 case bodies and the common tail are untouched.
+
+**(b) READ.** `bad:` is in the tail included at the end of `X(to_be_translated)` (`cpu_dyntrans.c:1983`). A `goto bad` inside `switch (iword & 3)` reaches that label, the same way the opcode-31 `default:goto bad` at :5201 does. The first statement there sets `ic->f = TO_BE_TRANSLATED`, so the `ic->f = NULL` written at :4297 does not survive. `load`, `size`, `zero`, `update` and the reassigned `imm` are locals the tail does not read, and `ic->arg[]` is written only after the guard (:4372-4380), which this jump skips. In read-ahead the tail returns without the UNIMPLEMENTED line. Otherwise it prints `UNIMPLEMENTED instruction`, skips `DISASSEMBLE` while stepping, and sets `cpu->running = 0`. `fatal()` (`src/core/debugmsg.c:384`) only logs; it does not exit.
+
+The difference from the arm’s `ra == 0 && update` guard (:4367-4370) and from the indexed twin (:5024-5027): those call `fatal("TODO: ra=0 && update?\n")` when not in read-ahead, then jump. The reserved path does not. Fixed-build observations match that split: `xo58_3` has `unimplemented=1` and `todo_ra0=0`; `ldu ra0` has both counts at 1 (`fixed.out`, packet). `X(invalid)` at :241-245 is a different path: `fatal` plus `exit(1)`. The reserved encodings do not take it.
+
+**(c) READ.** The LD comment matches the code and `prefix_BASE.out`: `ldu` loaded the doubleword at EA+1 and left RA, `lwa` loaded the doubleword at EA+2, reserved XO 3 now takes bare `goto bad`, and `ldu` with RA=0 reaches the existing guard. It does not carry the withdrawn “fatal sites are only unimplemented features” census, and it does not cite :4815 or :4997 (A3, F1).
+
+K7: the STD comment’s “as for PPC_HI6_LD above” is narrowed by the colon to “`stdu` ran as `std` at EA+1” and “XO 2 and 3 are reserved.” It does not state that `stdu` with RA=0 now stops. The code does stop it (`update = 1`, then the same guard). Add that clause. Licence L4 (site comment). A4’s CHANGELOG sentence already names both stops, and that draft has its own corrections in Q3.
+
+**(d) READ.** The comment’s one sentence (illegal on 32-bit, one source, no width test, disclosed), the contract’s NOT CLAIMED bullet (legal forms select the MODE32 handlers; reserved XO and RA=0 updates stop there too), and the CHANGELOG draft’s long paragraph are the three places A6/A9 ask for. PEM :6253 READ: opcodes 2, 30, 58 and 62 are illegal on 32-bit implementations. `tmp_ppc_tail.c` includes `cpu_ppc_instr.c` twice. The short comment is enough beside the contract’s long bullet. The comment does not itself say the MODE32 slots are real handlers; the contract and the CHANGELOG do.
+
+**(e)** Nothing else belongs in the diff. A9’s original “tag the mask line and the two case lines” was before F1 moved each mask into its case body. Two `#571` comments, one per body, is the amended count. No width test (A6). No handler edit.
+
+## Q2 — detector and table
+
+**(a) READ** of the probe’s contract, `ROW_NAMES`, sessions and `expect_unasm`; **DERIVED** for the 108-word count.
+
+`set32` is 2 words, `set64` is 5. Loads: 8×2 + 10 accesses + `li` = 27. Stores: 6×2 + 6×5 + 7 accesses + `li` = 50. Stops: 4, 9, 9, 2, 7. Total 27+50+4+9+9+2+7 = 108.
+
+| cell | where it went |
+|---|---|
+| five forms, DS ≠ 0, RA ≠ 0, value and RA | `ld`/`ldu`/`lwa`/`std` value and RA rows; `stdu` also `stdu neigh` |
+| DS = 0, RA ≠ 0, address channel | the five `ds0 value` rows (B4: address, not table half) |
+| RA = 0, DS ≠ 0, non-update | `ld ra0 value`, `lwa ra0 value`, `std ra0 value` |
+| `ldu`/`stdu` RA = 0, DS ≠ 0 | `ldu ra0 bad`, `stdu ra0 bad` |
+| reserved 58/3, 62/2, 62/3 | the three `bad` rows, each last in its session |
+| `stdu` RA = RS | `stdu alias val`, `stdu alias RA` (B5, by choice) |
+| `lwz`/`stw` with low bits set | `lwz odd`, `stw odd` (B7) |
+| `ldu` RA = RT | NOT CLAIMED (A5) |
+| DS = 0 and RA = 0 together, all five forms | NOT CLAIMED, including the “only observer of an update conditioned on a non-zero displacement” sentence (F2) |
+| `lwa` with bit 31 clear | NOT CLAIMED (B5) |
+| other D-form opcodes | NOT CLAIMED (B7) |
+| 32-bit | NOT CLAIMED, with the post-fix delta (A6) |
+| translation, MSR SF, high half, page-cross, indexed forms | NOT CLAIMED |
+| failed access | NOT CLAIMED, and the `-T` gate is named (C5) |
+| disassembler mnemonics | NOT CLAIMED; census uses DSMAP and the current `ld`/`std` text (A8). Witness line READ: `e8b5ffa1 ld r5,-95(r21)` |
+
+No enumerated floor cell has neither a row nor a bullet. Clause (a) is `prefix_BASE.out` 22/39, CONTROL=OK, SYMPTOM=PRESENT 17/17. Clause (b) is L3 22/39, L4b 31/39, L4c 30/39, same red sets as predicted.
+
+**(b) READ** of `L5_identity.out`, `L8c_lwasize3zero0.out`, `L9a_xo0asxo1.out`, `L9b_xo0plus1.out`, `L10_updall.out`.
+
+L9a loads stop at `pc=0x10064`, `todo_ra0=1`. That address is `ld ra0` (index 25: 16 `set32` words, then 8 accesses, then `lwa ra0` at `0x10060`, then `ld ra0`). The `li` at `0x10068` does not run, so `live` is red. Stores stop at `pc=0x100c0`, which is `std ra0`, so `st live` is red. L10’s RED line is the six predicted rows plus `live` and `st live`. Under L10, `lwa ra0` (XO 2, RA 0) is the earlier refusal, at `0x10060`. SCORES.txt’s account of both misses is right. Every red row on those two legs is the update that was added, or the session death that follows from it.
+
+L9b’s RED line is the six XO-0 address rows only. `lwa ra0 value` is absent from it (K6: PRETABLE’s “kills L9b” does not hold). L5’s RED line is the 22 transfer and stop rows; `stdu neigh` is absent, as predicted for a body that stores nothing. L8c: loads `how=exit1`, `internal_error=1`, `pc=none`, CONTROL=FAIL, SYMPTOM=MIXED, `PPC_DSFORM_PROBE_DONE` present, the other seven sessions still complete. That is B10’s scoring. No measured leg in the RED lines I opened is red for a reason other than the one SCORES names.
+
+**(c)** No product row has a channel that cannot move under the leg PRETABLE names for it. `lwa ra0 value` is red on BASE, L3, L4b, L5, L7, L8a, L8b and L10; L9b does not reach XO 2. The correction sits in `DETECTOR_FREEZE.txt` and in L9b’s RED line. PRETABLE’s channel line is stale, and its mtime is the order proof, so leave PRETABLE. BUILD_REPORT does not repeat the correction; add one sentence there (L4).
+
+`lwz value` is a pattern control on the same word `lwa` sign-extends. L8c reds it because the loads session dies. It is in CONTROL. The five stop-session `live` rows, `unasm census`, `word pins` and `neg apparatus` are apparatus in the contract and in PRETABLE §4. Only `neg apparatus` carries that word in the name. Their notes say what they watch. That labelling is enough.
+
+**(d) READ.** `(c): measured at L5_identity.out` is the identity body R2 specifies for an instruction-handler round, and the record uses the measured form. L5 is 17/39, CONTROL=FAIL.
+
+K3 is right, and it does not touch clause (c). `gate_ppc.sh:103` calls `need_exec` before any block; `lib.sh` skips the gate when the binary is missing. The `#571` block never runs, so its sentinel pin does not go red. L5b’s own result (no sentinel, `FileNotFoundError`) is a probe fact and is measured. SCORES.txt’s “the gate’s sentinel pin reds” is a wrong record. Licence L4. Clause (c) stays on L5.
+
+**(e) Ask-again, coverage.** The case bodies see opcode 58 or 62, XO in `iword & 3`, and the low halfword they mask into `imm`. The common tail then tests `imm == 0` and `ra == 0`. The bodies do not read RA, bit 31, or CPU width.
+
+Observed, with the row: every legal XO at DS ≠ 0 and RA ≠ 0 (value and RA; `stdu` flanks; `stdu` RA = RS); every legal XO at DS = 0 and RA ≠ 0 (address); `ld`/`lwa`/`std` at RA = 0 and DS ≠ 0; `ldu`/`stdu` at RA = 0 and DS = 0x10 (stop); reserved XO at one DS ≠ 0, RA ≠ 0 cell each (the body branches on XO before it uses DS or RA, so that one cell exhausts the reserved path); `lwa` with bit 31 set; `lwz`/`stw` at D ≡ 2 (mod 4).
+
+Signs actually driven on a completed access: `ld`/`ldu`/`std`/`stdu` negative; `lwa` positive; `ld` and `std` also positive at RA = 0. Positive DS on a completed `ldu` or `stdu` is only an untested value inside `imm != 0`, which the negative-DS rows already occupy. The body does not test the sign. That sample is not a floor cell (R7b).
+
+Unobserved, and what the shipped decode does there:
+
+* DS = 0 and RA = 0, all five forms. `ld`/`lwa`/`std` would access absolute 0 with the masked displacement. `ldu`/`stdu` would stop on the guard even though DS is 0, which is the only place an “update only when `imm != 0`” change shows. Disclosed in the joint bullet. Not floor (F2: the repair writes `imm` and `update` and does not read `ra`).
+* `ldu` with RA = RT. On a successful access the handler loads RT and then writes EA over that same register, so RT ends as EA. Disclosed. The contract’s “leaves RT = EA” omits “when the access succeeds”; the handler returns before the update if `memory_rw` fails (`cpu_ppc_instr_loadstore.c:174-179` then the update at :183). Add those four words (L4, prose).
+* `lwa` with bit 31 clear. The shipped decode still sign-extends; a clear bit 31 makes that result equal to a zero-extend, so the cell cannot separate them. Disclosed.
+* CPU width 32. Same arm, no width test. Legal forms select the MODE32 slots enumerated above. Reserved XO and RA = 0 updates hit the same `goto bad` and the same guard. Disclosed.
+* Translation on, a non-zero high half, a page-crossing EA, the indexed forms, a failed access, and the other D-form opcodes. Disclosed, and the case bodies do not see those inputs.
+
+No unobserved cell lacks a NOT CLAIMED bullet. The one ask does not produce an L2 cell. A change whose only guest-visible effect sits in a disclosed joint can leave all 39 rows green; that debt is already the contract’s, and R15 files anything past this ask.
+
+## Q3 — gate and records
+
+**(a) READ** of `gate_ppc.sh:203-241` and `lib.sh` `check`/`count`/`need_exec`. The block has the sentinel once and as the last line; each of RESULT, CONTROL, SYMPTOM, RED once in any form and once in the accepted form; `RESULT=39/39`; rows run and rows green at the literal 39; red 0; all 39 names on `^name  .*ok$`; census `108/108`. That is 1+1+4+4+39+1+3 = 53. A red run of this probe fails a name pin or the FAIL count. The inherited limit, same as the `#565` block, is that the gate trusts `row()`’s `ok` token.
+
+K1 is right, and F2’s mechanism is false. Re-opened. READ of both `row()` printers: the format is `"%-16s %-20s ..."` with a literal space after the column. A 15-character name gets one pad space plus that literal space, so `^name  ` matches. A 16-character name gets only the literal space, so the pin misses. The witness has the same format and asserts `<= 15`. The probe comment’s “14, not 15” and the CHANGELOG’s “a 15-character name misses the pin” describe a boundary the format does not have. The cap of 14 is a margin and can stay. The stated reason is a wrong record (L4). Correct the comment and do not repeat the mechanism in the CHANGELOG. A comment edit changes md5 `02662288…`; BUILD_SPEC §10 item 5 then re-runs the pre-fix and post-fix detector. Exhibit the comment-only diff. The sixteen legs stay the record of the behaviour.
+
+K2, which records are wrong: the gate comment (the parenthesis is seven sessions, then “and one bogus-machine” reads as nine, and it calls the negative session debugger-stepped); the CHANGELOG’s “EIGHT stepped sessions on `-E bareppc -M 64`” (the list includes the negative session, which runs `-E nosuchmachine`); the OUTSTANDING_BUGS draft’s “eight debugger-stepped sessions … bogus-machine control.” The probe docstring is the accurate one: eight sessions, seven of them guest sessions on `bareppc`, each with a liveness `li`, plus the negative control. Licence L4 on the three wrong sentences.
+
+The gate title still says only `rlwimi/rldimi/rldicl` (`gate_ppc.sh:98`). INSERTIONS.txt records that as deliberate. The `#565` precedent put `rldicl` in the title. Add this block to the title before landing (L4, one line). The pins do not depend on it.
+
+**(b) READ** of the staged key text and of the working-tree keys at :3237-3238. Classes are CLASS_DETECTOR and CLASS_WITNESS, which is B12. The witness blurb is scoped to the loads and names `prefix_BASE.out` for the stores. INSERTIONS.txt §4 says both new keys are GHOST until those paths are staged, because `domain()` reads `git ls-files`. I did not re-run the checker.
+
+No record says the landing commit must be the staged HEAD-based file. INSERTIONS.txt shows the working tree also carries the peer’s lines (`b115`, `fbclearread`, `wdcnullxfer`, `wdcrearmzero`), and those strings are in the working tree and absent from `staged/check_probe_wiring.py.txt`. The landing file is that staged copy: HEAD plus the two keys. Say so in the landing notes (L4). Committing the working-tree file would ship the peer’s keys inside a commit this round describes as two lines.
+
+**(c) READ.** `tools/precommit_check.sh:364-366` raises `SCORE_CLAIMS_MANIFEST` from 38 to 39 with the dated line for `ppc_dsform_probe.py`, unquoted, stem `ppc_dsform`, 39 rows. The probe docstring has no stale `N/N` score. The checker’s `SCORE_CLAIMS_PINNED=39` result is INSERTIONS.txt §4; I did not re-run it. The edit is the right shape.
+
+**(d) READ.** The NOT CLAIMED list matches A5, A6 as amended, F2’s five joints, B5, B7, A8 and C5, including the `-T` sentence and the “only observer” sentence. The one accuracy fix is the success proviso on “RT = EA” in Q2(e).
+
+**(e)** Section 9’s table: the score rows I re-read match (L5, L8c, L9a, L9b, L10, witness `RESULT=5/8`). K5 READ: the probe’s last line is 836, and the freeze says 836; BUILD_REPORT and the CHANGELOG say 834. K8: the guard in this tree is :4367-4371; the draft’s `:4338-4342` is HEAD’s numbering (`:4295` is still right, it sits above the insertion). K9: the round also edits `tools/precommit_check.sh`, so the harness count is four. K10: the stores program has `std ds0` (DS = 0, RA ≠ 0) and `std ra0` (RA = 0, DS = 0x7100); the joint is NOT CLAIMED, and the draft’s “`std` at DS = 0 and RA = 0” reads as that joint. K11 READ of F1: eleven amended bullets (A3, A6, A9/B9, B2, B7, B10, B11/B13, B12, C4, Q3, Q5). BUILD_SPEC §10 packages that work as eight numbered builder items. “Eight amendments accepted” names the package and not the bullet count. K1’s last clause is false, as in (a). All of these are L4, in drafts that have not landed, except the probe comment.
+
+**(f)** The witness-term draft is right for B12: loads only, `WITNESS_headbin.out` 5/8, `fixed_witness8.out` 8/8, and `prefix_BASE.out` named as the store half’s clause-(a) artifact. It does not repeat K3’s gate sentence.
+
+**(g)** K4 READ: SCORES.txt names `s6_leg.run-083332.sh` and `legs571.run-083332.py`; `s6_all.out` line 1 names the `083428` pair, and that line is the console the table cites. Correct the names (L4). The driver path in `s6_all.out` is a session scratchpad, not `table1_20261024/`. Copy the frozen `083428` driver next to the table so the citation stays inside the artifact directory. The md5 on line 2 of `s6_all.out` already pins those bytes. K13: the clock phrases are loose (PRETABLE’ s “~08:0x”, the report’s “09:1x” and “08:30”). The order that matters still holds: the freeze line is before `prefix_BASE.out`, and `s6_all.out` starts at 08:34:28, after the fix build. Correct the phrases while editing the report (L4). K14: no stores-session row uses a window at 0. `std ra0` lands in `0x70f0-0x711f`. The `0x0` window is the `stdu ra0` stop session. PRETABLE’s stores paragraph is stale; leave the file.
+
+K6’s correction is already in the freeze and in L9b’s RED line. One sentence in BUILD_REPORT is enough.
+
+## Q4 — standing licence and the filings
+
+Nothing in the product logic failed while checking the claims. The extra facts are record facts already named: F2’s pin boundary, the STD comment’s missing RA=0 clause, the MANIFEST landing file, and the C4 draft wording.
+
+C1, C2, C3 ids and severities match the rulings (LOW, LOW, MED). Unused-at-HEAD is DERIVED from C0 part 4 (this seat did not open `ledger.json`). C1 citation READ: `cpu_ppc.c:1495` folds the halfword, :1498 prints `ld`, :1517 prints `std`, and the witness census line is `ld r5,-95(r21)`. C2 READ: the case list at :1468-1489 has `LFD`/`LFS`/`STFD`/`STFS` and no `LFDU`/`LFSU`/`STFDU`/`STFSU`; a missing primary opcode hits `unimplemented hi6` at :1731. C3 READ: `opcodes_ppc.h` defines `PPC_31_STDX` (149) and `PPC_31_STDUX` (181) and has no define equal to 21, 53, 341 or 373; opcode 31’s switch ends at `default:goto bad` (:5201). The rung-3 shape (one stepped `ldx` on HEAD PPC970) is the filing’s future witness, not a witness already run.
+
+C4 does not match F1. READ of `X(extsw)` at :3125-3131: under MODE32 it calls `fatal("TODO: extsw: invalid instruction\n")` and returns without writing the register. `cmpd`/`cmpld` at :4652-4659 are selected from the L bit with no width test. The CHANGELOG has “at least fourteen” and no `extsw` sentence. The OUTSTANDING_BUGS draft marks C4 “LOW, open, design” (the ruling is design, without LOW) and says “the uniform `rld*`-idiom fix is its own round,” which pre-authorizes the sweep F1 withheld. BUILD_SPEC §10 item 7 and §8 required the fourteen-plus-`extsw` census and “No boot A/B is owed” in the report. BUILD_REPORT has neither. Licence L4 on all three drafts. The filing describes the ungated implemented set and records that `extsw` already diagnoses and returns; it does not license one gate for every name on the list.

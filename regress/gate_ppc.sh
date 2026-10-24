@@ -95,7 +95,7 @@ set -u
 cd "$(dirname "$0")"
 . ./lib.sh
 
-gate_begin "gate 13: PowerPC FP conversion + FPSCR (#304/#305/#324-#330) + rlwimi/rldimi/rldicl"
+gate_begin "gate 13: PowerPC FP conversion + FPSCR (#304/#305/#324-#330) + rlwimi/rldimi/rldicl + #571 DS-form"
 
 PMAX=${PMAX:-$ROOT/build/gxemul}
 LOG=$LOGDIR/gate_ppc.log
@@ -198,6 +198,46 @@ else
     #  appended contradictory `SCORE 0/24' pass (GPT-6 Astra, pass 1).
     check "ppc_rldicl score lines"  "$(grep -c '^SCORE ' "$RLCLOG")" "1"
     check "ppc_rldicl score 24/24"  "$(grep -c '^SCORE 24/24 ' "$RLCLOG")" "1"
+fi
+
+# ---- ppcdsformxo (#571): the 64-bit DS-form loads and stores, opcodes 58 and 62 -- its 39-row detector ------
+# The decoder took the whole low halfword of an opcode-58 or opcode-62 word as the displacement and never read
+# the two-bit XO field: ldu, lwa and stdu executed as an 8-byte ld or std at EA + XO with no update, and the
+# reserved encodings (58 with XO 3, 62 with XO 2 or 3) executed as well.  BEFORE the NetBSD prerequisite for
+# the reason the rlwimi block gives: `-E bareppc -M 64' needs no image, so a red row is recorded first.  Seven
+# debugger-stepped guest sessions (loads, stores and five stop sessions, each stop word last) plus one
+# bogus-machine session that exits before any step -- eight in all; the rung-3 witness of the loads
+# (regress/artifacts/ppcdsformxo/witness_20261024/) is NOT run here.
+# Scored in the #565 shape: the completion sentinel exactly once and as the last line; each protocol key
+# exactly once in ANY form, then exactly once in its accepted form (the rldimi block's idiom); every row by
+# name; the census row at its frozen count of placed words; the emitted, green and red row counts -- each
+# pinned to a literal.  Names are at most 14 characters in a %-16s column, so `^name  ' cannot match a
+# neighbour (the padded-column trap).  Session transcripts go to $LOGDIR/ppc_dsform/.  Kill table:
+# regress/artifacts/ppcdsformxo/table1_20261024/.
+DSFLOG=$LOGDIR/ppc_dsform.log
+python3 -u ppc_dsform_probe.py "$PMAX" gate "$LOGDIR/ppc_dsform" > "$DSFLOG" 2>&1 || true
+if [ "$(grep -cx 'PPC_DSFORM_PROBE_DONE' "$DSFLOG")" != 1 ]; then
+    note "ppc_dsform: completion sentinel missing or duplicated; last lines follow"
+    tail -5 "$DSFLOG" | sed 's/^/       /'
+    check "ppc_dsform probe completed" "no" "yes"
+else
+    check "ppc_dsform probe completed" "yes" "yes"
+    check "ppc_dsform sentinel is the last line" "$(tail -n 1 "$DSFLOG")" "PPC_DSFORM_PROBE_DONE"
+    for k in RESULT CONTROL SYMPTOM RED; do
+        check "ppc_dsform $k= lines" "$(grep -c "^PPC_DSFORM_$k=" "$DSFLOG")" "1"
+    done
+    check "ppc_dsform RESULT=39/39"   "$(grep -cx 'PPC_DSFORM_RESULT=39/39' "$DSFLOG")" "1"
+    check "ppc_dsform CONTROL=OK"     "$(grep -cx 'PPC_DSFORM_CONTROL=OK' "$DSFLOG")" "1"
+    check "ppc_dsform SYMPTOM=ABSENT" "$(grep -cx 'PPC_DSFORM_SYMPTOM=ABSENT' "$DSFLOG")" "1"
+    check "ppc_dsform RED=none"       "$(grep -cx 'PPC_DSFORM_RED=none' "$DSFLOG")" "1"
+    for v in "ld value" "ld RA after" "ld ds0 value" "ld ra0 value" "ldu value" "ldu RA after" "ldu ds0 value" "lwa value" "lwa RA after" "lwa ds0 value" "lwa ra0 value" "lwz value" "lwz odd" "live" "std value" "std RA after" "std ds0 value" "std ra0 value" "stdu value" "stdu neigh" "stdu RA after" "stdu ds0 value" "stdu alias val" "stdu alias RA" "stw odd" "st live" "xo58_3 live" "xo58_3 bad" "xo62_2 live" "xo62_2 bad" "xo62_3 live" "xo62_3 bad" "ldu ra0 live" "ldu ra0 bad" "stdu ra0 live" "stdu ra0 bad" "unasm census" "word pins" "neg apparatus"; do
+        check "ppc_dsform row: $v" "$(count "$DSFLOG" "^$v  .*ok$")" "1"
+    done
+    check "ppc_dsform census, 108 placed words" "$(count "$DSFLOG" "^unasm census  *108/108  *108/108  .*ok$")" "1"
+    dsfok=$(count "$DSFLOG" " ok$"); dsfbad=$(count "$DSFLOG" " FAIL$"); dsfrun=$((dsfok + dsfbad))
+    check "ppc_dsform rows run"   "$dsfrun" 39
+    check "ppc_dsform rows green" "$dsfok" 39
+    check "ppc_dsform rows red"   "$dsfbad" 0
 fi
 
 need_file "$IMAGES/netbsd401-macppc-GENERIC"

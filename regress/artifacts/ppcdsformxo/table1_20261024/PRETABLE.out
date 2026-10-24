@@ -1,0 +1,104 @@
+# PRETABLE.out -- #571 (ppcdsformxo), written 2026-10-24 ~08:0x by the main loop BEFORE table 1 (its mtime is the order proof)
+# Spec: BUILD_SPEC.md section 2 item 2, with sections 10 and 10b applied.  Rows are the amended list (8 sessions, N = 39);
+# legs are section 6 as amended (L4a == L7, one leg; L8c scored as emulator termination; L9 split into L9a/L9b).
+# Line numbers: HEAD add098b9, src/cpus/cpu_ppc_instr.c unless named.
+
+## 1. SIBLING PARITY -- the five DS forms against each other, and against the arm's D-form siblings
+form   | opcode/XO | flags after the repair           | writes RA | extension        | rows (value / RA / DS=0 / RA=0)
+ld     | 58 / 0    | load=1 size=3 zero=1 update=0    | no        | n/a (8 bytes)    | ld value / ld RA after / ld ds0 value / ld ra0 value
+ldu    | 58 / 1    | load=1 size=3 zero=1 update=1    | YES       | n/a              | ldu value / ldu RA after / ldu ds0 value / ldu ra0 bad (refusal)
+lwa    | 58 / 2    | load=1 size=2 zero=0 update=0    | no        | sign (int32_t)   | lwa value / lwa RA after / lwa ds0 value / lwa ra0 value
+std    | 62 / 0    | load=0 size=3 zero=1 update=0    | no        | n/a              | std value / std RA after / std ds0 value / std ra0 value
+stdu   | 62 / 1    | load=0 size=3 zero=1 update=1    | YES       | n/a              | stdu value (+ stdu neigh) / stdu RA after / stdu ds0 value / stdu ra0 bad (refusal)
+58 / 3, 62 / 2, 62 / 3: reserved -> goto bad (rows xo58_3 bad, xo62_2 bad, xo62_3 bad, each own session).
+Parity holds: every legal form has a value row, an RA row (an ungraded RA observation where RA = 0 cannot carry one),
+a DS = 0 row and an RA = 0 row (a refusal row for the update forms).  The one asymmetric axis is the extension, which
+only lwa has (its sign is pinned by the bit-31-set word); std/stdu have no extension axis (N/A, not a missing row).
+D-form siblings reached by DIFFERENT case labels with the SAME flags: lwzu (size 2, zero 1, update 1) ~ ldu's shape;
+lha (size 1, zero 0) ~ lwa's shape; stwu ~ stdu's shape.  None of them checks RA = RT either (:4299-4326) -- the
+repair's D1 disclosure is sibling-consistent.  The D-form siblings are rowed only as SCOPE controls (lwz odd, stw odd):
+they must be UNCHANGED, which is what the shared assignment at :4295 being untouched means.
+
+## 2. CLAIM -> ROW -- every sentence the #571 comment and the probe's contract will assert
+claim (the comment / contract sentence)                                           | row(s) that observe it           | leg that reds it
+the low two bits are XO; the displacement is EXTS(DS || 0b00)                      | ldu value, lwa value, stdu value, ldu/lwa/stdu ds0 value | L7, L3
+ldu and stdu write RA = EA                                                         | ldu RA after, stdu RA after, stdu alias RA | L6a, L6b, L3, L4b, L4c
+lwa is a sign-extending WORD load                                                   | lwa value, lwa ra0 value          | L8a (8 bytes), L8b (zero-ext), L3, L4b
+reserved XO 58/3, 62/2, 62/3 stop the cpu (bare goto bad; UNIMPLEMENTED line)        | xo58_3 bad, xo62_2 bad, xo62_3 bad | L12b, L12a, L3, L4b, L4c
+ldu/stdu with RA = 0 stop through the existing guard (:4338-4342)                  | ldu ra0 bad, stdu ra0 bad         | L6a, L6b, L3, L4b, L4c, L5
+ld/std and the other 22 opcodes of the arm are unchanged                           | ld value, std value, ld RA after, std RA after, lwz odd, stw odd | L9a, L9b, L10, L11
+no handler change (every form selects an existing slot)                           | NO ROW: a build fact (the slots named in the record; the table is generated) | --
+32-bit CPUs decode unchanged; no width test; MODE32 handlers are real             | NO ROW: disclosed in NOT CLAIMED (A6)  | --
+ldu RA = RT disclosed, not checked                                                 | NO ROW: disclosed (D1)                 | --
+the census attests opcode/RT/RA/raw halfword against the CURRENT disassembler text | unasm census, word pins (observations, apparatus) | an encoder error, not a product leg
+the store half's clause (a) is prefix_BASE.out                                      | every store symptom row            | the BASE run itself (L2)
+
+## 3. GUARD FIELD vs BODY FIELD -- the predicates dominating the edited lines, the lvalues the body reads, the partition the body induces
+edited lines: the two case bodies inside `switch (main_opcode)` at :4298 (case PPC_HI6_LD :4307, case PPC_HI6_STD :4320).
+dominating predicates: the outer case labels :4269-4292 (24 opcodes), the inner `switch (main_opcode)`, the new `switch (iword & 3)`.
+body-read lvalues after the edit (the common tail :4328-4351):
+  imm      tested `imm == 0` (:4335, table index)        partition {0, != 0}  -> EXHAUSTED per form (ds0 rows + DS != 0 rows); VALUES sampled (-112, -96, 8, 0, 0x7000, ...)
+  ra       tested `ra == 0 && update` (:4338), `ra == 0` (:4347)   partition {0, != 0}  -> EXHAUSTED per form (ra0 rows: legal access for ld/lwa/std, refusal for ldu/stdu); the imm==0 x ra==0 JOINT cells are NOT rowed (disclosed: ldu/stdu ra0z, ld/std both, lwa ra0z)
+  update   written by the repair (XO 1), read by :4338 and the table index       {0, 1} -> EXHAUSTED (both forms of each opcode)
+  size/zero/load  written by the repair, read by the table index only           derived from (opcode, XO) -> EXHAUSTED through the five forms + the three reserved XOs
+  fp       tested :4343; 0 for every 58/62 word (the FP labels set it)            {0} for this round -> N/A (a producer relationship, not an axis)
+  ic->f    tested :4328 (NULL -> table); set by the FP cases only                 derived from the label -> N/A for 58/62
+  rs/rt    arg[0]; never tested against ra                                       RA = RT (ldu) DISCLOSED; RA = RS (stdu, valid) rowed by choice (stdu alias val / RA)
+  main_opcode  the label axis: 58 and 62 rowed exhaustively; two D-form labels (lwz, stw) rowed as scope controls; the other 20 labels SAMPLED by the rounding probe (FP D-forms, stw) and the NetBSD boot when the image is present -- they do not reach the edited lines (B7, F1)
+where guard and body fields DIFFER: the repair's guard is (main_opcode, iword & 3); the body additionally reads imm and ra.  Both are written/available at the same site (decode of one word), so no "disagreeing state" row is owed -- the partitions above are the rows.
+
+## 4. CHANNEL per row -- the leg it kills and the observable that differs (names <= 14 chars; the stop rows' channel is the UNIMPLEMENTED line + sentinel/window + RA)
+session LOADS (bareppc -M 64; counting pattern at 0x20000..; seeded window at 0x7000.. for RA = 0; sentinel registers)
+  ld value       kills L5 (RT keeps the sentinel), L9b (bytes at +1)                  obs: the 8 bytes at offset 0x10
+  ld RA after    kills L9a, L10 (RA written)                                           obs: RA == base
+  ld ds0 value   kills L5, L9b                                                         obs: the 8 bytes at RA (the address channel; NOT the table half -- F2)
+  ld ra0 value   kills L5, L9b, L9a (at RA = 0 an added update becomes a refusal)      obs: the 8 bytes at the absolute address (the seeded window)
+  ldu value      kills L3, L7 (EA + 1), L5                                             obs: the 8 bytes at offset 0x20 vs 0x21
+  ldu RA after   kills L3, L4b, L6a, L5                                                obs: RA == EA
+  ldu ds0 value  kills L7 (RA + 1), L3                                                 obs: the 8 bytes at RA
+  lwa value      kills L3, L4b, L7 (EA + 2), L8a (8 bytes), L8b (zero-extended), L5    obs: 0xffffffff88898a8b (bit 31 set)
+  lwa RA after   kills L10                                                             obs: RA == base
+  lwa ds0 value  kills L7 (RA + 2), L3                                                 obs: the sign-extended word at RA
+  lwa ra0 value  kills L5, L8a, L8b, L9b                                               obs: the sign-extended word at the absolute address
+  lwz value      CONTROL (no product leg varies it): corroborates the pattern at lwa's word   obs: 0x88898a8b
+  lwz odd        kills L11 (a mask on the shared assignment reads +4 for +6)           obs: 0x06070809
+  live           kills L8c (the session's emulator terminates before the li) and any dead session   obs: the li value
+session STORES (seeded window at 0x21000.. and at 0x7100.. / 0x0.. for RA = 0 / DS = 0; sources = 8 distinct bytes; readback = debugger dump)
+  std value      kills L5, L9b                                                         obs: the 8 bytes at EA
+  std RA after   kills L9a, L10                                                        obs: RA == base
+  std ds0 value  kills L5, L9b                                                         obs: the 8 bytes at RA
+  std ra0 value  kills L5, L9b, L9a                                                    obs: the 8 bytes at the absolute address
+  stdu value     kills L3, L4c, L7, L5                                                 obs: the 8 bytes at EA (not EA + 1)
+  stdu neigh     kills L3, L4c, L7                                                     obs: flank bytes EA-1 and EA+8..EA+11 keep the seed
+  stdu RA after  kills L3, L4c, L6b, L5                                                obs: RA == EA
+  stdu ds0 value kills L7, L3                                                          obs: the 8 bytes at RA
+  stdu alias val kills L3, L7, L5                                                      obs: the 8 bytes at EA equal the OLD base value (by-choice row, C18)
+  stdu alias RA  kills L6b, L4c, L3                                                    obs: RA == EA
+  stw odd        kills L11                                                             obs: the 4 bytes at +6
+  st live        kills a dead stores session                                           obs: the li value
+sessions STOP (one word each, li before it; rows <name> live / <name> bad)
+  xo58_3 bad     kills L3, L4b, L12b                                                   obs: UNIMPLEMENTED line present; RT == sentinel; RA == base
+  xo62_2 bad     kills L3, L4c                                                         obs: UNIMPLEMENTED line; the window at EA-1..EA+11 keeps its seed; RA == base
+  xo62_3 bad     kills L3, L4c, L12a                                                   obs: as xo62_2
+  ldu ra0 bad    kills L3, L4b, L6a, L5                                                obs: UNIMPLEMENTED line; RT == sentinel
+  stdu ra0 bad   kills L3, L4c, L6b, L5                                                obs: UNIMPLEMENTED line; the window at the absolute target keeps its seed
+  <name> live    apparatus: the session reached the word (red only if the session died before it)
+global
+  unasm census   apparatus (the hand-assembled-encoding guard; expected text = the tree's CURRENT disassembler); red under L5b (no output)
+  word pins      apparatus: the three witness words equal their literals
+  neg apparatus  apparatus: the bogus machine TYPE exits 1 with no registers
+Rows whose channel cannot vary under their named leg: NONE -- every product-leg assignment above names an observable that differs.
+Known non-assignments (so nobody reads them as kills): RA rows at DS = 0 (RA <- RA is invisible: no DS = 0 RA row exists);
+ds0 value rows vs the table half (unobservable on PPC970); `stdu neigh` under L5 (green: nothing is stored); `lwz value` under
+every product leg (green).
+
+## 5. DIFF AGAINST THE BRIEF'S SECTION 7 (26 cells) AND RULINGS B4-B7 / F1 / F2
+Rowed: C1 (+RA row), C2 (ld ds0 -- added by F1, kept by F2 as a single-axis marginal), C3 (ld ra0 -- added by F1/F2),
+C4 (value + RA), C5, C6 (DS != 0 only), C8 (+RA row), C10, C11 (lwa ra0 -- added by F1/F2), C12, C13 (value + RA),
+C14 split into std ds0 and std ra0 (added by F1/F2), C15 (value + neigh + RA), C16, C17 (DS != 0 only), C18 (by choice:
+value + RA), C19, C20, C21, C22.  Disclosed, not rowed: C7 (RA = RT), C9 (positive-word lwa), C23 (FP / update D-forms
+beyond the two scope controls), C24 (32-bit), C25 (disassembler text), C26 (access failure; -T gated), and the three
+multi-axis joints F2 removed from F1's list (ld DS=0&RA=0, std DS=0&RA=0, lwa RA=0&DS=0) plus the two DS=0 RA=0 update
+refusals (ldu/stdu ra0z).  Changes from the brief: the brief's C14 lumped two cells (split); the brief's "lwa left at
+size 3 consumes the neighbour word" gloss is wrong (L8c is an emulator exit); the brief had no RA rows for the XO-0
+forms (B2 adds three); the brief's P2 sentence was inverted (M5).  Session count 8 (brief: unspecified; Codex 12; Grok 8).

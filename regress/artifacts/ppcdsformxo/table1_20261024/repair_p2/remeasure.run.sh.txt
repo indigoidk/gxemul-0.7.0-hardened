@@ -1,0 +1,31 @@
+#!/bin/bash
+#  #571 pass-2 repair re-measure (docstring-only detector revision 59e83491 + gate comment/title): the revised
+#  detector on the BASE binary (clause (a) again), on the fixed build/ binary, then gate 13 alone via run.sh 13.
+#  No tree is mutated; no build; the panel is idle.  Sequential; sentinel REMEASURE_DONE.
+set -u
+R=/mnt/c/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC
+D=$R/regress/artifacts/ppcdsformxo/table1_20261024
+B=/mnt/c/DocumentNoSnc/cc/GXEMUL/build
+cd "$R/regress" || { echo "cd failed"; exit 9; }
+echo "=== $(date '+%F %T') instrument (revised, docstring/comment-only)"
+ls -la --full-time ppc_dsform_probe.py; md5sum ppc_dsform_probe.py; wc -l ppc_dsform_probe.py
+echo "=== $(date '+%F %T') binaries"
+md5sum /tmp/gxt2/base/gxemul "$B/gxemul"
+[ "$B/gxemul" -nt "$B/src/cpus/cpu_ppc_instr.c" ] && echo "build/gxemul FRESH (newer than its cpu_ppc_instr.c)" || echo "build/gxemul STALE"
+cmp "$B/src/cpus/cpu_ppc_instr.c" "$R/src/cpus/cpu_ppc_instr.c" && echo "build/ cpu_ppc_instr.c == SEC"
+[ -e /tmp/gxt2/base/.MUTANT ] && echo "SENTINEL IN BASE" || echo "no .MUTANT in /tmp/gxt2/base"
+[ -e "$B/.MUTANT" ] && echo "SENTINEL IN build/" || echo "no .MUTANT in build/"
+echo "=== $(date '+%F %T') prefix_BASE2: the revised detector on the BASE binary (clause (a) re-run)"
+python3 -u ppc_dsform_probe.py /tmp/gxt2/base/gxemul prefix_BASE2 "$D" > "$D/prefix_BASE2.out" 2>&1; echo "PROBE_RC=$?"
+grep -E '^PPC_DSFORM_(RESULT|CONTROL|SYMPTOM|PROBE_DONE)' "$D/prefix_BASE2.out"
+echo "=== $(date '+%F %T') fixed2: the revised detector on build/gxemul (the fixed binary gate 13 uses)"
+python3 -u ppc_dsform_probe.py "$B/gxemul" fixed2 "$D" > "$D/fixed2.out" 2>&1; echo "PROBE_RC=$?"
+grep -E '^PPC_DSFORM_(RESULT|CONTROL|SYMPTOM|RED|PROBE_DONE)' "$D/fixed2.out"
+echo "=== $(date '+%F %T') gate 13 via run.sh 13 (binary build/gxemul md5 $(md5sum "$B/gxemul" | cut -c1-32))"
+bash run.sh 13 > "$D/gate13b_20261024.out" 2>&1; echo "RUN_RC=$?" >> "$D/gate13b_20261024.out"
+echo "=== $(date '+%F %T') done" >> "$D/gate13b_20261024.out"
+tail -5 "$D/gate13b_20261024.out"
+grep -cE ' ok$' "$D/gate13b_20261024.out" | sed 's/^/ok lines: /'
+grep -E 'PASS|FAIL' "$D/gate13b_20261024.out" | tail -3
+cp -p /tmp/gxregress/ppc_dsform.log "$D/gate13b_ppc_dsform.log" && echo "gate detector log preserved: $(wc -c < "$D/gate13b_ppc_dsform.log") b, tail: $(tail -1 "$D/gate13b_ppc_dsform.log")"
+echo "=== $(date '+%F %T') REMEASURE_DONE"

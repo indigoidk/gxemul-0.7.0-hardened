@@ -1,0 +1,847 @@
+#!/usr/bin/env python3
+"""ppcdsformxo -- RUNG-3 DETECTOR for the 64-bit DS-form loads and stores (opcodes 58 and 62, #571).
+
+usage: ppc_dsform_probe.py <gxemul> [label] [workdir]
+       workdir, when given, receives one transcript per session, RAW_<label>_<session>.txt.
+       The 4-byte dummy boot file is written to a private tempfile.mkdtemp directory, which is
+       removed when the probe ends.
+
+Promoted from the rung-3 witness of the loads, which stays byte-identical at
+regress/artifacts/ppcdsformxo/witness_20261024/ppc_dsform_probe.py.  Machine: the unmodified
+in-tree -E bareppc -M 64 (PPC970, a 64-bit CPU; MSR 0, so every address here is physical).
+Every placed word is built from its fields by encode() or encode_md().  Each session seeds
+registers and memory with the debugger, places its words with `put w', unassembles them, steps
+exactly once per word, then reads `reg' and `dump'.
+
+ARCHITECTURE -- PowerPC Book I v2.01, _scratchpad/ppc_uisa_book1_v201.txt.  DS form: OPCD 0:5,
+RT/RS 6:10, RA 11:15, DS 16:29, XO 30:31 (:777-787); EA = (RA|0) + EXTS(DS || 0b00)
+(:951-955, :1221-1227).  Opcode 58: XO 0 ld, XO 1 ldu (RA <- EA), XO 2 lwa (the word,
+sign-extended) (:2350-2367, :2372-2395, :2297-2317).  Opcode 62: XO 0 std, XO 1 stdu (RA <- EA)
+(:2573-2593, :2595-2621).  Opcode 58 with XO 3 and opcode 62 with XO 2 or 3 are empty cells of
+the opcode maps, so they are illegal instructions (:1040-1052, :10402-10435); ldu and stdu with
+RA = 0 are invalid forms (:2395, :2618).  D-form controls: lwz (:2244) and stw (:2518-2541).
+Every value, destination and RA want is computed from these lines and the seeded bytes.
+
+SESSIONS -- eight; each guest session has its own liveness row (li r9,0x1234, the last word
+before any stop word):
+  loads     the witness's three words (ld, ldu, lwa at DS != 0); ld, ldu and lwa at DS = 0
+            from second bases; ld and lwa with RA = 0 from a window at 0x7000 seeded with bytes
+            that count by two; the D-form controls lwz +8 and lwz +6.  Data: a counting byte
+            pattern at 0x20000.
+  stores    std, stdu (RA != RS, and RA = RS), std and stdu at DS = 0, std with RA = 0 at 0x7100,
+            and the D-form control stw +6.  Each destination window, EA-1 .. EA+11, is seeded
+            with a counting pattern and read back by `dump'; each source other than the RA = RS
+            store's (its own base) is eight distinct bytes absent from that pattern, built by
+            the guest with lis, ori, sldi and oris.
+  xo58_3, xo62_2, xo62_3, ldu ra0, stdu ra0
+            one stop word each -- 58 with XO 3; 62 with XO 2; 62 with XO 3; ldu and stdu with
+            RA = 0 at DS != 0 -- placed LAST.  Its `bad' row wants the `UNIMPLEMENTED instruction'
+            line, RT still the sentinel (loads) or the destination window unchanged (stores), and
+            RA unchanged.
+  neg       the loads commands against a bogus machine TYPE: exit 1 and no register dump.
+Global rows: `unasm census' (every placed word of the seven guest sessions, unassembled before
+stepping) and `word pins' (the witness's three words read back as e894ff90, e8b5ffa1, e8d6000a).
+
+CONTRACT (clause (e)).
+  CLAIMED: for ld, ldu, lwa, std and stdu, the effective address (the XO bits are never part of
+    the displacement), the width and extension of the transfer, and whether RA is written (ldu
+    and stdu write EA; ld, lwa and std perform no base update -- a load with RT = RA still
+    changes that register through its destination write, which no row drives); the expected
+    bytes at every store's destination, and for the ordinary stdu (DS != 0, RA != RS) the seeded
+    bytes around it (`stdu neigh'; the other stores' flanks are printed, not graded); the three
+    reserved XO encodings stop
+    the CPU and write nothing; ldu and stdu with RA = 0 (DS != 0) stop the CPU and write
+    nothing; lwz +6 and stw +6 keep the low two bits of a D-form displacement.  The DS = 0 value
+    rows pin the address each access reaches, not which half of the handler table was selected.
+  NOT CLAIMED:
+    * ldu with RA = RT (an invalid form; after the fix, when the access succeeds, it leaves
+      RT = EA -- the handler returns before the update on a failed access; not checked);
+    * 32-bit CPUs: opcodes 58 and 62 are illegal on 32-bit implementations; before and after
+      this fix a 32-bit CPU decodes them through the same arm; the MODE32 table has real
+      doubleword handlers (tmp_ppc_loadstore.c:1923+); after the fix the legal forms select
+      those handlers and reserved XO / RA = 0 updates stop there too; no width test this
+      round, and no 32-bit session is rowed;
+    * the joints of DS = 0 with RA = 0: ldu and stdu (the only observer of an update
+      conditioned on a non-zero displacement), ld and std, and lwa;
+    * the sign of DS crossed with RA -- a negative DS at RA = 0 and a positive DS at RA != 0
+      for ld, ldu, std and stdu, and any negative DS for lwa -- the reserved encodings at
+      DS = 0, at RA = 0 or at a positive DS, and stdu with RA = RS at DS = 0: the case bodies
+      copy the sign of DS into imm and never branch on it, and they do not read RA (the
+      common tail tests only imm == 0 and ra == 0 && update), so these are not floor cells;
+      not rowed -- remaining non-floor coverage debt;
+    * lwa of a word whose bit 31 is clear;
+    * the D-form opcodes other than lwz and stw;
+    * translation on (MSR IR or DR), MSR SF, an EA with a non-zero high half, an EA that
+      crosses a page, and the indexed forms ldx, ldux, lwax, lwaux, stdx and stdux;
+    * an access that fails: the translation-off failure path exists and is gated by -T
+      (halt_on_nonexistant_memaccess), which this probe does not pass;
+    * the disassembler's mnemonics.
+  CENSUS: `unasm census' attests the opcode, RT/RS, RA and the raw low halfword of every placed
+    word, never the instruction form: the tree's disassembler prints `ld' for every opcode-58
+    word and `std' for every opcode-62 word, with the raw low halfword as the displacement.  Its
+    expected text takes each DS-form word's opcode and XO from DSMAP, a table keyed by the
+    word's label, never from the fields the word was encoded from.
+  STOP WORDS: a word that stops the CPU ends its session's execution, so each one is the LAST
+    word of its own session, after the liveness li.
+  BEHAVIOUR CHANGES the fixed build shows: (1) opcode 58 with XO 3 and opcode 62 with XO 2 or 3
+    stop the CPU, where the committed decode executed them as an 8-byte ld or std at EA + XO;
+    (2) ldu and stdu with RA = 0 stop the CPU at the existing RA = 0 update guard, where the
+    committed decode executed them as an absolute ld or std at EXTS(DS || XO) with no update.
+
+SUMMARY LINES: PPC_DSFORM_RESULT=<ok>/<rows>; PPC_DSFORM_CONTROL=OK|FAIL over the CONTROL rows;
+PPC_DSFORM_SYMPTOM over the SYMPTOM rows -- PRESENT n/m when every one of them is red, ABSENT
+when none is, MIXED otherwise; PPC_DSFORM_RED=<names>|none; then the sentinel.  Exit status 1
+on any red row.
+
+Sentinel: PPC_DSFORM_PROBE_DONE
+"""
+
+import hashlib
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+
+CODE = 0x10000             # the guest program, in every session
+DATA = 0x20000             # loads: byte DATA + k is k, k < 0x100
+STORE = 0x21000            # stores: byte STORE + k is k, k < 0xc0
+LOWLD = 0x7000             # loads with RA = 0: byte LOWLD + k is 0x80 + 2k, k < 0x10
+LOWST = 0x7100             # std with RA = 0: byte LOWST - 0x10 + k is 0x10 + k, k < 0x30
+M64 = (1 << 64) - 1
+SENT = 0x5A5A5A5A5A5A5A5A  # seeded into every register no placed word may write
+LIVE = 0x1234
+LIVEREG = 9
+SPARE = 30                 # seeded, never written: shows the seeding itself took
+N_ROWS = 39
+CENSUS_WORDS = 108         # words placed in the seven guest sessions: the census row's want
+
+OP_ADDI = 14               # li  RT,SI   is addi RT,0,SI
+OP_ADDIS = 15              # lis RT,SI   is addis RT,0,SI
+OP_ORI = 24                # ori  RA,RS,UI  (RS sits in 6:10, RA in 11:15)
+OP_ORIS = 25               # oris RA,RS,UI
+OP_MD = 30                 # rldicr, the sldi encoding (MD form)
+OP_LWZ = 32                # lwz RT,D(RA)   :2244
+OP_STW = 36                # stw RS,D(RA)   :2518
+OP_DSLOAD = 58             # ld / ldu / lwa :2350, :2372, :2297
+OP_DSSTORE = 62            # std / stdu     :2573, :2595
+XO_LD = 0
+XO_LDU = 1
+XO_LWA = 2
+XO_STD = 0
+XO_STDU = 1
+XO_RLDICR = 1              # the MD-form XO field, 27:29
+
+#  The census's expected (opcode, XO) for each DS-form label -- Table 16 and Table 19
+#  (:10402-10435), written out here and never read from a placed word's fields.
+DSMAP = {"ld": (58, 0), "ldu": (58, 1), "lwa": (58, 2), "xo58_3": (58, 3),
+         "std": (62, 0), "stdu": (62, 1), "xo62_2": (62, 2), "xo62_3": (62, 3)}
+
+ROW_NAMES = (
+    "ld value", "ld RA after", "ld ds0 value", "ld ra0 value",
+    "ldu value", "ldu RA after", "ldu ds0 value",
+    "lwa value", "lwa RA after", "lwa ds0 value", "lwa ra0 value",
+    "lwz value", "lwz odd", "live",
+    "std value", "std RA after", "std ds0 value", "std ra0 value",
+    "stdu value", "stdu neigh", "stdu RA after", "stdu ds0 value",
+    "stdu alias val", "stdu alias RA", "stw odd", "st live",
+    "xo58_3 live", "xo58_3 bad", "xo62_2 live", "xo62_2 bad", "xo62_3 live", "xo62_3 bad",
+    "ldu ra0 live", "ldu ra0 bad", "stdu ra0 live", "stdu ra0 bad",
+    "unasm census", "word pins", "neg apparatus")
+#  CONTROL: green before and after the fix.  SYMPTOM: the rows the committed decode turns red.
+CONTROL = ("ld value", "ld RA after", "ld ds0 value", "ld ra0 value", "lwa RA after",
+           "lwz value", "lwz odd", "live",
+           "std value", "std RA after", "std ds0 value", "std ra0 value", "stw odd", "st live",
+           "xo58_3 live", "xo62_2 live", "xo62_3 live", "ldu ra0 live", "stdu ra0 live",
+           "unasm census", "word pins", "neg apparatus")
+SYMPTOM = ("ldu value", "ldu RA after", "ldu ds0 value",
+           "lwa value", "lwa ds0 value", "lwa ra0 value",
+           "stdu value", "stdu neigh", "stdu RA after", "stdu ds0 value",
+           "stdu alias val", "stdu alias RA",
+           "xo58_3 bad", "xo62_2 bad", "xo62_3 bad", "ldu ra0 bad", "stdu ra0 bad")
+assert len(ROW_NAMES) == N_ROWS == len(set(ROW_NAMES))
+assert set(CONTROL) | set(SYMPTOM) == set(ROW_NAMES) and not set(CONTROL) & set(SYMPTOM)
+assert len(CONTROL) + len(SYMPTOM) == N_ROWS
+
+rows = []
+
+
+def row(name, got, want, note=""):
+    assert name not in [n for n, _ in rows], "DUPLICATE ROW NAME %r" % name
+    #  14 is a margin: gate 13 pins each row as `^name  ' (two spaces) inside this %-16s column,
+    #  which gives a 15-character name its two spaces as well (16 misses); the cap stays one under.
+    assert len(name) <= 14, name
+    ok = (got == want)
+    rows.append((name, ok))
+    print("%-16s %-20s %-20s %-52s %s" % (name, str(got), str(want), note,
+                                          "ok" if ok else "FAIL"))
+    return ok
+
+
+def obs(text):
+    #  An observation never ends like a row: the gate counts lines ending ` ok' and ` FAIL'.
+    if re.search(r"\s(ok|FAIL)$", text):
+        text += " ."
+    print("OBS " + text)
+
+
+# ----------------------------------------------------------------- architecture
+def sext(v, bits):
+    """The two's-complement value of the low `bits' bits of v."""
+    v &= (1 << bits) - 1
+    return v - (1 << bits) if v >> (bits - 1) else v
+
+
+def exts64(v, bits):
+    """EXTS to 64 bits, as the unsigned image a 64-bit register holds."""
+    return sext(v, bits) & M64
+
+
+def ea_ds(ra_val, ds):
+    """EA = (RA|0) + EXTS(DS || 0b00) -- :2362, :2385, :2309, :2585, :2608."""
+    return (ra_val + exts64((ds & 0x3FFF) << 2, 16)) & M64
+
+
+def ea_d(ra_val, d):
+    """EA = (RA|0) + EXTS(D) -- lwz :2258, stw :2532."""
+    return (ra_val + exts64(d, 16)) & M64
+
+
+def seeded(regions):
+    """The bytes the debugger's `put b' writes: byte start + k is v0 + step * k."""
+    m = {}
+    for start, n, v0, step in regions:
+        assert 0 <= v0 and 0 < step and v0 + step * (n - 1) <= 0xFF
+        for k in range(n):
+            assert start + k not in m
+            m[start + k] = v0 + step * k
+    return m
+
+
+def rd(m, addr, n):
+    """MEM(addr, n) over a byte map, big-endian (the machine's byte order); None if a byte
+       is missing."""
+    v = 0
+    for i in range(n):
+        b = m.get(addr + i)
+        if b is None:
+            return None
+        v = (v << 8) | b
+    return v
+
+
+def wr(m, addr, value, n):
+    """MEM(addr, n) <- the low n bytes of value, big-endian."""
+    for i in range(n):
+        m[addr + i] = (value >> (8 * (n - 1 - i))) & 0xFF
+
+
+def hexbytes(m, addr, n):
+    """The n bytes at addr as one hex string, or None if a byte is missing."""
+    v = rd(m, addr, n)
+    return None if v is None else "0x%0*x" % (2 * n, v)
+
+
+# -------------------------------------------------------------------- encoding
+def encode(opcd, rt, ra, ds, xo):
+    """THE encoder for D- and DS-form words.  Figure 7 (:777-787):
+         OPCD 0:5 | RT 6:10 | RA 11:15 | DS 16:29 | XO 30:31   (big-endian bit numbers)
+       DS is the 14-bit field (a signed count of words) and XO the 2-bit field.  A D-form
+       word has the same layout, its D field (16:31) occupying DS and XO side by side --
+       d_fields() splits a D value into those two positions."""
+    assert 0 <= opcd < 64 and 0 <= rt < 32 and 0 <= ra < 32
+    assert -0x2000 <= ds < 0x2000 and 0 <= xo < 4
+    return ((opcd << 26) | (rt << 21) | (ra << 16) | ((ds & 0x3FFF) << 2)
+            | xo) & 0xFFFFFFFF
+
+
+def encode_md(rs, ra, sh, me, xo):
+    """The MD-form encoder (rldicr; regress/ppc_rldicl_probe.py's enc_md):
+         OPCD 0:5 | RS 6:10 | RA 11:15 | sh0:4 16:20 | me 21:26 (me5 at 26) | XO 27:29
+         | sh5 30 | Rc 31"""
+    assert 0 <= rs < 32 and 0 <= ra < 32 and 0 <= sh < 64 and 0 <= me < 64 and 0 <= xo < 8
+    return ((OP_MD << 26) | (rs << 21) | (ra << 16) | ((sh & 31) << 11) | ((me & 31) << 6)
+            | (((me >> 5) & 1) << 5) | (xo << 2) | (((sh >> 5) & 1) << 1)) & 0xFFFFFFFF
+
+
+def d_fields(d):
+    """A D-form field D (16:31) as the (DS, XO) pair encode() takes."""
+    assert -0x8000 <= d <= 0xFFFF
+    return sext(d >> 2, 14), d & 3
+
+
+def low_half(ds, xo):
+    """The raw low halfword (bits 16:31) of a word built by encode()."""
+    return ((ds & 0x3FFF) << 2) | xo
+
+
+# ----------------------------------------------------------------- the programs
+class Prog(object):
+    """One session's guest program, in placement order: one dict per placed word."""
+
+    def __init__(self, name):
+        self.name = name
+        self.ent = []
+
+    def _put(self, e):
+        if e.get("tag"):
+            assert e["tag"] not in [x.get("tag") for x in self.ent], e["tag"]
+        self.ent.append(e)
+        return e
+
+    def imm(self, kind, opcd, rt, ra, value, tag=None):
+        ds, xo = d_fields(value)
+        return self._put(dict(tag=tag, kind=kind, rt=rt, ra=ra, ds=ds, xo=xo,
+                              word=encode(opcd, rt, ra, ds, xo)))
+
+    def li(self, rt, value):
+        return self.imm("li", OP_ADDI, rt, 0, value)
+
+    def set32(self, r, value):
+        """lis + ori: r <- value, for a value below 0x80000000."""
+        assert 0 <= value < 0x80000000
+        self.imm("lis", OP_ADDIS, r, 0, value >> 16)
+        self.imm("ori", OP_ORI, r, r, value & 0xFFFF)
+
+    def set64(self, r, value):
+        """lis, ori, sldi 32 (rldicr r,r,32,31), oris, ori: r <- all 64 bits of value."""
+        self.imm("lis", OP_ADDIS, r, 0, (value >> 48) & 0xFFFF)
+        self.imm("ori", OP_ORI, r, r, (value >> 32) & 0xFFFF)
+        self._put(dict(tag=None, kind="sldi", rs=r, ra=r, sh=32, me=31,
+                       word=encode_md(r, r, 32, 31, XO_RLDICR)))
+        self.imm("oris", OP_ORIS, r, r, (value >> 16) & 0xFFFF)
+        self.imm("ori", OP_ORI, r, r, value & 0xFFFF)
+
+    def ds(self, tag, label, opcd, rt, ra, disp, xo):
+        """A DS-form word; disp is the byte displacement DS || 0b00."""
+        assert disp % 4 == 0 and label in DSMAP
+        return self._put(dict(tag=tag, kind="ds", label=label, rt=rt, ra=ra, ds=disp >> 2,
+                              xo=xo, word=encode(opcd, rt, ra, disp >> 2, xo)))
+
+    def get(self, tag):
+        hits = [e for e in self.ent if e.get("tag") == tag]
+        assert len(hits) == 1, tag
+        return hits[0]
+
+
+def ea_of(e, bases):
+    """The EA of a placed DS- or D-form word, from its ENCODED fields and the base the guest
+       set in RA (RA = 0 reads as 0)."""
+    b = 0 if e["ra"] == 0 else bases[e["ra"]]
+    if e["kind"] == "ds":
+        return ea_ds(b, e["ds"])
+    return ea_d(b, low_half(e["ds"], e["xo"]))
+
+
+def fold_of(e, bases):
+    """NOT a want: RA plus the RAW low halfword, XO included -- the committed decode as read
+       from source.  Printed beside each access as an observation, never graded."""
+    b = 0 if e["ra"] == 0 else bases[e["ra"]]
+    return (b + exts64(low_half(e["ds"], e["xo"]), 16)) & M64
+
+
+# loads -- the witness's bases r20..r23 first, then the second bases
+LD_BASES = {20: DATA + 0x80, 21: DATA + 0x80, 22: DATA + 0x80, 23: DATA + 0x80,
+            24: DATA + 0x30, 25: DATA + 0x90, 26: DATA + 0x40, 27: DATA}
+LD = Prog("loads")
+for _r in sorted(LD_BASES):
+    LD.set32(_r, LD_BASES[_r])
+LD.ds("ld", "ld", OP_DSLOAD, 4, 20, -0x70, XO_LD)            # the witness's e894ff90
+LD.ds("ldu", "ldu", OP_DSLOAD, 5, 21, -0x60, XO_LDU)         # the witness's e8b5ffa1
+LD.ds("lwa", "lwa", OP_DSLOAD, 6, 22, 0x08, XO_LWA)          # the witness's e8d6000a
+LD.imm("lwz", OP_LWZ, 7, 23, 0x08, tag="lwz")
+LD.ds("ld ds0", "ld", OP_DSLOAD, 11, 26, 0, XO_LD)
+LD.ds("ldu ds0", "ldu", OP_DSLOAD, 8, 24, 0, XO_LDU)
+LD.ds("lwa ds0", "lwa", OP_DSLOAD, 10, 25, 0, XO_LWA)
+LD.imm("lwz", OP_LWZ, 14, 27, 6, tag="lwz odd")
+#  The RA = 0 words go last before li: one that stops the CPU (under a variant that adds an update)
+#  then leaves the fewest words unrun.
+LD.ds("lwa ra0", "lwa", OP_DSLOAD, 13, 0, LOWLD + 4, XO_LWA)
+LD.ds("ld ra0", "ld", OP_DSLOAD, 12, 0, LOWLD, XO_LD)
+LD.li(LIVEREG, LIVE)
+#  The 0x7000 window counts by two, so no value read from it is also a value of the DATA pattern.
+LD_REGIONS = [(DATA, 0x100, 0x00, 1), (LOWLD, 0x10, 0x80, 2)]
+LD_DUMPS = [(DATA, DATA + 0x100), (LOWLD, LOWLD + 0x10)]
+LD_SEEDS = [0, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, LIVEREG, SPARE] + sorted(LD_BASES)
+
+# stores -- one 0x20-byte slot per store in the STORE pattern, plus the RA = 0 window
+ST_BASES = {20: STORE + 0x40, 21: STORE + 0x60, 22: STORE + 0x50, 23: STORE + 0x80,
+            24: STORE + 0x8A, 25: STORE + 0xB0}
+ST_SRC = {4: 0xC0C1C2C3C4C5C6C7, 5: 0xC8C9CACBCCCDCECF, 6: 0xD0D1D2D3D4D5D6D7,
+          7: 0xD8D9DADBDCDDDEDF, 8: 0xE0E1E2E3E4E5E6E7, 10: 0xE8E9EAEBECEDEEEF}
+ST = Prog("stores")
+for _r in sorted(ST_BASES):
+    ST.set32(_r, ST_BASES[_r])
+for _r in sorted(ST_SRC):
+    ST.set64(_r, ST_SRC[_r])
+ST.ds("std", "std", OP_DSSTORE, 4, 20, -0x30, XO_STD)
+ST.ds("std ds0", "std", OP_DSSTORE, 8, 25, 0, XO_STD)
+ST.ds("stdu", "stdu", OP_DSSTORE, 5, 21, -0x30, XO_STDU)
+ST.ds("stdu ds0", "stdu", OP_DSSTORE, 6, 22, 0, XO_STDU)
+ST.ds("stdu alias", "stdu", OP_DSSTORE, 23, 23, -0x10, XO_STDU)   # RA = RS
+ST.imm("stw", OP_STW, 7, 24, 6, tag="stw odd")
+ST.ds("std ra0", "std", OP_DSSTORE, 10, 0, LOWST, XO_STD)      # RA = 0, last before li
+ST.li(LIVEREG, LIVE)
+ST_REGIONS = [(STORE, 0xC0, 0x00, 1), (LOWST - 0x10, 0x30, 0x10, 1)]
+ST_DUMPS = [(STORE, STORE + 0xC0), (LOWST - 0x10, LOWST + 0x20)]
+ST_SEEDS = [0, LIVEREG, SPARE] + sorted(ST_BASES) + sorted(ST_SRC)
+ST_STORES = ("std", "std ds0", "stdu", "stdu ds0", "stdu alias", "stw odd", "std ra0")
+
+# the five stop sessions: (name, label, opcode, XO, RA value or None for RA = 0, disp, store,
+# seeded regions)
+STOP_SRC = 0xF0F1F2F3F4F5F6F7
+STOPS = (
+    ("xo58_3", "xo58_3", OP_DSLOAD, 3, DATA + 0x20, -0x10, False, [(DATA, 0x40, 0x00, 1)]),
+    ("xo62_2", "xo62_2", OP_DSSTORE, 2, STORE + 0x40, -0x30, True, [(STORE, 0x20, 0x00, 1)]),
+    ("xo62_3", "xo62_3", OP_DSSTORE, 3, STORE + 0x40, -0x30, True, [(STORE, 0x20, 0x00, 1)]),
+    ("ldu ra0", "ldu", OP_DSLOAD, XO_LDU, None, 0x10, False, [(0x0, 0x20, 0x60, 1)]),
+    ("stdu ra0", "stdu", OP_DSSTORE, XO_STDU, None, 0x10, True, [(0x0, 0x20, 0x60, 1)]),
+)
+STOP_PROGS = {}
+for _nm, _lb, _op, _xo, _ra, _disp, _st, _reg in STOPS:
+    _p = Prog(_nm)
+    if _ra is not None:
+        _p.set32(20, _ra)
+    if _st:
+        _p.set64(4, STOP_SRC)
+    _p.li(LIVEREG, LIVE)
+    _p.ds(_nm, _lb, _op, 4, 20 if _ra is not None else 0, _disp, _xo)     # LAST
+    STOP_PROGS[_nm] = _p
+
+GUEST_PROGS = [LD, ST] + [STOP_PROGS[s[0]] for s in STOPS]
+
+
+# ------------------------------------------- wants, from the ENCODED fields and the RTL
+LD_MODEL = seeded(LD_REGIONS)
+LD_EA = dict((t, ea_of(LD.get(t), LD_BASES)) for t in
+             ("ld", "ldu", "lwa", "lwz", "ld ds0", "ldu ds0", "lwa ds0", "ld ra0", "lwa ra0",
+              "lwz odd"))
+LD_WANT = {}
+for _t in ("ld", "ldu", "ld ds0", "ldu ds0", "ld ra0"):
+    LD_WANT[_t] = rd(LD_MODEL, LD_EA[_t], 8)                    # RT <- MEM(EA, 8)
+for _t in ("lwa", "lwa ds0", "lwa ra0"):
+    _w = rd(LD_MODEL, LD_EA[_t], 4)
+    assert _w is not None and _w & 0x80000000, _t                 # bit 31 set: C8
+    LD_WANT[_t] = exts64(_w, 32)                                  # RT <- EXTS(MEM(EA, 4))
+for _t in ("lwz", "lwz odd"):
+    LD_WANT[_t] = rd(LD_MODEL, LD_EA[_t], 4)                    # RT <- 32 zeros || MEM(EA, 4)
+assert None not in LD_WANT.values()
+assert low_half(LD.get("lwz odd")["ds"], LD.get("lwz odd")["xo"]) & 3 != 0
+
+ST_MODEL0 = seeded(ST_REGIONS)
+ST_MODEL = dict(ST_MODEL0)
+ST_EA = {}
+for _t in ST_STORES:
+    _e = ST.get(_t)
+    ST_EA[_t] = ea_of(_e, ST_BASES)
+    _src = ST_BASES[23] if _t == "stdu alias" else ST_SRC[_e["rt"]]   # alias: the OLD RA
+    _n = 4 if _t == "stw odd" else 8
+    #  every destination window EA-1 .. EA+11 lies inside the seeded bytes, and windows
+    #  do not overlap
+    for _a in range(ST_EA[_t] - 1, ST_EA[_t] + 12):
+        assert _a in ST_MODEL0, (_t, hex(_a))
+    wr(ST_MODEL, ST_EA[_t], _src, _n)
+for _i, _t in enumerate(ST_STORES):
+    for _u in ST_STORES[_i + 1:]:
+        assert abs(ST_EA[_t] - ST_EA[_u]) >= 13, (_t, _u)
+for _v in ST_SRC.values():
+    _b = [(_v >> (8 * _k)) & 0xFF for _k in range(8)]
+    assert len(set(_b)) == 8 and not set(_b) & set(ST_MODEL0.values()), hex(_v)
+assert low_half(ST.get("stw odd")["ds"], ST.get("stw odd")["xo"]) & 3 != 0
+for _nm, _lb, _op, _xo, _ra, _disp, _st, _reg in STOPS:
+    _b = [(STOP_SRC >> (8 * _k)) & 0xFF for _k in range(8)]
+    assert len(set(_b)) == 8 and not set(_b) & set(seeded(_reg).values())
+    _tgt = ea_ds(0 if _ra is None else _ra, STOP_PROGS[_nm].get(_nm)["ds"])
+    for _a in range(_tgt - 1, _tgt + 12):
+        assert _a in seeded(_reg), (_nm, hex(_a))
+
+
+def names_text(model, v):
+    """Every seeded location a loaded value can only have come from."""
+    if v is None or v < 0:
+        return "no readback"
+    if v == SENT:
+        return "unwritten (still the seeded sentinel)"
+    out = []
+    for a in sorted(model):
+        d = rd(model, a, 8)
+        if d is not None and v == d:
+            out.append("doubleword at 0x%x" % a)
+        w = rd(model, a, 4)
+        if w is None:
+            continue
+        if w & 0x80000000:
+            if v == w:
+                out.append("zero-extended word at 0x%x" % a)
+            if v == exts64(w, 32):
+                out.append("sign-extended word at 0x%x" % a)
+        elif v == w:
+            out.append("word (bit 31 clear) at 0x%x" % a)
+    return "; ".join(out) if out else "not a value of the seeded bytes"
+
+
+def expect_unasm(e):
+    """The disassembler's own text for a placed word (src/cpus/cpu_ppc.c): the tree's
+       convention, not architecture.  For opcodes 58 and 62 it prints `ld' / `std' whatever
+       XO is, with the RAW low halfword as the signed displacement -- here that halfword is
+       rebuilt from the DS field and DSMAP's XO for the word's label."""
+    k = e["kind"]
+    if k == "sldi":
+        return "rldicr", "r%d,r%d,%d,%d" % (e["ra"], e["rs"], e["sh"], e["me"])
+    if k == "ds":
+        opcd, xo = DSMAP[e["label"]]
+        return ({58: "ld", 62: "std"}[opcd],
+                "r%d,%d(r%d)" % (e["rt"], sext(low_half(e["ds"], xo), 16), e["ra"]))
+    lh = low_half(e["ds"], e["xo"])
+    if k in ("lwz", "stw"):
+        return k, "r%d,%d(r%d)" % (e["rt"], sext(lh, 16), e["ra"])
+    if k in ("lis", "li"):
+        assert e["ra"] == 0
+        return k, "r%d,%d" % (e["rt"], sext(lh, 16))
+    if k in ("ori", "oris"):
+        return k, "r%d,r%d,0x%04x" % (e["ra"], e["rt"], lh)     # it prints RA, then RS
+    raise AssertionError("no expected text for %r" % k)
+
+
+# --------------------------------------------------------------------- sessions
+DUMP_RE = re.compile(r"^0x([0-9a-f]{16})  ([0-9a-f]{8}) ([0-9a-f]{8}) ([0-9a-f]{8}) "
+                     r"([0-9a-f]{8}) ", re.M)
+UNASM_RE = re.compile(r"^([0-9a-f]{16}): ([0-9a-f]{8})\s*(?:<- )?(\S+)(?:\t(\S+))?", re.M)
+
+
+def parse_dump(text):
+    """addr -> byte, from every complete 16-byte `dump' line in text."""
+    m = {}
+    for mm in DUMP_RE.finditer(text):
+        a = int(mm.group(1), 16)
+        hx = "".join(mm.group(i) for i in range(2, 6))
+        for k in range(16):
+            m[a + k] = int(hx[2 * k:2 * k + 2], 16)
+    return m
+
+
+def commands(prog, seeds, regions, dumps):
+    cmds = ["r%d=0x%x" % (r, SENT) for r in sorted(set(seeds))]
+    for start, n, v0, step in regions:
+        for k in range(n):
+            cmds.append("put b 0x%x, 0x%02x" % (start + k, v0 + step * k))
+    for lo, hi in dumps:
+        assert lo % 16 == 0 and hi % 16 == 0
+        cmds.append("dump 0x%x 0x%x" % (lo, hi))
+    for i, e in enumerate(prog.ent):
+        cmds.append("put w 0x%x, 0x%08x" % (CODE + 4 * i, e["word"]))
+    n = len(prog.ent)
+    cmds.append("unassemble 0x%x 0x%x" % (CODE, CODE + 4 * n))
+    cmds.append("pc=0x%x" % CODE)
+    cmds.append("step %d" % n)
+    cmds.append("reg")
+    for lo, hi in dumps:
+        cmds.append("dump 0x%x 0x%x" % (lo, hi))
+    return cmds
+
+
+def session(name, cmds, machine="bareppc", timeout=120):
+    """The piped cold-debugger session -- regress/ppc_rldicl_probe.py's idiom.  An emulator
+       that ends early still returns here; its missing readbacks read as absent."""
+    argv = [BIN, "-V", "-x", "-E", machine, "-M", "64", "0x%x:%s" % (CODE, DUMMY)]
+    inp = ("\n".join(cmds + ["quit"]) + "\n").encode("latin-1")
+    try:
+        p = subprocess.run(argv, input=inp, stdout=subprocess.PIPE,
+                           stderr=subprocess.STDOUT, timeout=timeout)
+        raw = p.stdout.decode("latin-1", "replace")
+        rc = p.returncode
+        how = ("sig%d" % -rc) if rc < 0 else ("exit%d" % rc)
+    except subprocess.TimeoutExpired as ex:
+        raw = (ex.output or b"").decode("latin-1", "replace")
+        how = "TIMEOUT"
+    ncr = raw.count("\r")
+    t = raw.replace("\r", "")
+    R = {"name": name, "how": how, "regs": {}, "pc": None, "msr": None, "dis": []}
+    idx = t.rfind("GXemul> reg")
+    if idx >= 0:
+        seg = t[idx:]
+        for m in re.finditer(r"\br(\d\d) = (0x[0-9a-fA-F]+)", seg):
+            R["regs"][int(m.group(1))] = int(m.group(2), 16)
+        m = re.search(r"\bpc  = (0x[0-9a-fA-F]+)", seg)
+        R["pc"] = int(m.group(1), 16) if m else None
+        m = re.search(r"\bmsr = (0x[0-9a-fA-F]+)", seg)
+        R["msr"] = int(m.group(1), 16) if m else None
+    di = t.find("GXemul> unassemble")
+    if di >= 0:
+        de = t.find("GXemul> pc=", di)
+        for m in UNASM_RE.finditer(t[di:de if de > 0 else len(t)]):
+            R["dis"].append((int(m.group(1), 16), int(m.group(2), 16), m.group(3),
+                             m.group(4) or ""))
+    si = t.find("GXemul> step")
+    pre, post = (t[:si], t[si:]) if si >= 0 else (t, "")
+    R["pre"] = parse_dump(pre)
+    R["post"] = parse_dump(post)
+    R["unimpl"] = post.count("UNIMPLEMENTED instruction at 0x")
+    R["todo"] = post.count("TODO: ra=0 && update?")
+    R["internal"] = post.count("PPC: invalid(): INTERNAL ERROR")
+    fn = "RAW_%s_%s.txt" % (LABEL, name.replace(" ", "_"))
+    with open(os.path.join(TDIR, fn), "w", encoding="latin-1", newline="\n") as fh:
+        fh.write("ARGV: %s\nHOW: %s\nCR_REMOVED: %d (otherwise verbatim)\n\n"
+                 % (" ".join(argv), how, ncr))
+        fh.write(t)
+    R["file"] = fn if KEEP else "(not kept)"
+    return R
+
+
+def g(R, r):
+    return R["regs"].get(r, -1)
+
+
+def obs_session(R, prog, seeded_model, dumps):
+    seedok = all(R["pre"].get(a) == v for a, v in seeded_model.items()) if dumps else None
+    obs("session %-8s how=%s words=%d unimplemented=%d todo_ra0=%d internal_error=%d pc=%s "
+        "msr=%s r%d=%s seeded_readback=%s transcript=%s"
+        % (R["name"], R["how"], len(prog.ent), R["unimpl"], R["todo"], R["internal"],
+           hex(R["pc"]) if R["pc"] is not None else "none",
+           hex(R["msr"]) if R["msr"] is not None else "none", SPARE, hex(g(R, SPARE)),
+           {None: "not dumped", True: "same", False: "DIFFERS"}[seedok], R["file"]))
+
+
+# ========================================================================= RUN ==
+def main(tmpdir):
+    global BIN, LABEL, TDIR, KEEP, DUMMY
+    BIN = sys.argv[1]
+    LABEL = sys.argv[2] if len(sys.argv) > 2 else "local"
+    KEEP = len(sys.argv) > 3
+    TDIR = sys.argv[3] if KEEP else tmpdir
+    if KEEP:
+        os.makedirs(TDIR, exist_ok=True)
+    DUMMY = os.path.join(tmpdir, "dummy.bin")
+    with open(DUMMY, "wb") as fh:
+        fh.write(b"\x00\x00\x00\x00")
+
+    print("ppcdsformxo RUNG-3 DETECTOR for the 64-bit DS-form loads and stores (opcodes 58 and"
+          " 62, #571) -- binary=%s label=%s" % (BIN, LABEL))
+    try:
+        with open(BIN, "rb") as fh:
+            print("binary md5=%s" % hashlib.md5(fh.read()).hexdigest())
+    except OSError as ex:
+        print("binary md5=UNREADABLE (%s)" % ex)
+    print("machine: -E bareppc -M 64 (UNMODIFIED in-tree; MACHINE_DEFAULT_CPU=PPC970, 64-bit)")
+    print("wants: _scratchpad/ppc_uisa_book1_v201.txt :2350-2367 (ld) :2372-2395 (ldu)"
+          " :2297-2317 (lwa) :2573-2593 (std) :2595-2621 (stdu) :2244 (lwz) :2518-2541 (stw);"
+          " DS || 0b00 sign-extended :951-955 :1221-1227")
+    print("CODE=0x%x DATA=0x%x STORE=0x%x LOWLD=0x%x LOWST=0x%x placed words=%d"
+          % (CODE, DATA, STORE, LOWLD, LOWST, sum(len(p.ent) for p in GUEST_PROGS)))
+    print("%-16s %-20s %-20s %-52s %s" % ("row", "got", "want", "note", ""))
+    t0 = time.time()
+    results = []
+
+    # ------------------------------------------------------------------ loads ----
+    LD_CMDS = commands(LD, LD_SEEDS, LD_REGIONS, LD_DUMPS)
+    L = session("loads", LD_CMDS)
+    results.append((L, LD))
+    o = dict((t, LD_EA[t] - DATA) for t in ("ld", "ldu", "lwa", "lwz", "ld ds0", "ldu ds0",
+                                            "lwa ds0", "lwz odd"))
+    row("ld value", hex(g(L, 4)), hex(LD_WANT["ld"]),
+        "XO 0 control: MEM(EA,8), EA = DATA+0x%02x" % o["ld"])
+    row("ld RA after", hex(g(L, 20)), hex(LD_BASES[20]),
+        "XO 0, DS != 0: RA unchanged (r20)")
+    row("ld ds0 value", hex(g(L, 11)), hex(LD_WANT["ld ds0"]),
+        "XO 0, DS = 0: MEM(RA,8), RA = DATA+0x%02x" % o["ld ds0"])
+    row("ld ra0 value", hex(g(L, 12)), hex(LD_WANT["ld ra0"]),
+        "XO 0, RA = 0: MEM(0x%x,8), absolute" % LD_EA["ld ra0"])
+    row("ldu value", hex(g(L, 5)), hex(LD_WANT["ldu"]),
+        "XO 1: MEM(EA,8), EA = DATA+0x%02x" % o["ldu"])
+    row("ldu RA after", hex(g(L, 21)), hex(LD_EA["ldu"]),
+        "XO 1, DS != 0: RA <- EA (r21)")
+    row("ldu ds0 value", hex(g(L, 8)), hex(LD_WANT["ldu ds0"]),
+        "XO 1, DS = 0: MEM(RA,8), RA = DATA+0x%02x" % o["ldu ds0"])
+    row("lwa value", hex(g(L, 6)), hex(LD_WANT["lwa"]),
+        "XO 2: EXTS(MEM(EA,4)), EA = DATA+0x%02x" % o["lwa"])
+    row("lwa RA after", hex(g(L, 22)), hex(LD_BASES[22]),
+        "XO 2, DS != 0: RA unchanged (r22)")
+    row("lwa ds0 value", hex(g(L, 10)), hex(LD_WANT["lwa ds0"]),
+        "XO 2, DS = 0: EXTS(MEM(RA,4)), RA = DATA+0x%02x" % o["lwa ds0"])
+    row("lwa ra0 value", hex(g(L, 13)), hex(LD_WANT["lwa ra0"]),
+        "XO 2, RA = 0: EXTS(MEM(0x%x,4)), absolute" % LD_EA["lwa ra0"])
+    row("lwz value", hex(g(L, 7)), hex(LD_WANT["lwz"]),
+        "D-form control: MEM(EA,4), EA = DATA+0x%02x" % o["lwz"])
+    row("lwz odd", hex(g(L, 14)), hex(LD_WANT["lwz odd"]),
+        "D-form, D & 3 = 2: MEM(EA,4), EA = DATA+0x%02x" % o["lwz odd"])
+    row("live", hex(g(L, LIVEREG)), hex(LIVE),
+        "li r%d,0x%x is the LAST word: every placed word ran" % (LIVEREG, LIVE))
+    for t, r in (("ld", 4), ("ldu", 5), ("lwa", 6), ("lwz", 7), ("ld ds0", 11),
+                 ("ldu ds0", 8), ("lwa ds0", 10), ("ld ra0", 12), ("lwa ra0", 13),
+                 ("lwz odd", 14)):
+        v = L["regs"].get(r)
+        obs("%-7s r%d = %s  names: %s  | arch EA = 0x%x | RA + raw low half = 0x%x"
+            % (t, r, hex(v) if v is not None else "none", names_text(LD_MODEL, v),
+               LD_EA[t], fold_of(LD.get(t), LD_BASES)))
+    for r in sorted(LD_BASES):
+        obs("loads base r%d after = %s (set to 0x%x)" % (r, hex(g(L, r)), LD_BASES[r]))
+    obs("loads r0 after = %s (seeded; the RA = 0 words do not read it)" % hex(g(L, 0)))
+    obs_session(L, LD, seeded(LD_REGIONS), LD_DUMPS)
+
+    # ----------------------------------------------------------------- stores ----
+    S = session("stores", commands(ST, ST_SEEDS, ST_REGIONS, ST_DUMPS))
+    results.append((S, ST))
+    P = S["post"]
+
+    def at(t):
+        return "0x%x" % ST_EA[t]
+
+    row("std value", hexbytes(P, ST_EA["std"], 8), hexbytes(ST_MODEL, ST_EA["std"], 8),
+        "XO 0 control: MEM(EA,8) <- RS, EA = %s" % at("std"))
+    row("std RA after", hex(g(S, 20)), hex(ST_BASES[20]),
+        "XO 0, DS != 0: RA unchanged (r20)")
+    row("std ds0 value", hexbytes(P, ST_EA["std ds0"], 8),
+        hexbytes(ST_MODEL, ST_EA["std ds0"], 8),
+        "XO 0, DS = 0: MEM(RA,8) <- RS, RA = %s" % at("std ds0"))
+    row("std ra0 value", hexbytes(P, ST_EA["std ra0"], 8),
+        hexbytes(ST_MODEL, ST_EA["std ra0"], 8),
+        "XO 0, RA = 0: MEM(%s,8) <- RS, absolute" % at("std ra0"))
+    row("stdu value", hexbytes(P, ST_EA["stdu"], 8), hexbytes(ST_MODEL, ST_EA["stdu"], 8),
+        "XO 1: MEM(EA,8) <- RS, EA = %s" % at("stdu"))
+    ea = ST_EA["stdu"]
+    fl_got = (hexbytes(P, ea - 1, 1), hexbytes(P, ea + 8, 4))
+    fl_want = (hexbytes(ST_MODEL, ea - 1, 1), hexbytes(ST_MODEL, ea + 8, 4))
+    row("stdu neigh", "none" if None in fl_got else "%s|%s" % fl_got, "%s|%s" % fl_want,
+        "XO 1: EA-1 and EA+8..EA+11 keep the seeded bytes")
+    row("stdu RA after", hex(g(S, 21)), hex(ST_EA["stdu"]),
+        "XO 1, DS != 0: RA <- EA (r21)")
+    row("stdu ds0 value", hexbytes(P, ST_EA["stdu ds0"], 8),
+        hexbytes(ST_MODEL, ST_EA["stdu ds0"], 8),
+        "XO 1, DS = 0: MEM(RA,8) <- RS, RA = %s" % at("stdu ds0"))
+    row("stdu alias val", hexbytes(P, ST_EA["stdu alias"], 8),
+        hexbytes(ST_MODEL, ST_EA["stdu alias"], 8),
+        "XO 1, RA = RS: MEM(EA,8) <- the old RA, EA = %s" % at("stdu alias"))
+    row("stdu alias RA", hex(g(S, 23)), hex(ST_EA["stdu alias"]),
+        "XO 1, RA = RS, DS != 0: RA <- EA (r23)")
+    row("stw odd", hexbytes(P, ST_EA["stw odd"], 4), hexbytes(ST_MODEL, ST_EA["stw odd"], 4),
+        "D-form, D & 3 = 2: MEM(EA,4) <- RS low word, EA = %s" % at("stw odd"))
+    row("st live", hex(g(S, LIVEREG)), hex(LIVE),
+        "li r%d,0x%x is the LAST word: every placed word ran" % (LIVEREG, LIVE))
+    for t in ST_STORES:
+        e = ST.get(t)
+        lo = ST_EA[t] - 1
+        obs("%-10s window 0x%x..0x%x got %s | want %s | arch EA = 0x%x | RA + raw low half"
+            " = 0x%x" % (t, lo, lo + 12, hexbytes(P, lo, 13), hexbytes(ST_MODEL, lo, 13),
+                         ST_EA[t], fold_of(e, ST_BASES)))
+    for r in sorted(ST_SRC):
+        obs("stores source r%d = %s (built by the guest; want 0x%016x)"
+            % (r, hex(g(S, r)), ST_SRC[r]))
+    for r in sorted(ST_BASES):
+        obs("stores base r%d after = %s (set to 0x%x)" % (r, hex(g(S, r)), ST_BASES[r]))
+    obs("stores r0 after = %s (seeded; std ra0 does not read it)" % hex(g(S, 0)))
+    obs_session(S, ST, ST_MODEL0, ST_DUMPS)
+
+    # ------------------------------------------------------------ stop sessions ----
+    for nm, _lb, _op, _xo, ra_val, _disp, store, regions in STOPS:
+        prog = STOP_PROGS[nm]
+        e = prog.get(nm)
+        seeds = [0, 4, LIVEREG, SPARE] + ([20] if ra_val is not None else [])
+        dumps = [(lo, lo + n) for lo, n, _v, _s in regions] if store else []
+        R = session(nm, commands(prog, seeds, regions, dumps))
+        results.append((R, prog))
+        model = seeded(regions)
+        ra_reg = 20 if ra_val is not None else 0
+        ra_want = ra_val if ra_val is not None else SENT
+        stop = "stop" if R["unimpl"] else "nostop"
+        ra_txt = "kept" if g(R, ra_reg) == ra_want else hex(g(R, ra_reg))
+        row("%s live" % nm, hex(g(R, LIVEREG)), hex(LIVE),
+            "li r%d ran, the word before the stop word" % LIVEREG)
+        if store:
+            tgt = ea_ds(0 if ra_val is None else ra_val, e["ds"])
+            win_got = hexbytes(R["post"], tgt - 1, 13)
+            win_want = hexbytes(model, tgt - 1, 13)
+            win = "none" if win_got is None else ("kept" if win_got == win_want else "changed")
+            row("%s bad" % nm, "%s,win=%s,ra=%s" % (stop, win, ra_txt), "stop,win=kept,ra=kept",
+                "opcode %d XO %d, RA %s: CPU stops; window, RA unchanged"
+                % (DSMAP[e["label"]][0], e["xo"], "= 0" if ra_val is None else "!= 0"))
+            obs("%-8s window 0x%x..0x%x got %s | seeded %s | RA + raw low half = 0x%x"
+                % (nm, tgt - 1, tgt + 11, win_got, win_want, fold_of(e, {20: ra_val})))
+        else:
+            rt_txt = "sent" if g(R, 4) == SENT else hex(g(R, 4))
+            row("%s bad" % nm, "%s,rt=%s,ra=%s" % (stop, rt_txt, ra_txt), "stop,rt=sent,ra=kept",
+                "opcode %d XO %d, RA %s: CPU stops; RT, RA unchanged"
+                % (DSMAP[e["label"]][0], e["xo"], "= 0" if ra_val is None else "!= 0"))
+            obs("%-8s r4 = %s  names: %s | RA + raw low half = 0x%x"
+                % (nm, hex(g(R, 4)), names_text(model, R["regs"].get(4)),
+                   fold_of(e, {20: ra_val})))
+        obs_session(R, prog, model, dumps)
+
+    # ------------------------------------------------------- the unassemble census --
+    matched = 0
+    lines = 0
+    for R, prog in results:
+        dis = R["dis"]
+        lines += len(dis)
+        for i, e in enumerate(prog.ent):
+            em, eo = expect_unasm(e)
+            if i < len(dis):
+                d_addr, d_word, d_mn, d_ops = dis[i]
+                same = (d_addr == CODE + 4 * i and d_word == e["word"]
+                        and d_mn == em and d_ops == eo)
+                got_txt = "%x: %08x %s %s" % (d_addr, d_word, d_mn, d_ops)
+            else:
+                same = False
+                got_txt = "(no line)"
+            matched += 1 if same else 0
+            if e["kind"] == "ds" or not same:
+                extra = ""
+                if e["kind"] == "ds":
+                    extra = ("  [placed as %s: opcode %d RT %d RA %d DS %d XO %d; raw low half"
+                             " 0x%04x]" % (e["label"], e["word"] >> 26, e["rt"], e["ra"],
+                                           e["ds"], e["xo"], low_half(e["ds"], e["xo"])))
+                obs("unasm %-8s %s | want %s %s | %s%s"
+                    % (R["name"], got_txt, em, eo, "same" if same else "DIFFERS", extra))
+    row("unasm census", "%d/%d" % (matched, lines), "%d/%d" % (CENSUS_WORDS, CENSUS_WORDS),
+        "every placed word of the seven guest sessions")
+
+    # ------------------------------------------------------------------ word pins --
+    pins = []
+    for t in ("ld", "ldu", "lwa"):
+        i = LD.ent.index(LD.get(t))
+        pins.append("%08x" % L["dis"][i][1] if i < len(L["dis"]) else "none")
+    row("word pins", ",".join(pins), "e894ff90,e8b5ffa1,e8d6000a",
+        "the witness's ld, ldu, lwa words, read back by unassemble")
+
+    # ============================================== NEGATIVE APPARATUS CONTROL ==
+    # The loads commands against a bogus machine TYPE: no guest is built, so no register
+    # dump exists and every register oracle above would read -0x1.
+    N = session("neg", LD_CMDS, machine="nosuchmachine", timeout=60)
+    row("neg apparatus", "%s/%s" % (N["how"], hex(g(N, LIVEREG))), "exit1/-0x1",
+        "loads commands, bogus machine TYPE: exit 1, no registers")
+    obs("session neg      how=%s transcript=%s" % (N["how"], N["file"]))
+
+    # ============================================================ SUMMARY + DONE
+    assert [n for n, _ in rows] == list(ROW_NAMES), "row list drifted from ROW_NAMES"
+    okmap = dict(rows)
+    npass = sum(1 for _, ok in rows if ok)
+    red = [n for n, ok in rows if not ok]
+    nsym = sum(1 for n in SYMPTOM if not okmap[n])
+    if nsym == len(SYMPTOM):
+        sym = "PRESENT %d/%d" % (nsym, len(SYMPTOM))
+    elif nsym == 0:
+        sym = "ABSENT"
+    else:
+        sym = "MIXED"
+    print("")
+    print("elapsed=%.1fs binary=%s label=%s" % (time.time() - t0, BIN, LABEL))
+    print("PPC_DSFORM_RESULT=%d/%d" % (npass, len(rows)))
+    print("PPC_DSFORM_CONTROL=%s" % ("OK" if all(okmap[n] for n in CONTROL) else "FAIL"))
+    print("PPC_DSFORM_SYMPTOM=%s" % sym)
+    print("PPC_DSFORM_RED=%s" % (",".join(red) if red else "none"))
+    print("PPC_DSFORM_PROBE_DONE")
+    sys.stdout.flush()
+    return 1 if red else 0
+
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        sys.stderr.write("usage: ppc_dsform_probe.py <gxemul> [label] [workdir]\n")
+        sys.exit(2)
+    _TMPDIR = tempfile.mkdtemp(prefix="ppc_dsform_")
+    try:
+        _RC = main(_TMPDIR)
+    finally:
+        shutil.rmtree(_TMPDIR, ignore_errors=True)
+    sys.exit(_RC)

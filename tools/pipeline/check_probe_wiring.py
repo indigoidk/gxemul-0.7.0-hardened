@@ -3219,6 +3219,8 @@ MANIFEST = {
     "artifacts/m88kbuserrregs/witness_20261023/m88k_buserr_probe.py":
         (CLASS_WITNESS, "#570 m88kbuserrregs: the rung-3 pre-fix witness (rev 1, 24 rows, md5 d59798b0) -- 16/24 on HEAD "
                         "(witness_20261023/WITNESS_headbin.out), 24/24 on the fixed build (table1_20261023/fixed_witness24.out)"),
+    "ppc_dsform_probe.py": (CLASS_DETECTOR, "#571 ppcdsformxo: the 64-bit DS-form loads and stores (opcodes 58 and 62: ld, ldu, lwa, std, stdu, the reserved XO encodings, and ldu/stdu with RA = 0) -- 39 rows on unmodified -E bareppc -M 64; gated in gate_ppc.sh (gate 13) under the stem ppc_dsform, pinned at 39; kill table artifacts/ppcdsformxo/table1_20261024/ (SCORES.txt)"),
+    "artifacts/ppcdsformxo/witness_20261024/ppc_dsform_probe.py": (CLASS_RESEARCH, "#571 ppcdsformxo: the frozen rung-3 pre-fix instrument of the LOADS (8 rows, md5 5e96b69d), preserved as evidence -- 5/8 on HEAD (witness_20261024/WITNESS_headbin.out), 8/8 post-fix (table1_20261024/fixed_witness8.out): it asserts the REPAIRED property and is green once the defect is gone, so by the WITNESS/DETECTOR line above it is RESEARCH, not WITNESS; the stores' pre-fix artifact is table1_20261024/prefix_BASE.out"),
 }
 
 #  DATED, NAMED DEBT -- not a count and not a silent allowlist.  gate_offline.sh MEASURED that

@@ -1,0 +1,39 @@
+#!/bin/bash
+#  T2 (#571) spec section 6: ONE kill-table leg.  usage: s6_leg.sh <leg-id> <tag>
+#  Copies the WORK (fixed) tree to /tmp/gxt2/legs/<leg>, drops the clone-local .MUTANT sentinel, applies the
+#  leg's variant with legs571.py, rebuilds (rm src/cpus/*.o; make), runs the FROZEN detector into
+#  table1/L<leg>_<tag>.out, writes L<leg>.diff (fixed vs variant, a FILE), then DISCARDS the leg tree
+#  (so nothing is left mutated).  Foreground only.  Writes only into /tmp/gxt2/legs and table1.
+set -u
+LEG=${1:?leg id}; TAG=${2:?tag}
+SP=/mnt/c/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/t2/build
+SEC=/mnt/c/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC
+T=$SEC/regress/artifacts/ppcdsformxo/table1_20261024
+W=/tmp/gxt2/work
+L=/tmp/gxt2/legs/$LEG
+F=src/cpus/cpu_ppc_instr.c
+PROBE=$SEC/regress/ppc_dsform_probe.py
+echo "=== $(date '+%F %T') leg $LEG ($TAG): clone work -> $L"
+mkdir -p /tmp/gxt2/legs
+[ -d "$L" ] && rm -rf "$L"
+cp -a "$W" "$L"
+echo "$LEG $TAG $(date '+%F %T') -- mutated copy of the fixed work tree; discard, never restore from" > "$L/.MUTANT"
+echo "=== $(date '+%F %T') variant"
+python3 "$SP/legs571.py" "$LEG" "$L/$F" || { echo "VARIANT_FAILED"; exit 9; }
+diff -u "$W/$F" "$L/$F" > "$T/L${LEG}.diff"; echo "diff lines: $(wc -l < "$T/L${LEG}.diff")"
+cmp -s "$W/$F" "$L/$F" && { echo "VARIANT_IS_IDENTICAL_TO_FIXED"; exit 9; }
+echo "=== $(date '+%F %T') build"
+cd "$L" || exit 9
+rm -f src/cpus/*.o
+make > "$L/make_leg.log" 2>&1
+echo "MAKE_RC=$?  warnings/errors: $(grep -ciE 'warning|error' "$L/make_leg.log")"
+if [ gxemul -nt "$F" ]; then echo "FRESH"; else echo "STALE_OR_MISSING -- leg not measured"; exit 8; fi
+md5sum gxemul "$F"
+echo "=== $(date '+%F %T') detector -> L${LEG}_${TAG}.out"
+md5sum "$PROBE"
+python3 -u "$PROBE" "$L/gxemul" "L${LEG}_${TAG}" "$T" > "$T/L${LEG}_${TAG}.out" 2>&1
+echo "DETECTOR_RC=$?"
+grep -E '^PPC_DSFORM_(RESULT|CONTROL|SYMPTOM|RED)=|PROBE_DONE|internal_error=[1-9]|how=exit[1-9]|how=sig' "$T/L${LEG}_${TAG}.out" | cut -c1-300
+echo "=== $(date '+%F %T') discard the leg tree"
+cd /tmp && rm -rf "$L" && echo "leg tree removed (sentinel went with it)"
+echo "LEG_DONE $LEG"

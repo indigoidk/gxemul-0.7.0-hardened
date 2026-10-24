@@ -1,0 +1,163 @@
+The review is read-only. I will read the rest of the brief first, then check the premises against the PowerPC decoder and the manuals rather than ratifying them.The brief's arithmetic and the store half are the parts I will not take on faith. I am checking the decoder, the load/store table, and the manuals against the packet.VERDICT: READY WITH CHANGES -- the five-form repair is right and slots exist; the owed rows, the scoped mask, and a base-binary store measurement are not what the witness or Grok's floor currently cover.
+Q1: Five forms map onto existing handlers; scope the mask to 58/62; file the disassembler; disclose 32-bit. Q2: Ten symptom rows, with dump-anchored stores and a D-form whose low two bits are nonzero; DS=0 update rows are vacuous on PPC970. Q3: New detector in gate 13 before the NetBSD image, witness file left frozen, identity-body null measured. Q4: `ldx`/`ldux`/`lwax`/`lwaux` are real, unfiled under those names, and out of this round.
+
+Read-only. No build, no run. Line numbers below match `GXEMUL-SEC/src/` (the arm is at 4277/4288/4307/4320). `S12` is incomplete. `P2`'s "only DS=0" clause is the wrong place to spend a row.
+
+## Q1
+
+**(a) Five forms, P1, P3.** READ. `tmp_ppc_loadstore.c:893-957` is a flat 64-entry table. Index = `size + 4*zero + 8*load + 16*(imm==0) + 32*update`. The arm's initial flags are `load=0, zero=1, size=0, update=0`.
+
+| form | flags | slot | slot if imm==0 | handler |
+|---|---|---|---|---|
+| `ld` | load, size 3, zero 1 | 15 | 31 | `ppc_instr_ld` / `ld_0` |
+| `ldu` | those + update | 47 | 63 | `ldu` / `ldu_0` |
+| `lwa` | load, size 2, zero 0 | 10 | 26 | `lwa` / `lwa_0` |
+| `std` | size 3, zero 1 | 7 | 23 | `std` / `std_0` |
+| `stdu` | those + update | 39 | 55 | `stdu` / `stdu_0` |
+
+Slots 11, 27, 43, 59 are `ppc_instr_invalid` (`fatal` + `exit(1)`). They are exactly `load && !zero && size==3`. The design's five flag combinations do not land there. No handler edit. The nearby miss that does host-exit is `lwa` coded as size 3 with `zero` cleared. `lwa` must stay size 2, `zero` 0. The sign-extend is the existing `(int32_t)` cast at `cpu_ppc_instr_loadstore.c:119-120` (READ).
+
+P1, enumerated. Producer of `(DS, XO)` is the low halfword: DS is 14-bit signed, XO is bits 1:0, so all 65536 patterns, not a sample the decoder invents. `imm = (int16_t)(low & ~3)` against `EXTS(DS || 0b00)`:
+
+| DS | XO | low half | masked int16 | EXTS(DS\|\|00) |
+|---|---|---|---|---|
+| -8192 | 0..3 | 0x8000..0x8003 | -32768 | -32768 |
+| -1 | 0..3 | 0xFFFC..0xFFFF | -4 | -4 |
+| 0 | 0..3 | 0x0000..0x0003 | 0 | 0 |
+| +1 | 0..3 | 0x0004..0x0007 | 4 | 4 |
+| +8191 | 0..3 | 0x7FFC..0x7FFF | 32764 | 32764 |
+
+No cell differs. Clearing bits 1:0 never touches the int16 sign bit (bit 15), so the other 65516 halfwords match for the same reason. `(int16_t)low & ~3` matches those twenty as well. `iword` is `uint32_t` and `int` is 32-bit on this host, so `~3` converts to `0xFFFFFFFC` before the AND (READ, types at `cpu_ppc_instr.c:4074-4078` and the assignment at 4295).
+
+**(b) P2.** READ. `ppc_instr_ld_0` is built with `LS_IGNOREOFS` and `LS_GENERIC_N ppc_generic_ldz` (`tmp_ppc_loadstore.c:270-277`). The generic body is compiled only on the non-`_0` pass (`#ifndef LS_IGNOREOFS`). On PPC970, `LS_N` hits `if (!cpu->is_32bit) { LS_GENERIC_N; return; }` (`cpu_ppc_instr_loadstore.c:192-198`) before the fast path can ignore the offset. `cpu->is_32bit` is `(bits == 32)` (`cpu_ppc.c:120`), and PPC970 is the 64-bit implementation. Both `_0` and non-`_0` add `(int32_t)ic->arg[2]`. The `_0` half is unobservable by value on this CPU.
+
+The two uses can see different numbers only when XO is nonzero. When XO is 0 the mask changes nothing, at every DS. The guest-visible use is `ic->arg[2]`. Leaving that use raw is wrong at every DS, including nonzero DS. Leaving only the `imm==0` index raw is invisible on PPC970, including at DS=0, because both handlers add `arg[2]`. P2's "the two uses matter only for DS=0" is the inverted conclusion: DS=0 is where the index branch flips and where that flip cannot be seen.
+
+The design is safe only if one masked `imm` feeds both the index at 4335 and `ic->arg[2]` at 4351. The record has to say that, because the current assignment at 4295 sits before both and is shared with the other twenty-two opcodes. A second variable that only one of the two sites reads does not implement the design.
+
+**(c) Illegal XO.** READ. `ppc_exception(` under `src/` is DEC, EI, FPU, SC, and the storage interrupts in `memory_ppc.c`. `cpu_ppc.h:252-257` has no Program (0x700) and no Alignment (0x600). P6 stands. Member 5 (FAULT) is not available. Member 7 would execute the reserved XO, which is the defect. `goto bad` is the disposition this function already uses: `fatal()` prints and returns (`debugmsg.c:384-390`, it does not exit), then `bad:` sets `cpu->running = 0` (`cpu_dyntrans.c:2014`). No latch. The CPU stops on the first one, so it cannot recur.
+
+Print a `fatal("TODO: ...")` before `goto bad`, outside read-ahead, same shape as the RA=0 guard at 4338-4341 and `rld*` at 4602-4605. Under `step`, `bad:` skips `DISASSEMBLE` (`cpu_dyntrans.c:2011-2012`, the `single_step` test). A row that keys off the disassembly line inside `bad:` fails on a stepped session. The `rldicl` probe keys off the `fatal` text for this reason.
+
+**(d) D1, P4, P5.** READ. Store path copies RS into a local `uint64_t` and then calls `memory_rw`; the update write is after a successful store (`cpu_ppc_instr_loadstore.c:163-184`). `stdu` with RA=RS stores the old value and then writes EA. Valid. Nothing in the design treats it as invalid.
+
+`ldu` with RA=RT writes the doubleword through `arg[0]`, then writes EA through `arg[1]`. Those pointers are the same GPR, so RT ends as EA and the loaded value is discarded. Book I allows the illegal-instruction handler or boundedly undefined results for an invalid form. CRIT is the merged ruling: disclosed, not checked. Astra's "rather than executing them as plain `ld`/`std`" is what reserved XO and today's update-less decode do. RA=0 becomes distinguished by the existing guard once `update` is set. RA=RT does not. The sibling update loads in this same arm (`lbzu`, `lhzu`, `lhau`, `lwzu`) do not test RA=RT either. Adding a check only for `ldu` is a new predicate, and the only refusal on hand is a CPU stop. Leave it disclosed. The contract states the post-repair result: RT holds EA.
+
+P5 is right, and the change is the one this arm already makes for every other update form. Today opcode 58/62 leaves `update` at 0, so RA=0 takes the zero register (`cpu_ppc.zero`, allocated by `zeroed_alloc` in `cpu.c:71`) plus the raw halfword and does not stop. After `update` is set, 4338-4341 stops the CPU. That replaces a guest-visible absolute access at EA+1 with the tree's illegal-instruction stop. Book I's invalid-form rule allows that.
+
+**(e) 32-bit.** Disclose, and write the delta in the contract. Do not add the width test in this round.
+
+S9 is true: one source builds both decoders, and an edit of the arm changes both. PEM :6253 makes 58 and 62 illegal on a 32-bit implementation (DERIVED from the inlined manual). The `rld*` idiom would transfer (R13). It still does not join this round. The filed defect is the XO fold on the 64-bit CPU. A width gate is a different claim (illegal opcode versus wrong form), it is not witnessed, and R17 keeps `stdx`/`stdux` where they are. P7, READ: S12 is not the whole census. Gated on `bits==32`: `rld*` only. Implemented with no width test: `stdx`, `stdux`, `sld`, `extsw`, `ldarx`, `stdcx.`. No `PPC_31_*` define, so `default: goto bad` on every CPU: `ldx`, `ldux`, `lwax`, `lwaux`, `mulld`, `divd`, `srd`, `srad`, `cntlzd`, `td`. Primary opcode 2 has no case. Gating 58/62 alone would be a third policy in the same function, next to families that still execute.
+
+The contract has to say the consequence, or the delta is silent: after the repair a 32-bit CPU executes `ldu`, `lwa`, and `stdu` as the 64-bit forms. Today it executes every XO as an 8-byte `ld`/`std` with the fold.
+
+**(f) P8.** READ. No alignment vector is raised. Book III :3794-3814 lists FP misalignment, `lmw`/`stmw`/`lwarx`/`ldarx`/`stwcx.`/`stdcx.`/`eciwx`/`ecowx`, little-endian single-register accesses, and the string/multiple cache cases. Big-endian `ld`/`std` are not in that list. PEM :11975 allows a split. On PPC970 the handler is the generic path, which has no alignment gate. Grok's "8-aligned EA" is a test choice so that EA+1 is obviously the XO, not an alignment artifact. The repair does not require a 4- or 8-aligned EA. A base that is not a multiple of 8 still produces an unaligned `ld`/`std`, and DS||00 only forces the displacement to a multiple of 4.
+
+**(g) Disassembler.** File it. P10 is READ: `unassemble` calls `cpu_disassemble_instr` with `running=0` (`debugger_cmds.c:1928`) and returns before the preview read (`cpu_ppc.c:1535-1536`). The trace calls it with `running=1` (`cpu_dyntrans.c:295-296`) and previews through `memory_rw(..., NO_EXCEPTIONS)`. Neither writes a GPR. The fold is real (`cpu_ppc.c:1495`, `1498`, `1517`), and the witness census shows it.
+
+R17 does not admit it: the census oracle would change, which is an oracle correction (R16) with its own red-before-edit, and there is no guest effect. The detector's contract says the census confirms opcode, RT, RA, and the raw low halfword under the disassembler's current text (`ld`/`std` plus the raw halfword). It does not attest the architectural form.
+
+**(h)** CHANGELOG block, a `/* #571 */` tag on each edited decoder line, and the ledger witness term are the usual landing record. Three design points none of the three texts spelled out: both consumers of `imm` (b); `lwa` with `zero` left at 1 is a fourth null the sign-extended oracle kills, and size 3 with `zero` 0 is a host exit; under `step`, `bad:` does not disassemble.
+
+## Q2
+
+**(a) Clause (a), both halves.** The load half is already red on HEAD: `ldu value`, `ldu RA`, `lwa value` (S4, MEASURED). The store half is predicted from the arm and the handler (P9, READ) and is not measured. Before any decoder edit, the base binary owes a run whose summary is red on all of these, saved the way `#570` saved `prefix_HEAD.out`:
+
+- `stdu value` and `stdu RA`, DS nonzero, RA≠0, RA≠RS, EA 8-aligned. Source is eight distinct bytes that do not occur in the counting pattern.
+- `xo62/2` and `xo62/3`: memory unchanged and the CPU stops. On HEAD each one stores 8 bytes.
+- The three load symptoms, plus `xo58/3` and both RA=0 stops, in the same pre-fix run so one receipt covers the detector.
+
+Readback is the debugger's `dump` (`debugger_cmds.c:716`, `memory_rw` with `NO_EXCEPTIONS`). That channel does not go through the PPC load decoder. Window is the byte before EA, the 8 bytes at EA, and the byte at EA+8. On HEAD, `stdu` writes the source at EA+1..EA+8, so the 8-byte compare at EA fails and the spill byte at EA+8 fails. A reload by `ld` is a second observation from a decoder this round is also changing. `dump` is the anchor.
+
+`std` value is predicted green on HEAD. It is a control. It does not discharge clause (a).
+
+**(b) Clause (b), three sites (P13).** READ: the only execute consumers of `PPC_HI6_LD` / `PPC_HI6_STD` are the two case arms in `cpu_ppc_instr.c`. The disassembler is the third consumer and is not a fixed site this round. No combination pass re-decodes these opcodes; `combination_check` sees the translated `ic->f`.
+
+The three sites are the scoped mask, the opcode-58 case, and the opcode-62 case. Full reinstatement reds every symptom row for the right reason (the fold and the missing update return; illegal and RA=0 words execute instead of stopping). Per site, if the other two stay repaired:
+
+- Mask restored, cases kept: `ldu value`, `lwa value`, `stdu value` red. The stop rows stay green.
+- Opcode-58 case restored, mask kept: `ldu value` stays green (address still masked) and `ldu RA` reds; `lwa value` reds on width; `xo58/3` reds because it loads. A value-only `ldu` row does not cover this site.
+- Opcode-62 case restored, mask kept: `stdu value` stays green and `stdu RA` reds; `xo62/2` and `xo62/3` red because they store.
+
+A session that places a symptom word after a stopping word reds for the wrong reason (P15): `bad:` clears `running`, and `step N` does not execute the rest. Each of `xo58/3`, `xo62/2`, `xo62/3`, `ldu` RA=0, and `stdu` RA=0 is last in its own session, with its `li` before it.
+
+**(c) Clause (c).** Identity body for both primary opcodes: decode, retire, no memory access, no write of RT or RA. Record it as `(c): measured at <artifact>` after the leg runs. The pre-fix HEAD run is clause (a), not (c). The gate does not exist yet, so a by-construction claim is not currently checkable.
+
+Predicted on that body, from the witness's `row()` (got==want) plus the rows below: every transfer row reds (`ld value`, `ldu value`, `lwa value`, `std value`, `stdu value`, both update-RA rows). Stop rows red, because an identity body retires and does not stop; a stop row whose only oracle is "RT still holds the sentinel" goes green, which is a (c) hole. `ld RA`, `std RA`, and `lwa RA` stay green (unchanged is what they want). `lwz` with a nonzero low residue, `live`, the census, and `neg apparatus` stay green. CONTROL=FAIL and SYMPTOM=PRESENT. An absent binary is a weaker medium: `session()` does not catch `FileNotFoundError` (`ppc_dsform_probe.py:323-325`), so the probe dies before `PPC_DSFORM_PROBE_DONE` and a gate pin on the sentinel would red, once that pin exists.
+
+**(d) Cells.** Body tests inside the arm, READ: `imm==0`, `ra==0 && update`, `fp`, `ra==0` for the base pointer. It does not test RA=RT or RA=RS. On PPC970 the `imm==0` branch is unobservable (P2).
+
+| cell | class | why |
+|---|---|---|
+| C1 | FLOOR | XO-0 load control, DS≠0, plus an RA-unchanged row. The witness rows the value only. |
+| C2, C3 | (e) | DS=0 and RA=0 `ld` are already correct; the index split is invisible on PPC970. |
+| C4 | FLOOR | Measured. DS≠0, RA≠0, RA≠RT. Value and RA are different sites under (b). |
+| C5 | (e) | Update writes RA back to RA. Gate 13's own header records this trap (9.1). |
+| C6 | FLOOR | The body takes `goto bad` once `update` is set. A repair that clears `update` when RA=0 keeps C4 green and still executes the invalid form. |
+| C7 | (e) | D1. Result after repair: RT=EA. |
+| C8 | FLOOR | Negative word. Oracle is the sign-extended word, so size 3 and `zero` left at 1 both fail. Add RA unchanged (green on HEAD; kills "lwa updates"). |
+| C9 | (e) | Bit 31 clear does not separate sign-extend from zero-extend. |
+| C10, C11 | (e) | Same address channel as C8, or a legal absolute `lwa`. |
+| C12 | FLOOR | Own session. Grok's single illegal row does not cover opcode 62. |
+| C13 | FLOOR | XO-0 store control: dump of 8 bytes at EA, RA unchanged. Predicted green. |
+| C14 | (e) | Same as C2/C3 for stores. |
+| C15 | FLOOR | Clause (a) for stores. Value and RA are separate rows. |
+| C16 | (e) | Same vacuity as C5. |
+| C17 | FLOOR | Same reason as C6, store side. The guard is one `if`, but each case sets `update` on its own. |
+| C18 | (e) | Handler order is a callee (R5). It is already right. Ship it if the row budget allows: `stdu r1,-N(r1)` is the form guests use, and omitting it is debt, not a floor breach. |
+| C19, C20 | FLOOR | Separate sessions. `if (xo==2) goto bad` leaves XO 3 storing. |
+| C21 | FLOOR | One D-form load with D & 3 ≠ 0. R18: the shared assignment at 4295 is the natural wrong edit, and it flows into `imm`, which the body reads. The witness `lwz` is D=8 (P14, READ in the probe: `DISP["lwz"]=0x08`). |
+| C22 | (e) | Same shared assignment as C21. One odd load kills it. |
+| C23 | (e) | FP cases set `ic->f` themselves. Re-run the rounding probe; do not add a row. |
+| C24 | (e) | Q1(e). Contract discloses the post-fix delta. |
+| C25 | (e) | Filed with the disassembler. Census stays an observation. |
+| C26 | (e) | Callee, and the handler is not edited. `bareppc` with IR/DR clear does not fail these RAM accesses. Translation on PPC970 hits the N3 `exit(1)` in `memory_ppc.c:287-288` before a store is observable. |
+
+No missing cell on the axes the body tests. Indexed forms are a different opcode and a different round (Q4).
+
+**(e) Named variants.**
+
+- Mask kept, `update` left 0: `ldu RA` and `stdu RA` red. Value rows stay green. Floor if those RA rows exist.
+- `update` set, raw `int16_t` kept: `ldu value`, `lwa value`, `stdu value` red.
+- `lwa` left at size 3: `lwa value` red (eight bytes from the correct EA once the mask is in).
+- `lwa` at size 2 with `zero` left 1: `lwa value` red only while the oracle is the sign-extended word `0xffffffff88898a8b`, not "anything but the doubleword." The witness word has bit 31 set (bytes at 0x88 are `88 89 8a 8b`).
+- XO=0 plus one: `ld RA` and `std RA` red. The value rows stay green, because `ldu`/`stdu` transfer the same bytes.
+- Mask applied at line 4295 to every opcode of the arm: C21 reds. Instructions the repair must leave alone are the other twenty-two D-form opcodes. C21 is the row that shows it. The rounding probe does not: its D-form immediates are 0, 4, and 8 (`0xC4230004`, `0xCC230008`, `0xD4230004`, `0xDC230008`, `0xC0230004`), all 0 mod 4.
+
+**(f)** `ld value` plus `std value` are the XO-0 data controls. Each needs the matching RA-unchanged row. DS=0 and RA=0 XO-0 controls are (e). Keep a 4-aligned `lwz` only as a spare. C21 is the D-form control that discharges P14.
+
+**(g) R11.** Loads are anchored by the debugger-written counting pattern: the value names the offset, and `ld` at XO 0 on the same pattern is green. Stores are anchored by `dump` at the Python-computed EA. If every store address shifted one byte, `std value` and `stdu value` red. The source has to be eight distinct bytes. A repeated byte survives a one-byte shift under a sloppy compare.
+
+**(h) R8.** N/A. The predicates are equalities: opcode, XO, `ra==0`, `imm==0`, and a width test this round does not add. No relational compare against a bound.
+
+**(i)** Update rows use DS≠0 (C4, C15). An illegal-XO row's channel is the sentinel (RT, or the dump window for a store), RA unchanged, and the `fatal` text in the transcript; the word is last in its session; `li` is before it. A positive-word `lwa` is (e).
+
+**(j)** Census expectation stays the disassembler's text. `expect_unasm` rebuilds that text from the same `ds` and `xo` it just encoded (`ppc_dsform_probe.py:363-370`), so a wrong XO in `place()` matches on both sides. The value oracles do not use that path: `ea_ds` takes the DS field only. Pin the three opcode-58 raw words to the literals the witness already printed (`e894ff90`, `e8b5ffa1`, `e8d6000a`) so the census is not only a round-trip. That is a strengthening, not a new architectural oracle.
+
+**(k)** Closed. One ask-again after a clean table. The set does not grow a DS=0 axis, a positive `lwa`, an RA=RT check, a disassembler mnemonic, an indexed form, a 32-bit gate, or an alignment row.
+
+Symptom rows, all required red on the base binary before the edit: `ldu value`, `ldu RA`, `lwa value`, `stdu value`, `stdu RA`, `xo58 bad`, `xo622 bad`, `xo623 bad`, `ldu ra0`, `stdu ra0`. Controls beside them: `ld value`, `ld RA`, `lwa RA`, `std value`, `std RA`, `lwz odd` (D&3≠0), one `live` per session, `neg apparatus`, `unasm census`. Names stay within the probe's 15-character assert.
+
+## Q3
+
+**(a)** The witness file stays byte-identical. The detector is a new `regress/ppc_dsform_probe.py`. Sessions, in order: the load session (C1, C4, C8, C21, `li` last); the store session (C13, C15, then `dump`); five stopping sessions (C12, C19, C20, C6, C17), each `li` then one word; the bogus-TYPE control. No 32-bit session.
+
+Header of the detector, not of the frozen witness: CONTRACT claims the five forms, the three illegal XOs, and the two RA=0 stops. NOT CLAIMED keeps indexed forms, translation, MSR SF, page-crossing, RA=RT, the 32-bit illegality (including the post-fix delta), alignment, and the disassembler's mnemonics. SYMPTOM is the ten rows above. The census sentence stays an observation about raw halfwords.
+
+**(b)** Gate 13, `regress/gate_ppc.sh`, immediately before `need_file` of the NetBSD image (line 203), next to the `rldicl` block. Same machine as that block: `-E bareppc -M 64`. The skips that can swallow it are `need_exec` and a missing `python3`, which already skip the other register probes. Placing it after the image turns a red detector into a skip. Gate 14 is the wrong home: its earlier skips are ARM and m88k prerequisites, and a PPC probe there does not run when those are missing.
+
+**(c)** READ in the working-tree checker (this file differs from HEAD; the `#570` manifest text matches the brief's HEAD quote, shifted by about fifteen lines). `domain()` is `git ls-files -- *.py`. An unlisted tracked `.py` is UNCLASSIFIED. A witness that a gate invokes is GATED WITNESS. So: one `CLASS_DETECTOR` line for `ppc_dsform_probe.py`, naming gate 13 and the pin, and one `CLASS_WITNESS` line for `artifacts/ppcdsformxo/witness_20261024/ppc_dsform_probe.py` once that file is committed. `ppc_dsform_dummy.bin` is not `.py`. Kill-table drivers and frozen copies stay `*.py.txt` / `*.sh.txt`. A `*_probe.py` classified as `tool` is MISFILED (`check_probe_wiring.py:4203-4206`).
+
+**(d)** Score it the way gate 14 scores `#570`: sentinel present and exactly once, `RESULT` parsed with both halves pinned, `CONTROL=OK` once, `SYMPTOM=ABSENT` once, every row by name with `count "^$v  .*ok$"` = 1, emitted / green / red pinned, red = 0. Ignore the exit status (`|| true`); this probe exits 1 when any row is red. Add one pin on `PPC_DSFORM_RED=none` exactly once, the same lesson as the `rldicl` block's single SCORE line. Each stopping session's `live` row is already in the name list. The `%-16s` column and the 15-character assert are already in the witness and have to stay.
+
+**(e)** `probe:regress/artifacts/ppcdsformxo/witness_20261024/ppc_dsform_probe.py` is the right pointer to the load witness that exists. It is not a store measurement. The ledger term should not be edited to imply the store half until the base-binary run of the detector exists.
+
+**(f)** READ. `rlwimi`, `rldimi`, and `rldicl` do not execute this arm (`li` is opcode 14, a different case; the rotates are 21/23/30). `ppc_rounding_probe.py` does: `lfs`/`lfsu`/`lfdu`/`stfs`/`stfsu`/`stfdu`/`stfd` and `stw`, all through this arm, behind the NetBSD image. Re-run it. It will not catch a blanket mask, because those displacements are 0 mod 4. C21 is that catch. I found no other top-level PPC probe that places a D-form load or store.
+
+## Q4
+
+The disassembler fold is real, guest-invisible, and already shown by the witness census (`ld r5,-95(r21)`, `ld r6,10(r22)`). File it at low severity with that witness. No new run. Out of this round, as Q1(g).
+
+`ldx`, `ldux`, `lwax`, and `lwaux` are real and out of scope. READ: `opcodes_ppc.h` has `PPC_31_STDX` (149) and `PPC_31_STDUX` (181), and the indexed arm implements them with no width test. There is no define for XO 21, 53, 341, or 373, so those words hit opcode 31's `default: goto bad` on every CPU, including PPC970. A 64-bit guest's indexed doubleword load or algebraic word load stops the emulator; the matching store is implemented. No hit for those names in `OUTSTANDING_BUGS.md`. I did not open `ledger.json`. R17: different site, not witnessed here, and the oracle would be an indexed EA. Its own round if it is filed. The class is an unimplemented instruction (CPU stop), not a misdirected store.
+
+Also guest-invisible and not this round: the disassembler has no case for `LFDU`, `LFSU`, `STFDU`, or `STFSU` (no matches in `cpu_ppc.c`). Those opcodes execute since `#310` and disassemble as an unimplemented primary opcode.

@@ -1,0 +1,63 @@
+#!/usr/bin/env python3
+"""#571 kill-table variants (BUILD_SPEC.md section 6 as amended by 10 item 3 / 10b item 4; PREDICTIONS.txt).
+usage: legs571.py <leg> <cpu_ppc_instr.c-of-a-leg-clone>      (--list prints the leg ids)
+Each variant is an exact-text transform of the FIXED arm (patch571.py's two case blocks); every anchor must
+occur exactly once in its block, and the result must differ from the input.  Clause (b) legs reinstate HEAD's
+case lines; (c) is the identity body; (d) and growth legs weaken or widen one predicate of the repair."""
+import io, re, sys
+
+HEAD_LD = "\t\tcase PPC_HI6_LD:   load=1; size=3; break;\n"
+HEAD_STD = "\t\tcase PPC_HI6_STD:  size=3; break;\n"
+NOP_LD = "\t\tcase PPC_HI6_LD:\n\t\t\tic->f = instr(nop); break;\t/*  L5 identity body  */\n"
+NOP_STD = "\t\tcase PPC_HI6_STD:\n\t\t\tic->f = instr(nop); break;\t/*  L5 identity body  */\n"
+MASK = "\t\t\timm = (int16_t)(iword & ~3);\n"
+SHARED = "\t\tra = (iword >> 16) & 31;\n\t\timm = (int16_t)iword;\n\t\tload = 0; zero = 1; size = 0; update = 0; fp = 0;\n"
+SHARED_MASKED = "\t\tra = (iword >> 16) & 31;\n\t\timm = (int16_t)(iword & ~3);\n\t\tload = 0; zero = 1; size = 0; update = 0; fp = 0;\n"
+
+def block(t, label):
+    """The fixed case block: from the case label line through its closing '\t\t\tbreak;\n'."""
+    start = t.index("\t\tcase %s:\n" % label)
+    end = t.index("\t\t\tbreak;\n", start) + len("\t\t\tbreak;\n")
+    return start, end
+
+def sub1(s, old, new):
+    assert s.count(old) == 1, "anchor count %d: %r" % (s.count(old), old.strip())
+    return s.replace(old, new)
+
+def on_block(t, label, fn):
+    a, b = block(t, label)
+    return t[:a] + fn(t[a:b]) + t[b:]
+
+def on_both(t, fn):
+    return on_block(on_block(t, "PPC_HI6_LD", fn), "PPC_HI6_STD", fn)
+
+LEGS = {
+ "3":   lambda t: on_block(on_block(t, "PPC_HI6_LD", lambda s: HEAD_LD), "PPC_HI6_STD", lambda s: HEAD_STD),
+ "4b":  lambda t: on_block(t, "PPC_HI6_LD", lambda s: HEAD_LD),
+ "4c":  lambda t: on_block(t, "PPC_HI6_STD", lambda s: HEAD_STD),
+ "5":   lambda t: on_block(on_block(t, "PPC_HI6_LD", lambda s: NOP_LD), "PPC_HI6_STD", lambda s: NOP_STD),
+ "6a":  lambda t: on_block(t, "PPC_HI6_LD", lambda s: sub1(s, "case 1:\tupdate = 1; break;", "case 1:\tbreak;")),
+ "6b":  lambda t: on_block(t, "PPC_HI6_STD", lambda s: sub1(s, "case 1:\tupdate = 1; break;", "case 1:\tbreak;")),
+ "7":   lambda t: on_both(t, lambda s: sub1(s, MASK, "")),
+ "8a":  lambda t: on_block(t, "PPC_HI6_LD", lambda s: sub1(s, "case 2:\tsize = 2; zero = 0; break;", "case 2:\tbreak;")),
+ "8b":  lambda t: on_block(t, "PPC_HI6_LD", lambda s: sub1(s, "case 2:\tsize = 2; zero = 0; break;", "case 2:\tsize = 2; break;")),
+ "8c":  lambda t: on_block(t, "PPC_HI6_LD", lambda s: sub1(s, "case 2:\tsize = 2; zero = 0; break;", "case 2:\tzero = 0; break;")),
+ "9a":  lambda t: on_both(t, lambda s: sub1(s, "case 0:\tbreak;", "case 0:\tupdate = 1; break;")),
+ "9b":  lambda t: on_both(t, lambda s: sub1(s, "case 0:\tbreak;", "case 0:\timm += 1; break;")),
+ "10":  lambda t: on_block(on_block(t, "PPC_HI6_LD", lambda s: sub1(s, "\t\t\tload = 1; size = 3;\n", "\t\t\tload = 1; size = 3; update = 1;\n")),
+                           "PPC_HI6_STD", lambda s: sub1(s, "\t\t\tsize = 3;\n", "\t\t\tsize = 3; update = 1;\n")),
+ "11":  lambda t: sub1(t, SHARED, SHARED_MASKED),
+ "12a": lambda t: on_block(t, "PPC_HI6_STD", lambda s: sub1(s, "\t\t\tdefault: goto bad;", "\t\t\tcase 2: goto bad;\n\t\t\tdefault: break;")),
+ "12b": lambda t: on_block(t, "PPC_HI6_LD", lambda s: sub1(s, "\t\t\tdefault: goto bad;", "\t\t\tdefault: break;")),
+}
+
+if __name__ == "__main__":
+    if sys.argv[1] == "--list":
+        print(" ".join(LEGS)); sys.exit(0)
+    leg, path = sys.argv[1], sys.argv[2]
+    t = io.open(path, encoding="utf-8", newline="").read()
+    assert "#571" in t, "not the fixed source"
+    u = LEGS[leg](t)
+    assert u != t, "variant %s changed nothing" % leg
+    io.open(path, "w", encoding="utf-8", newline="").write(u)
+    print("VARIANT %s applied to %s" % (leg, path))

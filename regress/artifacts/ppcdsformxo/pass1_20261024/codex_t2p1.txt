@@ -1,0 +1,267 @@
+VERDICT: READY WITH CHANGES -- The five-form repair is sound; tighten displacement placement, add the CPU-width refusal, expand the floor rows, and preserve a separate disassembler scope.
+Q1: DERIVED — Approve with explicit masking order, 32-bit rejection, and disclosed invalid-form limitations.
+Q2: DERIVED — Expand the joint displacement/RA cells and D-form controls; store-side pre-fix measurements remain owed.
+Q3: DERIVED — Use gate 13, twelve sessions for the selected coverage, and strict protocol and row-identity pins.
+Q4: READ / NOT CHECKABLE — Confirmed separate decoder/disassembler gaps; independent ledger deduplication is unavailable within the permitted scope.
+
+## Q1
+
+**READ — Review basis.** I read the complete packet and checked the reviewed tree at `add098b9d94221c623e23fdd13fa26ec2793ab63`, using HEAD blobs for source review and the wiring checker. No build, emulator, probe, or mutation leg was executed.
+
+**(a) READ / DERIVED — P1, P3: displacement and handler slots.** The producer reads four instruction bytes into `uint32_t iword`; nothing restricts the low halfword to an already aligned displacement. The requested twenty cells are:
+
+| Signed DS | Raw signed halfword, XO 0 / 1 / 2 / 3 | Masked displacement, XO 0 / 1 / 2 / 3 |
+|---:|---|---|
+| −8192 | −32768 / −32767 / −32766 / −32765 | −32768 / −32768 / −32768 / −32768 |
+| −1 | −4 / −3 / −2 / −1 | −4 / −4 / −4 / −4 |
+| 0 | 0 / 1 / 2 / 3 | 0 / 0 / 0 / 0 |
+| 1 | 4 / 5 / 6 / 7 | 4 / 4 / 4 / 4 |
+| 8191 | 32764 / 32765 / 32766 / 32767 | 32764 / 32764 / 32764 / 32764 |
+
+Thus P1 holds: clearing the two low bits gives `EXTS(DS || 00)`. The intended flags select:
+
+| Form | `(size, zero, load, update)` | Nonzero / zero displacement slots |
+|---|---|---|
+| `ld` | `(3,1,1,0)` | 15 / 31 |
+| `ldu` | `(3,1,1,1)` | 47 / 63 |
+| `lwa` | `(2,0,1,0)` | 10 / 26 |
+| `std` | `(3,1,0,0)` | 7 / 23 |
+| `stdu` | `(3,1,0,1)` | 39 / 55 |
+
+All five have existing handlers. None of these exact combinations selects `ppc_instr_invalid`; no handler change is required. Eight-byte loads must retain `zero=1`, despite that flag not representing an additional architectural extension operation for a doubleword. Sources: [decoder arm](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:4269), [generated table](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/tmp_ppc_loadstore.c:893).
+
+**(b) READ / DERIVED — P2 needs qualification.**
+
+| Input partition | Difference between raw and masked consumers |
+|---|---|
+| XO=0 | Neither displacement value nor table choice changes. |
+| XO≠0, DS≠0 | The table half stays the same; a raw `arg[2]` still shifts the address by XO. |
+| XO≠0, DS=0 | The table choice differs by 16, and a raw `arg[2]` shifts the address by XO. |
+
+On PPC970, both table halves delegate to the generic handler, which adds `arg[2]`. Consequently, **raw table selection plus masked argument remains value-equivalent**, whereas a raw argument is wrong for every legal nonzero-XO displacement, not merely DS=0. Illegal XO inputs must leave before access.
+
+The record should explicitly require the masked assignment **before both table selection and `ic->arg[2]` assignment**. C5/C10/C16 can establish correct addressing; they cannot prove which equivalent table half ran. Source: [generic and fast handlers](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr_loadstore.c:41).
+
+**(c) READ / DERIVED — P6: illegal XO disposition.** `goto bad` is R12 member **3: announced refusal**, realized here as a guest CPU stop. It is neither silent retirement nor a guest Program interrupt. The common tail already supplies `UNIMPLEMENTED instruction`; follow the silent local `default:goto bad` idiom without another diagnostic or latch.
+
+No existing illegal-instruction Program-delivery path was found. The generic `ppc_exception()` can calculate a numerical vector, but that alone does not supply the missing architectural cause handling. Member **7, implementing that support**, is the omitted alternative; it belongs to a separate design. Source: [common refusal tail](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1983).
+
+**(d) READ / DERIVED — P4/P5, C6/C7/C17/C18.** Setting `update` makes RA=0 `ldu` and `stdu` reach the existing refusal. That correctly prevents their former absolute-address access, with the CPU-stop limitation disclosed.
+
+For successful `ldu` with RA=RT:
+
+- HEAD leaves RT holding the doubleword from EA+1.
+- The repair loads RT, then overwrites that same register with EA.
+
+Retain D1’s **“invalid, disclosed, not checked”** disposition. Book I permits boundedly undefined results for this invalid form, and sibling update loads lack the alias check too. Absence of Program delivery alone would not justify this choice; the invalid-form rule and sibling behavior do.
+
+`stdu` RA=RS is valid. The handler copies the old source before access and updates RA afterward. Nothing should reject C18.
+
+**(e) READ / DERIVED — P7/C24: choose option (ii).** Add the `bits == 32` refusal for primary opcodes 58/62, before XO-form dispatch. The opcode-30 precedent and PEM :6253 provide R13’s transferred warrant. This stays within the same decoder site under R17; it does not require repairing indexed siblings.
+
+Prove both primary-opcode labels with separate live 32-bit refusal observations, including unchanged architectural data and the expected stop. PPC970 with MSR.SF clear remains a **64-bit implementation** and must not be rejected.
+
+P7’s sibling census is incomplete:
+
+- `sld`, `ldarx`, `stdcx.`, and `mtmsrd` lack decoder width guards.
+- `extsw` lacks a decoder width guard, but its MODE32 handler diagnoses and returns.
+- `mulld`, `divd`/`divdu`, `srd`, `srad`/`sradi`, and `cntlzd` lack execution cases; `td` has a define but no execution case.
+
+These are scope disclosures, not additions to this repair.
+
+**(f) READ / DERIVED — P8: preserve alignment behavior.** Neither correctness nor the detector’s stated domain should require naturally aligned EA. Unrestricted bases plus a displacement divisible by four permit every byte-address residue. An eight-aligned example is only a selected test point.
+
+Also qualify the brief’s wording: a base not divisible by eight does not *necessarily* produce an unaligned EA; base residue four plus displacement residue four produces residue zero.
+
+**(g) READ / DERIVED — P10/C25: file the disassembler separately.** It shares the fold, but correcting it changes another site and its census oracle. Under R17, keep this round’s execute repair separate.
+
+The census contract should say:
+
+> Checks the emitted word and current disassembler representation of its fields; does not independently establish the intended DS-form semantics.
+
+The raw halfword does contain XO numerically, so “cannot check any XO information” would overstate the limitation. Its real weakness is deriving both encoded words and expected text from the same supplied fields.
+
+Nonrunning disassembly exits before the preview read. Running previews use `NO_EXCEPTIONS`; the memory path permits device callbacks under that flag only for devices marked as having no read side effects. The witness’s RAM previews therefore do not undermine its guest-state observations.
+
+**(h) DERIVED — Required records.** Carry the CHANGELOG round block, `/* #571: */` tags at actual edited sites, frozen witness pointer, width decision, refusal limitations, and detector contract. Explicit placement before both `imm` consumers and independent intended-form validation are design details the research texts did not adequately specify.
+
+## Q2
+
+**(a) READ / DERIVED — P9: the store half remains unmeasured.** The source supports its predicted behavior, but that does not discharge clause (a). The expanded detector must supply pre-edit BASE receipts for:
+
+| Cells | Required observable |
+|---|---|
+| C13, `std` | Exact eight destination bytes; RA unchanged. |
+| C15, nonzero-displacement `stdu` | Exact eight destination bytes; RA becomes EA. |
+| C16, zero-displacement `stdu` | Exact destination bytes; numeric RA preservation alone cannot prove update. |
+| C17, invalid RA=0 `stdu` | Expected refusal and no memory/register effects, at both displacement partitions. |
+| C19/C20, illegal stores | Expected refusal; destination, neighboring bytes, and RA unchanged. |
+
+Use the debugger’s **direct memory dump as the primary destination anchor**. A `lbz` or `lwz` reload can corroborate it; another DS-form load alone is insufficient independence.
+
+For legal stores, compare every target byte and boundary canaries. To cover the named old shifts, include the neighboring region through EA+10: an eight-byte store starting at EA+3 ends there. Check the lower boundary too. The pre-fix `std` control should stay green; the `stdu` destination/update and illegal-store refusal/effect checks supply the reds.
+
+**(b) READ / DERIVED — P13/P15: reinstatement must cover each repair effect.**
+
+| Reinstated behavior | Directly affected rows |
+|---|---|
+| Raw displacement | `ldu`/`lwa` values and `stdu` destinations. |
+| Original opcode-58 case, masking retained | `ldu` update, `lwa` width/sign, and applicable refusals. |
+| Original opcode-62 case, masking retained | `stdu` update and applicable refusals. |
+| Removed width rejection | Both primary-opcode 32-bit refusal observations. |
+
+Restoring the complete old arm should restore the original load symptoms and predicted store symptoms. P13’s “three lines” is not a complete site inventory once the width guard joins; record actual edited guards and effects. No disassembler or handler reinstatement is owed when those files remain outside the repair.
+
+Separate refusing sessions so missing later execution cannot masquerade as the intended value or destination failure. An internal-error exit must be recorded as such, not described as a measured wrong-width access.
+
+**(c) READ / DERIVED — Identity medium and record form.** Choose the recommended identity bodies for 58/62. Once the proposed gate wiring exists, the permissible construction record is:
+
+> `(c): by construction via ld value and gate 13's named-row equality plus literal N/N pins, leg not run`
+
+That is **not yet discharged at HEAD**, where the detector and its wiring do not exist.
+
+The frozen eight-row probe predicts **4/8** under that identity medium:
+
+- Red: `ld value`, `ldu value`, `ldu RA after`, `lwa value`.
+- Green: `lwz value`, `live`, `unasm census`, `neg apparatus`.
+- `CONTROL=FAIL`; `SYMPTOM=PRESENT 3/3`.
+
+A wholly dead executable is different: no-output exit 0 predicts 0/8; no-output exit 1 predicts 1/8 because the negative-apparatus row passes. An absent executable raises an uncaught subprocess error and supplies no completion sentinel. No expanded-detector numerical score is established until its source and row set are frozen. Source: [frozen probe](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/ppcdsformxo/witness_20261024/ppc_dsform_probe.py:398).
+
+**(d) READ / DERIVED — Correct the partition and floor.** The omitted body predicate is **`ic->f == NULL`**. Its producer makes it the integer-versus-FP label distinction; it is not another independent Boolean axis. Likewise, width, update, size, and extension must follow their actual producer relationships.
+
+Section 7 is overlapping coverage descriptions, not a disjoint partition. In particular, C14’s “DS=0 **or** RA=0” hides their intersection.
+
+For the five legal forms, enumerate:
+
+> five `(opcode,XO)` forms × displacement `{zero, nonzero}` × RA `{zero, nonzero}` = **20 decoder-input cells**.
+
+These comprise twelve non-update access cells, four valid-update access cells, and four invalid-update refusal cells. Valid `ldu` accesses exclude RA=RT; that invalid alias remains separately disclosed.
+
+| Cells | Disposition |
+|---|---|
+| C1–C6, C8, C10–C17, C19/C20 | **FLOOR**, with overlapping displacement/RA descriptions expanded into their joint cells. |
+| C7 | **Clause (e)**: invalid load/base alias is not compared in the decoder. |
+| C9 | **Clause (e)**: loaded-word sign is not a decoder body partition. |
+| C18 | **Clause (e)** as an alias axis; useful additional coverage that I would retain. |
+| C21–C23 | **FLOOR for the D-form label scope controls**, as detailed below. |
+| C24 | **FLOOR** for both primary labels under the selected width rejection. |
+| C25 | Separately filed disassembler; current census limitation disclosed. |
+| C26 | **Clause (e)**: access-failure ordering resides in an unedited callee. |
+
+**DERIVED — C5/C10/C16 remain address/value floor cells**, although they cannot distinguish equivalent table halves. Critically, **C6/C17 need both zero and nonzero displacement**: dropping update at DS=0 is invisible in a valid update access, but changes an RA=0 refusal into an access. The invalid joint cells close that otherwise invisible channel.
+
+**READ / DERIVED — R18 applies to all 22 D-form labels**, because `main_opcode` is retested and feeds flags or `ic->f` consumed below the join:
+
+- Loads: `lbz`, `lbzu`, `lhz`, `lhzu`, `lha`, `lhau`, `lwz`, `lwzu`.
+- Stores: `stb`, `stbu`, `sth`, `sthu`, `stw`, `stwu`.
+- FP: `lfd`, `lfdu`, `lfs`, `lfsu`, `stfd`, `stfdu`, `stfs`, `stfsu`.
+
+C21/C22 cannot be one representative each while C23 is blanket disclosure. Their scope controls need nonzero low displacement bits. This does not authorize crossing every label with arbitrary data, aliases, alignment, or machine modes.
+
+Illegal XO rejection occurs before downstream access partitions, so C12/C19/C20 do not need arbitrary DS/RA products. Likewise, placing width rejection before XO dispatch permits its floor to be the two primary-label refusals.
+
+**READ — C26’s categorical reachability premise is false.** Translation-off accesses can fail through `memory_warn_about_unimplemented_addr()` when the existing halt-on-nonexistent-memory setting applies. This does not make failure ordering part of the decoder repair. Sources: [memory failure return](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:695), [existing halt behavior](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/memory.c:645).
+
+**(e) READ / DERIVED — Classify the named variants accurately.**
+
+| Named variant | Required detecting channel |
+|---|---|
+| Mask retained, update dropped | Nonzero-displacement `ldu`/`stdu` RA rows; zero-displacement RA=0 refusal cells cover the invisible-update corner. |
+| Update retained, raw immediate kept | Load-value/store-destination rows; nonzero-displacement update values also differ. |
+| `lwa` left at size 3 | **With repaired `zero=0`, this selects invalid slot 11/27 and exits internally.** It does not consume a neighboring word. |
+| Original doubleword flags retained for `lwa` | C8’s independently expected four-byte sign-extended result differs. |
+| XO=0 address increased by one | Anchored C1/C13 value/destination controls differ. |
+
+The third variant’s existing gloss must be corrected. Neighbor consumption requires the old doubleword flag combination, including `zero=1`.
+
+The repair must preserve all 22 D-form immediate meanings and all 64-bit-CPU XO=0 `ld`/`std` meanings. C21–C23 and the expanded C1–C3/C13–C14 controls establish those preservation claims. The selected 32-bit rejection is an intentional exception to preservation.
+
+**(f) DERIVED — Controls.** C1 and C13 alone are insufficient for the body-tested joint cells. Include zero-displacement and absolute-base controls, including their intersection. RA=0 controls must distinguish the architectural zero base from the contents of register r0.
+
+Keep the original `lwz +8` control: it anchors the witness’s `lwa` comparison. Add the displacement-scope controls; do not substitute one purpose for the other. Non-update RA-preservation checks need a nonzero displacement to expose an erroneous update.
+
+**(g) DERIVED — Anchor rule.** A one-byte address shift reds the independently addressed destination/boundary comparison for C13/C15/C16. Debugger-side memory reads anchor the position outside instruction decoding. Eight distinct source bytes help diagnose the shift but are not logically necessary; the payload and surrounding bytes must make the shifted write distinguishable.
+
+**(h) READ / DERIVED — D2 is N/A.** No relevant predicate is a relational comparison against a constant boundary. Equality, truth, opcode selection, and the zero-immediate partition do not create D2 edge obligations.
+
+**(i) DERIVED — CHANNEL requirements.**
+
+- Valid update-effect rows for C4/C15, and C18 if retained, need nonzero displacement. C5/C16 are address checks, not update-effect checks.
+- Illegal-XO rows need preceding liveness, target-specific refusal evidence, and independently observed preserved state. Unchanged RA alone cannot distinguish them from HEAD’s non-update behavior.
+- C8’s negative word distinguishes sign from zero extension. C9 remains disclosed extra coverage, not a mandatory sign axis.
+- Every stop word belongs last in its own session; no post-stop liveness expectation.
+
+**(j) READ / DERIVED — Census.** Keep current-text expectations in this round, with the stated limitation. Independently pin the intended label-to-opcode/XO relationship; otherwise a wrong encoder-call XO can agree with its own expected text.
+
+If architectural disassembly is later repaired, expected mnemonics must derive from intended form labels. That later oracle correction owes R16’s ordering: corrected expectations, committed-tree red receipt, then product edit.
+
+**(k) DERIVED — Bounded closure.** The finite obligations above follow the edited decoder and its tested partitions. Arbitrary register identities, further sign samples, aliases, alignment, translation, and SF combinations do not become independent mandatory axes. Apply one ask-again after the clean table, disposing each finding under R15 rather than starting another expansion cycle.
+
+## Q3
+
+**(a) READ / DERIVED — Twelve sessions for this chosen design.**
+
+| Order | Sessions |
+|---|---:|
+| Legal loads and load-side controls | 1 |
+| Legal stores and store-side controls | 1 |
+| Illegal XO: 58/3, 62/2, 62/3 | 3 |
+| RA=0 updates: `ldu`/`stdu`, each at zero/nonzero displacement | 4 |
+| 32-bit refusal: one per primary label, 58 and 62 | 2 |
+| Bogus-machine apparatus control | 1 |
+| **Total** | **12** |
+
+The census runs before execution within each real session and adds no separate session. D-form controls and optional C18 coverage fit within the non-stopping sessions.
+
+Retain the frozen witness byte-identical. The promoted detector needs revised title, CONTRACT/NOT CLAIMED, session descriptions, row enumeration, CONTROL/SYMPTOM membership, and expanded census expectations. Assign symptom membership by **individual oracle**, not entire input cell: some preserved-state observations remain green on BASE even when refusal or destination observations fail.
+
+P11 is sufficient as load-side pre-fix evidence: actual result values come through the affected decode, alongside the counting-pattern anchor and controls. Its same-script post-fix green remains owed. P12 holds for these RAM/register/refusal rows: both machine defaults are PPC970. It does not establish equivalence for future device-dependent rows.
+
+**(b) READ / DERIVED — Gate 13, before the NetBSD prerequisite.** Place the block after executable/Python prerequisites and before `need_file "$IMAGES/netbsd401-macppc-GENERIC"`.
+
+Missing executable or Python still prevents its execution. A later missing image must preserve an already recorded DS failure; a green DS block followed by image absence does not establish rounding coverage. Gate 14 unnecessarily adds its eleven preceding skip points. Source: [gate 13 placement](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_ppc.sh:103).
+
+**(c) READ / DERIVED — MANIFEST.** The checker’s keys are relative to `regress/`:
+
+- `ppc_dsform_probe.py`: `CLASS_DETECTOR`, naming gate 13 and the final literal row pin.
+- `artifacts/ppcdsformxo/witness_20261024/ppc_dsform_probe.py`: `CLASS_WITNESS`.
+
+Classification is needed when staged, not only after commitment. The frozen witness directory contains only one `.py`; its dummy `.bin` is outside the domain. Keep archival drivers and frozen instruments as `.py.txt`/`.sh.txt`, or explicitly classify any actual Python files. The checker recursively examines committed-or-staged Python paths. This was checked in its HEAD blob.
+
+**(d) READ / DERIVED — Strengthen the #570 pattern.** Require:
+
+- Exactly one occurrence of every protocol prefix, then exact accepted content.
+- Literal `RESULT=N/N`, `CONTROL=OK`, `SYMPTOM=ABSENT`, and `RED=none`.
+- One exact completion sentinel, with completion last.
+- Every expected row identity exactly once and green.
+- Emitted rows=N, green=N, red=0.
+- Final liveness/progress checks for normal sessions; preceding liveness and target-specific stop checks for refusal sessions.
+
+Do not copy #570’s accepted-value counts alone: one `CONTROL=OK` can coexist with an extra contradictory `CONTROL=FAIL`. Gate 13’s “count every prefix, then validate its content” rule is stronger. Preserve unique names and the ≤15-character/padded-column invariant.
+
+The expanded literal **N is not established by the existing eight-row source**; freeze the chosen row list before wiring it.
+
+**(e) DERIVED — Ledger witness term.** Correct:
+
+`probe:regress/artifacts/ppcdsformxo/witness_20261024/ppc_dsform_probe.py`
+
+Keep its load-only scope explicit.
+
+**(f) READ — Collateral consumers.** The 28-row `rlwimi`, 29-row `rldimi`, and 24-row `rldicl` probes are register-only; they do not execute this arm. Keep them green as gate collateral checks. The 138-row rounding probe does execute its D-form integer/FP access machinery and is a direct consumer.
+
+No additional D-form-consuming PPC gate or guest rig was identified in the permitted top-level regression sources. In particular, gate 15’s halt probe executes opcode-59/63 words; its memory dump is debugger-side, so it is not that missing consumer.
+
+Also narrow Q3(f)’s wording: this is the arm for the listed 24 labels, not literally every PowerPC D-form load/store. `lmw`/`stmw` have a separate decoder arm at `cpu_ppc_instr.c:4568`.
+
+## Q4
+
+**READ / DERIVED — Disassembler fold: separate LOW diagnostic-correctness finding.** The frozen load transcript and output already witness its wrong names/displacements. Store-side disassembly remains source-derived. File separately under R17, with the measured-load limitation and R16 obligation for its eventual corrected oracle.
+
+**READ — Indexed loads are genuinely absent from execution dispatch.** `ldx`, `ldux`, `lwax`, and `lwaux` have no execution cases and reach opcode 31’s default refusal, while `stdx`/`stdux` are dispatched. This is a separate valid-instruction/guest-CPU-stop defect, not a host-process exit. It belongs outside this decoder round under R17.
+
+**NOT CHECKABLE — Existing filing under another name.** The packet’s unsuccessful ledger search is supplied evidence, not an independently verified exhaustive deduplication result. The prohibited ledger cannot support a stronger conclusion here.
+
+**READ / DERIVED — Additional diagnostic gap.** The disassembler also omits primary-opcode handling for `lfdu`, `lfsu`, `stfdu`, and `stfsu`, although the execute arm implements them. They fall to its generic unimplemented-primary-opcode text. Treat this as another separate diagnostic finding. It also limits what an unchanged disassembler census can attest for C23; independently checking intended encodings remains necessary.
+
+**READ / DERIVED — Other corrections found during review.** Preserve the expanded P7 census, the corrected C26 reachability statement, the size-only `lwa` variant’s actual internal-error channel, and the contradictory-protocol-line issue in the round’s records. None licenses silently expanding this repair into those unrelated product sites.
