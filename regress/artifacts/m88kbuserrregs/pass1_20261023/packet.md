@@ -1,0 +1,3443 @@
+# PASS-1 DESIGN REVIEW -- round #570, ledger row `m88kbuserrregs` (research item T36) -- GXemul hardened fork
+**Brief v1, FULL form (for seats that can read files; everything is inlined anyway).**  Drafted 2026-10-23.
+Tree under review: `GXEMUL-SEC/` at HEAD `7fca7187` -- a RECORDS-ONLY commit on top of `66920157` (it touched
+`CHANGELOG.md`, `regress/pass2_ledger.tsv`, `tools/pipeline/ledger.json` and `tools/pipeline/matrix.html`); every
+`src/` file and every top-level `regress/*.py` / `*.sh` is byte-identical at the two (section 4).  Built from
+`GXEMUL-SEC/tools/BRIEF_TEMPLATE.md` (working tree).
+
+## READ THIS FIRST — PLEASE DO NOT SIMPLY RATIFY
+
+A recent panel had seven of nine seats confirm a premise this brief's author stated
+wrongly.  **Check the premises, not just the derivations.**  Where I state something as
+fact, ask whether it is true.  A seat that re-derives a premise from something this brief
+did NOT give it is worth more than a seat that agrees.
+
+**THE TREE UNDER REVIEW IS `GXEMUL-SEC/src/`.**  There are THREE pristine-2021-upstream
+copies of GXemul under the project root (`./src/` and two under
+`_archive/audit-results-*/builds/`).  They are NOT this fork.  If your line numbers
+disagree with mine by hundreds you are reading one of them — say so rather than
+reconciling.
+
+**If you cannot read files that is expected** — every fact you need is inlined.  Name any
+premise you cannot settle from this packet rather than guessing at it.
+
+**Where this brief states an ARITHMETIC claim — an index range, an offset, a count of
+reachable addresses — ENUMERATE it rather than reasoning about it.**  Walk the values.
+A derivation that skips one masking line reads exactly like a correct one.
+
+**And ENUMERATE THE RIGHT DOMAIN — a domain is itself a premise.**  Ask what the PRODUCER of
+these values can actually emit before you walk them.  Walking every member of a set you have
+not audited is not enumeration; it is a derivation with more steps, and it reads exactly like
+a correct one.
+
+**VERDICT LINE FIRST**, so your answer survives truncation.
+
+---
+
+## 0. What this is, what this pass is for, and how to answer
+
+**The project.**  GXemul is a computer-architecture emulator: a developer tool that runs legacy operating systems
+inside a software sandbox.  This fork is a hardening effort -- ordinary software-correctness work on the emulator's
+own C code and the regression tests that keep each correction fixed.  The *guest* is a program or OS running INSIDE
+the emulator; the *host* is the emulator process.  A *variant* or *mutant* below is a deliberately altered copy of the
+code, used to measure whether a regression test notices the alteration (standard mutation testing).
+
+**The defect, in one paragraph.**  On the two 88K machines this tree models with MC88200 CMMUs (MVME187 and
+LUNA-88K), when a guest load or store reaches a device that REFUSES it, the emulator raises the CPU's access exception
+but leaves the CMMU's P-bus fault status register (PFSR, offset 0x108) and P-bus fault address register (PFAR,
+offset 0x10c) holding whatever they held before, so a guest fault handler that reads them to classify the fault reads
+stale values.  And at one LUNA-88K address (0x3ffffff0) the board device writes PFSR itself but then SERVES the access:
+no exception, no PFAR.  It is a WRONG-RESULT defect; no host process ends anywhere in this round.
+
+**This pass.**  PASS 1: a design review BEFORE any edit.  The fix design was adjudicated and AGREED by two seats
+(section 3), and a rung-3 witness reproduced the defect on the committed tree (section 2).  Your job is to check the
+design and the regression rows it owes.  Section 5's premises are settled -- re-open one only if you find it false,
+and then say so loudly.  Section 6 states the premises I am least sure of AS QUESTIONS.  Section 7 is my own partition
+of the cells -- check it, do not ratify it.
+
+**Hard limits.**  READ-ONLY.  Do not build, run, copy or modify anything in the repository.  Nobody is asked to write a
+guest program or a code variant: where a question needs a construction, it names the candidates the records already
+contain and asks you to classify them.
+
+**Reading scope (seats that can read files).**  `GXEMUL-SEC/src/` and the top-level `GXEMUL-SEC/regress/*.py`,
+`*.sh` and `*.c`.  **Do not read `GXEMUL-SEC/regress/artifacts/` or `GXEMUL-SEC/tools/pipeline/ledger.json`** --
+everything this brief needs from them (the witness, the two seat answers, the ledger row, the upstream diff) is
+inlined.  Files outside the repository are cited by ABSOLUTE path: the MC88100 manual text
+`C:\DocumentNoSnc\cc\GXEMUL\_scratchpad\mc88100.txt` and the OpenBSD 2.2 guest sources under
+`C:\DocumentNoSnc\cc\GXEMUL\_guest-src-openbsd22\sys\arch\mvme88k\`; their load-bearing passages are inlined in
+section 8.  At drafting time every cited `src/` file in the working tree was byte-identical to HEAD.  Two NON-cited
+files on the MVME187 machine (`src/devices/dev_pcc2.c`, `src/include/thirdparty/mvme_pcctworeg.h`) and two cited
+harness files (`regress/gate_offline.sh`, `tools/pipeline/check_probe_wiring.py`) carry uncommitted peer edits in the
+working tree; the harness excerpts in section 9 are quoted from HEAD.  If your line numbers disagree with this brief,
+say so rather than reconciling.
+
+**Answer format -- VERDICT LINE FIRST:**
+~~~~
+VERDICT: READY | READY WITH CHANGES | NOT READY -- <one line>
+Q1: <one line>   Q2: <one line>   Q3: <one line>   Q4: <one line>
+~~~~
+Then one section per question.  Mark each claim READ (you opened the source), DERIVED (from this packet) or NOT
+CHECKABLE.  Where you answer a premise in section 6, cite it by its number (P1..P12).
+
+---
+
+## 1. The defect -- as the ledger row and the queue describe it (VERBATIM)
+
+**Ledger row `m88kbuserrregs`** (`tools/pipeline/ledger.json` at HEAD `7fca7187`; identical at `66920157`): state `open`, sev `MED`, witness `none`, commits `''`.
+
+TITLE (VERBATIM):
+~~~~
+cpus/memory_rw.c MEM_M88K device-failure arm + devices/dev_luna88k.c case 0x3ffffff0 -- a refused device access raises the access exception without writing the CMMU fault status (PFSR=BERROR) and fault address (PFAR); the LUNA probe address writes PFSR only, no PFAR and no exception -- WRONG-RESULT (the guest's trap handler reads PFSR 0 for a bus error, per the fork's own vmedefaultkill measurement)
+~~~~
+STATE NOTE (VERBATIM):
+~~~~
+QUEUE: external-research batch 5 of 10 (regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md D).  Filed 2026-10-22 from the external-fixes research: regress/artifacts/research_20261022/TRIAGE.md row T36 (class WRONG-RESULT; reach K, guest kernel, firmware or device registers; effort: small; report rows: A1-20, A1-25, A1-48, A(c)#10, C U8).  Source URLs: https://github.com/retroprom/gxemul/commit/4e3e72b1, https://github.com/Randrianasulu/GXemul/commit/9bfc91e, https://github.com/retroprom/gxemul/commit/6cb3514c, https://sourceforge.net/p/gxemul/code2/HEAD/log/.  Our site at de8c7547: src/cpus/memory_rw.c:603-624; src/devices/dev_luna88k.c:624-627.  Portable fix: yes -- port upstream 4e3e72b1 + r6577(e) NULL check + upstream 6cb3514c (SVN r6542/r6547); do not copy the plain-RAM CMMU windows for absent CPUs.  Filing check (TRIAGE.md): no row of its own; context only in `lunadefaultstop` reason (b) and `vmedefaultkill`'s FAULT measurement.  THE CARRIER OF THE REOPENED PFAR ITEM (regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md D5, E; RECORDS_VERDICTS.md R2): OUTSTANDING_BUGS.md's Round 71B note refuted upstream's 'm88k PFAR' fix on a false premise -- CMMU_PFAR is modelled (include/thirdparty/m8820x.h:66; written at memory_m88k.c:399 and :405; guest-read through dev_m8820x.c:438) -- and is corrected in place by this filing; the dev_luna88k.c 0x3ffffff0 half of this row is that item (upstream 6cb3514c, SVN r6547).  Order: before ANY 88K fault round (D5).  The port keeps the original physical address (saved as orig_paddr at memory_rw.c:437; paddr is device-relative from :494), selects the right CMMU, keeps upstream's NULL check, and does not import upstream 4e3e72b1's plain-RAM CMMU windows (D5, F).  `m88kexit` (memory_m88k.c:390-394) is a different row -- not merged (E).  witness: none -- research finding, not yet reproduced here.
+~~~~
+**`OUTSTANDING_BUGS.md`** (HEAD) -- the batch queue line and the tail entry (VERBATIM):
+~~~~
+   34| > 5. `m88kbuserrregs` (MED, new) -- 88K bus errors carry no PFSR/PFAR; the carrier of the reopened PFAR item.  T36;
+   35| >    before any 88K fault round.
+   ...
+25336| * **`m88kbuserrregs` (MED, open)** -- new.  cpus/memory_rw.c MEM_M88K device-failure arm + devices/dev_luna88k.c case
+25337|   0x3ffffff0 -- a refused device access raises the access exception without writing the CMMU fault status (PFSR=BERROR)
+25338|   and fault address (PFAR); the LUNA probe address writes PFSR only, no PFAR and no exception -- WRONG-RESULT (the
+25339|   guest's trap handler reads PFSR 0 for a bus error, per the fork's own vmedefaultkill measurement).  TRIAGE.md T36;
+25340|   report rows A1-20, A1-25, A1-48, A(c)#10, C U8; port: yes (upstream 4e3e72b1, r6577, upstream 6cb3514c).  Batch 5 of
+25341|   10: before any 88K fault round; the carrier of the reopened PFAR item.
+~~~~
+**`regress/artifacts/research_20261022/TRIAGE.md`** -- the T36 row and the R2 records verdict it carries (VERBATIM; long lines):
+~~~~
+   67| | T36 | `cpus/memory_rw.c` MEM_M88K device-failure arm + `devices/dev_luna88k.c` case 0x3ffffff0 -- a refused device access raises the access exception without writing the CMMU fault status (PFSR=BERROR) and fault address (PFAR); the LUNA probe address writes PFSR only, no PFAR and no exception -- WRONG-RESULT (the guest's trap handler reads PFSR 0 for a bus error, per the fork's own vmedefaultkill measurement) | memory_rw.c:603-624; dev_luna88k.c:624-627 | K | UNFILED (no row of its own; context only in `lunadefaultstop` reason (b) and `vmedefaultkill`'s FAULT measurement) | small | port [upstream 4e3e72b1](https://github.com/retroprom/gxemul/commit/4e3e72b1) + [r6577](https://github.com/Randrianasulu/GXemul/commit/9bfc91e)(e) NULL check + [upstream 6cb3514c](https://github.com/retroprom/gxemul/commit/6cb3514c) ([SVN r6542/r6547](https://sourceforge.net/p/gxemul/code2/HEAD/log/)); do not copy the plain-RAM CMMU windows for absent CPUs (Y) | A1-20, A1-25, A1-48, A(c)#10, C U8 |
+  208| | R2 | `OUTSTANDING_BUGS.md:1896-1898` -- "m88k PFAR -- REFUTED as a defect: the register is not modelled at all. PFAR appears nowhere in src/" | **Report A:** the reason is false. **Coordinator verdict:** the conclusion is right and only the reason is wrong (no `M88K_CR_PFAR` / `cr[...PFAR]` anywhere; only comments mention PFAR). **Measured here:** PFAR is a CMMU register, not a CPU control register: `CMMU_PFAR` (`include/thirdparty/m8820x.h:66`) is written in code at `cpus/memory_m88k.c:399` (`cmmu->reg[CMMU_PFAR] = 0;`) and `:405` (`= pfar;`) and served by the guest register arm at `devices/dev_m8820x.c:437-438`; the fork's own `vmedefaultkill` record reads "PFSR and PFAR read 0 through a guest `ld` at 0xfff7f108/0xfff7f10c". **Both the reason and the conclusion are false**; the verdict's grep keyed on the control-register spelling. Upstream `6cb3514c` therefore fixes a live defect (merged into T36). | `OUTSTANDING_BUGS.md:1896-1898`; `src/cpus/memory_m88k.c:399`, `:405`; `src/devices/dev_m8820x.c:437-438`; ledger row `vmedefaultkill` |
+~~~~
+---
+
+## 2. The witness -- rung 3, RED on HEAD
+
+Produced 2026-10-23 by the round's measuring seat (the REPRODUCE step, test-first, before any edit).  Directory
+`regress/artifacts/m88kbuserrregs/witness_20261023/` -- **UNTRACKED at HEAD** (section 4, part 3); its files are frozen
+by its own `MANIFEST.md5` (the probe `m88k_buserr_probe.py` md5 `d59798b0383f433b191e214e7848fe49`; the output
+`WITNESS_headbin.out` md5 `c09c1d078147386e3aeddbc473f769c8`).  The binary was built in a scratch clone of HEAD
+`66920157` (source identical to `7fca7187`) with five uncommitted peer files replaced by their HEAD blobs.  Rows,
+controls, addresses and corrections below are the seat's own words unless marked otherwise.
+
+### 2.1 The verdict and the baseline receipts (WITNESS_REPORT.md, VERBATIM)
+~~~~
+    1| # m88kbuserrregs (T36) -- pre-fix reproduction, rung 3 -- 2026-10-23
+    2| 
+    3| **VERDICT: RED ON HEAD -- the symptom reproduced, both halves, on unmodified in-tree machines.**
+    4| `WITNESS_headbin.out`: `M88K_BUSERR_RESULT=16/24`, `M88K_BUSERR_CONTROL=OK`, `M88K_BUSERR_SYMPTOM=PRESENT 8/8`,
+    5| `M88K_BUSERR_RED=uld pfsr,uld pfar,ust pfsr,ust pfar,vme pfsr,vme pfar,luna route,luna pfar`, sentinel
+    6| `M88K_BUSERR_PROBE_DONE`.  The rig-shape run (`WITNESS_headbin_rig.out`) gives identical rows.
+    7| 
+    8| * **Generic refused-access arm** (`src/cpus/memory_rw.c:603-625`, MEM_M88K block `:614-623`), on `-E mvme88k -e
+    9|   mvme187`: a refused data load, a refused data store, and a refused load at a second refusing device each raise
+   10|   the data-access exception (vector 3, SXIP = the access, DMA0 = its address), and the data CMMU's PFSR and PFAR
+   11|   still hold the values the guest itself stored there before the access.
+   12| * **LUNA probe address** (`src/devices/dev_luna88k.c:624-627`), on `-E luna88k -e luna-88k`: the load at
+   13|   `0x3ffffff0` raises nothing and is served 0; PFSR is written (`0x00030000`), PFAR keeps the guest's stored value.
+   ...
+   17| ## Baseline and build receipts (named baseline: HEAD 66920157)
+   18| 
+   19| | check | result | artifact |
+   20| |---|---|---|
+   21| | HEAD | `66920157bbdd42349835695b3e813ce721f12132` | `baseline_check.out` |
+   22| | the three files the round will edit, HEAD blob vs GXEMUL-SEC working tree vs `build/` | all CLEAN: `memory_rw.c` 3d47dd66..., `dev_luna88k.c` 6ecc6908..., `dev_m8820x.c` 0d12cfaf... | `baseline_check.out` |
+   23| | the same three, scratch clone vs GXEMUL-SEC (WSL `cmp`) | all CLEAN | `build_base.out` |
+   24| | every git-tracked `src/` file outside `tools/est_divergence.txt`, `build/` vs GXEMUL-SEC | 498 of 499 identical; the one difference is `src/machines/.index`, a GENERATED file (`makeautomachine.sh` picks up a comment line from `machine_sgi.c`; the committed copy is stale) | `baseline_check.out` |
+   25| | GXEMUL-SEC working tree vs HEAD, tracked `src/` | 500 of 505 identical; 5 carry uncommitted peer work: `cpu_alpha_palcode.c`, `dev_lca.c`, `dev_pcc2.c`, `dev_sh4.c`, `mvme_pcctworeg.h` -- and `build/` carries them too | `baseline_check.out` |
+   26| | those 5 in the clone | REPLACED BY HEAD BLOBS before the build (two of them, `dev_pcc2.c` and `mvme_pcctworeg.h`, are on the mvme187 machine) | `headblobs_MD5.txt`, `build_base.out` (`HEAD-BLOB`) |
+   27| | the six declared divergence paths | left as `build/` has them (est-shaped: no ne2000 device, est's `machine_arc.c`/`dev_jazz.c`) -- the ARC/Jazz/ne2000 layer, which neither mvme187 nor luna-88k instantiates.  Per the carrier, no SEC `cmp` for these | -- |
+   28| | clean | `src/cpus` `make clean` (generated tables, generators, objects), every other `.o`, the binary | `build_base.out` |
+   29| | build | `make -j8` in WSL Gentoo, foreground: `MAKE_RC=0`, 0 error lines, 0 warnings, 223 objects; `generate_m88k_loadstore` regenerated `tmp_m88k_loadstore.c` (`make_base.log:227-228`, 198 functions) | `build_base.out`, `make_base.log` |
+   30| | binary | `/tmp/gxt36/base/gxemul`, md5 `2efeec559ec5b3d16b200cccf4203631`, 19:43:15; `[ gxemul -nt ... ]` FRESH for `memory_rw.c`, `dev_luna88k.c`, `dev_m8820x.c`, `tmp_m88k_loadstore.c`, `dev_pcc2.c` | `build_base.out`, `run_witness.out` |
+   31| | instrument | the probe that produced both outputs is md5 `d59798b0383f433b191e214e7848fe49`, the file in this directory | `run_witness.out`, `MANIFEST.md5` |
+   32| 
+   33| `build/` was only read (`cp -a` source).  No build tree was mutated, so no `.MUTANT` sentinel was owed.
+~~~~
+### 2.2 The pre-fix run, whole (WITNESS_headbin.out, VERBATIM; the rig-shape run `WITNESS_headbin_rig.out` differs only in its two label lines and its elapsed time)
+~~~~
+m88kbuserrregs RUNG-3 WITNESS (revision 1) -- binary=/tmp/gxt36/base/gxemul label=HEAD-66920157
+machines: -E mvme88k -e mvme187 -M 64 and -E luna88k -e luna-88k (UNMODIFIED); luna shape: dummy raw image at 0x10000
+seeds: dPFSR=0x5a5a5a5a dPFAR=0x13572468 iPFSR=0x2468ace0 iPFAR=0xbadf00d; want BERROR<<16=0x30000
+row              got                                want                               note                                                           
+neg apparatus    exit1/absent                       exit1/absent                       bogus subtype `187' -> no machine -> no register dump          ok
+mv devsig        0xa90000/0xa90000                  0xa90000/0xa90000                  DEVICE SIGNATURE: mvme187 data/instr CMMU IDR (RAM reads 0)    ok
+mv cmmu rt       0x5a5a5a5a/0x13572468/0x2468ace0/0xbadf00d 0x5a5a5a5a/0x13572468/0x2468ace0/0xbadf00d LIVENESS: four seeds stored and read back via the CMMU decode  ok
+ok route         fall/r4=0x67000000                 fall/r4=0x67000000                 ld VME VBR 0xfff40088 (cased): served 0x67000000, no exception ok
+ok regs          0x5a5a5a5a/0x13572468/0x2468ace0/0xbadf00d 0x5a5a5a5a/0x13572468/0x2468ace0/0xbadf00d an ACCEPTED device access writes no fault metadata             ok
+uld route        v3/0x1002a/0xfff46010              v3/0x1002a/0xfff46010              ld 0xfff46010 (unreadable): vector 3, SXIP, DMA0 -- the exception is THIS access ok
+uld pfsr         0x5a5a5a5a                         0x30000                            data CMMU PFSR after the fault (seeded 0x5a5a5a5a)             FAIL
+uld pfar         0x13572468                         0xfff46010                         data CMMU PFAR after the fault (seeded 0x13572468)             FAIL
+uld icmmu        kept                               kept                               instruction CMMU PFSR/PFAR keep their seeds                    ok
+ust route        v3/0x1002a/0xfff46010              v3/0x1002a/0xfff46010              st 0xfff46010 (unreadable): vector 3, SXIP, DMA0 -- the exception is THIS access ok
+ust pfsr         0x5a5a5a5a                         0x30000                            data CMMU PFSR after the fault (seeded 0x5a5a5a5a)             FAIL
+ust pfar         0x13572468                         0xfff46010                         data CMMU PFAR after the fault (seeded 0x13572468)             FAIL
+ust icmmu        kept                               kept                               instruction CMMU PFSR/PFAR keep their seeds                    ok
+vme route        v3/0x1002a/0xfff40090              v3/0x1002a/0xfff40090              ld 0xfff40090 (VME pop. 1): vector 3, SXIP, DMA0 -- the exception is THIS access ok
+vme pfsr         0x5a5a5a5a                         0x30000                            data CMMU PFSR after the fault (seeded 0x5a5a5a5a)             FAIL
+vme pfar         0x13572468                         0xfff40090                         data CMMU PFAR after the fault (seeded 0x13572468)             FAIL
+vme icmmu        kept                               kept                               instruction CMMU PFSR/PFAR keep their seeds                    ok
+luna devsig      0xa90000/0xa90000                  0xa90000/0xa90000                  DEVICE SIGNATURE: luna-88k data/instr CMMU IDR                 ok
+luna cmmu rt     0x5a5a5a5a/0x13572468/0x2468ace0/0xbadf00d 0x5a5a5a5a/0x13572468/0x2468ace0/0xbadf00d LIVENESS: the four seeds read back                             ok
+luna route       fall/0x0/0x0/r4=0x0                v3/0x1002a/0x3ffffff0/r4=0xdeadbeef ld 0x3ffffff0: a refused access raises vector 3, serves nothing FAIL
+luna pfsr        0x30000                            0x30000                            data CMMU PFSR (seeded 0x5a5a5a5a)                             ok
+luna pfar        0x13572468                         0x3ffffff0                         data CMMU PFAR (seeded 0x13572468)                             FAIL
+luna icmmu       kept                               kept                               instruction CMMU PFSR/PFAR keep their seeds                    ok
+INFO ifetch      jmp (r5) to 0xfff46010: how=exit0 path=v2 SXIP=0xfff46013 iPFSR=0x2468ace0 iPFAR=0xbadf00d dPFSR=0x5a5a5a5a dPFAR=0x13572468 pre-read-msg=1 halt-msg=0 unasm=23/23
+INFO unclaimed   ld 0x10000000 (no device, past RAM): how=exit0 path=fall r4=0x0 SXIP=0x0 dPFSR=0x5a5a5a5a dPFAR=0x13572468 iPFSR=0x2468ace0 iPFAR=0xbadf00d non-existant-msg=1 unasm=23/23
+unasm            115/115                            115/115                            every placed word re-read by the disassembler                  ok
+SCORE 16/24
+M88K_BUSERR_RESULT=16/24
+M88K_BUSERR_CONTROL=OK
+M88K_BUSERR_SYMPTOM=PRESENT 8/8
+M88K_BUSERR_LABEL=HEAD-66920157
+M88K_BUSERR_ELAPSED=0.030s
+M88K_BUSERR_RED=uld pfsr,uld pfar,ust pfsr,ust pfar,vme pfsr,vme pfar,luna route,luna pfar
+M88K_BUSERR_PROBE_DONE
+~~~~
+### 2.3 The 24 rows, enumerated (the drafter's enumeration of 2.2 -- 6 + 10 + 8 = 24)
+
+* **The 6 CONTROL rows** (`CONTROL_ROWS`, probe line 583), all green: `neg apparatus`, `mv devsig`, `mv cmmu rt`,
+  `luna devsig`, `luna cmmu rt`, `unasm`.
+* **The 10 other scored rows that are GREEN on HEAD:** `ok route`, `ok regs`, `uld route`, `uld icmmu`, `ust route`,
+  `ust icmmu`, `vme route`, `vme icmmu`, `luna pfsr`, `luna icmmu`.
+* **The 8 RED rows -- the symptom, each classified STALE by the probe:** `uld pfsr`, `uld pfar`, `ust pfsr`,
+  `ust pfar`, `vme pfsr`, `vme pfar`, `luna route`, `luna pfar`.
+* Two INFO lines are printed and never scored: `INFO ifetch`, `INFO unclaimed`.
+* The probe exits 0 only when every row passes AND every control passes (probe lines 583-605, section 2.12).
+
+### 2.4 What it observed, and why that is the symptom (WITNESS_REPORT.md, VERBATIM)
+~~~~
+   68| ## What it observed (`WITNESS_headbin.out`; raw transcripts in `transcripts_headbin/`)
+   69| 
+   70| "Before" is the readback after seeding (every session read back exactly the four seeds).
+   71| 
+   72| | cell | access | route (vector / SXIP / DMA0) | data PFSR after | data PFAR after | instr. CMMU after |
+   73| |---|---|---|---|---|---|
+   74| | `ok` (mvme187) | `ld` 0xfff40088, accepted | none, falls through; r4 = `0x67000000` | `0x5a5a5a5a` (seed) | `0x13572468` (seed) | seeds |
+   75| | `uld` (mvme187) | `ld` 0xfff46010, refused | **3** / `0x1002a` / `0xfff46010`; r4 kept | **`0x5a5a5a5a` (seed)** -- want `0x00030000` | **`0x13572468` (seed)** -- want `0xfff46010` | seeds |
+   76| | `ust` (mvme187) | `st` 0xa5a5a5a5 to 0xfff46010 | **3** / `0x1002a` / `0xfff46010` | **seed** -- want `0x00030000` | **seed** -- want `0xfff46010` | seeds |
+   77| | `vme` (mvme187) | `ld` 0xfff40090, refused | **3** / `0x1002a` / `0xfff40090`; r4 kept | **seed** -- want `0x00030000` | **seed** -- want `0xfff40090` | seeds |
+   78| | `luna` (luna-88k) | `ld` 0x3ffffff0 | **none**: falls through, SXIP 0, DMA0 0, **r4 = 0 (served)** -- want vector 3, r4 kept | `0x00030000` (written by the case) | **`0x13572468` (seed)** -- want `0x3ffffff0` | seeds |
+   79| 
+   80| **Why this is the symptom under test.**  The ruled fix writes PFSR = `0x00030000` and PFAR = the physical address
+   81| in the refused-access arm, and routes the LUNA case through that arm.  On HEAD the exception IS taken (vector 3,
+   82| SXIP naming the access instruction, DMA0 its address), yet the guest's own seeds survive in PFSR and PFAR: nothing
+   83| was written.  The SYMPTOM line classifies each of the eight red rows as STALE -- the exact seed, or the LUNA
+   84| fall-through serving 0 -- rather than OTHER, so none is red because of a death, a timeout, a missing device or a
+   85| failed readback.
+   86| 
+   87| **The ledger's citation of the fork's own measurement, checked:** `vmedefaultkill/measure_20261009/run_FAULT.out`
+   88| reads PFSR 0 and PFAR 0 after a FAULT, on a variant build, with UNSEEDED registers.  Zero is also the reset
+   89| value, so that run could not tell "not written" from "written zero".  The seeds here can.
+~~~~
+### 2.5 The controls and the INFO cells (WITNESS_REPORT.md, VERBATIM)
+~~~~
+   91| ### Controls (all green; CONTROL rows plus a per-session prerequisite check in every scored row)
+   92| 
+   93| * **apparatus negative** -- bogus subtype `187` exits 1 with no register dump (`neg apparatus`;
+   94|   `transcripts_headbin/neg_apparatus.txt`): the session oracle can go red.
+   95| * **DEVICE SIGNATURE** -- both CMMUs' IDR read `0x00a90000` on both machines (`mv devsig`, `luna devsig`, and the
+   96|   prerequisite of every scored session).  RAM cannot answer it: the windows are far past the 64 MB of RAM, and
+   97|   an unclaimed address reads 0 (INFO `unclaimed`).
+   98| * **LIVENESS through the same decode** -- the four seeds stored and read back (`mv cmmu rt`, `luna cmmu rt`, and
+   99|   per session).
+  100| * **The read channel can see a write** -- `luna pfsr`: the same handler reads PFSR change from the seed to
+  101|   `0x00030000` when the model writes it (`dev_luna88k.c:626`).  So the unchanged seeds in the generic cells come
+  102|   from a channel that is sensitive to a model-side write, not from a blind read.
+  103| * **Attribution** -- route rows: vector 3 entered, fall-through marker unset, SXIP `0x1002a` = `0x10028 | V`, DMA0 =
+  104|   the access's own address.
+  105| * **Handler completed** -- pc `0x10114` and r31 `0x5678` in every scored session.
+  106| * **`unasm` 115/115** -- every placed word re-read by the disassembler; a literal derived by hand.
+  107| * **Not a single-step artifact** -- free-running to a breakpoint (`explore2.out` case 1: the exploration program,
+  108|   same access and seeds, shorter preamble): vector 3, data PFSR `0x5a5a5a5a`, data PFAR `0x13572468`.  The LUNA cell
+  109|   free-running (`explore2.out` case 3): falls through, r4 = 0, PFSR `0x00030000`, PFAR seed.
+  110| * **LUNA shape** -- dummy raw image and the rig shape (`-d R:<liveimage> boot`, cwd `_images/`) give identical rows
+  111|   (`WITNESS_headbin_rig.out`, `transcripts_headbin_rig/`; first seen in `explore1.out` cases 5 and 6).
+  112| 
+  113| ### INFO cells (measured, never scored)
+  114| 
+  115| * **Instruction-fetch refusal** (`jmp` to 0xfff46010).  Stepped: vector 2, SXIP `0xfff46013`, instruction-CMMU
+  116|   PFSR/PFAR still the seeds, and the transcript carries the debugger pre-read's "could not read the instruction"
+  117|   message, not the halt message.  Free-running (`explore2.out` case 2): `to_be_translated(): read failed: TODO`,
+  118|   `UNIMPLEMENTED instruction at 0x10`, `All machines stopped`; pc `0x10`, SXIP `0xfff46013`, the vector's first
+  119|   instruction never ran.  The stepped delivery comes from the debugger's own disassembly fetch, so it is not
+  120|   counted as a witness.  The cmmu[0] cell is left to the round (NOT CLAIMED).
+  121| * **Unclaimed physical address** (`ld` 0x10000000 on mvme187: past RAM, below every device): falls through, r4 = 0,
+  122|   no exception, all four seeds kept, one `memory READ: from non-existant paddr=0x10000000` line.
+~~~~
+### 2.6 The measuring seat's FOUR premise corrections (WITNESS_REPORT.md, VERBATIM)
+~~~~
+  124| ## Corrections to the brief's premises, each measured or read here
+  125| 
+  126| 1. **"A load or store to a physical address no device claims" does not reach the arm T36 repairs.**  It takes
+  127|    `memory_rw.c:662-713` (served zeros, at most a warning; under `-T`, `core/main.c:465-466`, every cpu stops) --
+  128|    INFO `unclaimed`.  The arm is reached only by an access a device CLAIMS and REFUSES (returns 0 while the cpu
+  129|    keeps running): mvme187's `unreadable` windows (`machine_mvme88k.c:106`, `:120`, `:123`) and VME population 1.
+  130| 2. **On an unmodified luna-88k, every device refusal also stops the cpu** (this was read in the source, not
+  131|    measured).  Every `return 0;` in `dev_luna88k.c` (1, the `default:` at `:909-924`), `dev_mb89352.c` (6) and
+  132|    `dev_lunafb.c` (4; that device exists only with `-X`) comes immediately after `cpu->running = 0`, so
+  133|    `memory_rw.c:591-592` returns before the arm.  The `dev_le` access function returns `retval` >= 1.  `le_sram`'s
+  134|    `return 0` (`dev_le.c:932`) cannot be reached, because its window is `SRAM_SIZE` long and `memory_rw.c:495-523`
+  135|    clamps `len` to the window.  `dev_m8820x` always returns 1.  So the generic arm is witnessed on mvme187, and
+  136|    luna-88k supplies only the probe-case half.
+  137| 3. **The LUNA half's pre-fix symptom is not "PFSR lacks the status".**  PFSR IS written today (`luna pfsr` is
+  138|    green on HEAD).  What is missing is PFAR and the exception, and the access is served 0.
+  139| 4. **`_scratchpad/gxprobe.py` was not used.**  It carries MIPS presets and installs MIPS stubs when constructed.
+  140|    This probe uses no pty at all: it uses `vme_default_probe.py`'s piped-stdin shape.  The free-running
+  141|    exploration copied that file's own `run_pty`.
+~~~~
+### 2.7 Its three unfiled findings R1-R3 -- carried to Q4 as findings, by id (WITNESS_REPORT.md, VERBATIM)
+~~~~
+  143| ## Residuals found while measuring (for triage; NOT filed)
+  144| 
+  145| * **R1 -- an m88k instruction-fetch refusal halts the cpu.**  Free-running, the fetch raises vector 2.  Then
+  146|   `cpu_m88k_instr.c:2989-2993` reaches the dyntrans `bad:` tail (`cpu_dyntrans.c:1983-2014`), which stops every
+  147|   cpu before the handler runs (`explore2.out` case 2).  This blocks a free-running witness for T36's cmmu[0] cell.
+  148|   The tail is generic dyntrans code, so other architectures may behave the same way (not measured).
+  149| * **R2 -- single-stepping changes instruction-fetch fault behaviour.**  The step loop's disassembly pre-read
+  150|   (`cpu_dyntrans.c:287-290`) is a `CACHE_INSTRUCTION` `memory_rw` WITHOUT `NO_EXCEPTIONS`.  So when the debugger
+  151|   steps onto a refusing device, its own read raises the exception, and the vector then runs instead of the cpu
+  152|   halting (INFO `ifetch`).  The debugger changes guest-visible state.
+  153| * **R3 -- an unclaimed physical address raises no bus error at all on m88k.**  A read is served zeros and a write
+  154|   is dropped; upstream TODOs at `memory_rw.c:682` and `:709-710`.  Whether real MVME187/LUNA hardware bus-errors
+  155|   there is a board question (`_scratchpad/vmesbcp2.txt` is on disk).  It was not checked here.
+~~~~
+### 2.8 Owed and not done; landing notes (WITNESS_REPORT.md, VERBATIM)
+~~~~
+  157| ## Owed, and not done
+  158| 
+  159| * The post-fix half of witness clause (i): the same script all green (`M88K_BUSERR_SYMPTOM=ABSENT`) after the
+  160|   round's fix.  This is OWED to the round.  Two of the want strings are shown to be reachable on HEAD by the same
+  161|   formatter: `0x30000` is produced by `luna pfsr`, and the `v3/0x1002a/<addr>` route is produced by the three
+  162|   generic route rows.  The PFAR wants have never yet been produced by a model write.
+  163| * No mutant was built.  The mutant names given for each row in the header are dated predictions.
+  164| * The contract's NOT CLAIMED cells: translation on (VA differs from PA), an absent CMMU (the NULL check),
+  165|   `no_exceptions` callers, instruction access, sub-word accesses and byte addresses, more than one cpu, xmem, the
+  166|   88110, and the OpenBSD reader / `badaddr()` recovery.  A rung-4 boot would be the stronger witness; it was not
+  167|   attempted.
+  168| * The icmmu rows encode the ruling's "do not clear the sibling" (Grok Q2).  If the round decides otherwise, those
+  169|   wants change.
+  170| 
+  171| ## Landing notes for the main loop
+  172| 
+  173| * Git was used only for object reads (`rev-parse`, `log`, `show`, `ls-files`).  Nothing is staged.
+  174| * When `m88k_buserr_probe.py` is staged it needs a `tools/pipeline/check_probe_wiring.py` MANIFEST line.  That
+  175|   checker reads tracked-or-staged files only (`domain()`), so the untracked file reds nothing today.  The
+  176|   exploration and driver scripts are kept as `*.py.txt` / `*.sh.txt` on purpose.
+  177| * The WSL scratch clone `/tmp/gxt36/base` is kept.  It is a named baseline (HEAD 66920157 plus the five HEAD
+  178|   blobs; binary md5 `2efeec55...`) for the round's kill tables.  `/tmp` is volatile, and every number cited here
+  179|   is in this directory.
+  180| * To re-run: `python3 m88k_buserr_probe.py <gxemul> [label] [images-dir]`, with
+  181|   `M88K_BUSERR_DUMP=<dir>` to keep the session transcripts.  The exact driver is `run_witness.sh.txt`.
+~~~~
+### 2.9 What the probe does, and its addresses (WITNESS_REPORT.md, VERBATIM)
+~~~~
+   35| ## What the probe does
+   36| 
+   37| `m88k_buserr_probe.py` (header = rows, mutant per row, CONTRACT, citations).  Stepped cold-debugger sessions, the
+   38| debugger fed on stdin (`vme_default_probe.py`'s shape); a 4-byte dummy raw image at `0x10000`; no device_add and
+   39| no machine edit.  Every session runs one program; only the access word and its registers change:
+   40| 
+   41| 1. `ld` the data and instruction CMMU **IDR** (offset `0x000`) -- device signature;
+   42| 2. `st` four distinct seeds into both CMMUs' **PFSR** (`0x108`) and **PFAR** (`0x10c`), then `ld` all four back --
+   43|    liveness through the same decode;
+   44| 3. **the access under test** at `0x10028`;
+   45| 4. the reads of the four registers happen in a handler `H` (`0x10100`) that BOTH paths reach: the vectors
+   46|    (`0x10` instruction access, `0x18` data access; VBR is 0 at reset, measured) set a marker in r7 and branch to
+   47|    `H`; an access that raises nothing falls through (marker r6) and branches to the same `H`.  So the reads happen
+   48|    regardless of whether the exception redirects the pc -- the second option the brief offered.
+   49| 
+   50| Seeds: data PFSR `0x5a5a5a5a`, data PFAR `0x13572468`, instruction PFSR `0x2468ace0`, instruction PFAR
+   51| `0x0badf00d`.  Neither PFSR seed carries BERROR in the field a guest tests (`(x >> 16) & 7` = 2 and 0).
+   52| 
+   53| ### Guest addresses and register offsets, with their sources
+   54| 
+   55| | what | value | source |
+   56| |---|---|---|
+   57| | CMMU IDR / PFSR / PFAR offsets | `0x000` / `0x108` / `0x10c` | `m8820x.h:60`, `:65`, `:66`; read `dev_m8820x.c:257-258`; PFSR/PFAR guest-stored `:437-461`; IDR never stored `:262-272` |
+   58| | BERROR status | `CMMU_PFSR_BERROR << 16` = `0x00030000` | `m8820x.h:125`, field extract `:123` |
+   59| | IDR seed | `0x00a90000` = `(M88200_ID << 21) \| (9 << 16)`, `M88200_ID` 5 | `m8820x.h:152`; `dev_mvme187.c:139`, `:151`; `dev_luna88k.c:949`, `:960` |
+   60| | mvme187 data / instruction CMMU | `0xfff7f000` / `0xfff77000`; cmmu[1] / cmmu[0] | `mvme187.h:57`, `:56`; `dev_mvme187.c:136-137`, `:140-142`, `:148-149`, `:154-156`; `dev_m8820x.c:540-543` |
+   61| | luna-88k cpu-0 data / instruction CMMU | `0xfff06000` / `0xfff07000` | `luna88k_board.h:163`, `:162`; `dev_luna88k.c:934-965`, `:1074` |
+   62| | refusing device 1 | `0xfff46010` in `unreadable addr=0xfff46000 len=0x1000` (device-relative `0x10`) | `machine_mvme88k.c:106`; `dev_unreadable.c` (`return 0;`) |
+   63| | refusing device 2 | `0xfff40090`, VME population 1 (device-relative `0x90`) | `mvme88k_vme.h:44`; `machine_mvme88k.c:95-96`; `dev_vme.c:207-220` |
+   64| | accepted access (control) | `0xfff40088`, VME VBR, served `0x67000000` | `mvme88k_vme.h:80`; `dev_vme.c:144`, `:238-239` |
+   65| | LUNA probe address | `0x3ffffff0` (= `LUNA88K_REGISTERS_BASE`) | `dev_luna88k.c:78`, `:624-627`, `:990-992` |
+   66| | vectors, SXIP, DMA0 | vector 2 / 3, pc = VBR + 8 * vector, SXIP = pc \| V (`0x2`) | `cpu_m88k.h:202-203`; `cpu_m88k.c:837`, `:863`, `:908-912`; `m88k_psl.h:90` |
+~~~~
+### 2.10 The probe's header -- DEFECT, reach, FIX, RUNG 3, THE PROGRAM, ADDRESSES (m88k_buserr_probe.py, VERBATIM)
+~~~~
+    2| """m88k_buserr_probe.py -- rung-3 WITNESS (pre-fix) and detector base for m88kbuserrregs (TRIAGE.md T36).
+    3| 
+    4| REVISION 1 (2026-10-23), 24 rows.  Written by the measuring seat of T36's REPRODUCE step (test-first, before any
+    5| edit).  It is to move to regress/ as the round's detector base; the round re-derives the rows and this contract
+    6| against its own diff (PRETABLE, floor (a)-(d), the ask-again) -- nothing here is a kill-table measurement.
+    7| 
+    8| DEFECT (HEAD 66920157; both sites are the 0.7.0 import).  When a guest data load or store reaches a device whose
+    9| access function REFUSES it (returns 0 with the cpu still running), src/cpus/memory_rw.c's refused-access arm
+   10| (`if (res <= 0 && !no_exceptions)', :603-625) raises the m88k data-access exception (the MEM_M88K block,
+   11| :614-623) and writes NOTHING into the data CMMU's P-bus fault status register (PFSR, offset 0x108) or P-bus fault
+   12| address register (PFAR, 0x10c) -- its own TODO at :615-619 says "the faulting address should probably be
+   13| included somewhere too".  A guest fault handler that reads them sees whatever they held before.  The LUNA probe
+   14| address -- src/devices/dev_luna88k.c:624-627, `case 0x3ffffff0' -- writes PFSR = CMMU_PFSR_BERROR << 16 on
+   15| cmmu[1] only, writes NO PFAR, and `break's into `return 1' (:930): the access SUCCEEDS, serving 0, and no
+   16| exception is raised at all.
+   17| 
+   18| WHICH ACCESSES REACH THAT ARM -- a premise correction, measured: only an access a device CLAIMS and REFUSES.  An
+   19| access to a physical address NO device claims never enters the device scan's success branch; it falls through to
+   20| memory_rw.c:662-713 (`Outside of physical RAM?'), where memory_warn_about_unimplemented_addr() (core/memory.c:
+   21| 598-655) prints at most a warning -- or, under `-T' (core/main.c:465-466), stops every cpu -- and a read is served
+   22| zeros: no exception and no CMMU write, before or after T36's fix (INFO `unclaimed' below, default options).  So the refusing devices used here are ones the in-tree machine description installs
+   23| to model absent hardware: mvme187's `unreadable' window and VME population 1.
+   24| 
+   25| THE FIX (ruled, not yet written -- regress/artifacts/research_20261022/crit_20261022/CRIT_RULINGS.md row T36, Astra
+   26| Q2 in codex_rescrit.txt and Grok Q2 in grok_crit.txt beside it): in the refused-access arm select cmmu[0] for an
+   27| instruction access and cmmu[1] for a data access; if that pointer exists, write PFSR = CMMU_PFSR_BERROR << 16
+   28| (0x00030000) and PFAR = orig_paddr (the PHYSICAL address saved at memory_rw.c:437 -- not the device-relative
+   29| paddr :494 makes); the NULL check wraps the two writes only, the exception stays outside it, and the sibling
+   30| CMMU is not cleared (Grok Q2).  The LUNA case returns 0 through that repaired arm, its own PFSR write deleted.
+   31| 
+   32| RUNG 3: real MC88100 instructions (ld/st/or/br) through real address decode and real memory_rw, on two
+   33| UNMODIFIED in-tree machines: `-E mvme88k -e mvme187 -M 64' (machine_mvme88k.c; vme_default_probe.py's shape) and
+   34| `-E luna88k -e luna-88k' (machine_luna88k.c), each started with a 4-byte dummy raw image at 0x10000 (no PROM, no
+   35| disk).  An optional third argument names the rig images directory; the LUNA session then runs in
+   36| luna_absentcpu_probe.py's rig shape instead (`-e luna-88k -d R:<images>/liveimage-luna88k-raw-20250518.img boot',
+   37| cwd = the images directory) -- the two shapes were measured to give identical registers (witness_20261023/
+   38| explore1.out cases 5 and 6).  No device_add, no machine edit.  STEPPED sessions feed the debugger on stdin
+   39| (vme_default_probe.py's run_piped); no pty plumbing is used, which is why _scratchpad/gxprobe.py (MIPS presets,
+   40| installs MIPS stubs on construction) is not.  A synchronous device refusal is visible while stepping; a
+   41| FREE-RUNNING run of the exploration program (explore2.py.txt: the same access, the same four seeds, a shorter
+   42| preamble without the instruction-CMMU IDR and readbacks) gave the same stale registers (explore2.out case 1), so
+   43| the symptom is not a single-step artifact.
+   44| 
+   45| THE PROGRAM (every session; only the ACCESS word and its registers differ):
+   46|     0x10   or r7,r0,2 ; br H         vector 2 (INSTRUCTION_ACCESS) marker -- VBR is 0 at reset (measured)
+   47|     0x18   or r7,r0,3 ; br H         vector 3 (DATA_ACCESS) marker
+   48|     CODE   ld r10,r3,0x0             data CMMU IDR           -- DEVICE SIGNATURE (0x00a90000; RAM cannot answer it)
+   49|            ld r9,r2,0x0              instruction CMMU IDR    -- the same, for the sibling
+   50|            st r20,r3,0x108 / st r21,r3,0x10c / st r22,r2,0x108 / st r23,r2,0x10c
+   51|                                      SEED both CMMUs' PFSR and PFAR with four distinct values
+   52|            ld r11,r3,0x108 / ld r12,r3,0x10c / ld r17,r2,0x108 / ld r18,r2,0x10c
+   53|                                      LIVENESS through the same decode: each seed reads back
+   54|            ACCESS                    the access under test (CODE + 0x28)
+   55|            or r6,r0,0x1234 ; br H    FALL-THROUGH marker: runs only if the access raised nothing
+   56|     H      ld r13,r3,0x108 / ld r14,r3,0x10c / ld r15,r2,0x108 / ld r16,r2,0x10c
+   57|                                      the four registers AFTER the access, read by GUEST LOADS in the handler
+   58|            or r31,r0,0x5678 ; br .   the handler ran to its end
+   59|   So the reads happen on BOTH paths: a refused access enters vector 3 (or 2) and branches to H; an access that
+   60|   raises nothing falls through to the same H.  r7 says which vector was entered, r6 whether it fell through, and
+   61|   `reg 0,0' gives SXIP (the faulting instruction | V) and DMA0 (the faulting word address) -- the attribution
+   62|   control: the exception came from THIS access.  19 steps reach H's `br .' on either path.  One fault per session:
+   63|   the exception sets PSR.SFRZ, and a second fault while it is set becomes ERROR (cpu_m88k.c:811-819).
+   64| 
+   65| ADDRESSES AND OFFSETS (each cited; the probe uses literals on purpose, so a header edit cannot silently move them):
+   66|   CMMU register offsets -- src/include/thirdparty/m8820x.h:60 CMMU_IDR (0x000 / 4), :65 CMMU_PFSR (0x108 / 4),
+   67|       :66 CMMU_PFAR (0x10c / 4); dev_m8820x.c:257-258 serves a read as regs[relative_addr / 4]; :437-461 STORES a
+   68|       guest write to PFSR/PFAR (which is what makes the seed-and-readback liveness possible); IDR is never stored
+   69|       (:262-272).  BERROR: m8820x.h:125 (CMMU_PFSR_BERROR 3), the field extract :123 ((pfsr >> 16) & 7).
+   70|   IDR seed 0x00a90000 = (M88200_ID << 21) | (9 << 16), M88200_ID 5 at m8820x.h:152 -- dev_mvme187.c:139 and :151,
+   71|       dev_luna88k.c:949 and :960.
+   72|   mvme187 CMMUs: data 0xfff7f000, instruction 0xfff77000 (mvme187.h:57, :56); attached at dev_mvme187.c:140-142
+   73|       (addr2=0 -> cmmu_nr 0) and :154-156 (addr2=1); cmmu[0] = instruction, cmmu[1] = data (dev_mvme187.c:136-137,
+   74|       :148-149; dev_m8820x.c:540-543; memory_m88k.c:112 uses the same index).
+   75|   luna-88k CPU-0 CMMUs: data 0xfff06000, instruction 0xfff07000 (luna88k_board.h:163 CMMU_D0, :162 CMMU_I0;
+   76|       attached by add_cmmu_for_cpu(devinit, 0, CMMU_I0, CMMU_D0) at dev_luna88k.c:1074, :934-965).
+   77|   refused device #1 -- `unreadable addr=0xfff46000 len=0x1000' (machine_mvme88k.c:106, the ie0 placeholder):
+   78|       dev_unreadable.c's access function is `return 0;'.  The probe uses 0xfff46010, so the device-relative
+   79|       offset (0x10) differs from the physical address.
+   80|   refused device #2 -- the VME2 window at VME2_BASE 0xfff40000 (mvme88k_vme.h:44; machine_mvme88k.c:95-96):
+   81|       offset 0x90 is population 1 of #568 (vmedefaultkill), dev_vme.c:207-220 `default:' returns 0.  The probe
+   82|       uses 0xfff40090 (device-relative 0x90).
+   83|   accepted device access (the accept control) -- VME VBR at 0xfff40088 (mvme88k_vme.h:80 VME2_VBR 0x0088), served
+   84|       by its cased arm (dev_vme.c:144) from DEVINIT's seed VME2_SET_VBR0(6) + VME2_SET_VBR1(7) = 0x67000000
+   85|       (dev_vme.c:238-239).
+   86|   the LUNA probe address 0x3ffffff0 -- LUNA88K_REGISTERS_BASE (dev_luna88k.c:78; the device registered there at
+   87|       :990-992), `case 0x3ffffff0' at :624-627.
+   88|   vectors -- cpu_m88k.h:202-203 (INSTRUCTION_ACCESS 2, DATA_ACCESS 3); pc = VBR + 8 * vector (cpu_m88k.c:863);
+   89|       SXIP = pc | M88K_XIP_V (cpu_m88k.c:837; m88k_psl.h:90 V = 0x2), | M88K_XIP_E for an instruction access
+   90|       (:859-860); DMT0/DMD0/DMA0 copied from the data unit on DATA_ACCESS (:908-912).
+~~~~
+### 2.11 The probe's header -- ROWS with their predicted variants, SYMPTOM, CONTRACT, TEST-FIRST (m88k_buserr_probe.py, VERBATIM; the variant names are the seat's DATED PREDICTIONS -- none was built)
+~~~~
+   92| ROWS, each with the mutant it is DESIGNED to catch and the channel that differs under it.  These are DATED
+   93| PREDICTIONS (2026-10-23) read off the ruled design; no mutant has been built.  The pre-fix HEAD is the one
+   94| measured "mutant": the symptom rows below are its channels.
+   95|   CONTROL rows -- DEFINITION (vme_default_probe.py's): a row whose role is a PREREQUISITE of the scored rows -- an
+   96|   apparatus, medium or device-signature proof.  CONTROL=FAIL means a prerequisite failed and claims NO cause.
+   97|     neg apparatus  a bogus subtype `187': no machine, no register dump -- the session oracle MUST be able to go red
+   98|     mv devsig      mvme187 data + instruction CMMU IDR = 0x00a90000 each (RAM, or no device, reads 0)
+   99|     mv cmmu rt     mvme187: the four seeds read back through the same decode (the accept session's)
+  100|     luna devsig    luna-88k: the same two IDRs
+  101|     luna cmmu rt   luna-88k: the four seeds read back (the LUNA session's)
+  102|     unasm          every placed word re-read by the disassembler; LITERAL count
+  103|   Every scored row additionally reports `nodev ...', `readback ...' or `handler ...' instead of a value when ITS
+  104|   OWN session failed a prerequisite, so a red row never claims a cause it did not observe.
+  105|   accept side (mvme187, `ld r4,r5,0' at VME VBR 0xfff40088 -- an ACCEPTED device access)
+  106|     ok route       fall-through, r4 = 0x67000000.  Mutant: the refused-access arm's condition widened so an
+  107|                    accepted access faults (`res <= 0' -> `res <= 1') -- the route reads v3
+  108|     ok regs        all four seeds survive an accepted access.  Mutant: the two writes placed OUTSIDE `res <= 0'
+  109|                    (every device access writes metadata) -- the data seeds change
+  110|   generic arm, data LOAD (mvme187, `ld r4,r5,0' at 0xfff46010, the unreadable window)
+  111|     uld route      vector 3, SXIP = CODE + 0x28 | V, DMA0 = 0xfff46010, r4 keeps its sentinel.  Mutant: the
+  112|                    exception DROPPED -- the row reads fall-through or the handler is never reached.  NOT the
+  113|                    exception moved inside the NULL check: both CMMUs exist here, so that one needs an absent CMMU
+  114|                    (NOT CLAIMED).  GREEN on HEAD (the exception is raised today; the fix must keep it)
+  115|     uld pfsr       data PFSR = 0x00030000.  HEAD: the seed 0x5a5a5a5a.  Mutants: no write (HEAD); raw 3 instead of
+  116|                    3 << 16; the write on cmmu[0] instead of cmmu[1]
+  117|     uld pfar       data PFAR = 0xfff46010.  HEAD: the seed 0x13572468.  Mutants: no write (HEAD); the
+  118|                    device-RELATIVE paddr (0x10); a PFSR-only repair; cmmu[0] instead of cmmu[1]
+  119|     uld icmmu      instruction CMMU PFSR/PFAR keep their seeds.  Mutants: the write on BOTH CMMUs, or cmmu[0]
+  120|                    only; the sibling cleared as the translation-fault path does (memory_m88k.c:383-384)
+  121|   generic arm, data STORE (mvme187, `st r8,r5,0' at 0xfff46010, r8 = 0xa5a5a5a5)
+  122|     ust route / ust pfsr / ust pfar / ust icmmu    the same four channels for the store direction.  Mutant: a
+  123|                    repair conditioned on the direction (`writeflag == MEM_READ') -- the store pfsr/pfar read seeds
+  124|   generic arm, a SECOND refusing device (mvme187, `ld r4,r5,0' at 0xfff40090, VME population 1, #568's FAULT)
+  125|     vme route / vme pfsr / vme pfar / vme icmmu    the same four channels; PFAR = 0xfff40090 (device-relative 0x90).
+  126|                    Mutant: a repair keyed to one device (by name, base or length) -- one device's rows read seeds
+  127|   the LUNA probe address (luna-88k, `ld r4,r5,0' at 0x3ffffff0)
+  128|     luna route     vector 3, SXIP = CODE + 0x28 | V, DMA0 = 0x3ffffff0, r4 keeps its sentinel.  HEAD: fall-through,
+  129|                    SXIP 0, DMA0 0, r4 = 0 (the access is SERVED).  Mutant: the case left returning 1
+  130|     luna pfsr      data PFSR = 0x00030000.  GREEN on HEAD (the case's own write) -- pins that deleting that write
+  131|                    while routing through the generic arm keeps the status.  Mutant: the case's write deleted and
+  132|                    the route left at `return 1'
+  133|     luna pfar      data PFAR = 0x3ffffff0.  HEAD: the seed 0x13572468.  Mutants: the case's PFSR-only body kept
+  134|                    (no PFAR); the device-relative paddr (0x0 here: the access is AT the device's base)
+  135|     luna icmmu     the instruction CMMU keeps its seeds
+  136|   INFO (unscored): an INSTRUCTION fetch refused by the same unreadable window (mvme187, `jmp r5' to 0xfff46010),
+  137|                    and a load from an UNCLAIMED physical address (mvme187, `ld r4,r5,0' at 0x10000000: past the
+  138|                    64 MB of RAM, below every device).  Printed, never scored -- see NOT CLAIMED and the premise
+  139|                    correction above.
+  140| 
+  141| SYMPTOM CLASSIFICATION (the "did it fail for the reason under test?" line): the eight rows that the fix changes
+  142| (uld/ust/vme pfsr and pfar, luna route, luna pfar) are each classified STALE (got is exactly the probe's own seed,
+  143| or, for luna route, the fall-through with r4 served 0), FIXED (got == want) or OTHER.  M88K_BUSERR_SYMPTOM prints
+  144| PRESENT n/8 when all eight are STALE, ABSENT when all eight are FIXED, else MIXED with the list.  Neither data seed
+  145| carries BERROR in the field the guest tests: (0x5a5a5a5a >> 16) & 7 == 2 and (0x2468ace0 >> 16) & 7 == 0, so a
+  146| stale seed cannot pass for a recorded bus error even under the guest's own looser extract.
+  147| 
+  148| CONTRACT (clause e).  DESIGNED to catch: the pre-fix defect (measured: witness_20261023/WITNESS_headbin.out) and
+  149| the predicted mutants named per row above.  NOT CLAIMED, so a later escape is outside the contract rather than an
+  150| argument:
+  151|   * translation ON.  Every session runs with the CMMUs' APR invalid (physical = virtual, memory_m88k.c:130-144),
+  152|     so a repair that writes the VIRTUAL address into PFAR is indistinguishable here (Astra Q2 names "translated VA
+  153|     differing from PA" as owed -- the round's);
+  154|   * an ABSENT CMMU (the NULL check): mvme187 and luna-88k always attach both CMMUs, so a repair without the check,
+  155|     or with the exception moved inside it, passes every row (route rows catch only a DROPPED exception);
+  156|   * no_exceptions callers (the debugger's put/dump/unassemble never reach a DM_DEFAULT handler, memory_rw.c:584);
+  157|   * INSTRUCTION-access refusals.  Measured, not scored: STEPPED, the debugger's own disassembly pre-read
+  158|     (cpu_dyntrans.c:287-290, CACHE_INSTRUCTION) raises vector 2 and the vector runs -- an artifact of single-step;
+  159|     FREE-RUNNING, the fetch takes vector 2 (SXIP 0xfff46013) and then to_be_translated()'s read failure
+  160|     (cpu_m88k_instr.c:2989-2993) reaches `bad:' and STOPS the cpu with "UNIMPLEMENTED instruction at 0x10"
+  161|     (cpu_dyntrans.c:2002-2014; explore2.out case 2), so no guest handler can read cmmu[0] after an instruction
+  162|     refusal on HEAD.  The cmmu[0] cell is the round's to build;
+  163|   * an UNCLAIMED physical address (no device at all): it raises nothing and is served zeros before and after the
+  164|     ruled fix (memory_rw.c:662-713; INFO `unclaimed') -- a different path, not T36's arm;
+  165|   * sub-word accesses and byte addresses (PFAR = the byte address vs the word address DMA0 holds): every access
+  166|     here is a word at a word-aligned address;
+  167|   * more than one cpu (luna-88k `-n 2..4': the per-cpu CMMU selection), xmem, the 88110 (mvme197);
+  168|   * the OpenBSD reader itself (trap.c's `(dpfsr >> 16) & 7 == 3' and badaddr()'s eh.S recovery, which bypasses the
+  169|     PFSR read -- CRIT_RULINGS.md T36): no guest kernel runs here; a boot is the stronger witness;
+  170|   * the sibling-CMMU premise of the icmmu rows (not cleared) is the ruling's (Grok Q2); a round that decides the
+  171|     data-side bus error should clear cmmu[0]'s PFSR, as the translation-fault path does, changes those wants;
+  172|   * PFSR / PFAR bits beyond the exact values written (no partial-value or field-only row);
+  173|   * anything about real MC88200 timing or the P-bus.
+  174| 
+  175| TEST-FIRST SHAPE: on the committed HEAD the eight symptom rows are red -- the six generic pfsr/pfar rows each read
+  176| back the probe's own seed, `luna route' falls through with the access served 0 and `luna pfar' reads its seed
+  177| (M88K_BUSERR_SYMPTOM=PRESENT 8/8) -- while the six controls and the other ten scored rows are green.  After the
+  178| round's fix the same script is expected all green (M88K_BUSERR_SYMPTOM=ABSENT); that half is OWED to the round
+  179| (witness clause (i)), not measured here.
+  180| 
+  181| usage: m88k_buserr_probe.py <gxemul> [label] [images-dir]
+  182|        M88K_BUSERR_DUMP=<dir> also writes every session's raw debugger transcript to <dir>/<session>.txt
+  183|        (unset: nothing is written; the rows and lines below are identical either way).
+  184| Sentinel: M88K_BUSERR_PROBE_DONE (plus M88K_BUSERR_RESULT=n/N, M88K_BUSERR_CONTROL=OK|FAIL,
+  185| M88K_BUSERR_SYMPTOM=PRESENT n/8|ABSENT|MIXED ...)
+~~~~
+### 2.12 The probe's per-session prerequisite check, its row format, and its exit (m88k_buserr_probe.py, VERBATIM)
+~~~~
+  424| def prereq_bad(r):
+  425|     """None when the session's own prerequisites held; else a cause-free reason (the row stays red)."""
+  426|     if r.regs is None:
+  427|         return died(r)
+  428|     if g(r, 10) != IDR or g(r, 9) != IDR:
+  429|         return "nodev d=%s i=%s: device signature absent, check not made" % (hx(g(r, 10)), hx(g(r, 9)))
+  430|     back = (g(r, 11), g(r, 12), g(r, 17), g(r, 18))
+  431|     if back != SEEDS:
+  432|         return "readback %s: seeds did not round-trip, check not made" % "/".join(hx(v) for v in back)
+  433|     if r.pc != H_END or g(r, 31) != LIVE:
+  434|         return "handler pc=%s r31=%s: the reads did not complete" % (hx(r.pc), hx(g(r, 31)))
+  435|     return None
+   ...
+  468| def row(name, got, want, note=""):
+  469|     assert name not in [n for n, _ in rows], "DUPLICATE ROW NAME %r" % name
+  470|     assert len(name) <= 15, name     # `%-16s ' keeps a gate's `^$v  .*ok$' satisfiable
+  471|     ok = (got == want)
+  472|     rows.append((name, ok))
+  473|     print("%-16s %-34s %-34s %-62s %s" % (name, str(got), str(want), note, "ok" if ok else "FAIL"))
+  474|     sys.stdout.flush()
+  475|     return ok
+   ...
+  580| # ================================================================ score + done
+  581| npass = sum(1 for _, ok in rows if ok)
+  582| print("SCORE %d/%d" % (npass, len(rows)))
+  583| CONTROL_ROWS = ("neg apparatus", "mv devsig", "mv cmmu rt", "luna devsig", "luna cmmu rt", "unasm")
+  584| _status = dict(rows)
+  585| control_ok = all(_status.get(n, False) for n in CONTROL_ROWS)    # a renamed control fails loudly
+  586| assert len(SYMPTOM) == 8, SYMPTOM
+  587| _cls = [c for _, c in SYMPTOM]
+  588| if all(c == "STALE" for c in _cls):
+  589|     sym = "PRESENT %d/8" % len(_cls)
+  590| elif all(c == "FIXED" for c in _cls):
+  591|     sym = "ABSENT"
+  592| else:
+  593|     sym = "MIXED " + ",".join("%s=%s" % (n, c) for n, c in SYMPTOM)
+  594| print("M88K_BUSERR_RESULT=%d/%d" % (npass, len(rows)))
+  595| print("M88K_BUSERR_CONTROL=%s" % ("OK" if control_ok else "FAIL"))
+  596| print("M88K_BUSERR_SYMPTOM=%s" % sym)
+  597| print("M88K_BUSERR_LABEL=%s" % LABEL)
+  598| print("M88K_BUSERR_ELAPSED=%.3fs" % (time.time() - t0))
+  599| red = [n for n, ok in rows if not ok]
+  600| if red:
+  601|     print("M88K_BUSERR_RED=%s" % ",".join(red))
+  602| shutil.rmtree(_TMPDIR, ignore_errors=True)
+  603| print("M88K_BUSERR_PROBE_DONE")
+  604| sys.stdout.flush()
+  605| sys.exit(0 if control_ok and npass == len(rows) else 1)
+~~~~
+---
+
+## 3. The settled design (VERBATIM)
+
+### 3.1 The merged ruling -- `regress/artifacts/research_20261022/crit_20261022/CRIT_RULINGS.md` (committed in `cb2eba1e`): header, the T36 row, the order paragraph, the follow-up paragraph
+~~~~
+    1| # Critical-items design adjudication -- merged rulings, 2026-10-22 (main loop; Fable 5.1 HELD by the owner)
+    2| 
+    3| Seats: GPT-6 Astra (ultra; `codex_rescrit.txt`) VERDICT OPEN -- "T1 repair correct; PPC fault-delivery dependencies and
+    4| incomplete VR41xx subpage support prevent approving all six as ready fix rounds"; Grok 4.7 (xhigh; `grok_crit.txt`)
+    5| VERDICT SETTLED.  Fable 5.1 DELIBERATELY NOT FIRED (`fable5.NOT_FIRED.txt`).  Both read source at HEAD de8c7547 and the
+    6| local manuals; neither built or ran anything.  **On every design question the two seats agree**; the differences are
+    7| scope labels (Astra's OPEN = N3/T11 are not plain fix rounds, which Grok also says).  This file carries DISPOSITIONS and
+    8| POINTERS only; each round's owed rows, floor cells, accept controls and witness shape are specified in the two answers
+    9| under the question named, and the round's pass-1 brief inlines them from there.
+   ...
+   11| | item | ruling (both seats) | where the design is | status |
+   12| |---|---|---|---|
+   ...
+   14| | **T36** 88K bus-error PFSR/PFAR | Write `PFSR = CMMU_PFSR_BERROR << 16` and `PFAR = orig_paddr` on CMMU 0 (instruction) / 1 (data) inside the refused-device arm, NULL check around the two writes only, exception delivered outside it; `dev_luna88k.c:624-627`'s probe case returns 0 through the repaired generic path (its own PFSR-only write deleted). Packet citation corrected: `memory_rw.c:437` SAVES `orig_paddr`; `:494` makes `paddr` device-relative. `#568` unchanged (declines stay declines; population-1 faults gain metadata). `badaddr()` is NOT a sufficient oracle (OpenBSD's `eh.S` recovery path bypasses the PFSR read); the reader is `trap.c:326-335`'s `(dpfsr>>16)&7 == 3`, and a guest `ld` of CMMU `0x108`/`0x10c` is the cheap row. R2's reopened PFAR item is carried here; the translation-fault PFAR semantics in `memory_m88k.c` are NOT changed. | Astra Q2; Grok Q2 | READY -- round 2; precedes every later 88K fault round |
+   ...
+   22| **Order (both seats):** T1, T36, T2, N5, T11, T4.  N3 feature; N4 unscheduled.  T1 is not merged with N1/N2; T2 not with
+   23| N3; T36's generic path and LUNA case are ONE round; T11's two exits and the cache bit are ONE round; T4's advertisement,
+   24| decode, arithmetic, readback and `#407` row are ONE round.
+   25| 
+   26| **For the follow-up filing (records, no new rounds):** `memory_mips_v2p.c:293` `case 0x00007ff:` is dead code (Grok);
+   27| T11 links `subpagecache`; the T36 round's brief must carry the `badaddr()` caution and the `trap.c` reader; the T4
+   28| brief must carry the readback-round-trip caution; N5's "new defect" label in ADJ_RULINGS.md C is corrected to
+   29| `ppcbatppkill` (already applied in the filing).
+~~~~
+### 3.2 GPT-6 Astra -- `codex_rescrit.txt` (same directory): the verdict line, the every-round line, the whole Q2 section, and the two Q7 lines that name T36
+~~~~
+    1| VERDICT: OPEN -- Astra’s T1 repair is correct; PPC fault-delivery dependencies and incomplete VR41xx subpage support prevent approving all six as ready fix rounds.
+    2| 
+    3| Read the complete packet and checked the source at `de8c7547`, project rules, relevant manuals and preserved records. Nothing was built, executed or modified. The rows below are obligations, not measurements made today.
+   ...
+   20| For **every round below**, the same applicable floor, bounded DEPENDS-ON enumeration, de-escalation accept rows, gate failure propagation, and documented rung-3 attempt remain owed. An offline fixture is a detector, not a guest-path witness.
+   21| 
+   22| **Q2 — T36: coherent bus-error metadata before exception delivery**
+   23| 
+   24| Within the existing refused-device-access arm:
+   25| 
+   26| - Select **CMMU 0 for instruction access, CMMU 1 for data access**.
+   27| - If that pointer exists, write `PFSR = CMMU_PFSR_BERROR << 16`—`0x00030000`—and `PFAR = orig_paddr`.
+   28| - Keep the NULL check around **the register writes only**. Deliver the appropriate CPU access exception outside it.
+   29| - Retain the existing exception-suppression condition.
+   30| 
+   31| One citation in the packet needs correction: [`memory_rw.c:437`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:437) **saves** the original physical address; line 494 makes `paddr` device-relative. Neither that relative address nor the virtual address belongs in this bus-error PFAR.
+   32| 
+   33| LUNA’s special probe needs the same coherent behavior. Its [current case](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_luna88k.c:624) writes only data PFSR and returns success. Have it report failure through the repaired generic path, which owns the metadata and exception. Do not import the plain-RAM windows for absent CMMUs.
+   34| 
+   35| R2 does **not** justify changing existing translation-fault PFAR values to virtual addresses. The cited `memory_m88k.c` sites prove PFAR is modeled; they deliberately distinguish descriptor-address faults and write-protection behavior. Correct the false record and repair the missing **bus-error** PFAR.
+   36| 
+   37| Required observations are data-read, data-write and instruction refusals; correct CMMU/status/address; translated VA differing from PA; nonzero device base; absent CMMU; suppressed exceptions; successful accesses; and LUNA’s special case. The detector must distinguish omitted register writes, wrong addresses, wrong CMMU selection and missing exception delivery.
+   38| 
+   39| OpenBSD `badaddr()` supplies a recovery compatibility row, **not a sufficient metadata oracle**: its special recovery path can bypass ordinary trap handling. Explicit guest-visible PFSR/PFAR observations are needed.
+   40| 
+   41| **Preserve #568’s disposition.** Named unimplemented VME registers continue to decline with their latched announcements. Unmatched accesses continue to fault, now with complete metadata. The [preserved FAULT measurement](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/vmedefaultkill/measure_20261009/run_FAULT.out:6) establishes the missing metadata; it does not prove that correcting it makes named-register faults acceptable. OpenBSD also checks the faulting context and recovery state. Keep the seven established compatibility sites and the existing 38-row detector, adding metadata checks for actual faults.
+   ...
+  133| 2. **T36**, before any subsequent 88K round relying on fault delivery.
+   ...
+  140| T1 can precede T36 because its chosen repair restores a valid operation rather than replacing it with a fault. Keep N1/N2 separate unless deliberately widening scope. T36’s generic and LUNA paths can share a round if both are witnessed and use the same metadata oracle. T11 cannot close correctly while leaving the cache-granularity defect underneath it. N3/N4/N5 may share fault-delivery infrastructure, but their distinct architectural claims and regression obligations must remain explicit.
+~~~~
+### 3.3 Grok 4.7 -- `grok_crit.txt` (same directory): the opening line with its verdict, the whole Q2 section, the Q7 line for T36, and its closing 'also seen' line
+~~~~
+    1| I'll settle the six designs by reading the cited sites and the round rules, and I'll treat any repair that looks easy to finish as the one that needs the hardest check.T1's two repairs disagree about where `scaled` is computed. I'll read the other five sites the same way before settling the order.The bus-error path is clearer now. Next I’ll read the PowerPC, MIPS TLB, and IDE sites before writing the verdict.The first pass left the repair designs open. I am reading the two sites that were not opened — the MIPS PageMask exits and the IDE LBA path — and checking the premises the earlier seats treated as settled.VERDICT: SETTLED -- Astra on T1 (the table alias, the generator suppression kept); T36 writes `BERROR<<16` and the saved physical address; N3 stays a feature and keeps its exit.
+    2| 
+    3| No build was run. Every site below was read at HEAD `de8c7547`.
+   ...
+   26| ## Q2. T36 — write `BERROR<<16` and `orig_paddr` on the faulting CMMU; the LUNA case returns 0
+   27| 
+   28| The premise that line 437 has already made `paddr` device-relative is reversed. `:437` saves `orig_paddr = paddr` while `paddr` is still the physical address. The subtraction is `:494`. By the failure arm (`:603-623`) `paddr` is the device offset. PFAR gets `(uint32_t)orig_paddr`.
+   29| 
+   30| On `res <= 0 && !no_exceptions`, under `MEM_M88K`, before `m88k_exception`:
+   31| 
+   32| - `cmmu = cpu->cd.m88k.cmmu[cache == CACHE_INSTRUCTION ? 0 : 1]`, the same index as `memory_m88k.c:112` (0 instruction, 1 data).
+   33| - If non-NULL: `reg[CMMU_PFSR] = CMMU_PFSR_BERROR << 16` (`3<<16`, `0x00030000`) and `reg[CMMU_PFAR] = (uint32_t)orig_paddr`.
+   34| - The NULL check wraps only those two writes. `m88k_exception` stays outside it. Do not clear the sibling. The page-fault path does (`memory_m88k.c:383-384`); the bus-error write does not. Do not touch `:399` (PFAR = 0 on write protection) or the `exit` at `:390-394`.
+   35| 
+   36| `dev_luna88k.c:624-627` writes PFSR on the data CMMU with no NULL check and no PFAR, then `break`s into `return 1` at `:930`, so the access succeeds and no exception is raised. Replace that body with `return 0` and delete the PFSR store. The common arm then writes the right CMMU and raises the exception. Do not delete the case. `default:` (`:909-924`) sets `cpu->running = 0` and returns 0, and `memory_rw.c:591-592` then returns failure before the exception arm. Do not port `DEV_RAM_FAIL`, the beyond-RAM hunk that comments the exception out, or the plain-RAM CMMU windows.
+   37| 
+   38| `#568` is unchanged as a decline. The 26 named-but-unimplemented VME registers still return success. Population-1 faults gain PFSR `0x00030000` and PFAR equal to the VME physical address. `regress/vme_default_probe.py` pins PC `0x18`, DMA0, DMT0, and decline-versus-fault. It does not read PFSR, so those oracles stay green. Do not add a `PFSR == 0` assertion, and do not turn population 2 into a fault.
+   39| 
+   40| The pin is not `badaddr()`. In OpenBSD 2.2 `eh.S`, `badaddr` sets `FLAG_IGNORE_DATA_EXCEPTION` and `Data_Precheck` (`eh.S:312`) branches to `ignore_data_exception` before any PFSR read. A `badaddr()`-only row stays green when the exception is raised and the PFSR write is gone. The reader is `trap.c:326-335`: `(frame->dpfsr >> 16 & 7) == 3` and `sxip` inside `guarded_access_start..end`. A raw `3` in the low bits fails that extract. `CMMU_PFAR` (`m882xx.h:50`) is defined and has no reader under `sys/arch/mvme88k`; the fault address `trap.c` uses is the data unit's DMA0. PFAR is still the register upstream writes and the guest can `ld` it at CMMU offset `0x10c`.
+   41| 
+   42| Rows: a guest `ld` of the data CMMU at `0x108` and `0x10c` after a population-1 VME load on unmodified mvme187, field `(>>16)&7` equal to 3, PFAR equal to `orig_paddr`. A second cell reads `cmmu[0]` after an instruction fetch. A (d) mutant that stores the device offset fails because the VME base is not 0. A (d) mutant that writes only `cmmu[0]` on a data access fails the data-CMMU read. A (d) mutant that stores raw 3 fails the field extract. An accept row: a population-2 decline still returns success and does not write PFSR. Clause (c) is a memory-path round: an absent device, recorded by construction. The stronger boot witness is `sxip` inside the guarded window recovering at `guarded_access_bad`; the register `ld` is the cheap one. Every later 88K round whose repair is "return 0 and raise data-access" depends on this writer. T1 does not.
+   ...
+  111| 2. T36. Before any later 88K round whose repair raises data-access. One round: the common writer and the LUNA `return 0`. Splitting them leaves the probe either succeeding with a stale PFSR or stopping the CPU.
+   ...
+  119| Also seen while reading, and not given a new id: `match` is uninitialized if the N3 exit is removed; `case 0x00007ff` in the MIPS walker is dead code; `0xA0` and `0xE0` both round-trip through the wrong SDH split, so a readback oracle cannot carry T4; the LUNA `default:` plus `memory_rw.c:591` swallows the exception if the probe case is deleted.
+~~~~
+### 3.4 The port source -- upstream trunk against 0.7.0 (`regress/artifacts/research_20261022/trunk_src.diff`, VERBATIM)
+
+What the ruling PORTS is the first hunk's shape (a CMMU chosen by `cache`, a NULL check around two register writes,
+`orig_paddr` into PFAR, the exception outside).  What it REFUSES (Grok Q2, 3.3): the beyond-RAM hunk that writes the
+same two registers on the UNCLAIMED path and comments the exception out, and the `DEV_RAM_FAIL` device that replaced
+the LUNA case.  **The `cpu_m88k.c` include hunk is named by neither seat nor by the ruling -- see S16 and P1.**
+~~~~
+memory_rw.c, the refused-device arm:
+ 4668|  #ifdef MEM_M88K
+ 4669| -					/*  TODO: This is enough for
+ 4670| -					    OpenBSD/mvme88k's badaddr()
+ 4671| -					    implementation... but the
+ 4672| -					    faulting address should probably
+ 4673| -					    be included somewhere too!  */
+ 4674| +					struct m8820x_cmmu *cmmu = cpu->cd.m88k.cmmu[cache == CACHE_INSTRUCTION ? 0 : 1];
+ 4675| +					if (cmmu != NULL) {
+ 4676| +						cmmu->reg[CMMU_PFSR] = CMMU_PFSR_BERROR << 16;
+ 4677| +						cmmu->reg[CMMU_PFAR] = orig_paddr;
+ 4678| +					}
+ 4679|  					m88k_exception(cpu, cache == CACHE_INSTRUCTION
+ 4680|  					    ? M88K_EXCEPTION_INSTRUCTION_ACCESS
+ 4681|  					    : M88K_EXCEPTION_DATA_ACCESS, 0);
+
+memory_rw.c, the beyond-RAM path (NOT ported):
+ 4739| +#ifdef MEM_M88K
+ 4740| +			struct m8820x_cmmu *cmmu = cpu->cd.m88k.cmmu[cache == CACHE_INSTRUCTION ? 0 : 1];
+ 4741| +			if (cmmu != NULL) {
+ 4742| +				cmmu->reg[CMMU_PFSR] = CMMU_PFSR_BERROR << 16;
+ 4743| +				cmmu->reg[CMMU_PFAR] = paddr;
+ 4744|  			}
+ 4745| +			
+ 4746| +			// NOTE: It would be correct to cause exceptions here
+ 4747| +			// for any unimplemented address, but it is a common
+ 4748| +			// situation that some device in some machine is not
+ 4749| +			// yet implemented, so this is commented out. If
+ 4750| +			// exceptions are required, an alternative is to add
+ 4751| +			// a DEV_RAM_FAIL device for the probed memory range.
+ 4752| +			// m88k_exception(cpu, cache == CACHE_INSTRUCTION
+ 4753| +			//     ? M88K_EXCEPTION_INSTRUCTION_ACCESS
+ 4754| +			//     : M88K_EXCEPTION_DATA_ACCESS, 0);
+ 4755| +#endif
+
+cpu_m88k.c, the include:
+ 1914| diff -ruN x_070/gxemul-0.7.0/src/cpus/cpu_m88k.c x_trunk/gxemul-trunk/src/cpus/cpu_m88k.c
+ 1915| --- x_070/gxemul-0.7.0/src/cpus/cpu_m88k.c	2021-04-22 13:04:18.000000000 -0500
+ 1916| +++ x_trunk/gxemul-trunk/src/cpus/cpu_m88k.c	2023-07-24 14:14:36.000000000 -0500
+ 1917| @@ -50,6 +50,7 @@
+ 1918|  #include "settings.h"
+ 1919|  #include "symbol.h"
+ 1920|  
+ 1921| +#include "thirdparty/m8820x.h"
+ 1922|  #include "thirdparty/m8820x_pte.h"
+ 1923|  #include "thirdparty/m88k_dmt.h"
+ 1924|  #include "thirdparty/mvmeprom.h"
+
+dev_luna88k.c (NOT ported -- the fork keeps the case, section 3.1):
+ 5153| -#define	LUNA88K_REGISTERS_BASE		0x3ffffff0UL
+ 5154| +#define	LUNA88K_REGISTERS_BASE		PROM_ADDR
+   ...
+ 5272|  	switch (addr) {
+ 5273|  
+ 5274| -	case 0x3ffffff0:
+ 5275| -		/*  Accessed by OpenBSD/luna88k to trigger an illegal address  */
+ 5276| -		cpu->cd.m88k.cmmu[1]->reg[CMMU_PFSR] = CMMU_PFSR_BERROR << 16;
+ 5277| -		break;
+ 5278| -
+ 5279|  	case PROM_ADDR:		/*  0x41000000  */
+   ...
+ 5373| +	// Guest OSes such as OpenBSD probe memory by reading 0x3ffffff0.
+ 5374| +	// Having this device here suppresses visible debug messages.
+ 5375| +	dev_ram_init(devinit->machine, 0x3ffffff0, 0x10, DEV_RAM_FAIL, 0x0, "failprobe");
+ 5376| +
+~~~~
+---
+
+## 4. Section C0 -- has this round already shipped?  (commands run against HEAD; output VERBATIM)
+
+*`C0_OUTPUT.txt` beside this brief.  Part 0 was added after HEAD moved during drafting.*
+~~~~
+# §C0 -- has this round already shipped?  Run 2026-10-23 against HEAD 7fca71876a996868fa47034fa8727375ce59653d
+# (git object reads only: log / show / ls-tree.  No status, no diff.  The working tree may hold a records commit in flight.)
+
+## 0. HEAD moved while this brief was drafted -- what changed (added after parts 1-5 were run)
+$ git log --oneline -3
+7fca7187 records: `m88kscaledbyte` names its landing commit 66920157, and 66920157's committed-tree proofs and pass-2/3 receipts
+66920157 #569 m88kscaledbyte: the m88k load/store table's 24 scaled-byte slots were NULL and indexed unguarded -- the generator names the unscaled byte handlers, the table is regenerated, a 123-row offline detector is gated in gate 2; held for Fable
+0efeb283 probe wiring: alpha_tbi_probe.py's gate-wiring exemption came due 2026-10-22 with its Alpha gate home still owed and refused every commit -- re-dated to 2026-11-06 by owner ruling, in its own commit
+$ git show --stat --format="%h %ad %s" --date=iso HEAD   (the new commit's file list)
+7fca7187 2026-10-23 19:49:48 -0500 records: `m88kscaledbyte` names its landing commit 66920157, and 66920157's committed-tree proofs and pass-2/3 receipts
+
+ CHANGELOG.md               | 9 +++++++++
+ regress/pass2_ledger.tsv   | 1 +
+ tools/pipeline/ledger.json | 2 +-
+ tools/pipeline/matrix.html | 2 +-
+ 4 files changed, 12 insertions(+), 2 deletions(-)
+$ git log --oneline 66920157..HEAD -- src regress/*.py regress/*.sh   (empty = no source or harness script changed)
+(empty)
+blob SAME  66920157=2ea1ed00a544  HEAD=2ea1ed00a544  src/cpus/memory_rw.c
+blob SAME  66920157=61a63ade0671  HEAD=61a63ade0671  src/devices/dev_luna88k.c
+blob SAME  66920157=1b048b12b26b  HEAD=1b048b12b26b  src/devices/dev_m8820x.c
+blob SAME  66920157=d17c504f18f1  HEAD=d17c504f18f1  src/cpus/memory_m88k.c
+blob SAME  66920157=2edd51810173  HEAD=2edd51810173  src/cpus/cpu_m88k.c
+
+## 1. git log -1 -- <each file the round would touch>
+$ git log -1 --format='%h %ad %s' --date=short -- src/cpus/memory_rw.c
+50fb2ee0 2026-08-20 PIT panel recorded, and the pass 2 the hook demanded found two real things in my own comment
+$ git log -1 --format='%h %ad %s' --date=short -- src/devices/dev_luna88k.c
+79cd12e8 2026-09-06 #502 pass 9-12 and #503: two fixes shipped, a filing overturned to a floor breach and repaired, and a detector's own contract predicting both of its escapes
+$ git log -1 --format='%h %ad %s' --date=short -- src/devices/dev_m8820x.c
+2a5bc480 2026-08-16 R9 (#435): half this device's translation-cache purges were for registers nothing reads
+$ git log -1 --format='%h %ad %s' --date=short -- src/cpus/memory_m88k.c
+39748e3c 2026-06-28 Import GXemul 0.7.0 (unmodified upstream baseline)
+$ git log -1 --format='%h %ad %s' --date=short -- src/cpus/cpu_m88k.c   (added with part 0; see P1)
+79cd12e8 2026-09-06 #502 pass 9-12 and #503: two fixes shipped, a filing overturned to a floor breach and repaired, and a detector's own contract predicting both of its escapes
+$ git log -1 --format='%h %ad %s' --date=short -- regress/gate_arm.sh
+2ca79b90 2026-10-21 #568 (vmedefaultkill): dev_vme.c's default: no longer ends the emulator -- the 26 header-named registers decline with one announce each, every other offset faults to the guest; a 3
+$ git log -1 --format='%h %ad %s' --date=short -- regress/gate_m88k_rounding.sh
+01aef04f 2026-10-16 #502 m88kexcdeliver repair 15 CLOSES the chain: a trap in a branch delay slot is rowed at the five instruction labels, unfrozen and frozen (probe v23 -> v24, 73 -> 84 rows); pass 1
+$ git log -1 --format='%h %ad %s' --date=short -- tools/pipeline/check_probe_wiring.py
+0efeb283 2026-10-23 probe wiring: alpha_tbi_probe.py's gate-wiring exemption came due 2026-10-22 with its Alpha gate home still owed and refused every commit -- re-dated to 2026-11-06 by owner ruling,
+$ git log -1 --format='%h %ad %s' --date=short -- regress/m88k_buserr_probe.py
+(no commit touches this path -- it does not exist at HEAD)
+
+## 2. grep <row id> CHANGELOG.md (at HEAD, via git show HEAD:CHANGELOG.md)
+$ git show HEAD:CHANGELOG.md | grep -c -- 'm88kbuserrregs'   ->  0
+$ git show HEAD:CHANGELOG.md | grep -c -- 'T36'   ->  3
+$ git show HEAD:CHANGELOG.md | grep -c -- 'PFAR'   ->  9
+$ git show HEAD:CHANGELOG.md | grep -c -- 'CMMU_PFSR_BERROR'   ->  0
+$ git show HEAD:CHANGELOG.md | grep -c -- '0x3ffffff0'   ->  0
+-- the CHANGELOG lines naming PFAR / T36 / 0x3ffffff0, so a reader can see they are not this round:
+159:* **Filed: 126 open rows, witness `none`** -- the 121 UNFILED rows (T36's row carries the reopened PFAR item), the
+167:  T36, T18, T120, T7, T11, T5; tail = T12, T4, T8, T10, T13, N3.
+168:* **R2 corrected (L4):** the Round 71B note "m88k PFAR ... REFUTED" in `OUTSTANDING_BUGS.md` is false --
+169:  `CMMU_PFAR` (m8820x.h:66) is written at memory_m88k.c:399 and :405 and read by the guest through
+170:  dev_m8820x.c:438.  Reopened under T36's row.
+28363:reasons**, and the comment now gives all three: `PFSR`/`PFAR` have no translation consumer at
+28368:model *already* relies on "a PFSR write owes no purge". The fault path writes `PFSR` and `PFAR`
+28461:- `PFAR (:399-405)` — a bare line range after a `dev_luna88k.c` citation **inherits that
+28478:`dev_m8820x.c` grouped `PFSR`, `PFAR`, `SAR`, `SCTR`, `SAPR` and `UAPR` and called
+28531:- **"twice per fault"** → wrong reason (`PFAR` is read **zero** times) → corrected to "once" →
+28649:  own translation consults — `SAPR`/`UAPR` read at `memory_m88k.c:135,137`, `PFSR`/`PFAR` written
+
+## 3. ls <the directory any NEW TOOL would live in>
+$ git ls-tree --name-only HEAD regress/ | grep -i -E 'buserr|m88k|luna|vme_default|mk48'
+regress/diff_m88k_loadstore_gen.sh
+regress/gate_m88k_rounding.sh
+regress/luna_absentcpu_probe.py
+regress/luna_intmask_probe.py
+regress/m88k_exc_probe.py
+regress/m88k_idle_probe.py
+regress/m88k_rounding_probe.py
+regress/mk48_nvram_probe.py
+regress/vme_default_probe.py
+$ ls regress/ | grep -i buserr   (working tree, read-only)
+(none -- the probe exists only as the witness artifact, not under regress/)
+$ git ls-tree -r --name-only HEAD regress/artifacts/m88kbuserrregs/ | wc -l
+0
+$ ls regress/artifacts/m88kbuserrregs/   (working tree: the witness dir, UNTRACKED at HEAD)
+witness_20261023
+
+## 4. the ledger row at HEAD (state / witness / commits)
+state='open' witness='none' commits='' sev='MED' opened='2026-10-22'
+stages present: []
+
+## 5. est/ twin -- the product files are SHARED (not in tools/est_divergence.txt), so they land byte-identical in est/
+$ grep -vE '^\s*(#|$)' tools/est_divergence.txt   (derived, not quoted)
+src/devices/.index
+src/devices/Makefile.skel
+src/devices/autodev.c
+src/devices/dev_jazz.c
+src/devices/dev_ne2000.c
+src/machines/machine_arc.c
+cmp HEAD:src/cpus/memory_rw.c est/src/cpus/memory_rw.c -> IDENTICAL
+cmp HEAD:src/devices/dev_luna88k.c est/src/devices/dev_luna88k.c -> IDENTICAL
+cmp HEAD:src/devices/dev_m8820x.c est/src/devices/dev_m8820x.c -> IDENTICAL
+cmp HEAD:src/cpus/cpu_m88k.c est/src/cpus/cpu_m88k.c -> IDENTICAL   (added with part 0; see P1)
+
+VERDICT: the CHANGELOG does not name m88kbuserrregs; no commit touches regress/m88k_buserr_probe.py; the ledger row is state=open, witness=none, commits=''.  THE ROUND HAS NOT RUN.  (The witness exists on disk and is untracked at HEAD.)
+~~~~
+---
+
+## 5. SETTLED PREMISES -- re-inlined so nobody spends an answer re-deriving them
+
+Settled by the critical-items adjudication (`crit_20261022`: GPT-6 Astra and Grok 4.7, source read at `de8c7547`, no
+build), by the witness (section 2), and **RE-READ IN THIS SCOPE at HEAD `7fca7187`** by the drafter.  Each premise
+cites the line re-read; line numbers are as read at HEAD, and the grep anchor is given where a site is load-bearing.
+
+* **S1 -- `orig_paddr` is the PHYSICAL address, and it is in scope at the arm.**  `memory_rw.c`'s device block opens
+  with `if (paddr >= mem->mmap_dev_minaddr && paddr < mem->mmap_dev_maxaddr) {` (:436); its first statement is
+  `uint64_t orig_paddr = paddr;` (:437, anchor unique), taken after translation (:245-270).
+  `paddr -= mem->devices[i].baseaddr;` (:494, unique) makes `paddr` DEVICE-RELATIVE before the device call.  The
+  refused-access arm (:603-625) is inside the same block.  (Both seats corrected the crit packet on this point --
+  3.2 "One citation in the packet needs correction", 3.3 "The premise that line 437 ... is reversed".)
+* **S2 -- the arm, exactly.**  `res = 0;` (:583); the device function runs only
+  `if (!no_exceptions || (mem->devices[i].flags & DM_READS_HAVE_NO_SIDE_EFFECTS))` (:584-585); a device that stopped
+  the cpu leaves through `if (running_before_device_access && !cpu->running) return MEMORY_ACCESS_FAILED;` (:591-592)
+  BEFORE the arm; `if (res == 0) res = -1;` (:595-596); then `if (res <= 0 && !no_exceptions) {` (:603, unique) prints a
+  `debug()` line naming the direction, the device and the DEVICE-RELATIVE `paddr` (:604-607), and under
+  `#ifdef MEM_M88K` (:614-623) calls only `m88k_exception(cpu, cache == CACHE_INSTRUCTION ?
+  M88K_EXCEPTION_INSTRUCTION_ACCESS : M88K_EXCEPTION_DATA_ACCESS, 0);` before `return MEMORY_ACCESS_FAILED;` (:624).
+  Its own TODO: "but the faulting address should probably be included somewhere too!" (:615-619).  A served access
+  (`res >= 1`) takes `goto do_return_ok;` (:626).  On a read the caller's buffer was zeroed before the device call
+  (:491-492, `#95`).
+* **S3 -- only a CLAIMED-and-REFUSED access reaches the arm** (premise correction 1, 2.6).  The device scan (:479-634)
+  must find `baseaddr <= paddr < endaddr`, the device must return 0 with the cpu still running, and `no_exceptions`
+  must be clear.  An address NO device claims falls through to `Outside of physical RAM?` (:662-713): zeros on a read,
+  a dropped write, no exception, no CMMU write (INFO `unclaimed`).  On an unmodified luna-88k every device
+  `return 0;` follows `cpu->running = 0;` -- `dev_luna88k.c` 1 site (`default:`, :922-924), `dev_mb89352.c` 6,
+  `dev_lunafb.c` 4 (that device exists only with `-X`) -- so :591-592 returns first; `dev_le.c`'s `return 0;` lines are
+  in helper functions except :932, which the witness reads as unreachable (premise correction 2; the three counts
+  re-derived here with `git show HEAD:<file> | grep -B2 'return 0;'`).  `dev_m8820x.c` always returns 1 (:529).
+* **S4 -- the four refusal sources on an unmodified MVME187:** three `unreadable` windows -- 0xfff46000 len 0x1000
+  ("ie0 ethernet: TODO", `machine_mvme88k.c`:105-106, anchor `unreadable addr=0xfff46000 len=0x1000`), 0xff780000 len
+  0x80000 (:119-120) and 0xffff0000 len 0x10000 (:122-123) -- whose access function is the whole of
+  `DEVICE_ACCESS(unreadable) { return 0; }` (`dev_unreadable.c`:41-44, registered `DM_DEFAULT` :49-51); and VME2
+  population 1, every offset `dev_vme.c`'s switch does not name, which reaches `default:` and `return 0;` (:207-220,
+  `#568`).  The 26 header-named unimplemented VME2 registers (population 2) DECLINE: served, `return 1`, one latched
+  announce per register (:150-205).  The witness uses the first window (0xfff46010) and population 1 (0xfff40090).
+* **S5 -- how the arm tells an instruction access from a data access:** `cache = misc_flags & CACHE_FLAGS_MASK;`
+  (:242).  Data loads and stores -- and `xmem`, which calls the same handlers -- pass `CACHE_DATA`, or
+  `CACHE_DATA | MEMORY_USER_ACCESS` for `.usr` (`cpu_m88k_instr_loadstore.c`:60-64); the instruction fetch passes
+  `CACHE_INSTRUCTION` (`cpu_m88k_instr.c`:2989-2990); the debugger's memory reads and writes pass
+  `CACHE_NONE | NO_EXCEPTIONS` (`debugger_cmds.c`:716-717, :1006-1008, :1459-1461, :1506-1507, :1918-1919); the m88k
+  disassembler's look-behind reads pass `CACHE_INSTRUCTION | NO_EXCEPTIONS` (`cpu_m88k.c`:1117-1120, :1180-1183); the
+  single-step disassembly pre-read passes `CACHE_INSTRUCTION` WITHOUT `NO_EXCEPTIONS` (`cpu_dyntrans.c`:287-288 -- R2).
+* **S6 -- the index convention, cmmu[0] instruction and cmmu[1] data:** `memory_m88k.c`:112
+  `struct m8820x_cmmu *cmmu = cpu->cd.m88k.cmmu[instr? 0 : 1];`; `dev_m8820x.c`:540-543 "cmmu nr 0 = instruction,
+  1 = data"; `dev_mvme187.c`:136-137 and :148-149; `dev_luna88k.c`:946 and :957.  The array is
+  `struct m8820x_cmmu *cmmu[MAX_M8820X_CMMUS]` (`cpu_m88k.h`:268; MAX 8, :228).
+* **S7 -- which CPUs have CMMUs.**  Only `dev_mvme187.c` and `dev_luna88k.c` assign `cd.m88k.cmmu[` (`git grep` over
+  `src/`).  MVME187 attaches both to `machine->bootstrap_cpu` only (`dev_mvme187.c`:136-149) -- the cpu emul.c starts
+  (`cpu->running = true;`, `emul.c`:747-748).  LUNA-88K attaches both to every cpu below `ncpus` (`add_cmmu_for_cpu`,
+  `dev_luna88k.c`:934-965, early return `if (cpunr >= devinit->machine->ncpus)` :939-940, called for cpus 0-3 at
+  :1074-1077); the data CMMU additionally gets the hardwired `batc[8] = BATC8; batc[9] = BATC9;` (:961-962,
+  `dev_mvme187.c`:152-153).  The 88110 machines (testm88k, barem88k, mvme197) and mvme188 attach none
+  (`cpu_m88k.c`:340-342: "on the test machines every cmmu[] slot is NULL").  testm88k's devices (`default_test`:
+  irqc, cons, mp, fbctrl, disk, ether, rtc -- `machine_test.c`:136-168) contain no `return 0;` (grep of each
+  `dev_*.c`), EXCEPT the framebuffer `fbctrl`'s DEVINIT creates (`dev_fb_init`, `dev_fbctrl.c`:198): `dev_fb.c`
+  returns 0 for an access past `framebuffer_size` (:719-721), and `dev_fb_resize()` keeps the device's mapped length
+  equal to the framebuffer size (`memory_device_update_length`, :205-212, `#182`), so a CLAIMED access cannot reach
+  that return -- my reading, part of P4.  barem88k, mvme188 and mvme197 install no devices (`machine_test.c`:255-258;
+  `machine_mvme88k.c`:127-135).
+* **S8 -- the register layout and the guest's access to it.**  `CMMU_PFSR (0x108 / 4)`, `CMMU_PFAR (0x10c / 4)`
+  (`m8820x.h`:65-66); `CMMU_PFSR_FAULT(pfsr) (((pfsr) >> 16) & 0x07)` and `CMMU_PFSR_BERROR 3` (:123, :125), so the
+  ruled PFSR value is `3 << 16 = 0x00030000`.  `dev_m8820x.c` serves a read as `regs[relative_addr / sizeof(uint32_t)]`
+  (:257-258) and STORES a guest write to PFSR/PFAR (:437-461), which is what lets the witness seed both registers; it
+  is registered `DM_DEFAULT` (:545-547), so a `NO_EXCEPTIONS` access (the debugger) never reaches it (memory_rw.c
+  :584-585); it indexes the CMMU of `d->cpu_nr`, not of the accessing cpu (:250-251).  The debugger's `tlbdump` prints
+  BATC and PATC only, never `reg[]` (`cpu_m88k.c`:354-404) -- so no debugger command shows PFSR or PFAR.
+* **S9 -- the translation-fault writers, which this round does NOT change.**  `memory_m88k.c`'s `exception:` block
+  writes `cmmu->reg[CMMU_PFSR] = pfsr_status << 16;` on the faulting CMMU and sets the OTHER CMMU's PFSR to SUCCESS
+  (`cpu->cd.m88k.cmmu[instr? 1 : 0]->reg[CMMU_PFSR] = CMMU_PFSR_SUCCESS << 16;`, :382-384, no NULL test on the sibling);
+  PFAR is set to 0 on a write-protect fault (:397-400, "The PFAR is "destroyed"/undefined on write faults") and to the
+  PHYSICAL ADDRESS OF THE FAULTING DESCRIPTOR on SUPER/SFAULT/PFAULT (:402-406; computed at :265, :273, :297-298,
+  :306-307).  So on a translation fault this tree's PFAR is NOT the faulting address.  With `cmmu == NULL` the
+  translator returns physical = virtual (:130-132); with the APR invalid, likewise (:140-144).
+* **S10 -- exception delivery.**  `void m88k_exception(struct cpu *cpu, int vector, int is_trap)` (`cpu_m88k.c`:689):
+  SXIP = `cpu->pc | M88K_XIP_V` (:837), `| M88K_XIP_E` for an instruction access (:859-860); `pc = VBR + 8 * vector`
+  (:863); a second non-trap exception while PSR.SFRZ is set becomes ERROR (:811-819); DATA_ACCESS copies
+  DMT0/DMD0/DMA0 from `cpu->cd.m88k.dmt/dmd/dma[0]` (:908-912).  DMA0 is `addr & ~0x3` of the VIRTUAL address
+  (`cpu_m88k_instr_loadstore.c`:131); halfword, word and doubleword accesses are alignment-checked before
+  `memory_rw` (:167-186), bytes are not; `ld.d`/`st.d` make ONE 8-byte `memory_rw` call (:74, :189, :234).
+* **S11 -- the guest reader, OpenBSD 2.2 mvme88k** (absolute paths and the passages in section 8).  `eh.S` saves BOTH CMMUs' PFSR
+  (`CMMU_I` and `CMMU_D` + 0x108) into the frame in the common exception-entry setup (:1009-1018).  `trap.c`'s kernel data-fault
+  path recovers a guarded access only when `(frame->dpfsr >> 16 & 0x7) == 0x3` and `sxip` lies in
+  `guarded_access_start..guarded_access_end` (:326-336); its user-fault path calls `vm_fault()` only when NEITHER
+  `ipfsr` NOR `dpfsr` is BERROR (:405-411).  `badaddr()` sets `FLAG_IGNORE_DATA_EXCEPTION`, and `PREP()` runs
+  `Data_Precheck` -- `bb1.n FLAG_IGNORE_DATA_EXCEPTION, FLAGS, ignore_data_exception` -- as its first act, before the
+  frame and PFSR save (:273-275, :311-312), so `badaddr()` never reads PFSR.  No code under `sys/arch/mvme88k` reads
+  `CMMU_PFAR` (only its define, `include/m882xx.h`:50), and none writes the hardware PFSR (grep).  So on HEAD the PFSR
+  an OpenBSD handler reads after a bus error is whatever the last translation fault left, or the reset value 0.
+* **S12 -- the manual.**  `mc88100.txt`:9447-9451: "The exact cause of the exception is not stored in the MC881 00 [sic,
+  OCR]; the memory subsystem must provide a status register or other means of indicating the cause of the exception, if
+  necessary. The MC88200 CMMU includes a local status register, which the exception handler must read to determine the
+  cause of the exception in systems using an MC88200 on the data P bus." (and :9337-9341 for instruction access).  The
+  data P bus carries a WORD address plus byte enables (:7870-7874).  **The MC88200 manual is NOT on disk** (no file under
+  `_scratchpad/`; `vmesbcp2.txt`:139 lists "MC88200 Cache/Memory Management Unit (CMMU) MC88200UM" as a related
+  document) -- so no local primary source says what PFAR holds after a bus error.
+* **S13 -- the witness:** rung 3 on two unmodified machines, 8 rows red on HEAD, every control green (section 2).
+* **S14 -- section C0: not shipped** (section 4): the CHANGELOG names no `m88kbuserrregs`; no commit touches
+  `regress/m88k_buserr_probe.py`; the row is `open`, witness `none`, commits empty.
+* **S15 -- `#568` is untouched by this round's reach.**  Population 2 declines and never reaches the arm (S4);
+  population 1 does and will gain metadata.  **None of the 107 top-level `regress/*.py` at HEAD mentions PFSR or PFAR**
+  (deriver: each `git show HEAD:<file> | grep -ci 'pfsr\|pfar'`, 107 files, 0 hits) -- so `vme_default_probe.py`'s 38
+  rows read neither register, and no committed detector reads the CMMU fault registers at all.
+* **S16 -- the build: the arm compiles inside `cpu_m88k.c`, which does not include `thirdparty/m8820x.h`.**
+  `src/cpus/tmp_m88k_tail.c`:38-40 is `#define MEMORY_RW m88k_memory_rw` / `#define MEM_M88K` / `#include "memory_rw.c"`,
+  and `cpu_m88k.c` includes `thirdparty/m8820x_pte.h`, `m88k_dmt.h` and `mvmeprom.h` (:53-55) but not `m8820x.h`
+  (0 hits in `cpu_m88k.c`, `tmp_m88k_head.c`, `tmp_m88k_tail.c`, `cpu_m88k.h`, `cpu.h`, `memory.h`, `machine.h`; and no
+  header under `src/` includes it -- `git grep 'm8820x\.h' HEAD -- src` lists only the four `.c` files below and the
+  header itself).  `CMMU_PFSR`, `CMMU_PFAR` and `CMMU_PFSR_BERROR` are defined only in `src/include/thirdparty/m8820x.h`,
+  which only `memory_m88k.c`, `dev_luna88k.c`, `dev_m8820x.c` and `dev_mvme187.c` include; `memory_m88k.c` is its own
+  object, never `#include`d into `cpu_m88k.c` (it is absent from the `cpu_m88k.o:` dependency line,
+  `src/cpus/Makefile.skel`:128-129).  `tmp_m88k_tail.c` is itself GENERATED, though tracked
+  (`./generate_tail m88k M88K > tmp_m88k_tail.c`, `Makefile.skel`:140-141).  Upstream added the include to
+  `cpu_m88k.c` (3.4).  `struct m8820x_cmmu` itself is in `cpu_m88k.h` (:234-240).  *Its consequence is P1.*
+* **S17 -- shared files.**  `memory_rw.c`, `dev_luna88k.c`, `dev_m8820x.c` and `cpu_m88k.c` are not in
+  `tools/est_divergence.txt`; all four are byte-identical in `est/` (C0 part 5) -- every edit lands
+  byte-identical in `est/` and is propagated to the build trees.
+* **S18 -- scope exclusions.**  `m88kexit` (`memory_m88k.c`:390-394) is a different row (not merged, ledger note).
+  `lunadefaultstop` (the luna `default:` stops the cpu) is a different row -- and is why the LUNA case must not be
+  deleted (Grok, 3.3).  R3 (unclaimed addresses) is not this arm.  Upstream's beyond-RAM hunk, `DEV_RAM_FAIL` device and
+  plain-RAM CMMU windows are not ported (3.3, 3.4).
+* **S19 -- the LUNA case.**  `dev_luna88k.c`'s access function switches on
+  `uint32_t addr = relative_addr + LUNA88K_REGISTERS_BASE;` (:558; base `0x3ffffff0UL`, :78), so the case is reached by
+  a load OR a store of ANY width that starts at 0x3ffffff0.  The early windows before the switch -- fuse ROM
+  0x43000000, NVRAM 0x45000000, LUNA-88K2 NVRAM 0x47000000, tri-port RAM 0x71000000 (`luna88k_board.h`:58-70, :118) --
+  all lie above 0x3ffffff0, so the probe address reaches the switch.  `case 0x3ffffff0:` (:624, unique) is
+  `cpu->cd.m88k.cmmu[1]->reg[CMMU_PFSR] = CMMU_PFSR_BERROR << 16; break;` (:625-627) -- data CMMU always, no NULL test --
+  and `break` reaches the common tail `if (writeflag == MEM_READ) memory_writemax64(cpu, data, len, odata); return 1;`
+  (:927-930) with `odata` 0.  The function's only returns are :575, :587, :597, :607, :619 (`return 1;` from the early
+  windows), :924 (`return 0;` in `default:`, after `cpu->running = 0;`) and :930; every case between :629 and :907 ends
+  in `break;`.
+
+---
+
+## 6. PREMISES STATED AS QUESTIONS -- check these; ratification is not wanted
+
+* **P1 -- a fourth product file (S16).**  Neither seat's design, the ruling, nor the witness's "the three files the
+  round will edit" (`memory_rw.c`, `dev_luna88k.c`, `dev_m8820x.c` -- its baseline table, 2.1) names an include, and I read
+  the repair as written as NOT COMPILING in the m88k translation unit without one.  Is that right?  If so, the placement
+  on record is upstream's -- the include in `cpu_m88k.c` (3.4; `tmp_m88k_tail.c` is generated, S16).  Does `m8820x.h`
+  (which also defines `BATC8`/`BATC9`, `INST_CMMU`/`DATA_CMMU`, `MAX_CMMUS`, `NBSG` and the whole `CMMU_*` family)
+  collide with anything already visible in `cpu_m88k.c`, and does `cpu_m88k.c` then join the round's edit set and its
+  clearance (S17)?
+* **P2 -- PFAR's low two bits.**  `orig_paddr` is the BYTE address; DMA0 holds the WORD address (`addr & ~0x3`, S10);
+  the 88100 data P bus presents a word address plus byte enables (S12); no MC88200 manual is on disk.  For a byte or
+  halfword bus error at a non-word-aligned address, should PFAR be `orig_paddr` (upstream writes exactly that, 3.4) or
+  `orig_paddr & ~3`?  The witness's rows are all words at word-aligned addresses, so no row distinguishes the two, and
+  its contract lists sub-word accesses NOT CLAIMED.  Is the choice recorded with its warrant, and is a sub-word row owed?
+* **P3 -- the sibling CMMU.**  HEAD's translation-fault path writes the faulting CMMU's PFSR AND resets the other one's
+  to SUCCESS (S9).  The ruled bus-error path writes only the faulting CMMU (Grok: "Do not clear the sibling"), and the
+  four `icmmu` rows pin the sibling's seeds as `kept`.  OpenBSD 2.2 snapshots BOTH PFSRs at every exception entry and
+  its user-fault path branches on EITHER being BERROR (S11).  Can a stale sibling PFSR change what such a guest does
+  after a bus error, where a reset sibling would not?  Is `kept` the right want, and on what warrant?
+* **P4 -- the absent-CMMU cell (the NULL check).**  My reading of S7: no refused access by a CPU whose `cmmu[]` slot is
+  NULL is reachable by a guest on an unmodified in-tree machine -- the machines without CMMUs install no device that can
+  refuse a CLAIMED access (testm88k's one candidate, `dev_fb.c`:719-721, is fenced by `#182`'s length update), and the
+  machines with refusing devices attach CMMUs to every running CPU.  If that is right, the NULL check rests on a
+  TRANSFERRED WARRANT (upstream r6577(e); the same test at `memory_m88k.c`:131-132) under the addition licence (R13),
+  and its variants (the check removed; the exception moved inside it) are unobservable by any rung-3 row.  Check the
+  reading, and name any machine or CPU configuration that reaches the cell.
+* **P5 -- the instruction label of the selector the fix ADDS.**  The data label is rowed (uld, ust, vme, luna).  The
+  instruction label (cmmu[0] after a refused instruction FETCH) has no guest-visible channel on HEAD when free-running:
+  the fetch raises vector 2 and the translator's `bad:` tail then stops the cpu before the vector's first instruction
+  (R1).  Stepped, the exception comes from the debugger's own disassembly pre-read (R2) and the vector runs.  Options I
+  can name: (i) row it in a stepped session through R2's path; (ii) disclose it under clause (e) with this derivation;
+  (iii) sequence R1's repair first.  Which -- and does (i) make a row whose channel depends on a defect a later round
+  will remove?
+* **P6 -- the `no_exceptions` cell of the arm's own guard.**  The witness lists "no_exceptions callers" NOT CLAIMED
+  because "the debugger's put/dump/unassemble never reach a DM_DEFAULT handler, memory_rw.c:584" (probe header).  That
+  is true of the DEVICE CALL (:584-585), but the arm's guard still evaluates `!no_exceptions` with `res` forced to -1
+  (:595-596, :603), and the debugger's own reads are `CACHE_NONE | NO_EXCEPTIONS` (S5).  So a `NO_EXCEPTIONS` access to a
+  refusing device does reach the guard.  Is the {`no_exceptions` set} cell reachable in the witness's session shape,
+  and is a row owed for it?
+* **P7 -- VA different from PA.**  Astra lists "translated VA differing from PA" among the required observations (3.2).
+  Every witness session runs with the APR invalid (physical = virtual, S9), so PFAR = `vaddr` and PFAR = `orig_paddr`
+  agree in every row.  The DEPENDS-ON bound draws operand swaps ONLY from fields the guarded body reads (R5): the arm's
+  m88k block reads `cache`, its `debug()` reads the device-relative `paddr`, and `vaddr` is read only by the `MEM_MIPS`
+  block (compiled out for m88k).  So by the letter a PFAR := `vaddr` variant is outside the (d) enumeration.  Is a
+  VA≠PA row owed anyway -- and is translation-on reachable in the witness's session shape on unmodified mvme187 (the
+  guest stores SAPR and BWP0-7 through `dev_m8820x.c`'s SAPR/UAPR and BWP arms, :367-435 and :463-486; the BATC lookup
+  precedes the table walk, `memory_m88k.c`:152-180)?
+* **P8 -- the LUNA half changes what a booting guest sees.**  HEAD serves a load at 0x3ffffff0 (returns 1, value 0);
+  after the fix the same load raises a data-access exception.  Upstream's replacement carries the comment "Guest OSes
+  such as OpenBSD probe memory by reading 0x3ffffff0." (3.4).  No OpenBSD/luna88k source is on disk (only
+  `_guest-src-openbsd22`, which has no luna88k port), so whether the rig image's boot reads 0x3ffffff0, and how it
+  recovers, is NOT established here.  Does the round owe a before/after boot-to-`login:` measurement on the luna rig?
+  (Gate 7, `gate_ab.sh`, boots that rig to `login:`; it belongs to the full battery, not to a round's targeted gate
+  unless the round runs it.)
+* **P9 -- three in-code records go stale with this diff.**  `dev_m8820x.c` says "the model writes only PFSR and PFAR
+  (memory_m88k.c:382-405)" (:293-294), "the fault path writes PFSR (memory_m88k.c:382-384, dev_luna88k.c:614) and PFAR
+  (memory_m88k.c:399,405 ..." (:325-327 -- the `dev_luna88k.c:614` citation is ALREADY stale: the write is at :626) and
+  "PFSR and PFAR written at :382-405" (:500-501); `memory_rw.c`'s TODO (:615-619) describes the missing write.  After
+  the fix the LUNA write is gone and `memory_rw.c` writes both registers.  Is correcting them part of THIS diff (L4),
+  which makes `dev_m8820x.c` a comment-only edit site?
+* **P10 -- the LUNA label's other cells.**  The case is reached by a store and by any width at 0x3ffffff0 (S19); the
+  witness rows only a word load.  The case's new body does not test direction or width; the generic arm's direction is
+  rowed at mvme187 (`ust`).  Is a store row owed at the LUNA label, or is it clause (e)?
+* **P11 -- the accept row.**  Grok proposes "a population-2 decline still returns success and does not write PFSR"
+  (3.3); the witness's accept rows use the CASED VME VBR register (`ok route`, `ok regs`).  Both are served
+  (`return 1`).  Is the cased row sufficient, or is a population-2 row owed to pin "declines stay declines" against this
+  round's diff?
+* **P12 -- the translation-fault accept control.**  The ruling forbids changing `memory_m88k.c`'s PFAR semantics, and
+  no committed detector reads PFSR or PFAR (S15).  Is a row pinning the translation-fault values owed by THIS round,
+  whose diff does not touch `memory_m88k.c`, or is it outside the floor (rows are owed per enumerated variant OF THE
+  DIFF, R7/R9)?
+
+---
+
+## 7. The drafter's partition of the arm and the LUNA case -- CHECK IT
+
+*Read off the code in section 8: the predicates DOMINATING the edited lines within `MEMORY_RW_ONE_PAGE` and
+`DEVICE_ACCESS(luna88k)` (R5 clause 1), the two predicates the fix ADDS, and the lvalues the guarded body reads with
+the partition the body induces on each (the GUARD FIELD vs BODY FIELD column, R9).  15 axes; for each, the cells, where
+the code tests them, and which witness row holds each cell.  "unrowed" is a status, not a verdict -- Q2 asks which
+unrowed cells are floor.*
+
+| # | axis (where tested) | cells the code distinguishes | held by | status |
+|---|---|---|---|---|
+| 1 | claim: the device scan (:479-634) | claimed / unclaimed | INFO `unclaimed` (0x10000000) | unclaimed is NOT this arm (S3, R3) |
+| 2 | device call (:584-585) | called / not called (`no_exceptions` and `DM_DEFAULT`) | -- | not-called = P6 |
+| 3 | cpu stopped by the device (:591-592) | stopped / running | -- | stopped returns before the arm; the session then ends, so no guest reads PFSR afterwards -- unobservable |
+| 4 | `res` after `res == 0 -> -1` (:595-596, :603: `res <= 0`) | served (`res >= 1`) / refused (-1); the at-B member 0 is mapped away | `ok route`, `ok regs` (served); `uld`, `ust`, `vme`, `luna` (refused) | rowed at both D2 edges (R8) |
+| 5 | `!no_exceptions` (:603) | clear / set | clear: every scored row | set = P6, unrowed |
+| 6 | selector ADDED by the fix: `cache == CACHE_INSTRUCTION ? 0 : 1` | instruction / other (`CACHE_DATA`; `CACHE_NONE`) | other: uld, ust, vme, luna | instruction = P5, unrowed (R1, R2) |
+| 7 | NULL check ADDED by the fix | non-NULL / NULL | non-NULL: every refused row | NULL = P4, no reachable cell found |
+| 8 | `writeflag` (read by the arm's `debug()` only, :605) | read / write | read: uld, vme, luna; write: ust | LUNA write = P10, unrowed |
+| 9 | the refusing device (named by `debug()`, :607) | `unreadable` / VME population 1 / the LUNA case | uld+ust / vme / luna | rowed |
+| 10 | PFAR's operand (written verbatim) | swaps from body-read fields: `paddr` (device-relative) | 0x10, 0x90 and 0x0 relative against 0xfff46010, 0xfff40090, 0x3ffffff0 absolute | rowed; `vaddr` = P7 |
+| 11 | PFSR's value (a constant) | 0x00030000 / anything else | exact value in every refused row | rowed |
+| 12 | the sibling CMMU (not written by the repair) | kept / changed | the four `icmmu` rows | rowed as `kept` -- P3 |
+| 13 | width and alignment (`len`; not tested by the arm; the clamp :495-524 precedes it) | byte, halfword, word, doubleword; aligned / not | word, aligned only | P2; sampled |
+| 14 | which cpu (the arm uses `cpu`) | cpu 0 / cpu 1..3 (luna-88k `-n 2..4`) | cpu 0 only | NOT CLAIMED |
+| 15 | the LUNA dispatch (`switch (addr)`, :622) | `case 0x3ffffff0:` / other labels / `default:` (stops the cpu) | `luna route`, `luna pfsr`, `luna pfar`, `luna icmmu` (word load) | rowed for a word load |
+
+**Floor reading (mine, to be checked against R7):** the guard's dominating predicates are rows 2-5 above; the
+device-state lvalue the fix's own repair path reads is the `cmmu[]` pointer (row 7); the fix ADDS the selector (row 6)
+and the NULL check (row 7), whose labels clause (d) weakens (R4, first shape).  On that reading the floor cells are
+{refused, `no_exceptions` clear} x {data label, instruction label} x {non-NULL, NULL}, plus the served and
+`no_exceptions`-set cells of the guard -- and of those, the witness holds {refused, clear, data, non-NULL} and
+{served}.  The instruction label, the NULL cell and the `no_exceptions`-set cell are P5, P4 and P6.
+
+---
+
+## 8. SOURCE, INLINED -- line numbers as read at HEAD `7fca7187`
+
+*The sketch rule: the full enclosing function of every edit site, every exit path and the common tail.  Compiled-out `#if 0` blocks are elided and labelled.*
+
+### 8.1 `src/cpus/memory_rw.c` -- `MEMORY_RW_ONE_PAGE`, the enclosing function of the arm (lines 230-786; anchors `uint64_t orig_paddr = paddr;` and `if (res <= 0 && !no_exceptions) {`, both unique)
+~~~~
+  230| static int MEMORY_RW_ONE_PAGE(struct cpu *cpu, struct memory *mem, uint64_t vaddr,
+  231| 	unsigned char *data, size_t len, int writeflag, int misc_flags)
+  232| {
+  233| 	const int offset_mask = MRW_OFFSET_MASK;
+  234| 
+  235| 	int ok = 2;
+  236| 	uint64_t paddr;
+  237| 	int cache, no_exceptions, offset;
+  238| 	unsigned char *memblock;
+  239| 	int dyntrans_device_danger = 0;
+  240| 
+  241| 	no_exceptions = misc_flags & NO_EXCEPTIONS;
+  242| 	cache = misc_flags & CACHE_FLAGS_MASK;
+  243| 
+  244| 
+  245| 	if (misc_flags & PHYSICAL || cpu->translate_v2p == NULL) {
+  246| 		paddr = vaddr;
+  247| 	} else {
+  248| 		ok = cpu->translate_v2p(cpu, vaddr, &paddr,
+  249| 		    (writeflag? FLAG_WRITEFLAG : 0) +
+  250| 		    (no_exceptions? FLAG_NOEXCEPTIONS : 0)
+  251| 		    + (misc_flags & MEMORY_USER_ACCESS)
+  252| 		    + (cache==CACHE_INSTRUCTION? FLAG_INSTR : 0));
+  253| 
+  254| 		/*
+  255| 		 *  If the translation caused an exception, or was invalid in
+  256| 		 *  some way, then simply return without doing the memory
+  257| 		 *  access:
+  258| 		 */
+  259| 		if (!ok) {
+  260| 			/*  #244: A failed (or NO_EXCEPTIONS) translation leaves
+  261| 			    the caller's read buffer untouched; zero it so
+  262| 			    callers that ignore the return value (e.g. the DEC
+  263| 			    PROM string helpers) consume deterministic 0 bytes
+  264| 			    instead of uninitialised host stack. Same zero-fill
+  265| 			    ethos as the failed-device-read path (#95).  */
+  266| 			if (writeflag == MEM_READ)
+  267| 				memset(data, 0, len);
+  268| 			return MEMORY_ACCESS_FAILED;
+  269| 		}
+  270| 	}
+  271| 
+  272| 	/*
+  273| 	 *  #250: data write-watchpoint. Checked here, before the device /
+  274| 	 *  cache / RAM dispatch (several of which return early — notably the
+  275| 	 *  R3000 cached path via memory_cache_R3000()), so every store that
+  276| 	 *  reaches this slow path is covered. Watched pages are kept off the
+  277| 	 *  fast store table by update_translation_table(), and R3000 cached
+  278| 	 *  data already comes through here. Show the store (writer pc, target,
+  279| 	 *  width, value) and request entry into the debugger after the current
+  280| 	 *  instruction, via the same about_to_enter_single_step mechanism as
+  281| 	 *  subsystem breakpoints. NOP unless a watchpoint is set.
+  282| 	 */
+  283| 	if (writeflag == MEM_WRITE && cpu->machine->watchpoints.n != 0 &&
+  284| 	    !single_step && !about_to_enter_single_step &&
+  285| 	    machine_watchpoint_match(cpu->machine, paddr, len)) {
+  286| 		char valbuf[3 * 16 + 1];
+  287| 		size_t vi, vn = len < 16 ? len : 16;
+  288| 		valbuf[0] = '\0';
+  289| 		for (vi = 0; vi < vn; vi++)
+  290| 			snprintf(valbuf + strlen(valbuf),
+  291| 			    sizeof(valbuf) - strlen(valbuf), "%s%02x",
+  292| 			    vi ? " " : "", data[vi]);
+  293| 		fatal("[ WATCHPOINT: write of %i byte(s) to vaddr 0x%" PRIx64
+  294| 		    " (paddr 0x%" PRIx64") = %s%s, pc = 0x%" PRIx64" ]\n",
+  295| 		    (int) len, (uint64_t) vaddr, (uint64_t) paddr, valbuf,
+  296| 		    len > 16 ? " ..." : "", (uint64_t) cpu->pc);
+  297| 		about_to_enter_single_step = true;
+  298| 	}
+  299| 
+      [... lines 300-428 ELIDED: two `#if 0` debugging blocks, compiled out; no exit path ...]
+  429| 
+  430| 	/*
+  431| 	 *  Memory mapped device?
+  432| 	 *
+  433| 	 *  TODO: if paddr < base, but len enough, then the device should
+  434| 	 *  still be written to!
+  435| 	 */
+  436| 	if (paddr >= mem->mmap_dev_minaddr && paddr < mem->mmap_dev_maxaddr) {
+  437| 		uint64_t orig_paddr = paddr;
+  438| 		int i, start, end, res;
+  439| 
+      [... lines 440-473 ELIDED: an `#if 0` block, compiled out; no exit path ...]
+  474| 
+  475| 		start = 0; end = mem->n_mmapped_devices - 1;
+  476| 		i = mem->last_accessed_device;
+  477| 
+  478| 		/*  Scan through all devices:  */
+  479| 		do {
+  480| 			if (paddr >= mem->devices[i].baseaddr &&
+  481| 			    paddr < mem->devices[i].endaddr) {
+  482| 				/*  Found a device, let's access it:  */
+  483| 				mem->last_accessed_device = i;
+  484| 
+  485| 				/*  #95: zero the caller's buffer up front on a read
+  486| 				    so a device handler that fills only part of it --
+  487| 				    or whose access is len-clamped just below -- can
+  488| 				    never hand back uninitialised host memory to the
+  489| 				    guest.  Root-cause fix for the uninit-read class
+  490| 				    (cf. per-device #91/#93/#94).  */
+  491| 				if (writeflag == MEM_READ)
+  492| 					memset(data, 0, len);
+  493| 
+  494| 				paddr -= mem->devices[i].baseaddr;
+  495| 				if (paddr + len > mem->devices[i].length) {
+  496| 					/*  Note the truncation per the
+  497| 					    warn-loudly ethos, but only at
+  498| 					    debug verbosity (-v) and at most
+  499| 					    8 times (single-threaded), since
+  500| 					    probing at the end of a device's
+  501| 					    mapped range is common and benign
+  502| 					    (cf. the unwarned zero-fill in
+  503| 					    #95/#119 above).  */
+  504| 					static int n_trunc_msgs = 0;
+  505| 					if (ENOUGH_VERBOSITY(SUBSYS_MEMORY,
+  506| 					    VERBOSITY_DEBUG) &&
+  507| 					    n_trunc_msgs < 8) {
+  508| 						n_trunc_msgs ++;
+  509| 						debugmsg_cpu(cpu,
+  510| 						    SUBSYS_MEMORY,
+  511| 						    mem->devices[i].name,
+  512| 						    VERBOSITY_DEBUG,
+  513| 						    "%s truncated at end of"
+  514| 						    " device: offset 0x%llx,"
+  515| 						    " len %i -> %i",
+  516| 						    writeflag == MEM_WRITE ?
+  517| 						    "write" : "read",
+  518| 						    (long long) paddr,
+  519| 						    (int) len,
+  520| 						    (int) (mem->devices[i].
+  521| 						    length - paddr));
+  522| 					}
+  523| 					len = mem->devices[i].length - paddr;
+  524| 				}
+  525| 
+  526| 				if (cpu->update_translation_table != NULL &&
+  527| 				    !(ok & MEMORY_NOT_FULL_PAGE) &&
+  528| 				    mem->devices[i].flags & DM_DYNTRANS_OK) {
+  529| 					int wf = writeflag == MEM_WRITE? 1 : 0;
+  530| 					unsigned char *host_addr;
+  531| 
+  532| 					if (!(mem->devices[i].flags &
+  533| 					    DM_DYNTRANS_WRITE_OK))
+  534| 						wf = 0;
+  535| 
+  536| 					if (writeflag && wf) {
+  537| 						if (paddr < mem->devices[i].
+  538| 						    dyntrans_write_low)
+  539| 							mem->devices[i].
+  540| 							dyntrans_write_low =
+  541| 							    paddr &~offset_mask;
+  542| 						if (paddr >= mem->devices[i].
+  543| 						    dyntrans_write_high)
+  544| 							mem->devices[i].
+  545| 						 	dyntrans_write_high =
+  546| 							    paddr | offset_mask;
+  547| 					}
+  548| 
+  549| 					if (mem->devices[i].flags &
+  550| 					    DM_EMULATED_RAM) {
+  551| 						/*  MEM_WRITE to force the page
+  552| 						    to be allocated, if it
+  553| 						    wasn't already  */
+  554| 						uint64_t *pp = (uint64_t *)mem->
+  555| 						    devices[i].dyntrans_data;
+  556| 						uint64_t p = orig_paddr - *pp;
+  557| 						host_addr =
+  558| 						    memory_paddr_to_hostaddr(
+  559| 						    mem, p & ~offset_mask,
+  560| 						    MEM_WRITE);
+  561| 					} else if ((paddr | offset_mask) <
+  562| 					    mem->devices[i].length) {
+  563| 						host_addr = mem->devices[i].
+  564| 						    dyntrans_data +
+  565| 						    (paddr & ~offset_mask);
+  566| 					} else {
+  567| 						/*  #155: (Codex/Fable)
+  568| 						    don't install dyntrans
+  569| 						    fast-path access to a
+  570| 						    device page that is not
+  571| 						    fully backed; keep it on
+  572| 						    the bounded slow path.  */
+  573| 						host_addr = NULL;
+  574| 					}
+  575| 
+  576| 					if (host_addr != NULL)
+  577| 						cpu->update_translation_table(
+  578| 						    cpu, vaddr & ~offset_mask,
+  579| 						    host_addr, wf,
+  580| 						    orig_paddr & ~offset_mask);
+  581| 				}
+  582| 
+  583| 				res = 0;
+  584| 				if (!no_exceptions || (mem->devices[i].flags &
+  585| 				    DM_READS_HAVE_NO_SIDE_EFFECTS)) {
+  586| 					bool running_before_device_access = cpu->running;
+  587| 					res = mem->devices[i].f(cpu, mem, paddr,
+  588| 					    data, len, writeflag,
+  589| 					    mem->devices[i].extra);
+  590| 
+  591| 					if (running_before_device_access && !cpu->running)
+  592| 						return MEMORY_ACCESS_FAILED;
+  593| 				}
+  594| 
+  595| 				if (res == 0)
+  596| 					res = -1;
+  597| 
+  598| 				/*
+  599| 				 *  If accessing the memory mapped device
+  600| 				 *  failed, then return with an exception.
+  601| 				 *  (Architecture specific.)
+  602| 				 */
+  603| 				if (res <= 0 && !no_exceptions) {
+  604| 					debug("[ %s device '%s' addr %08lx "
+  605| 					    "failed ]\n", writeflag?
+  606| 					    "writing to" : "reading from",
+  607| 					    mem->devices[i].name, (long)paddr);
+  608| #ifdef MEM_MIPS
+  609| 					mips_cpu_exception(cpu,
+  610| 					    cache == CACHE_INSTRUCTION?
+  611| 					    EXCEPTION_IBE : EXCEPTION_DBE,
+  612| 					    0, vaddr, 0, 0, 0, 0);
+  613| #endif
+  614| #ifdef MEM_M88K
+  615| 					/*  TODO: This is enough for
+  616| 					    OpenBSD/mvme88k's badaddr()
+  617| 					    implementation... but the
+  618| 					    faulting address should probably
+  619| 					    be included somewhere too!  */
+  620| 					m88k_exception(cpu, cache == CACHE_INSTRUCTION
+  621| 					    ? M88K_EXCEPTION_INSTRUCTION_ACCESS
+  622| 					    : M88K_EXCEPTION_DATA_ACCESS, 0);
+  623| #endif
+  624| 					return MEMORY_ACCESS_FAILED;
+  625| 				}
+  626| 				goto do_return_ok;
+  627| 			}
+  628| 
+  629| 			if (paddr < mem->devices[i].baseaddr)
+  630| 				end = i - 1;
+  631| 			if (paddr >= mem->devices[i].endaddr)
+  632| 				start = i + 1;
+  633| 			i = (start + end) >> 1;
+  634| 		} while (start <= end);
+  635| 	}
+  636| 
+  637| 
+  638| #ifdef MEM_MIPS
+  639| 	/*
+  640| 	 *  Data and instruction cache emulation:
+  641| 	 */
+  642| 
+  643| 	switch (cpu->cd.mips.cpu_type.mmu_model) {
+  644| 	case MMU3K:
+  645| 		/*  if not uncached addess  (TODO: generalize this)  */
+  646| 		if (!(misc_flags & PHYSICAL) && cache != CACHE_NONE &&
+  647| 		    !((vaddr & 0xffffffffULL) >= 0xa0000000ULL &&
+  648| 		      (vaddr & 0xffffffffULL) <= 0xbfffffffULL)) {
+  649| 			if (memory_cache_R3000(cpu, cache, paddr,
+  650| 			    writeflag, len, data))
+  651| 				goto do_return_ok;
+  652| 		}
+  653| 		break;
+  654| 	default:
+  655| 		/*  R4000 etc  */
+  656| 		/*  TODO  */
+  657| 		;
+  658| 	}
+  659| #endif	/*  MEM_MIPS  */
+  660| 
+  661| 
+  662| 	/*  Outside of physical RAM?  */
+  663| 	if (paddr >= mem->physical_max) {
+  664| #ifdef MEM_MIPS
+  665| 		if ((paddr & 0xffffc00000ULL) == 0x1fc00000) {
+  666| 			/*  Ok, this is PROM stuff  */
+  667| 		} else if ((paddr & 0xfffff00000ULL) == 0x1ff00000) {
+  668| 			/*  Sprite reads from this area of memory...  */
+  669| 			/*  TODO: is this still correct?  */
+  670| 			if (writeflag == MEM_READ)
+  671| 				memset(data, 0, len);
+  672| 			goto do_return_ok;
+  673| 		} else
+  674| #endif /* MIPS */
+  675| 		{
+  676| 			if (paddr >= mem->physical_max && !no_exceptions)
+  677| 				if (memory_warn_about_unimplemented_addr
+  678| 				    (cpu, mem, writeflag, paddr, len))
+  679| 					return MEMORY_ACCESS_FAILED;
+  680| 
+  681| 			if (writeflag == MEM_READ) {
+  682| 				/*  Return all zeroes? (Or 0xff? TODO)  */
+  683| 				memset(data, 0, len);
+  684| 
+  685| #if 0
+  686| /*
+  687|  *  NOTE: This code prevents a PROM image from a real 5000/200 from booting.
+  688|  *  I think I introduced it because it was how some guest OS (NetBSD?) detected
+  689|  *  the amount of RAM on some machine.
+  690|  *
+  691|  *  TODO: Figure out if it is not needed anymore, and remove it completely.
+  692|  */
+  693| #ifdef MEM_MIPS
+  694| 				/*
+  695| 				 *  For real data/instruction accesses, cause
+  696| 				 *  an exceptions on an illegal read:
+  697| 				 */
+  698| 				if (cache != CACHE_NONE && !no_exceptions &&
+  699| 				    paddr >= mem->physical_max &&
+  700| 				    paddr < mem->physical_max+1048576) {
+  701| 					mips_cpu_exception(cpu,
+  702| 					    EXCEPTION_DBE, 0, vaddr, 0,
+  703| 					    0, 0, 0);
+  704| 				}
+  705| #endif  /*  MEM_MIPS  */
+  706| #endif
+  707| 			}
+  708| 
+  709| 			/*  Hm? Shouldn't there be a DBE exception for
+  710| 			    invalid writes as well?  TODO  */
+  711| 
+  712| 			goto do_return_ok;
+  713| 		}
+  714| 	}
+  715| 
+  716| 
+  717| 	/*
+  718| 	 *  Uncached access:
+  719| 	 *
+  720| 	 *  1)  Translate the physical address to a host address.
+  721| 	 *
+  722| 	 *  2)  Insert this virtual->physical->host translation into the
+  723| 	 *      fast translation arrays (using update_translation_table()).
+  724| 	 *
+  725| 	 *  3)  If this was a Write, then invalidate any code translations
+  726| 	 *      in that page.
+  727| 	 */
+  728| 	memblock = memory_paddr_to_hostaddr(mem, paddr & ~offset_mask,
+  729| 	    writeflag);
+  730| 	if (memblock == NULL) {
+  731| 		if (writeflag == MEM_READ)
+  732| 			memset(data, 0, len);
+  733| 		goto do_return_ok;
+  734| 	}
+  735| 
+  736| 	offset = paddr & offset_mask;
+  737| 
+  738| 	if (cpu->update_translation_table != NULL && !dyntrans_device_danger
+  739| #ifdef MEM_MIPS
+  740| 	    /*  Ugly hack for R2000/R3000 caches:  */
+  741| 	    && (cpu->cd.mips.cpu_type.mmu_model != MMU3K ||
+  742|             !(cpu->cd.mips.coproc[0]->reg[COP0_STATUS] & MIPS1_ISOL_CACHES))
+  743| #endif
+  744| 	    && !(ok & MEMORY_NOT_FULL_PAGE)
+  745| 	    && !no_exceptions)
+  746| 		cpu->update_translation_table(cpu, vaddr & ~offset_mask,
+  747| 		    memblock, (misc_flags & MEMORY_USER_ACCESS) |
+  748| 		    (cache == CACHE_INSTRUCTION?
+  749| 			(writeflag == MEM_WRITE? 1 : 0) : ok - 1),
+  750| 		    paddr & ~offset_mask);
+  751| 
+  752| 	/*
+  753| 	 *  If writing, or if mapping a page where writing is ok later on,
+  754| 	 *  then invalidate code translations for the (physical) page address:
+  755| 	 */
+  756| 
+  757| 	if ((writeflag == MEM_WRITE
+  758| 	    || (ok == 2 && cache == CACHE_DATA)
+  759| 	    ) && cpu->invalidate_code_translation != NULL)
+  760| 		cpu->invalidate_code_translation(cpu, paddr, INVALIDATE_PADDR);
+  761| 
+  762| 	if ((paddr&((1<<BITS_PER_MEMBLOCK)-1)) + len > (1<<BITS_PER_MEMBLOCK)) {
+  763| 		/*  #165: (Codex/Fable) split accesses that cross a memblock
+  764| 		    boundary (e.g. large DMA transfers) at the boundary,
+  765| 		    instead of exiting the whole emulator.  */
+  766| 		size_t len_head = (size_t) ((1<<BITS_PER_MEMBLOCK) -
+  767| 		    (paddr & ((1<<BITS_PER_MEMBLOCK)-1)));
+  768| 
+  769| 		if (writeflag == MEM_WRITE)
+  770| 			memcpy(memblock + offset, data, len_head);
+  771| 		else
+  772| 			memcpy(data, memblock + offset, len_head);
+  773| 
+  774| 		return MEMORY_RW(cpu, mem, vaddr + len_head, data + len_head,
+  775| 		    len - len_head, writeflag, misc_flags);
+  776| 	}
+  777| 
+  778| 	/*  And finally, read or write the data:  */
+  779| 	if (writeflag == MEM_WRITE)
+  780| 		memcpy(memblock + offset, data, len);
+  781| 	else
+  782| 		memcpy(data, memblock + offset, len);
+  783| 
+  784| do_return_ok:
+  785| 	return MEMORY_ACCESS_OK;
+  786| }
+~~~~
+*Its caller `MEMORY_RW` (:183-227) splits only a TRANSLATED access that crosses a 1 KB granule; on a chunk failure it zeroes the read buffer and returns `MEMORY_ACCESS_FAILED` (:205-217).  An aligned word never splits.*
+
+### 8.2 `src/devices/dev_luna88k.c` -- `DEVICE_ACCESS(luna88k)`, whole (lines 554-931; anchor `case 0x3ffffff0:`, unique)
+~~~~
+  554| DEVICE_ACCESS(luna88k)
+  555| {
+  556| 	struct tm *tmp;
+  557| 	time_t timet;
+  558|  	uint32_t addr = relative_addr + LUNA88K_REGISTERS_BASE;
+  559| 	uint64_t idata = 0, odata = 0;
+  560| 	struct luna88k_data *d = (struct luna88k_data *) extra;
+  561| 	int cpunr;
+  562| 	int sio_devnr;
+  563| 
+  564| 	if (writeflag == MEM_WRITE)
+  565| 		idata = memory_readmax64(cpu, data, len);
+  566| 
+  567| 	if (addr >= FUSE_ROM_ADDR && len == sizeof(uint32_t) &&
+  568| 	    addr < FUSE_ROM_ADDR + FUSE_ROM_SPACE) {
+  569| 		if (writeflag == MEM_READ) {
+  570| 			odata = d->fuse_rom[(addr - FUSE_ROM_ADDR) / sizeof(uint32_t)];
+  571| 			memory_writemax64(cpu, data, len, odata);
+  572| 		} else {
+  573| 			d->fuse_rom[(addr - FUSE_ROM_ADDR) / sizeof(uint32_t)] = idata;
+  574| 		}
+  575| 		return 1;
+  576| 	}
+  577| 
+  578| 	if (addr >= FUSE_ROM_ADDR && len == sizeof(uint8_t) &&
+  579| 	    addr < FUSE_ROM_ADDR + FUSE_ROM_SPACE) {
+  580| 		if (writeflag == MEM_READ) {
+  581| 			odata = d->fuse_rom[(addr - FUSE_ROM_ADDR) / sizeof(uint32_t)];
+  582| 			odata >>= ((3 - (addr & 3)) * 8);
+  583| 			memory_writemax64(cpu, data, len, odata);
+  584| 		} else {
+  585| 			fatal("TODO: luna88k byte write to fuse\n");
+  586| 		}
+  587| 		return 1;
+  588| 	}
+  589| 
+  590| 	if (addr >= NVRAM_ADDR && addr + len <= NVRAM_ADDR + NVRAM_SPACE) {
+  591| 		size_t offset = addr - NVRAM_ADDR;
+  592| 		if (writeflag == MEM_READ) {
+  593| 			memcpy(data, d->nvram + offset, len);
+  594| 		} else {
+  595| 			memcpy(d->nvram + offset, data, len);
+  596| 		}
+  597| 		return 1;
+  598| 	}
+  599| 
+  600| 	if (addr >= NVRAM_ADDR_88K2 && addr < NVRAM_ADDR_88K2 + NVRAM_SPACE && len == sizeof(uint8_t)) {
+  601| 		if (writeflag == MEM_READ) {
+  602| 			odata = d->nvram[addr - NVRAM_ADDR_88K2];
+  603| 			memory_writemax64(cpu, data, len, odata);
+  604| 		} else {
+  605| 			d->nvram[addr - NVRAM_ADDR_88K2] = idata;
+  606| 		}
+  607| 		return 1;
+  608| 	}
+  609| 
+  610| 	if (addr >= TRI_PORT_RAM && addr < TRI_PORT_RAM + TRI_PORT_RAM_SPACE) {
+  611| 		size_t offset = addr - TRI_PORT_RAM;
+  612| 
+  613| 		cpu->memory_rw(cpu, cpu->mem, LANCE_ADDR - 0x100000 + offset,
+  614| 			data, len, writeflag, NO_EXCEPTIONS | PHYSICAL);
+  615| // if(len==2)
+  616| // printf("OFFSET 0x%06x WRITE=%i 0x%02x%02x\n", (int)offset, (int)writeflag, data[0],data[1]);
+  617| // else
+  618| // printf("OFFSET 0x%06x WRITE=%i 0x%02x\n", (int)offset, (int)writeflag, data[0]);
+  619| 		return 1;
+  620| 	}
+  621| 
+  622| 	switch (addr) {
+  623| 
+  624| 	case 0x3ffffff0:
+  625| 		/*  Accessed by OpenBSD/luna88k to trigger an illegal address  */
+  626| 		cpu->cd.m88k.cmmu[1]->reg[CMMU_PFSR] = CMMU_PFSR_BERROR << 16;
+  627| 		break;
+  628| 
+  629| 	case PROM_ADDR:		/*  0x41000000  */
+  630| 		/*  OpenBSD/luna88k write here during boot. Ignore for now. (?)  */
+  631| 		break;
+  632| 
+  633| 	case OBIO_CAL_CTL:	/*  calendar control register  */
+  634| 		// TODO: Freeze bit etc.
+  635| 		// Perhaps same as dev_mk48txx.cc?
+  636| 		break;
+  637| 	case OBIO_CAL_SEC:
+  638| 		timet = time(NULL); tmp = gmtime(&timet);
+  639| 		odata = BCD(tmp->tm_sec) << 24;
+  640| 		break;
+  641| 	case OBIO_CAL_MIN:
+  642| 		timet = time(NULL); tmp = gmtime(&timet);
+  643| 		odata = BCD(tmp->tm_min) << 24;
+  644| 		break;
+  645| 	case OBIO_CAL_HOUR:
+  646| 		timet = time(NULL); tmp = gmtime(&timet);
+  647| 		odata = BCD(tmp->tm_hour) << 24;
+  648| 		break;
+  649| 	case OBIO_CAL_DOW:
+  650| 		timet = time(NULL); tmp = gmtime(&timet);
+  651| 		odata = BCD(tmp->tm_wday + 0) << 24;
+  652| 		break;
+  653| 	case OBIO_CAL_DAY:
+  654| 		timet = time(NULL); tmp = gmtime(&timet);
+  655| 		odata = BCD(tmp->tm_mday) << 24;
+  656| 		break;
+  657| 	case OBIO_CAL_MON:
+  658| 		timet = time(NULL); tmp = gmtime(&timet);
+  659| 		odata = BCD(tmp->tm_mon + 1) << 24;
+  660| 		break;
+  661| 	case OBIO_CAL_YEAR:
+  662| 		timet = time(NULL); tmp = gmtime(&timet);
+  663| 		// TODO: 1970 for LUNA88K (MK), 1990 for LUNA88K2 (DS)
+  664| 		odata = BCD((tmp->tm_year + 1900) - 1970) << 24;
+  665| 		break;
+  666| 
+  667| 	case OBIO_PIO0A:	/*  0x49000000: PIO-0 port A  */
+  668| 		/*  OpenBSD reads dipswitch settings from PIO0A and B.  */
+  669| 		odata = 0;	// high byte
+  670| 		if (cpu->machine->x11_md.in_use)
+  671| 			odata |= 0x40;
+  672| 		odata |= 0x80;	// multi-user mode
+  673| 		odata |= 0x20;	// don't ask name
+  674| 		odata |= 0x10;	// don't do manual UKC config
+  675| 		break;
+  676| 
+  677| 	case OBIO_PIO0B:	/*  0x49000004: PIO-0 port B  */
+  678| 		/*  OpenBSD reads dipswitch settings from PIO0A and B.  */
+  679| 		odata = 0x00;	// low byte
+  680| 		break;
+  681| 
+  682| 	case OBIO_PIO0:		/*  0x4900000C: PIO-0 control  */
+  683| 		/*  TODO: Implement for real.  */
+  684| 		break;
+  685| 
+  686| 	case OBIO_PIO1A:	/*  0x4d000000: PIO-1 port A  */
+  687| 		odata = luna88k_lcd_access(d, writeflag, idata);
+  688| 		break;
+  689| 
+  690| 	case OBIO_PIO1B:	/*  0x4d000004: PIO-1 port B  */
+  691| 	case OBIO_PIO1:		/*  0x4d00000C: PIO-1 control  */
+  692| 		/*  Ignore for now. (?)  */
+  693| 		break;
+  694| 
+  695| 	case OBIO_PIO1C:	/*  0x4d000008: PIO-1 port C  */
+  696| 		if (writeflag == MEM_WRITE)
+  697| 			d->pio1c = idata;
+  698| 		else
+  699| 			odata = d->pio1c;
+  700| 		break;
+  701| 
+  702| 	case OBIO_SIO + 0:	/*  0x51000000: data channel 0 */
+  703| 	case OBIO_SIO + 4:	/*  0x51000004: cmd channel 0 */
+  704| 	case OBIO_SIO + 8:	/*  0x51000008: data channel 1 */
+  705| 	case OBIO_SIO + 0xc:	/*  0x5100000c: cmd channel 1 */
+  706| 		sio_devnr = ((addr - OBIO_SIO) / 8) & 1;
+  707| 
+  708| 		if ((addr - OBIO_SIO) & 4) {
+  709| 			/*  cmd  */
+  710| 
+  711| 			/*  Similar to dev_scc.cc ?  */
+  712| 			if (writeflag == MEM_WRITE) {
+  713| 				int old_tx_enable = d->obio_sio_wr[sio_devnr][SCC_WR1] & SCC_WR1_TX_IE;
+  714| 				if (d->obio_sio_regno[sio_devnr] == 0) {
+  715| 					int regnr = idata & 7;
+  716| 					int cmd = idata & ~7;
+  717| 
+  718| 					// printf("[ sio: cmd=0x%02x, then setting regno for next operation to 0x%02x ]\n", cmd, regnr);
+  719| 
+  720| 					/*  High bits are command.  */
+  721| 					switch (cmd) {
+  722| 					case SCC_RESET_TX_IP:
+  723| 						d->sio_tx_pending[sio_devnr] = 0;
+  724| 						break;
+  725| 					}
+  726| 
+  727| 					d->obio_sio_regno[sio_devnr] = regnr;
+  728| 				} else {
+  729| 					int regnr = d->obio_sio_regno[sio_devnr] & 7;
+  730| 					d->obio_sio_wr[sio_devnr][regnr] = idata;
+  731| 
+  732| 					// printf("[ sio: setting reg 0x%02x = 0x%02x ]\n", d->obio_sio_regno[sio_devnr], (int)idata);
+  733| 
+  734| 					d->obio_sio_regno[sio_devnr] = 0;
+  735| 				}
+  736| 
+  737| 				if (d->obio_sio_wr[sio_devnr][SCC_WR1] & SCC_WR1_TX_IE && !old_tx_enable)
+  738| 					d->sio_tx_pending[sio_devnr] = 1;
+  739| 
+  740| 				reassert_serial_interrupt(d);
+  741| 			} else {
+  742| 				d->obio_sio_rr[sio_devnr][SCC_RR0] = SCC_RR0_TX_EMPTY | SCC_RR0_DCD | SCC_RR0_CTS;
+  743| 
+  744| 				if (anything_in_sio_queue(d, sio_devnr))
+  745| 					d->obio_sio_rr[sio_devnr][SCC_RR0] |= SCC_RR0_RX_AVAIL;
+  746| 
+  747| 				d->obio_sio_rr[sio_devnr][SCC_RR1] = SCC_RR1_ALL_SENT;
+  748| 
+  749| 				int regnr = d->obio_sio_regno[sio_devnr] & 7;
+  750| 				odata = d->obio_sio_rr[sio_devnr][regnr];
+  751| 				// printf("[ sio: reading reg 0x%02x: 0x%02x ]\n", regnr, (int)odata);
+  752| 				d->obio_sio_regno[sio_devnr] = 0;
+  753| 			}
+  754| 		} else {
+  755| 			/*  data  */
+  756| 			if (writeflag == MEM_WRITE) {
+  757| 				// printf("[ sio: writing data 0x%02x to port %i ]\n", (int)idata, sio_devnr);
+  758| 				if (sio_devnr == 0) {
+  759| 					console_putchar(d->console_handle, idata);
+  760| 				} else {
+  761| 					/*  Mouse and Keyboard.  */
+  762| 					/*  These are according to OpenBSD/luna88k's lunaws.c  */
+  763| 					switch (idata) {
+  764| 					case 0x00:
+  765| 						/*  "kana LED off".  TODO  */
+  766| 						break;
+  767| 					case 0x01:
+  768| 						/*  "caps LED off".  TODO  */
+  769| 						break;
+  770| 					case 0x10:
+  771| 						/*  "kana LED on".  TODO  */
+  772| 						break;
+  773| 					case 0x11:
+  774| 						/*  "caps LED on".  TODO  */
+  775| 						break;
+  776| 					case 0x20:
+  777| 						d->mouse_enable = 0;
+  778| 						break;
+  779| 					case 0x60:
+  780| 						d->mouse_enable = 1;
+  781| 						break;
+  782| 					default:
+  783| 						fatal("[ luna88k: sio write to dev 1 (keyboard/mouse): 0x%02x ]\n", (int)idata);
+  784| 					}
+  785| 				}
+  786| 
+  787| 				d->sio_tx_pending[sio_devnr] = 1;
+  788| 			} else {
+  789| 				if (anything_in_sio_queue(d, sio_devnr)) {
+  790| 					odata = get_from_sio_queue(d, sio_devnr);
+  791| 				} else {
+  792| 					odata = 0;
+  793| 				}
+  794| 			}
+  795| 
+  796| 			reassert_serial_interrupt(d);
+  797| 		}
+  798| 
+  799| 		break;
+  800| 
+  801| 	case OBIO_CLOCK0:	/*  0x63000000: Clock ack?  */
+  802| 	case OBIO_CLOCK1:	/*  0x63000004: Clock ack?  */
+  803| 	case OBIO_CLOCK2:	/*  0x63000008: Clock ack?  */
+  804| 	case OBIO_CLOCK3:	/*  0x6300000c: Clock ack?  */
+  805| 		cpunr = (addr - OBIO_CLOCK0) / 4;
+  806| 		// TODO: Pending counter per cpu?
+  807| 		if (cpunr == 0 && d->pending_timer_interrupts > 0)
+  808| 			d->pending_timer_interrupts --;
+  809| 
+  810| 		reassert_timer_interrupt(d);
+  811| 		break;
+  812| 
+  813| 	case INT_ST_MASK0:	/*  0x65000000: Interrupt status CPU 0.  */
+  814| 	case INT_ST_MASK1:	/*  0x65000004: Interrupt status CPU 1.  */
+  815| 	case INT_ST_MASK2:	/*  0x65000008: Interrupt status CPU 2.  */
+  816| 	case INT_ST_MASK3:	/*  0x6500000c: Interrupt status CPU 3.  */
+  817| 		/*
+  818| 		 *  From OpenBSD/luna88k machdep.c source code:
+  819| 		 *
+  820| 		 *  On write: Bits 31..26 are used to enable/disable levels 6..1.
+  821| 		 *  On read: Bits 31..29 show value 0-7 of current interrupt.
+  822| 		 *           Bits 23..18 show current mask.
+  823| 		 */
+  824| 		cpunr = (addr - INT_ST_MASK0) / 4;
+  825| 		if (writeflag == MEM_WRITE) {
+  826| 			if ((idata & 0x03ffffff) != 0x00000000) {
+  827| 				/*
+  828| 				 *  #438: was fatal() + exit(1) -- an ordinary guest
+  829| 				 *  store to INT_ST_MASK0-3 with any of bits 25..0
+  830| 				 *  set ended the emulator process.
+  831| 				 *
+  832| 				 *  STORE AS-IS, and the reason is not that the low
+  833| 				 *  bits are dead.  They are not: interrupt_enable[]
+  834| 				 *  has two readers, and while the interrupt path can
+  835| 				 *  only ever see bits 26..31, the read path below
+  836| 				 *  echoes bits 25..8 back at odata[17..0].  Store-as-is
+  837| 				 *  drops nothing BECAUSE IT STORES EVERYTHING, and the
+  838| 				 *  echo lands outside both fields this file's own
+  839| 				 *  comment says a driver reads (31..29, 23..18).
+  840| 				 *
+  841| 				 *  Masking would invent a hardware behaviour the tree
+  842| 				 *  has no source for; INT_SET_LV0..LV7 are defined and
+  843| 				 *  never read anywhere, the TIMER_EXTERNAL trap again.
+  844| 				 *  And returning without storing would drop the LEGAL
+  845| 				 *  prefix in 31..26 too -- a real SPL change -- which
+  846| 				 *  the guest can read back stale at odata[23..18].
+  847| 				 *
+  848| 				 *  The latch is MANDATORY as a capability bound, not
+  849| 				 *  because a boot pays it: a real boot-to-login makes
+  850| 				 *  ZERO guarded writes, but the register takes 29,960
+  851| 				 *  writes/s, so an unlatched complaint is guest-drivable
+  852| 				 *  at ~2.3 MB/s.
+  853| 				 */
+  854| 				if (!d->intmask_lowbits_reported[cpunr]) {
+  855| 					d->intmask_lowbits_reported[cpunr] = 1;
+  856| 					fatal("[ luna88k: INT_ST_MASK%i: unimplemented "
+  857| 					    "low bits in write 0x%08x; stored as-is "
+  858| 					    "(reported once per cpu) ]\n",
+  859| 					    cpunr, (uint32_t)idata);
+  860| 				} else {
+  861| 					debug("[ luna88k: INT_ST_MASK%i: unimplemented "
+  862| 					    "low bits in write 0x%08x ]\n",
+  863| 					    cpunr, (uint32_t)idata);
+  864| 				}
+  865| 			}
+  866| 
+  867| 			d->interrupt_enable[cpunr] = idata;
+  868| 			reassert_interrupts(d);
+  869| 		} else {
+  870| 			uint32_t currentMask = d->interrupt_enable[cpunr];
+  871| 			uint32_t status = d->interrupt_status & currentMask;
+  872| 			int highestCurrentStatus = 0;
+  873| 			odata = currentMask >> 8;
+  874| 			
+  875| 			for (int i = 1; i <= 6; ++i) {
+  876| 				int m = 1 << (25 + i);
+  877| 				if (status & m)
+  878| 					highestCurrentStatus = i;
+  879| 			}
+  880| 
+  881| 			odata |= (highestCurrentStatus << 29);
+  882| 			// printf("highest = %i 0x%08x\n", highestCurrentStatus, (int)odata);
+  883| 		}
+  884| 
+  885| 		break;
+  886| 
+  887| 	case SOFT_INT0:		/*  0x69000000: Software Interrupt status CPU 0.  */
+  888| 	case SOFT_INT1:		/*  0x69000004: Software Interrupt status CPU 1.  */
+  889| 	case SOFT_INT2:		/*  0x69000008: Software Interrupt status CPU 2.  */
+  890| 	case SOFT_INT3:		/*  0x6900000c: Software Interrupt status CPU 3.  */
+  891| 		cpunr = (addr - SOFT_INT0) / 4;
+  892| 
+  893| 		if (writeflag == MEM_WRITE) {
+  894| 			d->software_interrupt_status[cpunr] = idata;
+  895| 		} else {
+  896| 			// Reading status clears it.
+  897| 			odata = d->software_interrupt_status[cpunr];
+  898| 			d->software_interrupt_status[cpunr] = 0;
+  899| 		}
+  900| 
+  901| 		reassert_interrupts(d);
+  902| 		break;
+  903| 
+  904| 	case RESET_CPU_ALL:	/*  0x6d000010: Reset all CPUs  */
+  905| 		for (int i = 0; i < cpu->machine->ncpus; ++i)
+  906| 			cpu->machine->cpus[i]->running = 0;
+  907| 		break;
+  908| 
+  909| 	default:
+  910| 		if (writeflag == MEM_WRITE)
+  911| 			debugmsg_cpu(cpu, SUBSYS_DEVICE, "luna88k", VERBOSITY_ERROR,
+  912| 		    	    "unimplemented %i-bit WRITE to address 0x%x: 0x%x",
+  913| 		    	    len * 8,
+  914| 			    (int) addr,
+  915| 			    (int) idata);
+  916| 		else
+  917| 			debugmsg_cpu(cpu, SUBSYS_DEVICE, "luna88k", VERBOSITY_ERROR,
+  918| 		    	    "unimplemented %i-bit READ from address 0x%x",
+  919| 		    	    len * 8,
+  920| 			    (int) addr);
+  921| 
+  922| 		// Stop the emulation immediately.
+  923| 		cpu->running = 0;
+  924| 		return 0;
+  925| 	}
+  926| 
+  927| 	if (writeflag == MEM_READ)
+  928| 		memory_writemax64(cpu, data, len, odata);
+  929| 
+  930| 	return 1;
+  931| }
+~~~~
+### 8.3 `src/devices/dev_luna88k.c` -- where LUNA-88K gets its CMMUs (lines 934-965, 1072-1077)
+~~~~
+  934| void add_cmmu_for_cpu(struct devinit* devinit, int cpunr, uint32_t iaddr, uint32_t daddr)
+  935| {
+  936| 	char tmpstr[300];
+  937| 	struct m8820x_cmmu *cmmu;
+  938| 
+  939| 	if (cpunr >= devinit->machine->ncpus)
+  940| 		return;
+  941| 
+  942| 	/*  Instruction CMMU:  */
+  943| 	CHECK_ALLOCATION(cmmu = (struct m8820x_cmmu *) malloc(sizeof(struct m8820x_cmmu)));
+  944| 	memset(cmmu, 0, sizeof(struct m8820x_cmmu));
+  945| 
+  946| 	devinit->machine->cpus[cpunr]->cd.m88k.cmmu[0] = cmmu;
+  947| 
+  948| 	/*  This is a 88200, revision 9:  */
+  949| 	cmmu->reg[CMMU_IDR] = (M88200_ID << 21) | (9 << 16);
+  950| 	snprintf(tmpstr, sizeof(tmpstr), "m8820x addr=0x%x addr2=%i", iaddr, 2 * cpunr);
+  951| 	device_add(devinit->machine, tmpstr);
+  952| 
+  953| 	/*  ... and data CMMU:  */
+  954| 	CHECK_ALLOCATION(cmmu = (struct m8820x_cmmu *) malloc(sizeof(struct m8820x_cmmu)));
+  955| 	memset(cmmu, 0, sizeof(struct m8820x_cmmu));
+  956| 
+  957| 	devinit->machine->cpus[cpunr]->cd.m88k.cmmu[1] = cmmu;
+  958| 
+  959| 	/*  This is also a 88200, revision 9:  */
+  960| 	cmmu->reg[CMMU_IDR] = (M88200_ID << 21) | (9 << 16);
+  961| 	cmmu->batc[8] = BATC8;
+  962| 	cmmu->batc[9] = BATC9;
+  963| 	snprintf(tmpstr, sizeof(tmpstr), "m8820x addr=0x%x addr2=%i", daddr, 1 + 2 * cpunr);
+  964| 	device_add(devinit->machine, tmpstr);
+  965| }
+   ...
+ 1072| 	d->ncpus = devinit->machine->ncpus;
+ 1073| 
+ 1074| 	add_cmmu_for_cpu(devinit, 0, CMMU_I0, CMMU_D0);
+ 1075| 	add_cmmu_for_cpu(devinit, 1, CMMU_I1, CMMU_D1);
+ 1076| 	add_cmmu_for_cpu(devinit, 2, CMMU_I2, CMMU_D2);
+ 1077| 	add_cmmu_for_cpu(devinit, 3, CMMU_I3, CMMU_D3);
+~~~~
+### 8.4 `src/cpus/memory_m88k.c` -- the CMMU choice, the PFAR computations, and the fault writers (lines 103-145, 262-310, 373-420; NOT edited by this round)
+~~~~
+  103| int m88k_translate_v2p(struct cpu *cpu, uint64_t vaddr64,
+  104| 	uint64_t *return_paddr, int flags)
+  105| {
+  106| 	int instr = flags & FLAG_INSTR;
+  107| 	int writeflag = (flags & FLAG_WRITEFLAG)? 1 : 0;
+  108| 	int no_exceptions = flags & FLAG_NOEXCEPTIONS;
+  109| 	int exception_type = instr? M88K_EXCEPTION_INSTRUCTION_ACCESS
+  110| 	    : M88K_EXCEPTION_DATA_ACCESS;
+  111| 	int supervisor = cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_MODE;
+  112| 	struct m8820x_cmmu *cmmu = cpu->cd.m88k.cmmu[instr? 0 : 1];
+  113| 	uint32_t vaddr = vaddr64;
+  114| 	uint32_t apr;
+  115| 	uint32_t *seg_base, *page_base;
+  116| 	sdt_entry_t seg_descriptor;
+  117| 	pt_entry_t page_descriptor;
+  118| 	int pfsr_status = CMMU_PFSR_SUCCESS;
+  119| 	uint32_t pfar = 0;
+  120| 	int accumulated_flags;
+  121| 	int i, seg_nr = vaddr >> 22, page_nr = (vaddr >> 12) & 0x3ff;
+  122| 
+  123| 	if (flags & MEMORY_USER_ACCESS)
+  124| 		supervisor = 0;
+  125| 
+  126| 
+  127| 	/*
+  128| 	 *  Is the CMMU not yet initialized? Then return physical = virtual.
+  129| 	 */
+  130| 	*return_paddr = vaddr;
+  131| 	if (cmmu == NULL)
+  132| 		return 2;
+  133| 
+  134| 	if (supervisor)
+  135| 		apr = cmmu->reg[CMMU_SAPR];
+  136| 	else
+  137| 		apr = cmmu->reg[CMMU_UAPR];
+  138| 
+  139| 
+  140| 	/*
+  141| 	 *  Address translation not enabled? Then return physical = virtual.
+  142| 	 */
+  143| 	if (!(apr & APR_V))
+  144| 		return 2;
+  145| 
+   ...
+  262| 	/*  Segment descriptor invalid? Then cause a segfault exception.  */
+  263| 	if (!(seg_descriptor & SG_V)) {
+  264| 		/*  PFAR = physical address of faulting segment descriptor:  */
+  265| 		pfar = (apr & 0xfffff000) + seg_nr * sizeof(uint32_t);
+  266| 		pfsr_status = CMMU_PFSR_SFAULT;
+  267| 		goto exception;
+  268| 	}
+  269| 
+  270| 	/*  Usermode attempted to access a supervisor segment?  */
+  271| 	if ((seg_descriptor & SG_SO) && !supervisor) {
+  272| 		/*  PFAR = physical address of faulting segment descriptor:  */
+  273| 		pfar = (apr & 0xfffff000) + seg_nr * sizeof(uint32_t);
+  274| 		pfsr_status = CMMU_PFSR_SUPER;
+  275| 		goto exception;
+  276| 	}
+  277| 
+  278| 	accumulated_flags = seg_descriptor & SG_RO;
+  279| 
+  280| 	page_base = (uint32_t *) memory_paddr_to_hostaddr(
+  281| 	    cpu->mem, seg_descriptor & 0xfffff000, 1);
+  282| 
+  283| 	page_descriptor = page_base[page_nr];
+  284| 	if (cpu->byte_order == EMUL_LITTLE_ENDIAN)
+  285| 		page_descriptor = LE32_TO_HOST(page_descriptor);
+  286| 	else
+  287| 		page_descriptor = BE32_TO_HOST(page_descriptor);
+  288| 
+  289| #ifdef M8820X_TABLE_SEARCH_DEBUG
+  290| 	printf("| page_base %p (on the host)\n", page_base);
+  291| 	printf("| pd        0x%08"PRIx32"\n", page_descriptor);
+  292| #endif
+  293| 
+  294| 	/*  Page descriptor invalid? Then cause a page fault exception.  */
+  295| 	if (!(page_descriptor & PG_V)) {
+  296| 		/*  PFAR = physical address of faulting page descriptor:  */
+  297| 		pfar = (seg_descriptor & 0xfffff000)
+  298| 		    + page_nr * sizeof(uint32_t);
+  299| 		pfsr_status = CMMU_PFSR_PFAULT;
+  300| 		goto exception;
+  301| 	}
+  302| 
+  303| 	/*  Usermode attempted to access a supervisor page?  */
+  304| 	if ((page_descriptor & PG_SO) && !supervisor) {
+  305| 		/*  PFAR = physical address of faulting page descriptor:  */
+  306| 		pfar = (seg_descriptor & 0xfffff000)
+  307| 		    + page_nr * sizeof(uint32_t);
+  308| 		pfsr_status = CMMU_PFSR_SUPER;
+  309| 		goto exception;
+  310| 	}
+   ...
+  373| exception:
+  374| 	if (no_exceptions)
+  375| 		return 0;
+  376| 
+  377| 	/*
+  378| 	 *  Update the Page Fault Status Register of the CMMU which this fault
+  379| 	 *  was associated with, but also clear the PFSR of the _other_ CMMU:
+  380| 	 */
+  381| 
+  382| 	cmmu->reg[CMMU_PFSR] = pfsr_status << 16;
+  383| 	cpu->cd.m88k.cmmu[instr? 1 : 0]->reg[CMMU_PFSR] =
+  384| 	    CMMU_PFSR_SUCCESS << 16;
+  385| 
+  386| 	/*  ... and (if necessary) update the Page Fault Address Register:  */
+  387| 
+  388| 	switch (pfsr_status) {
+  389| 
+  390| 	case CMMU_PFSR_SUCCESS:
+  391| 		debugmsg_cpu(cpu, SUBSYS_CPU, "m88k",
+  392| 		    VERBOSITY_ERROR,
+  393| 		    "HUH? CMMU_PFSR_SUCCESS:, but exception? TODO");
+  394| 		exit(1);
+  395| 		break;
+  396| 
+  397| 	case CMMU_PFSR_WRITE:
+  398| 		/*  Note: The PFAR is "destroyed"/undefined on write faults.  */
+  399| 		cmmu->reg[CMMU_PFAR] = 0;
+  400| 		break;
+  401| 
+  402| 	case CMMU_PFSR_SUPER:
+  403| 	case CMMU_PFSR_SFAULT:
+  404| 	case CMMU_PFSR_PFAULT:
+  405| 		cmmu->reg[CMMU_PFAR] = pfar;
+  406| 		break;
+  407| 
+  408| 	default:
+  409| 		debugmsg_cpu(cpu, SUBSYS_CPU, "m88k",
+  410| 		    VERBOSITY_ERROR,
+  411| 		    "Internal error in memory_m88k? pfsr_status = %i",
+  412| 		    pfsr_status);
+  413| 		exit(1);
+  414| 	}
+  415| 
+  416| 	/*  ... and finally cause the exception:  */
+  417| 	m88k_exception(cpu, exception_type, 0);
+  418| 
+  419| 	return 0;
+  420| }
+~~~~
+### 8.5 `src/devices/dev_m8820x.c` -- the access head, the three comments P9 names, the PFSR/PFAR arm, the default arm and tail, DEVINIT
+~~~~
+  243| DEVICE_ACCESS(m8820x)
+  244| {
+  245| 	// NOTE:
+  246| 	//	cpu is the struct cpu* of the processor doing the device access.
+  247| 	//	c   is the struct cpu* where the M88200 CMMU is located.
+  248| 	uint64_t idata = 0, odata = 0;
+  249| 	struct m8820x_data *d = (struct m8820x_data *) extra;
+  250| 	struct cpu* c = cpu->machine->cpus[d->cpu_nr];
+  251| 	uint32_t *regs = c->cd.m88k.cmmu[d->cmmu_nr]->reg;
+  252| 	uint32_t *batc = c->cd.m88k.cmmu[d->cmmu_nr]->batc;
+  253| 
+  254| 	if (writeflag == MEM_WRITE)
+  255| 		idata = memory_readmax64(cpu, data, len);
+  256| 
+  257| 	if (writeflag == MEM_READ)
+  258| 		odata = regs[relative_addr / sizeof(uint32_t)];
+  259| 
+  260| 	switch (relative_addr / sizeof(uint32_t)) {
+   ...
+  288| 	case CMMU_SSR:
+  289| 		if (writeflag == MEM_WRITE) {
+  290| 			/*  #433: ignoring a guest write to SSR corrupts nothing the model
+  291| 			    maintains -- but the first version of this comment gave a WRONG
+  292| 			    REASON, saying SSR is "written by the MODEL".  Measured: NOTHING
+  293| 			    in the tree ever writes reg[CMMU_SSR]; the model writes only PFSR
+  294| 			    and PFAR (memory_m88k.c:382-405).  The right reason is stronger:
+  295| 			    SSR reads as zero, V-bit clear, so DROPPING the write is what makes
+  296| 			    the command arm's own argument true -- if a guest could store here
+  297| 			    it could set the V bit, and a dropped PROBE would then read back a
+  298| 			    plausible-looking VALID translation instead of a deterministic
+  299| 			    miss.  The two decisions are coupled, and row D10 pins them.  */
+  300| 			m8820x_unimplemented(d, "write to CMMU_SSR");
+  301| 		}
+  302| 		break;
+   ...
+  319| 	 *  THE JUSTIFICATION IS THREE DIFFERENT REASONS, NOT ONE, and the first draft of
+  320| 	 *  this comment collapsed them into "no consumer reads these", which two review
+  321| 	 *  seats showed is FALSE for SAR:
+  322| 	 *
+  323| 	 *    PFSR, PFAR   no translation consumer at all.  m88k_translate_v2p never reads
+  324| 	 *                 them; they are status OUTPUTS.  The strongest evidence in the
+  325| 	 *                 round is that THE MODEL ITSELF already relies on this: the fault
+  326| 	 *                 path writes PFSR (memory_m88k.c:382-384, dev_luna88k.c:614) and
+  327| 	 *                 PFAR (memory_m88k.c:399,405 -- TWO DISCRETE LINES, and the file has
+  328| 	 *                 to be named again: a bare ":399-405" after a dev_luna88k.c citation
+  329| 	 *                 reads as dev_luna88k.c:399-405, which is a keyboard scancode switch)
+  330| 	 *                 DIRECTLY through reg[], with no purge, ~10^5
+  331| 	 *                 times per boot -- against 2 guest writes per boot through this
+  332| 	 *                 handler.  If a PFSR write owed a purge the model would already
+  333| 	 *                 be wrong, five orders of magnitude more often than here.
+   ...
+  437| 	case CMMU_PFSR:
+  438| 	case CMMU_PFAR:
+  439| 	case CMMU_SAR:
+  440| 	case CMMU_SCTR:
+  441| 		/*
+  442| 		 *  #435: STORE, BUT DO NOT PURGE.  See the three reasons above the SAPR/UAPR
+  443| 		 *  arm -- they are three DIFFERENT reasons and the distinction is load-bearing.
+  444| 		 *
+  445| 		 *  THE STORE STAYS FOR ALL SIX, and that is not cosmetic: a measure seat built
+  446| 		 *  the natural over-reading of this round's own justification -- dropping the
+  447| 		 *  store as well as the purge -- and it PASSED every row the round first
+  448| 		 *  planned to ship.  It is a real defect: SAR would stop steering
+  449| 		 *  m8820x_command(), so a flush command would match against a stale address.
+  450| 		 *  
+  451| 		 *  AN EARLIER VERSION OF THIS SENTENCE ALSO CLAIMED the guest's PFSR reads
+  452| 		 *  would return zero, and a pass-2 seat showed that is FALSE: the fault path
+  453| 		 *  writes PFSR DIRECTLY through reg[] at memory_m88k.c:382-384, never through
+  454| 		 *  this handler, so dropping the handler's store would not touch it at all.
+  455| 		 *  The SAR consequence stands on its own; the PFSR one was reasoning by
+  456| 		 *  analogy from the register beside it.  Removing a purge and removing a
+  457| 		 *  store are different changes and only the first is argued for here.
+  458| 		 */
+  459| 		if (writeflag == MEM_WRITE)
+  460| 			regs[relative_addr / sizeof(uint32_t)] = idata;
+  461| 		break;
+   ...
+  492| 	default:
+  493| 		/*
+  494| 		 *  #433: THE ARM THAT COVERS 1006 OF THE 1024 WORD OFFSETS.  It used to
+  495| 		 *  exit(1), so an ordinary guest LOAD of an unmodelled register terminated the
+  496| 		 *  host process -- measured at 1007 of 1024 offsets on a read.
+  497| 		 *
+  498| 		 *  The MMU objection to continuing does not apply here, and that is a measured
+  499| 		 *  fact rather than a hope: every register the emulator's own translation
+  500| 		 *  consults -- SAPR and UAPR read at memory_m88k.c:135,137, PFSR and PFAR
+  501| 		 *  written at :382-405 -- is a HANDLED case label above.  Nothing reaching this
+  502| 		 *  arm can alter what the emulator translates.  The defined-but-unhandled
+  503| 		 *  registers are all cache diagnostics (CDP0-3, CTP0-3, and the 88204-only
+  504| 		 *  CSSP1-3) against a model that has no cache -- and the neighbouring CSSP0 arm
+  505| 		 *  ALREADY answers exactly this way, silently, on a path a real boot exercises
+  506| 		 *  1024 times.  Continuing here is the same policy, said out loud once.
+  507| 		 *
+  508| 		 *  On a read the caller gets the regs[] value fetched above, which is zero for
+  509| 		 *  anything never stored; a write is dropped rather than stored, because
+  510| 		 *  RAM-like read-back could satisfy a guest's write-then-verify probe for a
+  511| 		 *  register the model does not implement.
+  512| 		 */
+  513| 		if (writeflag == MEM_WRITE) {
+  514| 			char w[64];
+  515| 			snprintf(w, sizeof(w), "write to offset 0x%x: 0x%x",
+  516| 			    (int) relative_addr, (int) idata);
+  517| 			m8820x_unimplemented(d, w);
+  518| 		} else {
+  519| 			char r[64];
+  520| 			snprintf(r, sizeof(r), "read from offset 0x%x",
+  521| 			    (int) relative_addr);
+  522| 			m8820x_unimplemented(d, r);
+  523| 		}
+  524| 	}
+  525| 
+  526| 	if (writeflag == MEM_READ)
+  527| 		memory_writemax64(cpu, data, len, odata);
+  528| 
+  529| 	return 1;
+  530| }
+  531| 
+  532| 
+  533| DEVINIT(m8820x)
+  534| {
+  535| 	struct m8820x_data *d;
+  536| 
+  537| 	CHECK_ALLOCATION(d = (struct m8820x_data *) malloc(sizeof(struct m8820x_data)));
+  538| 	memset(d, 0, sizeof(struct m8820x_data));
+  539| 
+  540| 	// Hack: Use the addr2 field to select cpu and cmmu numbers.
+  541| 	// cmmu nr 0 = instruction, 1 = data.
+  542| 	d->cmmu_nr = devinit->addr2 & 1;
+  543| 	d->cpu_nr = devinit->addr2 >> 1;
+  544| 
+  545| 	memory_device_register(devinit->machine->memory, devinit->name,
+  546| 	    devinit->addr, M8820X_LENGTH, dev_m8820x_access, (void *)d,
+  547| 	    DM_DEFAULT, NULL);
+  548| 
+  549| 	return 1;
+  550| }
+~~~~
+### 8.6 `src/include/thirdparty/m8820x.h` -- the registers and the status field (lines 59-66, 122-129)
+~~~~
+   59| /* CMMU registers */
+   60| #define CMMU_IDR	(0x000 / 4)	/* CMMU id register */
+   61| #define CMMU_SCR	(0x004 / 4)	/* system command register */
+   62| #define CMMU_SSR	(0x008 / 4)	/* system status register */
+   63| #define CMMU_SAR	(0x00c / 4)	/* system address register */
+   64| #define CMMU_SCTR	(0x104 / 4)	/* system control register */
+   65| #define CMMU_PFSR	(0x108 / 4)	/* P bus fault status register */
+   66| #define CMMU_PFAR	(0x10c / 4)	/* P bus fault address register */
+   ...
+  122| /* P bus fault status */
+  123| #define	CMMU_PFSR_FAULT(pfsr)	(((pfsr) >> 16) & 0x07)
+  124| #define CMMU_PFSR_SUCCESS	0	/* no fault */
+  125| #define CMMU_PFSR_BERROR	3	/* bus error */
+  126| #define CMMU_PFSR_SFAULT	4	/* segment fault */
+  127| #define CMMU_PFSR_PFAULT	5	/* page fault */
+  128| #define CMMU_PFSR_SUPER		6	/* supervisor violation */
+  129| #define CMMU_PFSR_WRITE		7	/* writer violation */
+~~~~
+### 8.7 `src/cpus/cpu_m88k.c` -- its includes; `src/cpus/tmp_m88k_tail.c` -- where `memory_rw.c` is compiled for m88k (S16)
+~~~~
+   44| #include "cpu.h"
+   45| #include "float_emul.h"
+   46| #include "interrupt.h"
+   47| #include "machine.h"
+   48| #include "memory.h"
+   49| #include "misc.h"
+   50| #include "settings.h"
+   51| #include "symbol.h"
+   52| 
+   53| #include "thirdparty/m8820x_pte.h"
+   54| #include "thirdparty/m88k_dmt.h"
+   55| #include "thirdparty/mvmeprom.h"
+   56| 
+   57| #define DYNTRANS_32
+   58| #define DYNTRANS_DELAYSLOT
+   59| #include "tmp_m88k_head.c"
+
+src/cpus/tmp_m88k_tail.c:
+   36| #undef DYNTRANS_UPDATE_TRANSLATION_TABLE
+   37| 
+   38| #define MEMORY_RW m88k_memory_rw
+   39| #define MEM_M88K
+   40| #include "memory_rw.c"
+   41| #undef MEM_M88K
+   42| #undef MEMORY_RW
+~~~~
+### 8.8 `src/cpus/cpu_m88k.c` -- `m88k_exception()`: the common path and the two access vectors (lines 689-693, 799-921)
+~~~~
+  689| void m88k_exception(struct cpu *cpu, int vector, int is_trap)
+  690| {
+  691| 	bool update_shadow_regs = true;
+  692| 	bool implemented = false;
+  693| 
+   ...
+  799| 	if (vector < M88K_EXCEPTION_USER_TRAPS_START && !implemented) {
+  800| 		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "unimplemented",
+  801| 		    VERBOSITY_ERROR, "vector=0x%03x pc=0x%08x",
+  802| 			vector,
+  803| 			(int)cpu->pc);
+  804| 		for (int j = 0; j < cpu->machine->ncpus; ++j)
+  805| 			cpu->machine->cpus[j]->running = false;
+  806| 		m88k_pc_to_pointers(cpu);
+  807| 		return;
+  808| 	}
+  809| 
+  810| 	/*  Stuff common for all exceptions:  */
+  811| 	if (cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_SFRZ) {
+  812| 		/*
+  813| 		 *  Non-trap exceptions when the shadow freeze bit is already
+  814| 		 *  set result in an Error exception:
+  815| 		 */
+  816| 		if (!is_trap) {
+  817| 			vector = M88K_EXCEPTION_ERROR;
+  818| 			fatal("[ SFRZ already set in PSR => ERROR ]\n");
+  819| 		}
+  820| 
+  821| 		update_shadow_regs = false;
+  822| 	} else {
+  823| 		/*  Freeze shadow registers, and save the PSR:  */
+  824| 		cpu->cd.m88k.cr[M88K_CR_EPSR] = cpu->cd.m88k.cr[M88K_CR_PSR];
+  825| 	}
+  826| 
+  827| 	m88k_stcr(cpu, cpu->cd.m88k.cr[M88K_CR_PSR]
+  828| 	    | M88K_PSR_SFRZ	/*  Freeze shadow registers,          */
+  829| 	    | M88K_PSR_IND	/*  disable interrupts,               */
+  830| 	    | M88K_PSR_SFD1	/*  disable the floating point unit,  */
+  831| 	    | M88K_PSR_MODE,	/*  and switch to supervisor mode.    */
+  832| 	    M88K_CR_PSR, 0);
+  833| 
+  834| 	if (update_shadow_regs) {
+  835| 		cpu->cd.m88k.cr[M88K_CR_SSBR] = 0;
+  836| 
+  837| 		cpu->cd.m88k.cr[M88K_CR_SXIP] = cpu->pc | M88K_XIP_V;
+  838| 
+  839| 		/*  SNIP is the address to return to, when executing rte:  */
+  840| 		if (cpu->delay_slot) {
+  841| 			if (vector == M88K_EXCEPTION_DATA_ACCESS) {
+  842| 				cpu->cd.m88k.cr[M88K_CR_SNIP] = cpu->cd.m88k.delay_target | M88K_NIP_V;
+  843| 				cpu->cd.m88k.cr[M88K_CR_SFIP] = cpu->cd.m88k.cr[M88K_CR_SNIP]+4;
+  844| 			} else if (vector == M88K_EXCEPTION_INSTRUCTION_ACCESS) {
+  845| 				/*  If we are in a delay slot, then pc is
+  846| 				    something like 0xc6000 here (not 0xc5ffc).  */
+  847| 				cpu->cd.m88k.cr[M88K_CR_SNIP] = cpu->cd.m88k.delay_target | M88K_NIP_V;
+  848| 				cpu->cd.m88k.cr[M88K_CR_SFIP] = 0;
+  849| 			} else {
+  850| 				/*  Perhaps something like this could work:  */
+  851| 				cpu->cd.m88k.cr[M88K_CR_SNIP] = (cpu->pc + 4) | M88K_NIP_V;
+  852| 				cpu->cd.m88k.cr[M88K_CR_SFIP] = cpu->cd.m88k.delay_target | M88K_NIP_V;
+  853| 			}
+  854| 		} else {
+  855| 			cpu->cd.m88k.cr[M88K_CR_SNIP] = (cpu->pc + 4) | M88K_NIP_V;
+  856| 			cpu->cd.m88k.cr[M88K_CR_SFIP] = cpu->cd.m88k.cr[M88K_CR_SNIP]+4;
+  857| 		}
+  858| 
+  859| 		if (vector == M88K_EXCEPTION_INSTRUCTION_ACCESS)
+  860| 			cpu->cd.m88k.cr[M88K_CR_SXIP] |= M88K_XIP_E;
+  861| 	}
+  862| 
+  863| 	cpu->pc = cpu->cd.m88k.cr[M88K_CR_VBR] + 8 * vector;
+  864| 
+  865| 	if (cpu->delay_slot)
+  866| 		cpu->delay_slot = EXCEPTION_IN_DELAY_SLOT;
+  867| 	else
+  868| 		cpu->delay_slot = NOT_DELAYED;
+  869| 
+  870| 	/*  Default to no memory transactions:  */
+  871| 	cpu->cd.m88k.cr[M88K_CR_DMT0] = 0;
+  872| 	cpu->cd.m88k.cr[M88K_CR_DMD0] = 0;
+  873| 	cpu->cd.m88k.cr[M88K_CR_DMA0] = 0;
+  874| 	cpu->cd.m88k.cr[M88K_CR_DMT1] = 0;
+  875| 	cpu->cd.m88k.cr[M88K_CR_DMD1] = 0;
+  876| 	cpu->cd.m88k.cr[M88K_CR_DMA1] = 0;
+  877| 	cpu->cd.m88k.cr[M88K_CR_DMT2] = 0;
+  878| 	cpu->cd.m88k.cr[M88K_CR_DMD2] = 0;
+  879| 	cpu->cd.m88k.cr[M88K_CR_DMA2] = 0;
+  880| 
+  881| 	/*  Vector-specific handling:  */
+  882| 	if (vector < M88K_EXCEPTION_USER_TRAPS_START) {
+  883| 		switch (vector) {
+  884| 
+  885| 		case M88K_EXCEPTION_RESET:
+  886| 			fatal("[ m88k_exception: reset ]\n");
+  887| 			for (int j = 0; j < cpu->machine->ncpus; ++j)
+  888| 				cpu->machine->cpus[j]->running = false;
+  889| 			break;
+  890| 
+  891| 		case M88K_EXCEPTION_INTERRUPT:
+  892| 			/*  When returning with rte, we want to re-  */
+  893| 			/*  execute the interrupted instruction:  */
+  894| 			cpu->cd.m88k.cr[M88K_CR_SNIP] -= 4;
+  895| 			cpu->cd.m88k.cr[M88K_CR_SFIP] -= 4;
+  896| 			break;
+  897| 
+  898| 		case M88K_EXCEPTION_INSTRUCTION_ACCESS:
+  899| 			/*  When returning with rte, we want to re-  */
+  900| 			/*  execute the instruction in SXIP, not SNIP/SFIP,  */
+  901| 			/*  (unless the exception was in a delay-slot):  */
+  902| 			if (!(cpu->delay_slot & EXCEPTION_IN_DELAY_SLOT)) {
+  903| 				cpu->cd.m88k.cr[M88K_CR_SNIP] = 0;
+  904| 				cpu->cd.m88k.cr[M88K_CR_SFIP] = 0;
+  905| 			}
+  906| 			break;
+  907| 
+  908| 		case M88K_EXCEPTION_DATA_ACCESS:
+  909| 			/*  Update the memory transaction registers:  */
+  910| 			cpu->cd.m88k.cr[M88K_CR_DMT0] = cpu->cd.m88k.dmt[0];
+  911| 			cpu->cd.m88k.cr[M88K_CR_DMD0] = cpu->cd.m88k.dmd[0];
+  912| 			cpu->cd.m88k.cr[M88K_CR_DMA0] = cpu->cd.m88k.dma[0];
+  913| 			cpu->cd.m88k.cr[M88K_CR_DMT1] = cpu->cd.m88k.dmt[1];
+  914| 			cpu->cd.m88k.cr[M88K_CR_DMD1] = cpu->cd.m88k.dmd[1];
+  915| 			cpu->cd.m88k.cr[M88K_CR_DMA1] = cpu->cd.m88k.dma[1];
+  916| 			cpu->cd.m88k.cr[M88K_CR_DMT2] = 0;
+  917| 			cpu->cd.m88k.cr[M88K_CR_DMD2] = 0;
+  918| 			cpu->cd.m88k.cr[M88K_CR_DMA2] = 0;
+  919| 			m88k_memory_transaction_debug_dump(cpu, 0);
+  920| 			m88k_memory_transaction_debug_dump(cpu, 1);
+  921| 			break;
+~~~~
+### 8.9 `src/cpus/cpu_m88k_instr_loadstore.c` -- the flags, DMA0, the alignment check, the two `memory_rw` calls
+~~~~
+   57| #ifdef LS_INCLUDE_GENERIC
+   58| void LS_GENERIC_N(struct cpu *cpu, struct m88k_instr_call *ic)
+   59| {
+   60| #ifdef LS_USR
+   61| 	const int memory_rw_flags = CACHE_DATA | MEMORY_USER_ACCESS;
+   62| #else
+   63| 	const int memory_rw_flags = CACHE_DATA;
+   64| #endif
+   ...
+  131| 	cpu->cd.m88k.dma[0] = addr & ~0x3;
+   ...
+  167| #ifndef LS_1
+  168| 	/*  Check alignment:  */
+  169| 	if (addr & (LS_SIZE - 1)) {
+  170| #if 1
+  171| 		/*  Cause an address alignment exception:  */
+  172| 		m88k_exception(cpu, M88K_EXCEPTION_MISALIGNED_ACCESS, 0);
+  173| #else
+  174| 		fatal("{ m88k dyntrans alignment exception, size = %i,"
+  175| 		    " addr = %08" PRIx32", pc = %08" PRIx32" }\n", LS_SIZE,
+  176| 		    (uint32_t) addr, (uint32_t) cpu->pc);
+  177| 
+  178| 		cpu->running = 0;
+  179| 		cpu->cd.m88k.next_ic = &nothing_call;
+  180| 
+  181| 		if (cpu->delay_slot)
+  182| 			cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+  183| #endif
+  184| 		return;
+  185| 	}
+  186| #endif
+  187| 
+  188| #ifdef LS_LOAD
+  189| 	if (!cpu->memory_rw(cpu, cpu->mem, addr, data, sizeof(data),
+  190| 	    MEM_READ, memory_rw_flags)) {
+  191| 		/*  Exception or aborted execution.  */
+  192| 		if (!cpu->running)
+  193| 			cpu->cd.m88k.next_ic = &nothing_call;
+  194| 		return;
+  195| 	}
+   ...
+  233| 	memory_writemax64(cpu, data, LS_SIZE, x);
+  234| 	if (!cpu->memory_rw(cpu, cpu->mem, addr, data, sizeof(data),
+  235| 	    MEM_WRITE, memory_rw_flags)) {
+  236| 		/*  Exception or aborted execution.  */
+  237| 		if (!cpu->running)
+  238| 			cpu->cd.m88k.next_ic = &nothing_call;
+  239| 		return;
+  240| 	}
+  241| #endif
+~~~~
+### 8.10 R1 and R2 in the source -- the instruction fetch (`cpu_m88k_instr.c`), the step pre-read and the `bad:` tail (`cpu_dyntrans.c`)
+~~~~
+ 2981| 	/*  Read the instruction word from memory:  */
+ 2982| 	page = cpu->cd.m88k.host_load[(uint32_t)addr >> 12];
+ 2983| 
+ 2984| 	if (page != NULL) {
+ 2985| 		/*  fatal("TRANSLATION HIT!\n");  */
+ 2986| 		memcpy(ib, page + (addr & 0xffc), sizeof(ib));
+ 2987| 	} else {
+ 2988| 		/*  fatal("TRANSLATION MISS!\n");  */
+ 2989| 		if (!cpu->memory_rw(cpu, cpu->mem, addr, ib,
+ 2990| 		    sizeof(ib), MEM_READ, CACHE_INSTRUCTION)) {
+ 2991| 			fatal("to_be_translated(): read failed: TODO\n");
+ 2992| 			goto bad;
+ 2993| 		}
+ 2994| 	}
+
+src/cpus/cpu_dyntrans.c:
+  282| 		if (single_step || cpu->machine->instruction_trace) {
+  283| 			/*  TODO/Note: This must be large enough to hold
+  284| 			    any instruction for any ISA:  */
+  285| 			unsigned char instr[1 <<
+  286| 			    DYNTRANS_INSTR_ALIGNMENT_SHIFT];
+  287| 			if (!cpu->memory_rw(cpu, cpu->mem, cached_pc, &instr[0],
+  288| 			    sizeof(instr), MEM_READ, CACHE_INSTRUCTION)) {
+  289| 				fatal("XXX_run_instr(): could not read "
+  290| 				    "the instruction\n");
+  291| 			} else {
+   ...
+ 1983| bad:	/*
+ 1984| 	 *  Nothing was translated. (Unimplemented or illegal instruction.)
+ 1985| 	 */
+ 1986| 
+ 1987| 	/*  Clear the translation, in case it was "half-way" done:  */
+ 1988| 	ic->f = TO_BE_TRANSLATED;
+ 1989| 
+ 1990| 	if (cpu->translation_readahead)
+ 1991| 		return;
+ 1992| 
+ 1993| 
+ 1994| 	/*
+ 1995| 	 *  Abort the emulation.  In principle, it may have been more accurate
+ 1996| 	 *  to treat invalid/unimplemented instructions as something that
+ 1997| 	 *  should cause e.g. an exception (depending on how the particular
+ 1998| 	 *  CPU works), but chances are that this is an unimplemented
+ 1999| 	 *  instruction that should be implemented for real.
+ 2000| 	 */
+ 2001| 
+ 2002| 	about_to_enter_single_step = true;
+ 2003| 
+ 2004| 	if (cpu->is_32bit)
+ 2005| 		debugmsg_cpu(cpu, SUBSYS_CPU, "", VERBOSITY_ERROR,
+ 2006| 		    "UNIMPLEMENTED instruction at 0x%" PRIx32, (uint32_t)cpu->pc);
+ 2007| 	else
+ 2008| 		debugmsg_cpu(cpu, SUBSYS_CPU, "", VERBOSITY_ERROR,
+ 2009| 		    "UNIMPLEMENTED instruction at 0x%" PRIx64, (uint64_t)cpu->pc);
+ 2010| 
+ 2011| 	if (!(single_step || cpu->machine->instruction_trace))
+ 2012| 		DISASSEMBLE(cpu, ib, 1, 0);
+ 2013| 
+ 2014| 	cpu->running = 0;
+ 2015| 
+ 2016| 	/*  Note: Single-stepping can jump here.  */
+ 2017| stop_running_translated:
+ 2018| 
+ 2019| 	// This makes sure that we stop in the debugger, even if e.g.
+ 2020| 	// "step 100" was executing and 50 steps remained.
+ 2021| 	debugger_reset();
+ 2022| 
+ 2023| 	ic = cpu->cd.DYNTRANS_ARCH.next_ic = &nothing_call;
+ 2024| 	cpu->cd.DYNTRANS_ARCH.next_ic ++;
+~~~~
+### 8.11 The refusing devices and where the machines attach them (`dev_unreadable.c`, `dev_vme.c`, `machine_mvme88k.c`, `dev_mvme187.c`), the debugger's read flags, and which cpu emul.c starts
+~~~~
+src/devices/dev_unreadable.c:
+   41| DEVICE_ACCESS(unreadable)
+   42| {
+   43| 	return 0;
+   44| }
+   45| 
+   46| 
+   47| DEVINIT(unreadable)
+   48| {
+   49| 	memory_device_register(devinit->machine->memory,
+   50| 	    devinit->name, devinit->addr, devinit->len,
+   51| 	    dev_unreadable_access, NULL, DM_DEFAULT, NULL);
+   52| 
+   53| 	return 1;
+   54| }
+
+src/devices/dev_vme.c:
+  150| 	/*  #568 (vmedefaultkill): registers the header names but this model
+  151| 	    does not implement.  Each ended the emulator in default: below.
+  152| 	    OpenBSD 2.2's mvme88k driver (sys/arch/mvme88k/dev/vme.c) has
+  153| 	    access sites at six of them.  Its attach reaches four:
+  154| 	    vme2chip_init() reads MASTERCTL and writes it back and writes
+  155| 	    MASTER3, MASTER4 and MASTER4MOD.  The other two, IRQSTAT and
+  156| 	    IRQCLR, are in vme2abort(), the ABORT-switch interrupt handler,
+  157| 	    and this model raises no VME2 interrupt.  A bus error here
+  158| 	    would panic that guest's attach, so these DECLINE: a read is served
+  159| 	    the word preloaded above, which is 0 because nothing writes these
+  160| 	    words of d->reg[] (odata is deliberately not forced to 0, so a store
+  161| 	    added by a later edit would show in a read-back); a write is
+  162| 	    dropped; one fatal() per register per device, the first access's
+  163| 	    direction deciding its wording (#501's shape in dev_pcc2.c).
+  164| 	    Sub-word starts inside these words are not matched here and reach
+  165| 	    default: (vmewidthlanes).  */
+  166| 	case VME2_SADDR2:
+  167| 	case VME2_SLAVELMOD1:
+  168| 	case VME2_SLAVELMOD2:
+  169| 	case VME2_SLAVECTL:
+  170| 	case VME2_MASTER1:
+  171| 	case VME2_MASTER2:
+  172| 	case VME2_MASTER3:
+  173| 	case VME2_MASTER4:
+  174| 	case VME2_MASTER4MOD:
+  175| 	case VME2_MASTERCTL:
+  176| 	case VME2_DMACTL:
+  177| 	case VME2_DMAMODE:
+  178| 	case VME2_DMALADDR:
+  179| 	case VME2_DMAVMEADDR:
+  180| 	case VME2_DMACOUNT:
+  181| 	case VME2_DMATABLE:
+  182| 	case VME2_DMASTAT:
+  183| 	case VME2_T2CMP:
+  184| 	case VME2_T2COUNT:
+  185| 	case VME2_PRESCALE:
+  186| 	case VME2_IRQSTAT:
+  187| 	case VME2_SETSOFTIRQ:
+  188| 	case VME2_IRQCLR:
+  189| 	case VME2_IRQL1:
+  190| 	case VME2_IRQL2:
+  191| 	case VME2_MISC:
+  192| 		if (!(d->warned_unimpl & (1ULL << (relative_addr >> 2)))) {
+  193| 			d->warned_unimpl |= 1ULL << (relative_addr >> 2);
+  194| 			if (writeflag == MEM_WRITE)
+  195| 				fatal("[ vme: unimplemented write to register "
+  196| 				    "0x%x (len %d): 0x%llx -- declined.  (once) ]\n",
+  197| 				    (unsigned) relative_addr, (int) len,
+  198| 				    (unsigned long long) idata);
+  199| 			else
+  200| 				fatal("[ vme: unimplemented read from register "
+  201| 				    "0x%x (len %d) -- served 0x%llx.  (once) ]\n",
+  202| 				    (unsigned) relative_addr, (int) len,
+  203| 				    (unsigned long long) odata);
+  204| 		}
+  205| 		break;
+  206| 
+  207| 	default:if (writeflag == MEM_READ)
+  208| 			debug("[ vme: unimplemented READ from offset 0x%x ]"
+  209| 			    "\n", (int)relative_addr);
+  210| 		else
+  211| 			debug("[ vme: unimplemented WRITE to offset 0x%x: "
+  212| 			    "0x%x ]\n", (int)relative_addr, (int)idata);
+  213| 		/*  #568 (vmedefaultkill): an offset this model does not service:
+  214| 		    no header-named register, or the inside of one (a sub-word
+  215| 		    start).  Refuse the access -- for a guest data load or store,
+  216| 		    memory_rw then raises the m88k data-access exception, the bus
+  217| 		    error a badaddr() probe expects -- instead of exit(1), which
+  218| 		    ended the emulator with no visible reason (debug() is silent
+  219| 		    at default verbosity).  */
+  220| 		return 0;
+  221| 	}
+  222| 
+  223| 	if (writeflag == MEM_READ)
+  224| 		memory_writemax64(cpu, data, len, odata);
+  225| 
+  226| 	return 1;
+  227| }
+
+src/machines/machine_mvme88k.c:
+   83| 	case MACHINE_MVME88K_187:
+   84| 		machine->machine_name = strdup("MVME187");
+   85| 
+   86| 		/*  The mvme187 device contains 187-specific stuff, such
+   87| 		    as motherboard registers, and the memory controller:  */
+   88| 		device_add(machine, "mvme187");
+   89| 
+   90| 		/*  PCC2 bus at 0xfff00000:  */
+   91| 		snprintf(tmpstr, sizeof(tmpstr), "pcc2 addr=0x%x", PCC2_BASE);
+   92| 		device_add(machine, tmpstr);
+   93| 
+   94| 		/*  VME2 bus at 0xfff40000:  */
+   95| 		snprintf(tmpstr, sizeof(tmpstr), "vme addr=0x%x", VME2_BASE);
+   96| 		device_add(machine, tmpstr);
+   97| 
+   98| 		/*  Cirrus Logic serial console at 0xfff45000:  */
+   99| 		snprintf(tmpstr, sizeof(tmpstr), "clmpcc irq=%s.cpu[%i].pcc2 "
+  100| 		    "addr=0x%08x name2=cl0", machine->path,
+  101| 		    machine->bootstrap_cpu, 0xfff45000);
+  102| 		machine->main_console_handle =
+  103| 		    (size_t) device_add(machine, tmpstr);
+  104| 
+  105| 		/*  ie0 ethernet: TODO  */
+  106| 		device_add(machine, "unreadable addr=0xfff46000 len=0x1000");
+  107| 
+  108| 		/*  53C710 SCSI at 0xfff47000:  */
+  109| 		snprintf(tmpstr, sizeof(tmpstr), "osiop irq=%s.cpu[%i].pcc2.%i "
+  110| 		    "addr=0x%08x", machine->path,
+  111| 		    machine->bootstrap_cpu, PCC2V_SCSI, 0xfff47000);
+  112| 		device_add(machine, tmpstr);
+  113| 
+  114| 		/*  MK48T08 clock/nvram at 0xfffc0000:  */
+  115| 		snprintf(tmpstr, sizeof(tmpstr),
+  116| 		    "mk48txx addr=0x%x", 0xfffc0000);
+  117| 		device_add(machine, tmpstr);
+  118| 
+  119| 		/*  VMES (?): TODO  */
+  120| 		device_add(machine, "unreadable addr=0xff780000 len=0x80000");
+  121| 
+  122| 		/*  VME devices: TODO  */
+  123| 		device_add(machine, "unreadable addr=0xffff0000 len=0x10000");
+  124| 
+  125| 		break;
+  126| 
+  127| 	case MACHINE_MVME88K_188:
+  128| 		machine->machine_name = strdup("MVME188");
+  129| 		/*  TODO  */
+  130| 		break;
+  131| 
+  132| 	case MACHINE_MVME88K_197:
+  133| 		machine->machine_name = strdup("MVME197");
+  134| 		/*  TODO  */
+  135| 		break;
+
+src/devices/dev_mvme187.c:
+  132| 	/*  Instruction CMMU:  */
+  133| 	CHECK_ALLOCATION(cmmu = (struct m8820x_cmmu *) malloc(sizeof(struct m8820x_cmmu)));
+  134| 	memset(cmmu, 0, sizeof(struct m8820x_cmmu));
+  135| 
+  136| 	devinit->machine->cpus[devinit->machine->bootstrap_cpu]->
+  137| 	    cd.m88k.cmmu[0] = cmmu;
+  138| 	/*  This is a 88200, revision 9:  */
+  139| 	cmmu->reg[CMMU_IDR] = (M88200_ID << 21) | (9 << 16);
+  140| 	snprintf(tmpstr, sizeof(tmpstr),
+  141| 	    "m8820x addr=0x%x addr2=0", MVME187_SBC_CMMU_I);
+  142| 	device_add(devinit->machine, tmpstr);
+  143| 
+  144| 	/*  ... and data CMMU:  */
+  145| 	CHECK_ALLOCATION(cmmu = (struct m8820x_cmmu *) malloc(sizeof(struct m8820x_cmmu)));
+  146| 	memset(cmmu, 0, sizeof(struct m8820x_cmmu));
+  147| 
+  148| 	devinit->machine->cpus[devinit->machine->bootstrap_cpu]->
+  149| 	    cd.m88k.cmmu[1] = cmmu;
+  150| 	/*  This is also a 88200, revision 9:  */
+  151| 	cmmu->reg[CMMU_IDR] = (M88200_ID << 21) | (9 << 16);
+  152| 	cmmu->batc[8] = BATC8;
+  153| 	cmmu->batc[9] = BATC9;
+  154| 	snprintf(tmpstr, sizeof(tmpstr),
+  155| 	    "m8820x addr=0x%x addr2=1", MVME187_SBC_CMMU_D);
+  156| 	device_add(devinit->machine, tmpstr);
+  157| 
+
+src/debugger/debugger_cmds.c:
+  714| 		unsigned char buf[16];
+  715| 		memset(buf, 0, sizeof(buf));
+  716| 		r = c->memory_rw(c, mem, addr, &buf[0], sizeof(buf),
+  717| 		    MEM_READ, CACHE_NONE | NO_EXCEPTIONS);
+  718| 
+
+src/core/emul.c:
+  740| 	/*  Same byte order and entrypoint for all CPUs:  */
+  741| 	for (i=0; i<m->ncpus; i++)
+  742| 		if (i != m->bootstrap_cpu) {
+  743| 			m->cpus[i]->byte_order = cpu->byte_order;
+  744| 			m->cpus[i]->pc = cpu->pc;
+  745| 		}
+  746| 
+  747| 	/*  Startup the bootstrap CPU:  */
+  748| 	cpu->running = true;
+  749| 
+  750| 	/*  ... or pause all CPUs, if start_paused is set:  */
+  751| 	if (m->start_paused) {
+  752| 		for (i=0; i<m->ncpus; i++)
+  753| 			m->cpus[i]->running = false;
+  754| 	}
+~~~~
+### 8.12 The guest reader -- OpenBSD 2.2 mvme88k (OUTSIDE the repository; absolute paths)
+~~~~
+C:\DocumentNoSnc\cc\GXEMUL\_guest-src-openbsd22\sys\arch\mvme88k\mvme88k\trap.c:
+  315| 	/*
+  316| 	 *	If it is a guarded access, bus error is OK.
+  317| 	 */
+  318| 
+  319| 	if ((frame->dpfsr >> 16 & 0x7) == 0x3) {
+  320| #ifdef DIAGNOSTIC 
+  321| 		printf("sxip %x dpfsr %x\n", frame->sxip, frame->dpfsr);
+  322| 		gimmeabreak();
+  323| #endif
+  324| 	}
+  325| 
+  326| 	if ((frame->dpfsr >> 16 & 0x7) == 0x3 && 		/* bus error */
+  327| 		(frame->sxip & ~3) >= (unsigned)&guarded_access_start &&
+  328| 		(frame->sxip & ~3) <= (unsigned)&guarded_access_end) {
+  329| 
+  330| 		frame->snip = ((unsigned)&guarded_access_bad    ) | FIP_V;
+  331| 		frame->sfip = ((unsigned)&guarded_access_bad + 4) | FIP_V;
+  332| 		frame->sxip = 0;
+  333| 		frame->dmt0 = 0;/* XXX what about other trans. in data unit */
+  334| 		frame->dpfsr = 0;
+  335| 		return;
+  336| 	}
+   ...
+  403| 	/* Call vm_fault() to resolve non-bus error faults */
+  404| 
+  405| 	if ((frame->ipfsr >> 16 & 0x7) != 0x3 &&
+  406| 		(frame->dpfsr >> 16 & 0x7) != 0x3) {
+  407| 
+  408| 		result = vm_fault(map, va, ftype, FALSE); 
+  409| 		frame->ipfsr = frame->dpfsr = 0;
+  410| 
+  411| 	}
+
+C:\DocumentNoSnc\cc\GXEMUL\_guest-src-openbsd22\sys\arch\mvme88k\mvme88k\eh.S:
+  273| #define PREP(NAME, NUM, BIT, SSBR_STUFF, FLAG_PRECHECK)		; \
+  274| 		xcr	FLAGS, FLAGS, SR1			; \
+  275| 		FLAG_PRECHECK					; \
+  276| 		 						; \
+   ...
+  311| #define Data_Precheck \
+  312| 	bb1.n   FLAG_IGNORE_DATA_EXCEPTION, FLAGS, ignore_data_exception
+   ...
+  417| 	PREP("data", 3, DEBUG_DATA_BIT, No_SSBR_Stuff, Data_Precheck)
+   ...
+ 1009| 	/*
+ 1010| 	 * Save Pbus fault status register from data and inst CMMU.
+ 1011| 	 */
+ 1012| 
+ 1013| 	or.u	TMP, r0, hi16(CMMU_I)
+ 1014| 	ld	TMP2, TMP, lo16(CMMU_I) + 0x108
+ 1015| 	st	TMP2, r31, REG_OFF(EF_IPFSR)
+ 1016| 	or.u	TMP, r0, hi16(CMMU_D)
+ 1017| 	ld	TMP2, TMP, lo16(CMMU_D) + 0x108
+ 1018| 	st	TMP2, r31, REG_OFF(EF_DPFSR)
+~~~~
+### 8.13 The MC88100 User's Manual (OUTSIDE the repository: `C:\DocumentNoSnc\cc\GXEMUL\_scratchpad\mc88100.txt`; OCR text)
+~~~~
+ 9333| Instruction access exceptions occur when an attempt is made to execute an instruction
+ 9334| and the corresponding prefetch to instruction memory resulted in a fault reply on the
+ 9335| instruction P bus reply signals (CR1-CRO). The instruction access exception occurs when
+ 9336| execution of the faulted instruction is attempted. The XIP points to the instruction that
+ 9337| caused the exception, and this is reflected in the SXIP. The memory system must provide
+ 9338| a status register or other means of indicating the reason that the exception occurred. The
+ 9339| MC88200 CMMU includes a local status register, which the exception handler must read
+ 9340| to determine the cause of the exception in systems with an MC88200 residing on the
+ 9341| instruction P bus.
+   ...
+ 9442| 6.7.3 Data Access Exception (Vector Offset $18)
+ 9443| 
+ 9444| Data access exceptions are recoverable imprecise exceptions; none of the shadow instruc-
+ 9445| tion pointers are guaranteed to point to the instruction that caused the exception, but this
+ 9446| information is not required to recover from the exception. The exception is caused by a
+ 9447| fault reply on the data P bus reply signals (DR1-DRO). The exact cause of the exception is
+ 9448| not stored in the MC881 00; the memory subsystem must provide a status register or other
+ 9449| means of indicating the cause of the exception, if necessary. The MC88200 CMMU includes
+ 9450| a local status register, which the exception handler must read to determine the cause of
+ 9451| the exception in systems using an MC88200 on the data P bus.
+   ...
+ 7870| The DBE3-DBEO signals indicate which byte(s) on the data bus (D3-DO) are valid during �
+ 7871| a data memory transaction. For a data read operation, the upper 30 data address lines
+ 7872| select a word in memory, and the asserted byte enable signals indicate which byte(s) within
+ 7873| that word are required by the processor. The memory system responds to the read by
+ 7874| placing the requested byte(s) on the data P bus corresponding to the asserted byte enable
+~~~~
+---
+
+## 9. Detector-shape facts for Q3 (VERBATIM excerpts at HEAD)
+
+* **The gate list** (`regress/run.sh`:10, `GATES=(...)`, 1-based): 1 `gate_build`, 2 `gate_offline`,
+  3 `selftest_mutation`, 4 `gate_mips`, 5 `gate_crossfamily`, 6 `gate_hygiene`, 7 `gate_ab`, 8 `gate_upstream`,
+  9 `gate_asan_sweep`, 10 `gate_sh_rounding`, **11 `gate_m88k_rounding`**, 12 `gate_mips_rounding`, 13 `gate_ppc`,
+  **14 `gate_arm`**, 15 `gate_ppc_halt`, 16 `gate_mips_folds`.
+* **Gate 14 needs only the binary** (`need_exec "$PMAX"`, python3, a stub it writes itself) -- but it `gate_skip`s
+  WHOLE if its FIRST probe, `arm_flags_probe.py`, prints no result line (`gate_arm.sh`:100-106).  It already runs five
+  mvme187 rung-3 probes -- `pcc2_width_probe.py`, `pcc2_default_probe.py`, `pcc2_c040_probe.py`, `mk48_nvram_probe.py`
+  and `#568`'s `vme_default_probe.py`, the probe the witness copied its session shape from (`gate_arm.sh`:1800-1898).
+* **Gate 11 is the m88k gate** and runs `m88k_rounding_probe.py`, `m88k_idle_probe.py`, `m8820x_sites_probe.py`,
+  `luna_intmask_probe.py`, `m88k_exc_probe.py` and `luna_absentcpu_probe.py` -- but it `need_file`s the luna RIG IMAGE at
+  its head and `gate_skip`s WHOLE without it (`gate_m88k_rounding.sh`:32-39), and again if its first probe prints no
+  result line (:45-51).  The witness probe's default shape needs no image (a 4-byte dummy raw image); given an images
+  directory as its third argument it runs the LUNA session in the rig shape instead (2.2's rig run: identical rows).
+* **Gate 6's readiness censuses** count `endswith(` in every non-artifacts `regress/**/*.py` (`gate_hygiene.sh`:151-153)
+  and pty-driving probes by `pty\.fork|forkpty|pty\.spawn|^[[:space:]]*(import|from) drive_guest` (:728-730).  The witness
+  probe contains none of those tokens (grep of the file) -- it drives the debugger on a pipe -- so moving it to
+  `regress/` should move no gate-6 pin.  *Checked by grep only; the deriver is `tools/derive_hygiene_pins.sh`.*
+* **`tools/pipeline/check_probe_wiring.py`** reads tracked-or-staged files only; an unlisted committed `.py` under
+  `regress/` -- including one under `regress/artifacts/` -- is RED.  The MANIFEST header and `#568`'s two lines (HEAD):
+
+~~~~
+  147| #  THE MANIFEST.  One line per python artefact in regress/.  The CLASS is the only thing a
+  148| #  machine cannot derive; the wiring is derived below and printed with its file:line.
+  149| #
+  150| #  Adding a probe means adding a line here, deliberately -- the same idiom as run.sh's
+  151| #  GATE_MANIFEST and gate_offline's SM_COVERED.  An unlisted file is RED, so a new detector
+  152| #  cannot arrive unnoticed, which is exactly how all four debts below arrived.
+  153| MANIFEST = {
+   ...
+ 2862|     "vme_default_probe.py":
+ 2863|         (CLASS_DETECTOR, "#568 vmedefaultkill: 38 rows on unmodified -E mvme88k -e mvme187 (rev 3); gated in gate_arm.sh (gate 14) under the stem vme_default, pinned at 38; kill table 2 (artifacts/vmedefaultkill/killtable2_20261021/) BASE 38/38, HEAD 14/38, NULL 5/38 CONTROL=FAIL, 32 of 34 legs killed (M_CAPNARROW by its failed build), the 2 survivors predicted equivalents; addenda 2b/2c/2d: 7 legs, 2 killed, 3 clause-(e) survivors, 2 equivalents"),
+ 2864|     "artifacts/vmedefaultkill/witness_20261020/vme_sites_probe.py":
+ 2865|         (CLASS_WITNESS, "#568 the rung-3 witness: 7 of 7 guest access sites end the emulator (rc 1) on HEAD 5dbc000e"),
+~~~~
+* **`#568`'s gate block -- the row-identity form for a probe whose row names contain spaces** (`regress/gate_arm.sh`, HEAD):
+~~~~
+ 1887| #  ------------------------------------------------------------ vmedefaultkill (#568)
+ 1888| #  dev_vme.c's default: ended the emulator (exit(1), announced only by debug() -- silent while
+ 1889| #  free-running) on any VME2 offset the switch did not name.  Now: the 26 header-named registers
+ 1890| #  the model does not implement DECLINE (reads served the preloaded word, writes dropped, one
+ 1891| #  latched fatal() per register); every other unmatched offset returns 0, and for a guest data load
+ 1892| #  or store memory_rw raises the m88k data-access exception.  The rung-3 witness
+ 1893| #  (regress/artifacts/vmedefaultkill/witness_20261020/, 7 of 7 guest sites rc 1 on 5dbc000e) is NOT
+ 1894| #  run here; this is its detector.  Needs only the binary: the probe constructs mvme88k/mvme187 with
+ 1895| #  -M 64 and a 4-byte dummy image at 0x10000 -- no PROM image.  Kill tables:
+ 1896| #  regress/artifacts/vmedefaultkill/killtable1_20261020/ (rev 2) and killtable2_20261021/ (rev 3).
+ 1897| VMEDLOG=$LOGDIR/vme_default.log
+ 1898| python3 -u vme_default_probe.py "$PMAX" gate > "$VMEDLOG" 2>&1 || true
+ 1899| if ! grep -q "VME_DEFAULT_PROBE_DONE" "$VMEDLOG"; then
+ 1900|     check "vme default probe completed" "no" "yes"
+ 1901| else
+ 1902|     check "vme default probe completed" "yes" "yes"
+ 1903|     vres=$(sed -n 's/^VME_DEFAULT_RESULT=//p' "$VMEDLOG")
+ 1904|     check "vme_default rows run"     "${vres#*/}" 38
+ 1905|     check "vme_default rows correct" "${vres%/*}" "38"
+ 1906|     check "vme default controls" "$(grep -c '^VME_DEFAULT_CONTROL=OK$' "$VMEDLOG")" "1"
+ 1907|     for v in "neg apparatus" "session" "live" "vbr reset" "t1cmp rt" "cased census" "free ctl" "free quiet" "free neg ctl" "tctl rt" "vbr rt" "t1count inc" "cased wr" "p2 rd census" "p2 wr census" "p2 ld widths" "p2 st widths" "p2 ann rd" "p2 ann rd 2" "p2 ann wr" "p2 ann wr 2" "p2 nw rd" "p2 nw wr" "p2 nw rd 2" "p2 nw wr 2" "p2 zero wr" "p1 fault lo" "p1 fault hi" "p1 fault mid" "p1 fault wr" "p1 p2 edge" "p3 interim" "p2 int byte" "p2 int half" "p1 census" "p1 widths" "p1 quiet" "unasm"; do
+ 1908|         check "vme default row: $v" "$(count "$VMEDLOG" "^$v  .*ok$")" "1"
+ 1909|     done
+ 1910|     check "vme default rows emitted" "$(( $(count "$VMEDLOG" " ok$") + $(count "$VMEDLOG" " FAIL$") ))" "38"
+ 1911|     check "vme default rows green"   "$(count "$VMEDLOG" " ok$")"   "38"
+ 1912|     check "vme default rows red"     "$(count "$VMEDLOG" " FAIL$")" "0"
+ 1913| fi
+~~~~
+* **Gate 11's head, and its `#503` block** (`regress/gate_m88k_rounding.sh`, HEAD):
+~~~~
+   30| gate_begin "gate 11: m88k rounding mode (#298)"
+   31| 
+   32| PMAX=${PMAX:-$ROOT/build/gxemul}
+   33| IMG=$IMAGES/liveimage-luna88k-raw-20250518.img
+   34| BOOTFILE=$IMAGES/boot
+   35| LOG=$LOGDIR/gate_m88k_rounding.log
+   36| 
+   37| need_exec "$PMAX"
+   38| need_file "$IMG" "$BOOTFILE"
+   39| command -v python3 >/dev/null || gate_skip "python3 not available"
+   40| 
+   41| note "binary : $PMAX"
+   42| note "image  : $IMG (R: throwaway overlay; never written)"
+   43| note "cold debugger; the guest executes fstcr itself, results read from GPRs"
+   44| 
+   45| python3 m88k_rounding_probe.py "$PMAX" "$IMAGES" > "$LOG" 2>&1 || true
+   46| 
+   47| if ! grep -q "M88K_ROUND_RESULT=" "$LOG"; then
+   48|     note "probe produced no result line; last lines follow"
+   49|     tail -5 "$LOG" | sed 's/^/       /'
+   50|     gate_skip "probe did not complete"
+   51| fi
+   ...
+  403| #  ---- #503 lunaabsentcpu: the LUNA-88K interrupt controller's per-CPU walk.
+  404| #
+  405| #  reassert_interrupts() walked all MAX_CPUS and called the NULL interrupt_assert of a slot DEVINIT never
+  406| #  connected, so on the DEFAULT one-cpu machine a guest store to an interrupt mask followed by a store to a
+  407| #  soft-interrupt register followed a null function pointer and ended the process.  This probe is BOTH the
+  408| #  rung-3 WITNESS (it shows the symptom on the pre-fix build and goes green after, same script) and the
+  409| #  DETECTOR.  Kill tables under regress/artifacts/lunaabsentcpu/: killtable/ .. killtable5/, the last on
+  410| #  this 37-row instrument -- BASE 37/37, all twenty-six distinct mutants killed, and M_NULLAB EQUIVALENT
+  411| #  (the empty-name stub path it edits is dead code, warrant recorded with the row).
+  412| #
+  413| #  THE PINS ARE STRUCTURAL ON PURPOSE.  The 37 rows reuse names across sessions -- `slot0' three times,
+  414| #  `cpu1' four -- so a per-name `grep -c' would count a population nobody intended.  The denominator, the
+  415| #  witness verdict and the two mandated controls are each unambiguous, and the denominator is what reds if
+  416| #  a row stops running.
+  417| LUNALOG=$LOGDIR/luna_absentcpu.log
+  418| python3 luna_absentcpu_probe.py "$PMAX" "$IMAGES" > "$LUNALOG" 2>&1 || true
+  419| grep -E "^(LUNAABS_|LUNA_ABSENTCPU_)" "$LUNALOG" | cut -c1-110 | sed 's/^/       /'
+  420| 
+  421| if ! grep -q "LUNAABS_DONE" "$LUNALOG"; then
+  422|     note "luna88k absent-cpu probe produced no completion sentinel; last lines follow"
+  423|     tail -5 "$LUNALOG" | sed 's/^/       /'
+  424|     check "luna absentcpu: probe completed" "no" "yes"
+  425| else
+  426|     check "luna absentcpu: 37 rows, all OK (the denominator is the pin -- a row that stops running shrinks it)" \
+  427|           "$(grep -c 'LUNAABS_RESULT=37/37' "$LUNALOG")" "1"
+  428|     check "luna absentcpu: the rung-3 witness verdict is PASS (PRE_FIX_SYMPTOM means the fix is gone; FAIL means a row broke)" \
+  429|           "$(grep -c '^LUNA_ABSENTCPU_WITNESS=PASS' "$LUNALOG")" "1"
+  430|     check "luna absentcpu: both mandated controls green -- liveness (a known value returns through the same decode) and device signature (the value could only have come from this device)" \
+  431|           "$(grep -cE '^LUNAABS_ROW=(live|devsig) +RESULT=OK' "$LUNALOG")" "2"
+  432|     check "luna absentcpu: no row reported a halted machine (the pre-fix symptom is the process ending mid-row)" \
+  433|           "$(grep -cE '^LUNAABS_ROW=[^ ]+ +RESULT=(HALT|NOSTART)' "$LUNALOG")" "0"
+  434| fi
+  435| 
+  436| gate_end
+~~~~
+* **`#569`'s row-identity pinning** -- lists held in the GATE, never read from the probe; every row by identity, exactly once; the denominator pinned by literal equality (`regress/gate_offline.sh`, HEAD):
+~~~~
+  187| # ---- #569: the m88k load/store dispatch-table generator --------------------------
+  188| # generate_m88k_loadstore.c printed NULL for the 24 scaled-byte slots of
+  189| # m88k_loadstore[512], which cpu_m88k_instr.c indexes with no NULL check
+  190| # (xmem_slow() calls the slot; the register-form ld/st decoder installs it as
+  191| # ic->f). The fix deletes that NULL arm, so the slots name the unscaled byte
+  192| # handlers. The driver compiles and runs the REAL generator in a scratch copy and
+  193| # reads the COMMITTED table separately -- each alone stays green when only the
+  194| # other is reverted -- against names hard-coded in the driver, never read from
+  195| # either artifact. GEN and TABLE are cleared so this always tests the committed
+  196| # files. A missing or non-compiling generator, one that fails to run, and a
+  197| # missing table are each a red row inside the driver, never a skip. Placed after
+  198| # the gate's compiler detection so the driver gets `$CC`; standalone it falls
+  199| # back to cc, then gcc.
+  200| MLSLOG=$LOGDIR/diff_m88k_loadstore_gen.log
+  201| if [ ! -x "$HERE/diff_m88k_loadstore_gen.sh" ]; then
+  202|     check "m88k loadstore generator: driver is executable" "no" "yes"
+  203| else
+  204|     GEN= TABLE= CC="$CC" "$HERE/diff_m88k_loadstore_gen.sh" > "$MLSLOG" 2>&1
+  205|     sed 's/^/       /' "$MLSLOG"
+  206|     check     "m88k loadstore generator: row failures" \
+  207|               "$(sed -n 's/^ROWS=[0-9]* FAIL=\([0-9]*\)$/\1/p' "$MLSLOG")" "0"
+  208|     check     "m88k loadstore generator: rows run (the denominator is the pin)" \
+  209|               "$(sed -n 's/^ROWS=\([0-9]*\) FAIL=[0-9]*$/\1/p' "$MLSLOG")" "123"
+  210|     check     "m88k loadstore generator: completion sentinel" \
+  211|               "$(grep -c '^M88KLS_DONE$' "$MLSLOG")" "1"
+  212|     #  EVERY ROW BY IDENTITY, each exactly once, from lists held HERE and not read
+  213|     #  from the driver: a deleted, renamed or duplicated row is red by name, which
+  214|     #  the total alone cannot say.  The lists are the driver's contract -- the 24
+  215|     #  repaired slots; the 6 further accepts plus the 3 counterparts that are also
+  216|     #  accepts; the other 21 counterparts -- in both artifacts, plus the generator
+  217|     #  status rows and the cmp row: 4 + 2 x (5 + 24 + 9 + 21) + 1 = 123.
+  218|     _mls_pin="160 164 168 176 180 184 224 228 232 240 244 248 416 420 424 432 436 440 480 484 488 496 500 504"
+  219|     _mls_acc="161 177 418 422 434 438 144 400 404"
+  220|     _mls_cp="128 132 136 148 152 192 196 200 208 212 216 384 388 392 408 448 452 456 464 468 472"
+  221|     _mls_ids="gen_compiles gen_exit gen_stdout gen_count cmp_fresh_committed"
+  222|     for _a in fresh committed; do
+  223|         _mls_ids="$_mls_ids ${_a}_present ${_a}_inits ${_a}_entries ${_a}_nulls ${_a}_lsn"
+  224|         for _i in $_mls_pin; do _mls_ids="$_mls_ids ${_a}_pin$_i"; done
+  225|         for _i in $_mls_acc; do _mls_ids="$_mls_ids ${_a}_acc$_i"; done
+  226|         for _i in $_mls_cp;  do _mls_ids="$_mls_ids ${_a}_cp$_i"; done
+  227|     done
+  228|     for _id in $_mls_ids; do
+  229|         check "m88k loadstore generator: row $_id, exactly once" \
+  230|               "$(grep -ow -- "$_id" "$MLSLOG" | wc -l | tr -d ' ')" "1"
+  231|     done
+  232| fi
+~~~~
+* **The gate library** (`regress/lib.sh`, HEAD): `check` is string equality; `check_min` is `-ge`; `count` is `grep -ac`:
+~~~~
+   80| check() {
+   81|     _checks=$((_checks+1))
+   82|     if [ "$2" = "$3" ]; then
+   ...
+   91| check_min() {
+   92|     _checks=$((_checks+1))
+   93|     if [ "$2" -ge "$3" ] 2>/dev/null; then
+   ...
+  326| count() {
+  327|     [ -f "$1" ] || { echo 0; return; }
+  328|     local c
+  329|     c=$(grep -ac -- "$2" "$1" 2>/dev/null)
+  330|     echo "${c:-0}"
+~~~~
+---
+
+## 10. The project rules the questions apply -- quoted with their bounds
+
+**Provenance, plainly:** quoted from the WORKING-TREE carrier `GXEMUL-SEC/tools/CLAUDE.md` (byte-identical to the root
+`CLAUDE.md` every session loads; 4104 lines).  HEAD's copy (3846 lines) does not yet carry the 2026-10-09 owner
+rulings -- the clause-(c) null-medium block (R2) and rule D2 (R8) are WORKING-TREE ONLY.  They are the rules this round
+is held to, and they travel here WITH their bounds: a rule quoted without its bound is a different rule.
+
+**R1 -- THE FLOOR** -- `tools/CLAUDE.md` (working tree) lines 1328-1333, VERBATIM:
+~~~~
+ 1328| > **THE FLOOR.** A detector is VACUOUS — replace it IN-ROUND — unless it (a) fails on the
+ 1329| > pre-fix build, (b) fails on a **VERBATIM REINSTATEMENT of the removed defect at EVERY fixed
+ 1330| > site**, and (c) fails on a **NULL MEDIUM** -- a product medium carrying none of the behaviour under
+ 1331| > test (the clause-(c) block below says what that is per instrument kind). Below the floor, the
+ 1332| > round's own claim to have "shipped a detector with the fix" is a WRONG RECORD, which the
+ 1333| > stopping rule already fixes in-round.
+~~~~
+**R2 -- clause (c): the null medium by instrument kind, the pre-fix build, the two record forms** -- `tools/CLAUDE.md` (working tree) lines 1340-1367, VERBATIM:
+~~~~
+ 1340| > **ONE criterion -- a product medium carrying none of the behaviour under test -- and its object
+ 1341| > differs by instrument kind:**
+ 1342| > * an offline differential that `#include`s the product: a COMMENT-ONLY product source, which must
+ 1343| >   fail to COMPILE, with a gate that reds on the compile failure (measured for `#488`:
+ 1344| >   `regress/artifacts/shortread/nullmedium_20261009/RECEIPT.txt`);
+ 1345| > * a runtime probe: an ABSENT or NON-EMULATOR binary (every session dies), or a build WITHOUT the
+ 1346| >   device for a device round;
+ 1347| > * an instruction-handler round: an IDENTITY BODY (decode and retire, write nothing) -- the
+ 1348| >   recommended default, two measured legs at `#527`.
+ 1349| >
+ 1350| > **THE PRE-FIX BUILD IS CLAUSE (a)'S MEDIUM AND NEVER CLAUSE (c)'S.**  It carries every behaviour of the
+ 1351| > product, one of them wrong, so a detector can red on it and still pass a comment-only file -- `#446`,
+ 1352| > the instance that created this clause.  A table that wrote "null medium" over a pre-fix leg carries a
+ 1353| > WRONG RECORD (L4: correct it in place, quoting what it refutes, as
+ 1354| > `ppcrldimimask/killtable_20260911/SCORES.txt` does), NOT a floor breach: clause (c) is then
+ 1355| > UNMEASURED there.  **A breach is a genuine null medium coming back GREEN, and nothing else** -- "a
+ 1356| > sharper medium was available" is not a floor criterion (at most clause-(e) debt).
+ 1357| >
+ 1358| > **RECORD CLAUSE (c) IN ONE OF EXACTLY TWO FORMS, never as a bare clause letter beside a row name:**
+ 1359| > * `(c): measured at <artifact>` -- the leg was run and its receipt is durable;
+ 1360| > * `(c): by construction via <row/pin>, leg not run` -- e.g. the gate pins the row count by EQUALITY
+ 1361| >   and a named row reds on a dead run, or the differential `#include`s the product and its gate reds
+ 1362| >   on a compile failure.  **A by-construction claim is checked by READING that shape; where the reading
+ 1363| >   fails -- no runtime gate wiring, no pin, `check_min`, a control computed over the row list
+ 1364| >   (`all([])` is True) -- the leg is OWED** (7n-1's two: the unwired `ppc_rldicl_probe.py` and
+ 1365| >   `alpha_tbi_probe.py`).  Predict a dead run's score from the source, not from the row count (Astra
+ 1366| >   measured luna's at 0/14 with four gate checks red, and SGI's at 6/46 because six rows test only
+ 1367| >   exit status).
+~~~~
+**R3 -- clause (d)** -- `tools/CLAUDE.md` (working tree) lines 1376-1377, VERBATIM:
+~~~~
+ 1376| > **(d) The detector must also fail when the fix is PRESENT but its REPAIR IS NULLED —
+ 1377| > the guard kept, its effect removed.**
+~~~~
+**R4 -- the two (d) shapes** -- `tools/CLAUDE.md` (working tree) lines 1428-1433, VERBATIM:
+~~~~
+ 1428| > **The two shapes, once the enumeration is right:**
+ 1429| > * **fix ADDS a predicate** -> weaken the added one (unchanged; the original rule).
+ 1430| > * **fix adds none** -> the (d) mutant reroutes an EXISTING guard's repair. For a
+ 1431| >   de-fatalisation: **swap the guard's operand for a field the guarded BODY reads.**
+ 1432| >   For a pure deletion: **re-introduce the removed behaviour under a DIFFERENT predicate**
+ 1433| >   -- not the same one widened, which is (b) wearing (d)'s clothes.
+~~~~
+**R5 -- the DEPENDS-ON bound** -- `tools/CLAUDE.md` (working tree) lines 1448-1451, VERBATIM:
+~~~~
+ 1448| > > **DEPENDS ON enumerates exactly two things: (1) the predicates DOMINATING the diff's
+ 1449| > > edited lines, walked up only to the ENCLOSING FUNCTION BOUNDARY -- never into callees
+ 1450| > > or callers; and (2) for operand-swap forms, swaps drawn ONLY from fields the guarded
+ 1451| > > BODY reads (the guard-field/body-field grep the pre-table check already mandates).**
+~~~~
+**R6 -- joint cells: the body-tested partition** -- `tools/CLAUDE.md` (working tree) lines 1464-1472, VERBATIM:
+~~~~
+ 1464| > > **DEPENDS-ON enumerates JOINT cells over the guard's operands and the body-read lvalues EXACTLY
+ 1465| > > WHEN THE GUARDED BODY'S OWN CODE DISTINGUISHES THEM.**  For each lvalue take the PARTITION the
+ 1466| > > body's own tests induce (`pending > 0` gives {0, >0}; `relative_addr == PCCTWO_T1ICR` gives
+ 1467| > > {T1, T2}); the enumerated cells are the CROSS-PRODUCT of those partitions -- never arbitrary
+ 1468| > > boolean functions of the read-set.  A mutant exempting a single cell whose reachability is
+ 1469| > > MEASURED is a floor breach; close the whole cross-product in ONE diff and write into the
+ 1470| > > contract which cells are rowed.  A value or combination the body never tests as a case
+ 1471| > > (`idata == k`; a byte no conditional distinguishes; both counts >= 2 where the body tests `> 0`)
+ 1472| > > is DISCLOSED under clause (e).
+~~~~
+**R7 -- the floor (cells a row is OWED for) versus clause-(e) disclosure** -- `tools/CLAUDE.md` (working tree) lines 1517-1522, VERBATIM:
+~~~~
+ 1517| > > **The rule ENUMERATES joint cells wherever the body distinguishes them; the FLOOR -- the cells a row
+ 1518| > > is OWED for -- is the cross-product of the guard's dominating predicates with the device-STATE lvalues
+ 1519| > > the fix's own repair path reads that are JOINTLY REACHABLE through its own data flow.**  The bits of
+ 1520| > > the single value being written are single-operand MARGINALS, not floor; joint cells outside the floor
+ 1521| > > are clause-(e) coverage debt, subject to the one ask-again.  A filter may reject or discharge a cell
+ 1522| > > but may demand a new row only for a floor cell -- so it cannot grow unbounded.
+~~~~
+**R8 -- rule D2: a relational compare is pinned at its edges** -- `tools/CLAUDE.md` (working tree) lines 1557-1566, VERBATIM:
+~~~~
+ 1557| > > For a relational compare against a constant bound B that a fix DEPENDS ON (`X > B`, `e < 96`), each region of its
+ 1558| > > generating set is discharged by the row that varies under the LEAST-OBSERVABLE non-equivalent move of B: **X = B+1
+ 1559| > > for the region past the bound and X = B-1 for the region below it** (the "at" member is dead where the branch maps B
+ 1560| > > to itself).  **A far row proves the branch EXISTS and discharges the BRANCH partition; it never pins the BOUND.**
+ 1561| > > Measured on `#473`'s shipped WDC detector: its rows at 68928 and 4998 let `> 32769` and `> 32766` at each clamp --
+ 1562| > > one-token bound moves -- pass all 128 rows, while rows at 32769 and 32767 red each one
+ 1563| > > (`regress/artifacts/wdc473floor/pass1_20261009/fable5_meas/`).  **Bound: at most two rows per compare the fix
+ 1564| > > depends on -- the compare's own two edges.**  It adds no axis; it moves the rows a region already owes to where the
+ 1565| > > bound is observable, so it cannot become `#392`.  It is the accept-row finding -- *a single accept row pins exactly
+ 1566| > > ONE bound, the one it is near* -- stated for compares.
+~~~~
+**R9 -- GUARD FIELD vs BODY FIELD, and the CHANNEL line (two rows of the pre-table check's table)** -- `tools/CLAUDE.md` (working tree) lines 1740-1741, VERBATIM:
+~~~~
+ 1740| > | **GUARD FIELD vs BODY FIELD** | list fields the PREDICATE reads and fields the guarded BODY reads; where they differ, grep whether they are written at the same sites. If not, the detector owes a state where they DISAGREE.  **Also record, per lvalue, the PARTITION THE BODY INDUCES on it** (its tested masks and compare regions) -- EXHAUSTED / SAMPLED is read off this column, never asserted (7n-5, 2026-10-09) | the guard's operand swapped for a field whose third state no row built |
+ 1741| > | **CHANNEL** | for each row, name **the mutant it kills** and **the observable that differs under that mutant**. A row whose named channel cannot vary under its named mutant is VACUOUS BY CONSTRUCTION, and that is knowable at writing time, before any table runs | a survival oracle at a REFUSAL-EFFECT site: guarded and unguarded code both survive |
+~~~~
+**R10 -- clause (e): the contract** -- `tools/CLAUDE.md` (working tree) lines 1801-1805, VERBATIM:
+~~~~
+ 1801| > **(e) THE CONTRACT.** The probe header names which edits this detector is designed
+ 1802| > to catch. *A detector that says so is falsifiable; one claiming completeness is
+ 1803| > not* -- and a later escape becomes "outside the contract" or "a breach of it",
+ 1804| > which are different dispositions, rather than an argument about overclaiming.
+ 1805| > Two lines in a header.
+~~~~
+**R11 -- clause (f): the anchor rule, and the anchored-row requirement with its reviewer check** -- `tools/CLAUDE.md` (working tree) lines 1814-1817, VERBATIM:
+~~~~
+ 1814| > **Rows that assert only PAIRWISE DISTINCTNESS, or a same-path round-trip, test the decode
+ 1815| > against ITSELF.** They are therefore invariant under any edit that re-maps addresses
+ 1816| > INJECTIVELY over the probed set -- translations first among them -- and they catch a re-map
+ 1817| > only where it COLLIDES on that set.
+   ...
+ 1888| > **A DETECTOR CLAIMING TO PIN *WHERE* AN ACCESS LANDS MUST CARRY AT LEAST ONE ANCHORED ROW:
+ 1889| > > an oracle tied to a SPECIFIC CELL by a channel OUTSIDE the decode under test** -- a side
+ 1890| > > effect (a tick that zeroes the cell), an architectural reset value, or a second access path
+ 1891| > > to the same cell. **One anchored row converts a whole distinctness suite from relative to
+ 1892| > > absolute.**
+ 1893| >
+ 1894| > **THE REVIEWER CHECK, and it costs two seconds** -- it belongs beside *"does this diff delete
+ 1895| > `exit(` from a device? then look for accept rows"*:
+ 1896| >
+ 1897| > > ***"If every address in this device shifted one word, which row reds?"*** If the answer is
+ 1898| > > NONE, position is unpinned, whatever the row count.
+~~~~
+**R12 -- the option set: FAULT and ACCEPT, and FAULT's availability on M88K** -- lines 2036-2041 and 2047-2057, VERBATIM:
+~~~~
+ 2036| > > this set said. ***  FAULT works because `memory_rw.c` dispatches an exception on a failed device access --
+ 2037| > > **for MIPS and M88K.  There is no Alpha equivalent.**  So `dev_unreadable.c`, which `machine_sgi.c`
+ 2038| > > installs ten times, does not transfer to an Alpha machine at all, and a round reaching for FAULT there owes
+ 2039| > > Alpha exception delivery first.
+ 2040| > >
+ 2041| > > > **BEFORE CHOOSING A MEMBER, CHECK IT IS AVAILABLE ON THIS CPU.**  The set is a menu of dispositions, not
+   ...
+ 2047| > > * **4 ACCEPT** -- the model ALREADY computes the right value and then discards it.  Delete
+ 2048| > >   the kill, keep the value, NO latch: there is no event to announce, and a bounded announce
+ 2049| > >   would ship a wrong record in product code (*"unimplemented; ignored"* about a read that
+ 2050| > >   is implemented and is not ignored).  Found 2026-08-27 when the DC21285 datasheet showed
+ 2051| > >   `+0x188` is IRQEnable, a documented read-only register the model answers correctly.
+ 2052| > > * **5 FAULT** -- deliver the architectural bus error, by MODELLING THE SPACE AS UNMAPPED.
+ 2053| > >   `src/devices/dev_unreadable.c` is a device whose entire access function is `return 0;`
+ 2054| > >   ("returns an error for all reads/writes"), and `machine_sgi.c` installs it TEN times so
+ 2055| > >   absent hardware faults, because the PROM and NetBSD probe those regions and RELY on the
+ 2056| > >   failure.  **This is why *`return 0` is not a decline* and *FAULT is a member* are both
+ 2057| > >   true: it is not a refusal, it is a positive statement that nothing is there.**
+~~~~
+**R13 -- the addition licence** -- lines 2334-2335, VERBATIM:
+~~~~
+ 2334| > > **Additions to product code in a hardening fork are licensed by MEASURED DELTAS or by a
+ 2335| > > TRANSFERRED WARRANT -- never by "it cannot hurt."**
+~~~~
+**R14 -- the witness clauses** -- lines 2788-2796, VERBATIM:
+~~~~
+ 2788| **A rung-2–4 witness is INVALID unless all of:** (i) it shows the defect symptom on the pre-fix
+ 2789| committed HEAD and goes green post-fix with the same script — this is test-first itself, restated
+ 2790| per-probe; (ii) **for ACCESS witnesses (rungs 3–4)** it carries a LIVENESS control (a known value
+ 2791| returns through the same decode) AND a DEVICE-SIGNATURE control (the observed value could only
+ 2792| have come from the device — RAM would answer differently; **the footbridge probe's first draft
+ 2793| returned 0x0 everywhere WITH ITS RAM CONTROL GREEN**, so one control is not enough); (iii) the
+ 2794| machine description and dispatch are committed and unmodified — a machine or `device_add`
+ 2795| introduced IN ORDER TO reach the site is
+ 2796| laundering, not witnessing.
+~~~~
+**R15 -- the ask-again cap** -- lines 2471-2475, VERBATIM:
+~~~~
+ 2471| > **CAPPED AT ONE ASK-AGAIN PER DETECTOR PER ROUND.** This is not the #392 chain — #392 was
+ 2472| > unbounded fix-of-fix passes with no stop condition; this is a single extra adversarial query
+ 2473| > against a clean table with a measured stop: nothing found, done; something found, row added
+ 2474| > under L1, done. **The cap IS the anti-#392 clause.** A second ask-again after an empty first
+ 2475| > is exactly where the chain starts, and anything found past the cap is FILED, never fixed.
+~~~~
+*Not binding here, said so that nobody spends an answer on it: the de-escalation clause and accept-row failability (carrier :2406-2415 and :2452-2458) bind a diff that DELETES an `exit(` -- this diff deletes none.*
+
+---
+
+## 11. QUESTIONS -- VERDICT LINE FIRST (format in section 0)
+
+**Q1 -- the repair: complete and correct?**
+
+(a) **The CMMU and how the arm knows which access this is.**  Is `cpu->cd.m88k.cmmu[cache == CACHE_INSTRUCTION ? 0 : 1]`
+right for every caller that can reach the arm (S5, S6)?  Name any caller that reaches it with a `cache` class the
+selector misroutes.  On luna-88k with more than one cpu, the arm uses the FAULTING cpu's CMMU while `dev_m8820x.c`
+serves each CMMU from `d->cpu_nr` (S8): consistent?
+
+(b) **The two values.**  PFSR = `CMMU_PFSR_BERROR << 16` = 0x00030000 (S8; the same `<< 16` encoding the translation path
+uses, S9) and PFAR = `orig_paddr` (S1).  Answer P2 (byte or word address) with a warrant, or say it is UNKNOWN.
+
+(c) **The NULL check's scope.**  Around the two writes only, the exception outside it.  Answer P4: is the NULL cell
+reachable anywhere, and if not, is the check licensed (R13) and its variants disclosed rather than rowed?
+
+(d) **The exception unchanged.**  The vector expression, the `!no_exceptions` guard, the `debug()` line and
+`return MEMORY_ACCESS_FAILED` stay as they are (S2).  Anything in the ruled design that moves any of them?
+
+(e) **The LUNA case's return path.**  `case 0x3ffffff0:` becomes `return 0;`, its PFSR write deleted, the case kept
+(S19; deleting it would reach `default:`, which stops the cpu -- S3).  `return 0` skips the function's common tail,
+whose only effect is writing the read buffer that `memory_rw` already zeroed and that a failing load never consumes
+(`cpu_m88k_instr_loadstore.c`:189-195).  Confirm the path into the arm (:591-592 does not fire; `res` 0 -> -1; data
+CMMU; vector 3), and say what changes for a STORE and for an instruction fetch at 0x3ffffff0 (P10).
+
+(f) **The build.**  Answer P1.
+
+(g) **The records the diff must carry.**  Answer P9; and say whether `memory_rw.c`'s TODO (:615-619) is replaced.
+
+(h) **Does the witness's premise correction change the design's reach or its contract?**  Only a CLAIMED-and-REFUSED
+access reaches the arm (S3): unclaimed addresses (R3) get nothing, and on luna-88k only the probe case reaches the arm
+(every other luna refusal stops the cpu first).  What may the round's CHANGELOG and probe contract claim -- and what
+must they disclaim -- about "88K bus errors" in general?
+
+(i) **The sibling and the boot.**  Answer P3 and P8.
+
+(j) **Option-set completeness for the LUNA disposition** (the carrier's option set, R12, and its availability rule:
+FAULT works on M88K).  Members I can name: (1) keep serving the access (`return 1`) and write PFAR beside PFSR, no
+exception -- ACCEPT with metadata; (2) `return 0` into the repaired arm -- FAULT, the ruling's choice; (3) upstream's
+`DEV_RAM_FAIL` device over 0x3ffffff0 -- FAULT by another device, refused by the ruling; (4) delete the case -- `default:`
+stops the cpu, refused by the ruling.  Is there a member this list does not name?  Grep the fork for the idiom
+(`dev_unreadable.c` is this tree's FAULT idiom; `machine_mvme88k.c` installs it three times, S4).
+
+**Q2 -- the owed detector rows: complete, consistent, bounded?**
+
+(a) **Clause (a) and the witness's own clause (i).**  Pre-fix red = the witness (8 of 24 red, SYMPTOM PRESENT 8/8).  The
+post-fix half -- the same script all green, `M88K_BUSERR_SYMPTOM=ABSENT` -- is owed.  Anything else owed for (a)?
+
+(b) **Clause (b), verbatim reinstatement at EVERY fixed site.**  Two sites: the arm (HEAD's MEM_M88K block) and the LUNA
+case (HEAD's body).  My prediction, to be checked: reinstating the ARM alone (the LUNA case fixed) reds the six
+`uld`/`ust`/`vme` pfsr and pfar rows AND `luna pfsr` and `luna pfar` -- the fixed case now routes through the arm --
+while `luna route` stays green; reinstating the CASE alone (the arm fixed) reds `luna route` and `luna pfar`, with
+`luna pfsr` green because the case's own write is back.  Correct?  Does any row red for the wrong reason under either?
+
+(c) **Clause (c), the null medium (R2).**  Which medium for this instrument -- an absent or non-emulator binary, or "a
+build WITHOUT the device" (which device: `dev_m8820x`? the refusing devices?) -- and which of the TWO record forms?  Read
+the probe for a by-construction claim: every scored row reports a cause-free failure when its session has no register
+dump (2.12, `prereq_bad`), and the exit is non-zero unless all rows pass -- but the gate pin does not exist yet (Q3).
+Predict a dead run's score from the source, as R2 requires.
+
+(d) **Clause (d), the DEPENDS-ON enumeration.**  Check section 7 against the code: is any dominating predicate missing,
+any partition wrong, any cell mislabelled?  Then, for each unrowed cell -- P4, P5, P6, P7, P10, and row 13 (P2) -- say
+FLOOR (a row is owed, R7) or CLAUSE (e) (disclosed, with its derivation), and why.
+
+(e) **Classify the variants the records already name** (the §E smallest-edit question, in the checkable form): for
+each, which shipped row reds -- or say no row does and whether that is a floor breach or disclosed debt.  From the probe
+header (2.11, dated predictions): the writes on cmmu[0] instead of cmmu[1]; raw 3 instead of `3 << 16`; the
+device-relative `paddr` in PFAR; a PFSR-only repair; the writes on BOTH CMMUs; the sibling cleared as the translation
+path does; the repair conditioned on the direction; the repair keyed to one device; the exception dropped; the writes
+placed outside `res <= 0`; the arm widened (`res <= 0` -> `res <= 1`); the LUNA case left returning 1; the LUNA write
+deleted with the case left returning 1.  From Grok Q2 (3.3): "stores the device offset", "writes only cmmu[0] on a data
+access", "stores raw 3".  From the witness's NOT CLAIMED list (2.11): the NULL check removed, or the exception moved
+inside it; PFAR := `vaddr`; a sub-word address in PFAR.
+
+(f) **Accept controls.**  Answer P11 and P12.  Is `ok regs` (all four seeds survive an ACCEPTED access) the right
+channel for "a served access leaves PFSR/PFAR untouched"?
+
+(g) **The anchor rule (R11).**  PFAR is pinned by ABSOLUTE physical address at three device-relative offsets (0x10,
+0x90, 0x0), PFSR by exact value, and the sibling by its four exact seeds.  "If every address in this device shifted one
+word, which row reds?" -- answer it for PFAR.
+
+(h) **Rule D2 (R8).**  The only relational compare against a constant that the fix depends on is `res <= 0` (after
+`res == 0 -> -1`): B = 0, B+1 = served (`ok route`, `ok regs`), B-1 = refused (every refused row), the at-B member mapped
+away.  Discharged by existing rows?  Is there another compare against a constant among the dominating predicates?
+
+(i) **The CHANNEL line (R9), row by row.**  For each of the 24 rows, does its named channel vary under its named
+variant?  Two I want checked: `luna pfsr` (GREEN on HEAD -- after the fix its value comes from the generic arm, not the
+case: under which named variant does it red that no generic row also reds?) and the four `route` rows (GREEN on HEAD:
+which named variant reds each?).
+
+(j) **Bounded?**  Is this row set closed over the diff (R5, R7), with one ask-again after a clean table (R15)?
+
+**Q3 -- the detector shape and its gate home**
+
+(a) The witness probe becomes the detector base at `regress/m88k_buserr_probe.py`, post-fix green with the same script
+(Q2(a)).  Anything in its header (contract, NOT CLAIMED list, the `icmmu` wants) that must change before it moves?
+
+(b) **Gate home:** gate 14 (binary only; already hosts `#568`'s probe, which this one copied) or gate 11 (the m88k gate;
+skips whole without the luna rig image) -- section 9.  Which, with which LUNA shape (dummy image or rig), and what does
+the choice cost when the gate's own first probe or required image is missing?
+
+(c) **The MANIFEST lines** in `tools/pipeline/check_probe_wiring.py`: one `CLASS_DETECTOR` line for
+`regress/m88k_buserr_probe.py`, and -- if the witness directory is committed with its `.py` -- one `CLASS_WITNESS` line
+for `artifacts/m88kbuserrregs/witness_20261023/m88k_buserr_probe.py` (`#568`'s precedent, section 9).  Right, and is
+anything else in that directory a `.py` the checker will see?  (The seat stored its scripts as `*.py.txt` on purpose.)
+
+(d) **Row-identity pinning as `#569` did it:** the row list held in the GATE, every row checked by identity exactly
+once, the denominator pinned by literal equality, red = 0, `M88K_BUSERR_CONTROL=OK`, `M88K_BUSERR_SYMPTOM=ABSENT`, and the
+completion sentinel `M88K_BUSERR_PROBE_DONE`.  `#569` counted single-token ids with `grep -ow`; these row names contain
+spaces, which `#568`'s gate-14 form (`count "$LOG" "^$v  .*ok$"`) handles and the probe's `%-16s` format and 15-character
+assert exist to keep satisfiable.  Which form, and is a per-row check owed for the six controls separately?
+
+(e) **The ledger witness term:** `probe:regress/artifacts/m88kbuserrregs/witness_20261023/m88k_buserr_probe.py` (rung 3).
+Right?
+
+(f) **What else must stay green and be measured:** `vme_default_probe.py`'s 38 rows (S15), and -- P8 -- the luna rig boot.
+Astra (3.2) would keep the 38-row detector "adding metadata checks for actual faults"; the witness instead carries
+population 1 in its own `vme` cell.  Which -- and if `#568`'s probe gains rows, does its pin move?
+
+**Q4 -- the standing licence.**  If, while verifying a claim, you found something ELSE -- say so.  In particular:
+
+* **R1** (2.7): file it?  As what, at what severity, and is it a PREREQUISITE for the instruction label (P5)?  The source
+  sets `cpu->running = 0` on the faulting cpu (`cpu_dyntrans.c`:2014) and requests the debugger (:2002, :2021); the
+  witness's transcript says "All machines stopped" on a one-cpu machine.
+* **R2** (2.7): file it?  Does any COMMITTED stepped probe depend on the pre-read raising an exception (a probe whose
+  rows would change if the pre-read became `NO_EXCEPTIONS`)?
+* **R3** (2.7): a board question.  `vmesbcp2.txt`'s contents list "Sources of Local BERR*", "Local Bus Time-out" and
+  "Bus Error Processing" (`C:\DocumentNoSnc\cc\GXEMUL\_scratchpad\vmesbcp2.txt`:341-348); I did not locate their body
+  text.  File it, or leave it with the board question?
+* Anything the drafter got wrong in sections 5-7.
+
+---
+
+## 12. Every path this brief names -- checked with `ls` at drafting time (`LS_PERMITTED.txt`, VERBATIM)
+~~~~
+# Every path the T36 pass-1 brief names, checked 2026-10-23 21:15:36 -0500.  HEAD 7fca7187.
+# Repo paths are relative to C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC; 'tracked' = present in HEAD's tree (git cat-file -e HEAD:<path>).
+OK    tracked   src/cpus/memory_rw.c
+OK    tracked   src/cpus/memory_m88k.c
+OK    tracked   src/cpus/cpu_m88k.c
+OK    tracked   src/cpus/tmp_m88k_tail.c
+OK    tracked   src/cpus/tmp_m88k_head.c
+OK    tracked   src/cpus/cpu_m88k_instr.c
+OK    tracked   src/cpus/cpu_m88k_instr_loadstore.c
+OK    tracked   src/cpus/cpu_dyntrans.c
+OK    tracked   src/cpus/Makefile.skel
+OK    tracked   src/devices/dev_luna88k.c
+OK    tracked   src/devices/dev_m8820x.c
+OK    tracked   src/devices/dev_mvme187.c
+OK    tracked   src/devices/dev_unreadable.c
+OK    tracked   src/devices/dev_vme.c
+OK    tracked   src/devices/dev_mb89352.c
+OK    tracked   src/devices/dev_lunafb.c
+OK    tracked   src/devices/dev_le.c
+OK    tracked   src/devices/dev_pcc2.c
+OK    tracked   src/devices/dev_fb.c
+OK    tracked   src/devices/dev_fbctrl.c
+OK    tracked   src/core/memory.c
+OK    tracked   src/machines/machine_mvme88k.c
+OK    tracked   src/machines/machine_test.c
+OK    tracked   src/machines/machine_luna88k.c
+OK    tracked   src/include/thirdparty/m8820x.h
+OK    tracked   src/include/thirdparty/mvme_pcctworeg.h
+OK    tracked   src/include/thirdparty/luna88k_board.h
+OK    tracked   src/include/cpu_m88k.h
+OK    tracked   src/include/cpu.h
+OK    tracked   src/include/memory.h
+OK    tracked   src/include/machine.h
+OK    tracked   src/debugger/debugger_cmds.c
+OK    tracked   src/core/emul.c
+OK    tracked   regress/run.sh
+OK    tracked   regress/lib.sh
+OK    tracked   regress/gate_arm.sh
+OK    tracked   regress/gate_m88k_rounding.sh
+OK    tracked   regress/gate_offline.sh
+OK    tracked   regress/gate_hygiene.sh
+OK    tracked   regress/gate_ab.sh
+OK    tracked   regress/vme_default_probe.py
+OK    tracked   regress/luna_absentcpu_probe.py
+OK    tracked   regress/luna_intmask_probe.py
+OK    tracked   regress/m88k_exc_probe.py
+OK    tracked   regress/m88k_rounding_probe.py
+OK    tracked   regress/m88k_idle_probe.py
+OK    tracked   regress/m8820x_sites_probe.py
+OK    tracked   regress/mk48_nvram_probe.py
+OK    tracked   regress/pcc2_width_probe.py
+OK    tracked   regress/arm_flags_probe.py
+OK    tracked   tools/pipeline/check_probe_wiring.py
+OK    tracked   tools/pipeline/ledger.json
+OK    tracked   tools/derive_hygiene_pins.sh
+OK    tracked   tools/est_divergence.txt
+OK    tracked   tools/BRIEF_TEMPLATE.md
+OK    tracked   tools/CLAUDE.md
+OK    tracked   OUTSTANDING_BUGS.md
+OK    tracked   CHANGELOG.md
+OK    tracked   regress/artifacts/research_20261022/TRIAGE.md
+OK    tracked   regress/artifacts/research_20261022/trunk_src.diff
+OK    tracked   regress/artifacts/research_20261022/crit_20261022/CRIT_RULINGS.md
+OK    tracked   regress/artifacts/research_20261022/crit_20261022/codex_rescrit.txt
+OK    tracked   regress/artifacts/research_20261022/crit_20261022/grok_crit.txt
+OK    tracked   regress/artifacts/vmedefaultkill/measure_20261009/run_FAULT.out
+OK    UNTRACKED regress/artifacts/m88kbuserrregs/witness_20261023/WITNESS_REPORT.md
+OK    UNTRACKED regress/artifacts/m88kbuserrregs/witness_20261023/WITNESS_headbin.out
+OK    UNTRACKED regress/artifacts/m88kbuserrregs/witness_20261023/WITNESS_headbin_rig.out
+OK    UNTRACKED regress/artifacts/m88kbuserrregs/witness_20261023/m88k_buserr_probe.py
+OK    UNTRACKED regress/artifacts/m88kbuserrregs/witness_20261023/MANIFEST.md5
+OK    UNTRACKED regress/artifacts/m88kbuserrregs/witness_20261023/explore2.out
+OK    tracked   regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md
+OK    tracked   regress/artifacts/shortread/nullmedium_20261009/RECEIPT.txt
+OK    tracked   regress/diff_m88k_loadstore_gen.sh
+OK    tracked   regress/pass2_ledger.tsv
+OK    tracked   tools/pipeline/matrix.html
+OK    tracked   src/devices/autodev.c
+OK    tracked   src/devices/dev_jazz.c
+OK    tracked   src/devices/dev_ne2000.c
+OK    tracked   src/machines/machine_arc.c
+# named as the round's FUTURE path (must not exist yet):
+ABSENT (as expected) regress/m88k_buserr_probe.py
+# outside the repository (absolute):
+OK          775987 bytes  C:\DocumentNoSnc\cc\GXEMUL\_scratchpad\mc88100.txt
+OK          556690 bytes  C:\DocumentNoSnc\cc\GXEMUL\_scratchpad\vmesbcp2.txt
+OK           18509 bytes  C:\DocumentNoSnc\cc\GXEMUL\_guest-src-openbsd22\sys\arch\mvme88k\mvme88k\trap.c
+OK           61184 bytes  C:\DocumentNoSnc\cc\GXEMUL\_guest-src-openbsd22\sys\arch\mvme88k\mvme88k\eh.S
+OK            8281 bytes  C:\DocumentNoSnc\cc\GXEMUL\_guest-src-openbsd22\sys\arch\mvme88k\include\m882xx.h
+OK           27540 bytes  C:\DocumentNoSnc\cc\GXEMUL\est\src\cpus\memory_rw.c
+OK           33415 bytes  C:\DocumentNoSnc\cc\GXEMUL\est\src\devices\dev_luna88k.c
+OK           25695 bytes  C:\DocumentNoSnc\cc\GXEMUL\est\src\devices\dev_m8820x.c
+OK           48146 bytes  C:\DocumentNoSnc\cc\GXEMUL\est\src\cpus\cpu_m88k.c
+OK          309189 bytes  C:\DocumentNoSnc\cc\GXEMUL\CLAUDE.md
+# result: 0 missing or unexpected
+~~~~

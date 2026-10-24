@@ -1,0 +1,60 @@
+#!/bin/bash
+# T36 / #570 builder -- git-bash side of the baseline: HEAD sha, HEAD blobs of the peer's five dirty files
+# (written to this scratch dir for the WSL work-tree build), and the tracked-src census
+# (SEC working tree vs HEAD; build/ vs SEC, divergence set excluded).
+# Git OBJECT READS ONLY (rev-parse, show, ls-files, log).  Never status/diff/add/commit.
+set -u
+SEC=/c/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC
+BLD=/c/DocumentNoSnc/cc/GXEMUL/build
+SP=/c/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/t36/build
+WIT=$SEC/regress/artifacts/m88kbuserrregs/witness_20261023
+cd "$SEC" || exit 9
+echo "GIT_SIDE_START $(date '+%F %T %z')"
+echo "HEAD=$(git rev-parse HEAD)"
+echo "HEAD subject: $(git log -1 --format=%s | cut -c1-100)"
+echo "git log 66920157..HEAD -- src regress/*.py regress/*.sh (empty = the witness baseline holds at HEAD):"
+git log --oneline 66920157..HEAD -- src 'regress/*.py' 'regress/*.sh' | sed 's/^/  /'
+echo "  (end)"
+
+echo "== HEAD blobs of the four product files (git show HEAD:<f> | md5sum) =="
+for f in src/cpus/memory_rw.c src/cpus/cpu_m88k.c src/devices/dev_luna88k.c src/devices/dev_m8820x.c; do
+    echo "  $(git show "HEAD:$f" | md5sum | cut -c1-32)  HEAD:$f"
+done
+
+echo "== HEAD blobs for the peer's five dirty files -> $SP/headblobs (+ md5 vs the witness's headblobs_MD5.txt) =="
+rm -rf "$SP/headblobs"
+for f in src/cpus/cpu_alpha_palcode.c src/devices/dev_lca.c src/devices/dev_pcc2.c src/devices/dev_sh4.c \
+         src/include/thirdparty/mvme_pcctworeg.h; do
+    mkdir -p "$SP/headblobs/$(dirname "$f")"
+    git show "HEAD:$f" > "$SP/headblobs/$f"
+    m=$(md5sum < "$SP/headblobs/$f" | cut -c1-32)
+    w=$(grep " $f\$" "$WIT/headblobs_MD5.txt" | cut -c1-32)
+    if [ "$m" = "$w" ]; then r=SAME-AS-WITNESS; else r="DIFFERS-FROM-WITNESS(witness=$w)"; fi
+    if cmp -s "$SP/headblobs/$f" "$SEC/$f"; then wt="SEC-WT==HEAD"; else wt="SEC-WT-DIFFERS"; fi
+    echo "  $m  $f  $r  $wt"
+done
+echo "  (the witness also listed src/machines/.index, a GENERATED file it left as build/ has it; recorded only:)"
+echo "  HEAD:src/machines/.index md5=$(git show HEAD:src/machines/.index | md5sum | cut -c1-32)  build/ md5=$(md5sum < "$BLD/src/machines/.index" | cut -c1-32)  witness-listed=$(grep ' src/machines/.index$' "$WIT/headblobs_MD5.txt" | cut -c1-32)"
+
+echo "== every git-tracked src/ file: SEC working tree vs HEAD (object reads only) =="
+wn=0; wsame=0; wdiff=0; wlist=""
+while IFS= read -r f; do
+    wn=$((wn+1))
+    if git show "HEAD:$f" | cmp -s - "$SEC/$f"; then wsame=$((wsame+1)); else wdiff=$((wdiff+1)); wlist="$wlist $f"; fi
+done < <(git ls-files src/)
+echo "tracked src/ files=$wn  SEC-wt==HEAD: $wsame  differ: $wdiff"
+for x in $wlist; do echo "  WT-DIFF:$x"; done
+
+echo "== every git-tracked src/ file outside tools/est_divergence.txt: build/ vs SEC working tree =="
+div=$(grep -vE '^\s*(#|$)' tools/est_divergence.txt)
+n=0; same=0; diff=0; absent=0; skipped=0; difflist=""
+while IFS= read -r f; do
+    if printf '%s\n' "$div" | grep -qxF "$f"; then skipped=$((skipped+1)); continue; fi
+    n=$((n+1))
+    if [ ! -f "$BLD/$f" ]; then absent=$((absent+1)); difflist="$difflist ABSENT:$f"; continue; fi
+    if cmp -s "$SEC/$f" "$BLD/$f"; then same=$((same+1)); else diff=$((diff+1)); difflist="$difflist DIFF:$f"; fi
+done < <(git ls-files src/)
+echo "shared tracked files considered=$n  build==SEC: $same  differ: $diff  absent-in-build: $absent  (divergence-set skipped: $skipped)"
+for x in $difflist; do echo "  $x"; done
+echo "divergence set (derived): $(printf '%s ' $div)"
+echo "GIT_SIDE_DONE $(date '+%F %T %z')"

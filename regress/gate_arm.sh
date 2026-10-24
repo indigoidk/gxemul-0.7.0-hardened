@@ -1913,6 +1913,37 @@ else
 fi
 
 
+#  ------------------------------------------------------------ m88kbuserrregs (#570)
+#  A CLAIMED, REFUSED, UNSUPPRESSED m88k device access that passes the running-transition check (the device returns 0 with
+#  the cpu still running; NO_EXCEPTIONS callers excluded) now records its bus error in the faulting side's CMMU WHEN THE
+#  SELECTED CMMU EXISTS (memory_rw.c's refused-device arm: PFSR = BERROR << 16, PFAR = the physical address), and
+#  luna-88k's 0x3ffffff0 probe case is refused through that arm instead of being served 0.  The rung-3 witness
+#  (regress/artifacts/m88kbuserrregs/witness_20261023/, 16/24 on HEAD) is NOT run here; this is its detector: 31 rows, the
+#  witness's 24 plus the instruction label (ifetch x4), a NO_EXCEPTIONS caller (dbg noexc) and a CMMU-less cpu (null surv,
+#  null route; mvme187 -n 2).  Needs only the binary: mvme187 -M 64 [-n 2] and luna-88k, each with a 4-byte dummy image at
+#  0x10000 -- no PROM, no rig image.  Kill table: regress/artifacts/m88kbuserrregs/table1_20261023/ (SCORES.txt).  Like
+#  #568's block above, it runs only if none of this gate's eleven earlier skip points fired (the probe header names them).
+M88KBELOG=$LOGDIR/m88k_buserr.log
+python3 -u m88k_buserr_probe.py "$PMAX" gate > "$M88KBELOG" 2>&1 || true
+if ! grep -q "M88K_BUSERR_PROBE_DONE" "$M88KBELOG"; then
+    check "m88k buserr probe completed" "no" "yes"
+else
+    check "m88k buserr probe completed" "yes" "yes"
+    check "m88k buserr sentinel once" "$(grep -c '^M88K_BUSERR_PROBE_DONE$' "$M88KBELOG")" "1"
+    mbres=$(sed -n 's/^M88K_BUSERR_RESULT=//p' "$M88KBELOG")
+    check "m88k_buserr rows run"     "${mbres#*/}" 31
+    check "m88k_buserr rows correct" "${mbres%/*}" "31"
+    check "m88k buserr controls" "$(grep -c '^M88K_BUSERR_CONTROL=OK$' "$M88KBELOG")" "1"
+    check "m88k buserr symptom absent" "$(grep -c '^M88K_BUSERR_SYMPTOM=ABSENT$' "$M88KBELOG")" "1"
+    for v in "neg apparatus" "mv devsig" "mv cmmu rt" "ok route" "ok regs" "uld route" "uld pfsr" "uld pfar" "uld icmmu" "ust route" "ust pfsr" "ust pfar" "ust icmmu" "vme route" "vme pfsr" "vme pfar" "vme icmmu" "luna devsig" "luna cmmu rt" "luna route" "luna pfsr" "luna pfar" "luna icmmu" "ifetch route" "ifetch pfsr" "ifetch pfar" "ifetch dcmmu" "dbg noexc" "null surv" "null route" "unasm"; do
+        check "m88k buserr row: $v" "$(count "$M88KBELOG" "^$v  .*ok$")" "1"
+    done
+    check "m88k buserr rows emitted" "$(( $(count "$M88KBELOG" " ok$") + $(count "$M88KBELOG" " FAIL$") ))" "31"
+    check "m88k buserr rows green"   "$(count "$M88KBELOG" " ok$")"   "31"
+    check "m88k buserr rows red"     "$(count "$M88KBELOG" " FAIL$")" "0"
+fi
+
+
 #  ------------------------------------------------------------ hpcmipsctor (#444) + #536
 #  Three of eight advertised hpcmips subtypes SIGABRTed during construction (#444).  Its rung-2
 #  detector (~8 s, no rig image) shipped EXEMPT for want of a construction gate; #536 wires it here.

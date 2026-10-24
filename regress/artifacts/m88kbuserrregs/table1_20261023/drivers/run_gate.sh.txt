@@ -1,0 +1,22 @@
+#!/bin/bash
+# T36 / #570 builder -- section 8: ONE gate through regress/run.sh's single-gate form, alone, with a private LOGDIR.
+# PMAX is the gate's default ($ROOT/build/gxemul) unless PMAX is exported by the caller.  Writes the run.sh output to
+# <out>, then copies the named gate logs beside it.  usage: run_gate.sh <gate n> <logdir> <out file> [log ...]
+set -u
+N=$1; LD=$2; OUT=$3; shift 3
+SEC=/mnt/c/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC
+mkdir -p "$LD" "$(dirname "$OUT")"
+{
+echo "RUN_GATE_START gate $N $(date '+%F %T %z')  LOGDIR=$LD  PMAX=${PMAX:-<default \$ROOT/build/gxemul>}"
+echo "build/gxemul: $(md5sum /mnt/c/DocumentNoSnc/CC/GXEMUL/build/gxemul)  mtime $(stat -c '%y' /mnt/c/DocumentNoSnc/CC/GXEMUL/build/gxemul)"
+echo "regress/gate_arm.sh md5 $(md5sum < "$SEC/regress/gate_arm.sh" | cut -c1-32); m88k_buserr_probe.py md5 $(md5sum < "$SEC/regress/m88k_buserr_probe.py" | cut -c1-32)"
+} > "$OUT"
+t0=$(date +%s)
+LOGDIR="$LD" bash "$SEC/regress/run.sh" "$N" >> "$OUT" 2>&1
+rc=$?
+echo "RUN_SH_RC=$rc  wall=$(( $(date +%s) - t0 ))s" >> "$OUT"
+for l in "$@"; do
+    if [ -f "$LD/$l" ]; then cp "$LD/$l" "$(dirname "$OUT")/$l"; echo "copied $l ($(wc -c < "$LD/$l") bytes; last line: $(tail -1 "$LD/$l" | cut -c1-80))" >> "$OUT"; else echo "NO LOG $l" >> "$OUT"; fi
+done
+echo "RUN_GATE_DONE gate $N $(date '+%F %T %z')" >> "$OUT"
+tail -25 "$OUT"

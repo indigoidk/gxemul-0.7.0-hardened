@@ -1,0 +1,150 @@
+--- HEAD:src/cpus/cpu_m88k.c
++++ WT:src/cpus/cpu_m88k.c
+@@ -51,6 +51,10 @@
+ #include "symbol.h"
+ 
+ #include "thirdparty/m8820x_pte.h"
++/*  #570: memory_rw.c's m88k refused-device arm, compiled into this unit through
++    tmp_m88k_tail.c, uses CMMU_PFSR, CMMU_PFAR and CMMU_PFSR_BERROR, which are
++    defined only in m8820x.h; upstream adds the same include to this file.  */
++#include "thirdparty/m8820x.h"
+ #include "thirdparty/m88k_dmt.h"
+ #include "thirdparty/mvmeprom.h"
+ 
+--- HEAD:src/cpus/memory_rw.c
++++ WT:src/cpus/memory_rw.c
+@@ -612,11 +612,30 @@
+ 					    0, vaddr, 0, 0, 0, 0);
+ #endif
+ #ifdef MEM_M88K
+-					/*  TODO: This is enough for
+-					    OpenBSD/mvme88k's badaddr()
+-					    implementation... but the
+-					    faulting address should probably
+-					    be included somewhere too!  */
++					/*  #570: record the bus error in the
++					    faulting side's CMMU first: PFSR =
++					    BERROR << 16 (the field OpenBSD/mvme88k's
++					    trap.c extracts) and PFAR = orig_paddr,
++					    the PHYSICAL address saved before paddr
++					    was made device-relative.  cmmu[0] is the
++					    instruction CMMU, cmmu[1] the data CMMU
++					    (memory_m88k.c's index); the other CMMU
++					    is not written.  A cpu without a CMMU
++					    gets no write and still takes the
++					    exception.  NO_EXCEPTIONS callers (the
++					    debugger) never get here: the test above
++					    keeps them out.  */
++					{
++						struct m8820x_cmmu *cmmu =
++						    cpu->cd.m88k.cmmu[cache ==
++						    CACHE_INSTRUCTION ? 0 : 1];
++						if (cmmu != NULL) {
++							cmmu->reg[CMMU_PFSR] =
++							    CMMU_PFSR_BERROR << 16;
++							cmmu->reg[CMMU_PFAR] =
++							    (uint32_t) orig_paddr;
++						}
++					}
+ 					m88k_exception(cpu, cache == CACHE_INSTRUCTION
+ 					    ? M88K_EXCEPTION_INSTRUCTION_ACCESS
+ 					    : M88K_EXCEPTION_DATA_ACCESS, 0);
+--- HEAD:src/devices/dev_luna88k.c
++++ WT:src/devices/dev_luna88k.c
+@@ -622,9 +622,13 @@
+ 	switch (addr) {
+ 
+ 	case 0x3ffffff0:
+-		/*  Accessed by OpenBSD/luna88k to trigger an illegal address  */
+-		cpu->cd.m88k.cmmu[1]->reg[CMMU_PFSR] = CMMU_PFSR_BERROR << 16;
+-		break;
++		/*  Accessed by OpenBSD/luna88k to trigger an illegal address.
++		    #570: refuse it.  memory_rw.c's refused-device arm then
++		    raises the access exception and writes PFSR and PFAR (for a
++		    load or store, in the data CMMU); this case used to write
++		    cmmu[1]'s PFSR only and serve 0.  The case is kept: without
++		    it the access would reach default:, which stops the cpu.  */
++		return 0;
+ 
+ 	case PROM_ADDR:		/*  0x41000000  */
+ 		/*  OpenBSD/luna88k write here during boot. Ignore for now. (?)  */
+--- HEAD:src/devices/dev_m8820x.c
++++ WT:src/devices/dev_m8820x.c
+@@ -290,13 +290,13 @@
+ 			/*  #433: ignoring a guest write to SSR corrupts nothing the model
+ 			    maintains -- but the first version of this comment gave a WRONG
+ 			    REASON, saying SSR is "written by the MODEL".  Measured: NOTHING
+-			    in the tree ever writes reg[CMMU_SSR]; the model writes only PFSR
+-			    and PFAR (memory_m88k.c:382-405).  The right reason is stronger:
+-			    SSR reads as zero, V-bit clear, so DROPPING the write is what makes
+-			    the command arm's own argument true -- if a guest could store here
+-			    it could set the V bit, and a dropped PROBE would then read back a
+-			    plausible-looking VALID translation instead of a deterministic
+-			    miss.  The two decisions are coupled, and row D10 pins them.  */
++			    in the tree ever writes reg[CMMU_SSR]; the model writes only PFSR and
++			    PFAR (memory_m88k.c:382-405 and, since #570, memory_rw.c's refused-device
++			    arm).  The right reason is stronger: SSR reads as zero, V-bit clear, so
++			    DROPPING the write is what makes the command arm's own argument true --
++			    if a guest could store here it could set the V bit, and a dropped PROBE
++			    would then read back a plausible-looking VALID translation instead of a
++			    deterministic miss.  The two decisions are coupled, and row D10 pins them.  */
+ 			m8820x_unimplemented(d, "write to CMMU_SSR");
+ 		}
+ 		break;
+@@ -323,10 +323,10 @@
+ 	 *    PFSR, PFAR   no translation consumer at all.  m88k_translate_v2p never reads
+ 	 *                 them; they are status OUTPUTS.  The strongest evidence in the
+ 	 *                 round is that THE MODEL ITSELF already relies on this: the fault
+-	 *                 path writes PFSR (memory_m88k.c:382-384, dev_luna88k.c:614) and
+-	 *                 PFAR (memory_m88k.c:399,405 -- TWO DISCRETE LINES, and the file has
+-	 *                 to be named again: a bare ":399-405" after a dev_luna88k.c citation
+-	 *                 reads as dev_luna88k.c:399-405, which is a keyboard scancode switch)
++	 *                 path writes PFSR (memory_m88k.c:382-384; #570: and memory_rw.c's arm -- no
++	 *                 longer dev_luna88k.c) and PFAR (memory_m88k.c:399,405 -- TWO DISCRETE LINES,
++	 *                 the file named again because a bare ":399-405" after a dev_luna88k.c
++	 *                 citation read as a keyboard scancode switch; #570: and memory_rw.c's arm)
+ 	 *                 DIRECTLY through reg[], with no purge, ~10^5
+ 	 *                 times per boot -- against 2 guest writes per boot through this
+ 	 *                 handler.  If a PFSR write owed a purge the model would already
+@@ -450,11 +450,11 @@
+ 		 *  
+ 		 *  AN EARLIER VERSION OF THIS SENTENCE ALSO CLAIMED the guest's PFSR reads
+ 		 *  would return zero, and a pass-2 seat showed that is FALSE: the fault path
+-		 *  writes PFSR DIRECTLY through reg[] at memory_m88k.c:382-384, never through
+-		 *  this handler, so dropping the handler's store would not touch it at all.
+-		 *  The SAR consequence stands on its own; the PFSR one was reasoning by
+-		 *  analogy from the register beside it.  Removing a purge and removing a
+-		 *  store are different changes and only the first is argued for here.
++		 *  writes PFSR DIRECTLY through reg[] at memory_m88k.c:382-384 (and, since #570, in
++		 *  memory_rw.c's refused-device arm), never through this handler, so dropping its
++		 *  store would not touch it at all.  The SAR consequence stands on its own; the PFSR
++		 *  one was reasoning by analogy from the register beside it.  Removing a purge and
++		 *  removing a store are different changes and only the first is argued for here.
+ 		 */
+ 		if (writeflag == MEM_WRITE)
+ 			regs[relative_addr / sizeof(uint32_t)] = idata;
+@@ -495,15 +495,15 @@
+ 		 *  exit(1), so an ordinary guest LOAD of an unmodelled register terminated the
+ 		 *  host process -- measured at 1007 of 1024 offsets on a read.
+ 		 *
+-		 *  The MMU objection to continuing does not apply here, and that is a measured
+-		 *  fact rather than a hope: every register the emulator's own translation
+-		 *  consults -- SAPR and UAPR read at memory_m88k.c:135,137, PFSR and PFAR
+-		 *  written at :382-405 -- is a HANDLED case label above.  Nothing reaching this
+-		 *  arm can alter what the emulator translates.  The defined-but-unhandled
+-		 *  registers are all cache diagnostics (CDP0-3, CTP0-3, and the 88204-only
+-		 *  CSSP1-3) against a model that has no cache -- and the neighbouring CSSP0 arm
+-		 *  ALREADY answers exactly this way, silently, on a path a real boot exercises
+-		 *  1024 times.  Continuing here is the same policy, said out loud once.
++		 *  The MMU objection to continuing does not apply here, and that is a measured fact
++		 *  rather than a hope: every register the emulator's own translation consults --
++		 *  SAPR and UAPR read at memory_m88k.c:135,137, PFSR and PFAR written at :382-405
++		 *  and, since #570, in memory_rw.c's refused-device arm -- is a HANDLED case label
++		 *  above.  Nothing reaching this arm can alter what the emulator translates.  The
++		 *  defined-but-unhandled registers are all cache diagnostics (CDP0-3, CTP0-3, and
++		 *  the 88204-only CSSP1-3) against a model that has no cache -- and the neighbouring
++		 *  CSSP0 arm ALREADY answers exactly this way, silently, on a path a real boot
++		 *  exercises 1024 times.  Continuing here is the same policy, said out loud once.
+ 		 *
+ 		 *  On a read the caller gets the regs[] value fetched above, which is zero for
+ 		 *  anything never stored; a write is dropped rather than stored, because

@@ -1,0 +1,138 @@
+The brief is a pass-2 review of the uncommitted #570 diff. I will read the rest of the packet first, then check its premises against `GXEMUL-SEC/src/` before answering.The packet is in. I am checking the product comments and the control-flow claims against `GXEMUL-SEC/src/`, starting with the arm, the CMMU index, and the line citations the include would move.VERDICT: SHIP WITH CHANGES -- the repair and the 31-row floor hold; comment sentences in the diff and the probe header are wrong records and have to be corrected before commit. No floor breach.
+Q1: A1-A7 are in the four files; four comment claims in those files are wrong records (debugger identity, :354-355, the ~10^5, "only PFSR and PFAR").
+Q2: Clauses (a)(b)(c)(d) hold on the measured table; no floor cell is unrowed; the header's "upstream's placement" and its R2 "survives" sentence are L4.
+Q3: Claim A8's slice only, cite every score with its artifact and revision, and do not treat the boot-count delta or L22's prediction as living in PRETABLE.
+Q4: The model also writes CMMU_IDR at init; DMA0 is stored word-aligned while PFAR is the unmasked address.
+
+No floor breach anywhere below. Scores, gates, and boots are DERIVED from the packet. I did not re-run them, and a hash of the working probe was not available, so the md5 `d57c12ab` is NOT CHECKABLE. The header sentences quoted below were read from `regress/m88k_buserr_probe.py`.
+
+## Q1 — the diff against A1-A7
+
+(a) The four hunks match S1. READ.
+
+`memory_rw.c:628-641` is A1 (`cache == CACHE_INSTRUCTION ? 0 : 1`), A2 (`CMMU_PFSR_BERROR << 16` and `(uint32_t) orig_paddr`, unmasked), A3 (the NULL test wraps only the two stores; `debug()` at :604, the guard at :603, `m88k_exception` at :639, and `return MEMORY_ACCESS_FAILED` at :643 sit outside it), and A4 (the TODO is gone; nothing else in the arm moved). `CACHE_INSTRUCTION` is 1, `CACHE_DATA` is 0, `CACHE_NONE` is 2 (`memory.h:122-124`), so the ternary selects `cmmu[0]` for an instruction access and `cmmu[1]` for data and for `CACHE_NONE`. `CMMU_PFSR` is `0x108/4` = 66 and `CMMU_PFAR` is `0x10c/4` = 67, both inside `reg[0x1000/4]` (`cpu_m88k.h:229-235`). `3 << 16` = `0x00030000`. `(0x00030000 >> 16) & 7` = 3, which is the value `trap.c:319` and `:326` test with `(frame->dpfsr >> 16 & 0x7) == 0x3`.
+
+`dev_luna88k.c:624-631` is A5: the case returns 0 and the old PFSR store is gone. `default:` at :913-928 sets `cpu->running = 0` and returns 0, so `memory_rw.c:591-592` returns before the arm. The case's `return 0` skips the common tail at :931-934. That tail only writes `odata` (still 0) into a buffer `#95` already zeroed on a read (`memory_rw.c:491-492`). The device is registered with `DM_DEFAULT` (`dev_luna88k.c:994-996`), and `DM_DEFAULT` is 0 while `DM_DYNTRANS_OK` is 1 (`memory.h:131-132`), so the refusal does not install a dyntrans page.
+
+`cpu_m88k.c:53-57` is A6: the include sits after `m8820x_pte.h`, and the comment does not say the order matters. `dev_m8820x.c` is A7: four comment hunks, each `@@` line count balanced, no new "only" invented in the `:382-384` sentence. Departure 6 ("dropping its store") is the text at :454. S21's identical `dev_m8820x.o` is DERIVED from the packet.
+
+(b) C2 is true and is a sufficient warrant for the include's presence. It is not a warrant for the position. READ: `m8820x.h` is included from `cpu_m88k.c`, `memory_m88k.c`, `dev_luna88k.c`, `dev_m8820x.c`, and `dev_mvme187.c` only. `memory_m88k.c` is a different translation unit. `tmp_m88k_tail.c:39-40` is the only `#define MEM_M88K`, and it pulls `memory_rw.c` into `cpu_m88k.c`. The three macros exist only in `m8820x.h:65-66,125`. `NBSG` (`m8820x.h:182`) has no other hit under `src/`. The header's `struct m8820x_cmmu` is under `#if 0` (`:190-212`); the live struct is `cpu_m88k.h:234`. Upstream's hunk (`trunk_src.diff`, inlined) places the include before `m8820x_pte.h`. Either order compiles; A6 already kept "after `m8820x_pte.h`" and withdrew "order matters." P3 is F5 below.
+
+(c) Comment sentences.
+
+| id | grade | basis |
+|---|---|---|
+| M1, M3, M4, M5 | TRUE | READ `:615-636`, `:437`, `:494`, `memory_m88k.c:112`, `dev_mvme187.c:136-149` |
+| M2 | TRUE | READ `trap.c:319,326` |
+| M6 | TRUE of the source, unrowed for the instruction label | F8 |
+| M7 | TRUE-BUT-MISLEADING | F1 |
+| C1, C2 | TRUE | (b) |
+| L1 | NOT CHECKABLE | inherited; no OpenBSD/luna88k source on disk |
+| L2 | TRUE of load and store | the case has no `writeflag` test; a store is clause (e), S3 |
+| L3 | TRUE | DERIVED: pre-fix `luna route` is `fall/.../r4=0x0` and `luna pfsr` is `0x30000` (`prefix_HEAD.out`) |
+| L4 | TRUE | READ `default:` `:926-928`; L22 is the measurement (DERIVED) |
+| D1 | TRUE-BUT-INCOMPLETE | F4 |
+| D2 | wrong count over a new set | F3 |
+| D3 | TRUE | the arm stores through `cmmu->reg[]`, and this handler is not on that path |
+| D4 | TRUE | PFSR/PFAR remain case labels at `:437-438`; the new writer does not change that. "Consults" already covered write-only registers in the pre-round sentence |
+
+(d) F2. One citation in a file this round edits now names the wrong statement. Five citations in files this round does not edit are filed.
+
+(e) The skipped tail is inert, as in (a).
+
+(f) F1-F4 are L4 in the diff. None is a floor breach. They are comment text. A comment-only pass leaves the measured objects identical and does not require a new table.
+
+F1. L4, not a floor breach. READ. P1, S11, S12. `memory_rw.c:625-627` says NO_EXCEPTIONS callers, parenthetically "the debugger," never get here because the test above keeps them out. The guard at `:603` does keep every `no_exceptions` caller out of this block. The parenthetical is an identity, and it is false. `debugger_cmds.c:716-717` dumps with `CACHE_NONE | NO_EXCEPTIONS` on `cpus[bootstrap_cpu]`, and that caller stays out. The single-step pre-read at `cpu_dyntrans.c:287-288` passes `CACHE_INSTRUCTION` with no `NO_EXCEPTIONS`, and that is the channel of the `ifetch` rows and of null part 2. `dev_luna88k.c:613-614` is a `NO_EXCEPTIONS` caller that is not the debugger. Fix the parenthetical before commit.
+
+F2. L4, not a floor breach. READ. P2, R18. `dev_m8820x.c:361` cites `cpu_m88k.c:354-355` as the loop that touches `batc[]` and `patc_*[]` and never `reg[]`. The `+4` include moved that loop to `:358-359`. Lines `:354-355` are now `idle_fold_n_taken_n` and `idle_fold_slot_runs` in the tlbdump printf. This is the only `cpu_m88k.c:<number>` citation under `src/`. Update it to `:358-359`. The five tracked regress citations past line 53 (`diff_m8820x.c:996` → `:362-375`, `diff_m8invread.c:161` → `:121-122`, `luna_intmask_probe.py:23` and `m8820x_sites_probe.py:27` → `:991-1019`, `readiness_predicate_test.py:70` → `:277`) now point four lines above their targets. File them. Do not sweep them in this commit. The frozen witness's line comments stay with its bytes.
+
+F3. L4, not a floor breach. READ. P4. `dev_m8820x.c:326-331` folds "since #570, memory_rw.c's arm" into the subject of "~10^5 times per boot." That count was measured for the translation-fault writer. Nothing in this round counts the arm. The same comment, at `:312-317`, already refuses to treat two boot counts as one quantity. Keep `~10^5` on `memory_m88k.c:382-405`, and say the arm's count was not measured.
+
+F4. L4, not a floor breach. READ. D1, S1 A7. `dev_m8820x.c:293-294` says the model writes only PFSR and PFAR. Every `cmmu->reg[` store under `src/` is PFSR (`memory_m88k.c:382-384`, `memory_rw.c:633`), PFAR (`memory_m88k.c:399` and `:405`, `memory_rw.c:635`), or IDR (`dev_mvme187.c:139` and `:151`, `dev_luna88k.c:953` and `:964`). The IDR stores are init, once per CMMU. "Nothing writes `reg[CMMU_SSR]`" is true on that census. "Only PFSR and PFAR" is not. The round rewrote the sentence and kept "only." Scope it to the fault path.
+
+## Q2 — the detector and the floor
+
+(a) Clause (a) is measured, and it matches. DERIVED from `prefix_HEAD.out` and `fixed.out`. Pre-fix reds, walked off that listing: `uld pfsr`, `uld pfar`, `ust pfsr`, `ust pfar`, `vme pfsr`, `vme pfar`, `luna route`, `luna pfar`, `ifetch pfsr`, `ifetch pfar`. That is 10. `31 - 10 = 21`. `SYMPTOM=PRESENT 10/10`. `luna pfsr` is green on HEAD because the case wrote `0x30000` itself. Post-fix is `31/31`, `ABSENT`. The frozen witness is `16/24` then `24/24` (L1). Seed check, walked: `(0x5a5a5a5a >> 16) & 7 = 2` and `(0x2468ace0 >> 16) & 7 = 0`, so a stale PFSR cannot pass as BERROR. Unasm, walked off the probe: each standard session places `2+2+13+6 = 23` words; seven scored sessions (`ok`, `uld`, `ust`, `vme`, `luna`, `ifetch`, `dbg`) are `7 × 23 = 161`; null adds `4+1+2+1 = 8`, so `23+8 = 31`; `161+31 = 192`. The apparatus session and INFO `unclaimed` are not accumulated. P8: the by-construction form in R2 is defined for clause (c). Clause (a)'s record is `prefix_HEAD.out` (`21/31`, `PRESENT 10/10`) and `fixed.out` (`31/31`, `ABSENT`). The gate block was inserted after propagation (departure 3), so gate 14 never ran the block on a pre-fix binary. The equality pins (`rows correct` = 31, `SYMPTOM=ABSENT`) would fail that output. Say that as a property of the pins. Do not write "(a): by construction."
+
+(b) Clause (b) is red for the reason under test. DERIVED. L3 (`memory_rw.c` restored, case fixed): the ten metadata rows, including `luna pfsr`, and `luna route` stays green because the refused case still enters the arm and the arm still raises the exception. `31 - 10 = 21`. Witness `16/24` drops the two `ifetch` rows the 24-row instrument does not score. L4 (case restored, arm fixed): `luna route` and `luna pfar` only; `luna pfsr` stays green because the case write is back. `29/31` and `22/24`.
+
+(c) Clause (c) is the measured form, and it is the right one. DERIVED. L5 is `1/31`, only `neg apparatus` green, `CONTROL=FAIL`, sentinel present, exit 1. L5b raises `FileNotFoundError` before row 1, no sentinel, so the gate's "probe completed" check goes red. Record `(c): measured at table1_20261023/L5_stub.out and L5b_absent.out`. Nothing further is owed.
+
+(d) Every floor cell in S3 has a row whose channel moves under that cell's variant. DERIVED from section 2.3 against the source.
+
+- Data × CMMU present: `uld` / `ust` / `vme` / `luna` `pfsr`, `pfar`, `icmmu`. L6b, L10, L11, L12, L13, L14, and L15 on `ust`.
+- Instruction × CMMU present: `ifetch pfsr`, `ifetch pfar`, `ifetch dcmmu`. L6 reds those three and leaves `ifetch route` green, which is the disclosed vacuity (the vector expression at `:639-641` reads `cache` on its own).
+- Data × CMMU absent: `null route` (HANDLED / FELL / SXIP / DMA0) and part 1 of `null surv`. L8 and L9.
+- Instruction × CMMU absent: `null surv` part 2. L8b reds it by the NULL dereference. Delivery is not scored. E discharged that cell with survival (S3). F8.
+- `no_exceptions` set: `dbg noexc`. L7.
+- Served: `ok route`, `ok regs`. Their reachable channel is the prerequisite string. (e) below.
+
+Unrowed, and not floor: a LUNA store (clause (e), L2 limits the comment to load or store), sub-word PFAR and VA≠PA (clause (e), S3), luna-88k `-n 2..4` (NOT CLAIMED), a stepped fetch at `0x3ffffff0` (F7), and delivery in the instruction × NULL cell (F8).
+
+(e) One vacuity is disclosed, and it has its own variant. `ifetch route` cannot move under L6. It reds under L17 through `prereq:handler`. The header says so. L18 (25 red, `CONTROL=FAIL`) and L19 (27 red, `CONTROL=FAIL`) make `ok route` and `ok regs` red only through `prereq:readback` and `prereq:nodev`. That is the only channel a global widening can reach, because the seed stores and the IDR loads are themselves served CMMU accesses and they fire first. The header names that channel (`ok route` / `ok regs` in section 2.4). The got string changes. No separate row is owed.
+
+(f) No breach the records missed. The single-row carriers are red for the reason their variant names. L7 reds only `dbg noexc` (the dump enters the body). L8 reds `null surv` and `null route` (`sig11` on the data NULL slot). L8b reds only `null surv` (part 1's dump is flushed; `debugger.c:383` is `fflush(stdout)`; part 2 dereferences `cmmu[0]`). L9 reds only `null route` (FELL, no exception). L6 reds the three instruction-metadata rows and not the vector row. `27/27` MATCH is DERIVED. L22's red reason (the handler never runs) matches `default:` as read. Where that prediction was written is F-record under Q3, not a wrong red.
+
+(g) The R2 dependency and the ERROR delivery are source-true, and one sentence overclaims a measurement. READ. The arm calls `m88k_exception(..., 0)`, so `is_trap` is clear. `cpu_m88k.c:815-822` rewrites a non-trap fault to `M88K_EXCEPTION_ERROR` (10) when `PSR.SFRZ` is set, and `:877` zeroes DMA0 on every exception while `:912-916` copies it back only for `DATA_ACCESS`. Part 1 therefore has a real DMA0 (`0xfff46010`); part 2, with SFRZ still set, is ERROR at `VBR1 + 8×10 = 0x30050`. The fixed and HEAD INFO lines show `cpu1 end pc=0x30050`. The arm runs before that call, so the NULL test runs either way. `m88k_exception` does not read PFSR or PFAR (`:814-925`), so the guest's later loads are what the rows see. F6: the header's claim that `null surv` survives an R2 fix is unmeasured. `cpu_m88k_instr.c:2989-2992` is the real fetch (`CACHE_INSTRUCTION`, no `NO_EXCEPTIONS`, `goto bad` on failure). Label it predicted. F8: no scored row reads the instruction × NULL delivery. L9 and L17 leave `null surv` green with `cpu1 end pc=0xfff46010`.
+
+(h) The gate block is satisfiable and is not self-satisfying. READ `gate_arm.sh` (the working file's sentinel checks are at `:1928` and `:1932`) and `check_probe_wiring.py:3222-3232`. The loop names 31 rows. Six structural checks, 31 row checks, and emitted/green/red is 40, as the packet counts. `row()` uses `%-16s` plus a following space, and it asserts `len(name) <= 15`. The longest name, `neg apparatus`, is 13 characters, so `^$v  .*ok$` matches. `count` is `grep -ac`. Equality pins, not `check_min`. The eleven skip points are `gate_arm.sh:84, :85, :93, :105, :389, :430, :515, :638, :695, :816, :949`, all above the insertion, and the file has no later `gate_skip`. The header and the gate comment both name them. That disclosure is enough (S8).
+
+(i) One ask. No item is floor. A new row is not owed (R10, and E already closed the instruction × NULL cell with survival).
+
+- AA1. `PFAR = orig_paddr & ~3` (or any low-bit mask). All five PFAR addresses are word-aligned, so the low bits are already 0. `cpu_m88k_instr_loadstore.c:131` stores `dma[0] = addr & ~0x3`, and misaligned half/word/double accesses trap at `:168-172` before `memory_rw`. Cell: `orig_paddr` residue, SAMPLED. CLAUSE (e), already named.
+- AA2. `PFAR = vaddr` while `APR_V` is clear. Every session leaves the APR invalid, so virtual and physical are the same value (`memory_m88k.c:130-144`). Cell: translation identity. CLAUSE (e), already named.
+- AA3. The LUNA case returns 0 only on `MEM_READ` and `break`s on a store. The luna rows are one load. `ust` is a different device. Cell: LUNA dispatch × `writeflag`. CLAUSE (e), already named.
+- AA4. A stepped instruction fetch at `0x3ffffff0`, or a mutant that still serves that fetch and writes `cmmu[1]`. The cache partition is rowed on mvme187's unreadable window. This address is one sample of the device axis. Cell: LUNA dispatch × `cache`. CLAUSE (e). F7: the NOT CLAIMED list does not name it.
+- AA5. `m88k_exception` moved inside the NULL test only when `cache == CACHE_INSTRUCTION`. Part 1 still takes the data exception, so `null route` stays green. Part 2 prints `failed ]` (`debug()` is outside the NULL test), leaves J, and stays `exit0` with both dumps readable, so `null surv` stays green. The same shape is already measured for L9's instruction half. Cell: instruction × NULL delivery. CLAUSE (e). E discharged the floor. The comment still owes the no-row sentence in F8.
+
+Swapping the two stores with `m88k_exception` is invisible to these rows, because the handler loads happen after the arm returns and `m88k_exception` does not read those registers. That is not a gap.
+
+F5. L4, not a floor breach. READ. P3, S16. `regress/m88k_buserr_probe.py:33-34` says the include is "after m8820x_pte.h (upstream's placement, the transferred warrant)." Upstream places it before `m8820x_pte.h`. The product comment does not say this. The builder's report already records that. The header still says it. Correct the sentence. The table ran on the frozen bytes. Keep that frozen copy as the instrument, and record the new md5 of the shipped probe and that the row logic did not change. "Without it the repair does not compile" is true (C1).
+
+F6. L4, not a floor breach. READ the header's null paragraph against `cpu_dyntrans.c:287-288` and `cpu_m88k_instr.c:2989-2992`. P10. "With R2 fixed the step's own fetch reaches the same arm, so the NULL-check observable survives" is a source-derived prediction. No leg measured an R2 fix. Write "predicted (source-derived)." Same header edit and same md5 note as F5.
+
+F7. L4, not a floor breach. READ the header's NOT CLAIMED list (`:187-204`) and `dev_luna88k.c:624-631`. P6. HEAD's case wrote `cmmu[1]`'s PFSR for every access class. The fix deletes that store. The list names a LUNA store and free-running instruction-fetch refusals. It does not name a stepped instruction fetch at `0x3ffffff0`. PRETABLE 1.B(3) already routes that cell to one CHANGELOG sentence. Add the clause-(e) line. Not a floor cell: devices are samples, and the cache partition is rowed on mvme187.
+
+F8. L4, not a floor breach. READ. P15, S3, R7, R10. `memory_rw.c:623-625` says a cpu without a CMMU gets no write and still takes the exception. The source does call `m88k_exception` outside the NULL test, for either `cache` value. `null route` scores delivery for the data label only. `null surv`'s want is `exit0/readable`. It stays green under L9 and L17, where cpu 1 ends at `0xfff46010` and no instruction exception was taken (packet section 3.3). E's survival ruling covers the floor obligation. It does not let the comment assert the instruction label's delivery with no row and no no-row sentence. Narrow the sentence: the data-access exception is what `null route` scores; instruction-fetch delivery on a CMMU-less cpu is survival-only.
+
+## Q3 — the records
+
+(a) The CHANGELOG `#570` block has to say all of the following.
+
+The claim is S2: fault metadata for a claimed, refused, unsuppressed device access that passes the running-transition check, on a cpu that has a CMMU, plus LUNA's `0x3ffffff0` case routed into that arm. PFSR is `CMMU_PFSR_BERROR << 16` (`0x00030000`). PFAR is `(uint32_t) orig_paddr`. The sibling is kept (A9); hardware latch behaviour is UNKNOWN. Disclaim unclaimed addresses (R3; INFO `unclaimed` fell through with the seeds intact), luna-88k's other refusals (`default:` stops the cpu first), free-running instruction-fetch refusals (R1: `cpu_m88k_instr.c:2989-2992` then `bad:`), `NO_EXCEPTIONS` callers, translation-fault semantics (`memory_m88k.c` unchanged), sub-word PFAR, and CMMU-less cpus beyond "no write, exception call unchanged, delivery of the instruction label not scored." Do not write "every 88K bus error now carries PFSR and PFAR." Do not write "parity with MIPS" (the MIPS arm in this block writes no fault address).
+
+HEAD's case wrote `cmmu[1]`'s PFSR for any access class and wrote no PFAR, then served the access. The fix removes that second wrong. A stepped fetch at `0x3ffffff0` is clause (e) (F7).
+
+Boot A/B, and no more than this (P7, S24). Both runs reached `login:` with markers `LUNA-88K BOOT` : `M88100` : `login:` = `1:1:1`. BASE `2efeec55` was `7651336103` instructions, 125 s. FIXED `3cd0501c` was `7550665157` instructions, 120 s. The difference is `7651336103 - 7550665157 = 100670946`. There is no base-against-base control, so the delta is not attributed. The consoles differ in the overlay temporary name, the spinner wrap, a break in the quotas line, and the date. Neither log shows whether the boot touched `0x3ffffff0`.
+
+C5 is withdrawn. E3 measured a CMMU-less cpu 1 reading both IDR windows (`0x00a90000`, cpu 0's) and storing an SCR command through `m8820x_command`, exit 0 (S4). C4 stays conditional on a nonzero bootstrap cpu, source-derived, unmeasured (S5): `dev_mvme187.c:136-149` attaches both CMMUs to `cpus[bootstrap_cpu]` while `dev_m8820x.c` decodes `cpu_nr` 0.
+
+The include is warranted because the three macros live only in `m8820x.h` and this translation unit did not include it. Upstream adds that include before `m8820x_pte.h`. This tree places it after, per A6. The position is not load-bearing. The header sentence that called the position "upstream's placement" was false and is corrected (F5).
+
+R2: the stepped `ifetch` rows and null part 2 reach the arm through `cpu_dyntrans.c:287-288`. With R2 fixed, the `ifetch` rows go red because of R1's halt and are re-rooted with C1/C2. `null surv`'s survival across that fix is predicted, not measured (F6). The SFRZ / ERROR mechanism in the builder's draft sentence is accurate (`cpu_m88k.c:815-822`); say the arm runs first either way, and that no scored row observes the instruction label's vector.
+
+Clause (c) in the measured form, at `L5_stub.out` and `L5b_absent.out`. Each score with its artifact and instrument (R19): pre-fix `21/31` PRESENT on rev 2 (`prefix_HEAD.out`); fixed `31/31` ABSENT (`fixed.out`, binary `3cd0501c`); witness `16/24` then `24/24` (rev 1, `d59798b0`); L3 `21/31` and `16/24`; L4 `29/31` and `22/24`; the other legs as `SCORES.txt`, with L22's prediction cited from BUILD_SPEC section 11 Q18. NULL-check licence: measured delta, L8 and L8b (P9). A3's "transferred warrant until measured" is spent.
+
+Departures, as the builder listed them: gate 14 was one background job, 7974 s, on `build/gxemul` `931e69fa`, 1310 checks, 0 FAIL, and the `#568` pin stayed `38/38`; the harness insertions landed after propagation, so the gate never ran this block pre-fix; the staged checker copy is `check_probe_wiring.py.txt`; one pre-freeze smoke run matched `prefix_HEAD.out`; `dev_m8820x.c` was rewrapped so `__LINE__` at the `FAILURE()` site did not move. The `~10^5` sentence and the IDR census have to match F3 and F4.
+
+(b) OUTSTANDING_BUGS. File C1/R1 with the re-root obligation of the four stepped `ifetch` rows and of null part 2's after-fault flow. File C2/R2. File C3/R3. File C4 as conditional and unmeasured. Withdraw C5, with E3's measurement. P2's five regress citations and the frozen witness's `cpu_m88k.c` line comments are filed here, not edited. P5, P11, and P12 are corrections to this round's own artifacts and belong next to the `#570` record, as below. P15's disposition is the no-row sentence in the product comment (F8) plus one sentence here so the filed R1/R2 items are not read as also covering a scored delivery row.
+
+(c) Ledger. `state` held for Fable, with the filed hold question. `witness` is `probe:regress/artifacts/m88kbuserrregs/witness_20261023/m88k_buserr_probe.py`, rung 3, which does not imply free-running instruction-fetch coverage or boot coverage of `0x3ffffff0`. `commits` empty until the landing commit. Stage entries name `pass1_20261023/` and `pass2_20261023/`. This pass's roster: GLM 5.3 and DeepSeek fired on the compact packet, Grok 4.7 on this full packet, Gemini 4 Argon not fired (transport), Fable 5.1 held, and agy, kimi, minimax, and Opus not fired. The commit that lands the fix is a later stage.
+
+(d) Header and gate comment, beyond F5-F8.
+
+P13. "DATED PREDICTIONS ... UNTIL THE TABLE RUNS" is the freeze-time status. The table has run and matched. Leave the frozen bytes, and say so in the CHANGELOG. If the header is already being edited for F5-F7, update that sentence in the same edit.
+
+P14. F9. The gate comment at `gate_arm.sh` (the `#570` block) says a refused access — a device claims it and returns 0 with the cpu still running — records the bus error in the faulting side's CMMU. That subject includes a CMMU-less cpu, which gets no write. Add "when that side's CMMU exists." The header already carries A8's disclaimers; the gate line should not contradict them.
+
+The MANIFEST lines at `check_probe_wiring.py:3225-3232` match `#568`'s two classes. "27 of 27 measurements as predicted" stays true only if "predicted" includes BUILD_SPEC Q18 for L22. Qualify it.
+
+(e) These are L4 if the records assert them wrongly. None is a floor breach by itself. A claimed measurement or number that was not made is L4 (R2). Writing "(a): by construction" is L4. Writing "the boot exercised the fix" or attributing the `100670946` instruction delta is L4. Writing "upstream's placement" again is L4. Copying a `SCORES.txt` `measured:` symptom cut at 60 characters as the full class is L4 (P11); the leg files hold the full `M88K_BUSERR_SYMPTOM` line. Calling L22's red set "PRETABLE section 5 as amended" is L4 (P5): that set is not in PRETABLE, and section 2 still says no leg deletes the case. The prediction is BUILDER_QUESTIONS Q18 and BUILD_SPEC section 11 Q18, both dated before the leg in the packet's mtime table; I did not open those files. Committing `table1_20261023/staged/gate_arm.sh` under a live `.sh` suffix departs from Q19 (P12). Rename it to `.sh.txt` or leave it out. The checker's domain is `.py` only, so the suffix does not make a false wiring failure. The wiring comment at `:3222-3224` says the frozen drivers are `*.py.txt` / `*.sh.txt`.
+
+## Q4 — standing license
+
+F4 above is the extra product fact: IDR init stores make "only PFSR and PFAR" false. Separately, `memory_m88k.c:383-384` stores the sibling PFSR with no NULL test. That writer is not in this diff. On mvme187 and luna-88k the two CMMUs are installed as a pair (`dev_mvme187.c:136-149`; luna attaches both per cpu), and a NULL selected CMMU returns at `memory_m88k.c:131-132` before the store. Not a `#570` defect.
+
+`dma[0] = addr & ~0x3` (`cpu_m88k_instr_loadstore.c:131`) while PFAR gets the unmasked `orig_paddr`. The route rows want `addr & ~3` and the PFAR rows want the byte address. Those quantities meet on every address this probe uses. They diverge on a byte access, which is AA1.
+
+Premises P1-P15, as checked: P1 misleading (F1); P2 the in-file citation is owed and the five are filed (F2); P3 the header sentence is false and the product sentence is a sufficient presence warrant (F5); P4 the count is on the wrong set (F3); P5 a records correction, prediction not re-read from BUILD_SPEC; P6 a clause-(e) line is owed (F7); P7 claim "reached login:" and the unattributed delta only; P8 cite the probe artifacts, and do not use the clause-(c) form for (a); P9 the NULL check is now licensed by L8 and L8b; P10 label it predicted (F6); P11 do not quote the 60-character cut as the class; P12 rename or omit the staged `.sh`; P13 a records note, or fix it in the same header edit; P14 qualify the gate sentence (F9); P15 a no-row sentence, not a new row (F8).

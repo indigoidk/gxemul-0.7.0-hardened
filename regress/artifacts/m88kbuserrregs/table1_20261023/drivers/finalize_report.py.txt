@@ -1,0 +1,34 @@
+#!/usr/bin/env python3
+"""T36 / #570: fill BUILD_REPORT.draft.md's placeholders from the measured artifacts and write BUILD_REPORT.md.
+usage: finalize_report.py <draft> <scores_rows.txt> <table1 dir>"""
+import io
+import os
+import sys
+
+draft, rowsf, T1 = sys.argv[1], sys.argv[2], sys.argv[3]
+t = io.open(draft, encoding="utf-8").read()
+rows = io.open(rowsf, encoding="utf-8").read().strip().splitlines()
+INST = {"L1": "rev1/24", "L3/w24": "rev1/24", "L4/w24": "rev1/24"}
+tab = ["| leg | score | instrument / N | artifact | vs PRETABLE |", "|---|---|---|---|---|"]
+for r in rows:
+    _, leg, score, art, _e = [c.strip() for c in r.split("|")]
+    tab.append("| %s | %s | %s | `%s` | MATCH |" % (leg, score, INST.get(leg, "rev2/31"), art))
+tab.append("| L5b | no sentinel | rev2/31 | `L5b_absent.out` | MATCH |")
+tab.append("| L20 | not run (= L4, Q13) | -- | -- | -- |")
+gates = ("GATE 14 (`gate_arm.sh`, `run.sh 14`, build/gxemul `931e69fa`, LOGDIR /tmp/gxt36/gatelogs14): **PASS, 1310 "
+         "checks, 0 FAIL, REGRESS_PASS**, wall 7974 s; the #570 block **31/31** (all 31 per-row checks, controls, SYMPTOM "
+         "absent, sentinel once); the **#568 pin 38/38**.  GATE 11 (`gate_m88k_rounding.sh`, `run.sh 11`): **PASS, 111 "
+         "checks**, wall 247 s.  `grep 3ffffff0` over regress/*.py and regress/*.sh: no committed probe or gate at HEAD; "
+         "the only working-tree hits are this round's probe and the new gate-14 comment")
+clr = io.open(os.path.join(T1, "CLEARANCE_final.out"), encoding="utf-8").read().strip().splitlines()
+clr = "```\n" + "\n".join(l for l in clr if l.startswith("  /") or l.startswith("  leg")) + "\n```\n" + \
+      ("Re-run at 01:36 after both gates (`CLEARANCE_final.out`), identical to the 23:14 run (`CLEARANCE.out`).  est/ is "
+       "a source tree: part 2 N/A.  build/'s five peer files are md5-identical before and after (`prop_build.out`).")
+t = t.replace("GATE_RESULTS_PLACEHOLDER", gates)
+t = t.replace("SCORES_TABLE_PLACEHOLDER", "\n".join(tab) + "\n\nPer-leg red rows, predicted sets and reasons: `SCORES.txt`.")
+t = t.replace("CLEARANCE_PLACEHOLDER", clr)
+t = t.replace("# T36 / round #570 (m88kbuserrregs) -- BUILD_REPORT.md (the builder, Opus 5.5, 2026-10-23)",
+              "# T36 / round #570 (m88kbuserrregs) -- BUILD_REPORT.md (the builder, Opus 5.5, 2026-10-23/24)")
+assert "PLACEHOLDER" not in t
+io.open(os.path.join(T1, "BUILD_REPORT.md"), "w", encoding="ascii", newline="\n").write(t)
+print("BUILD_REPORT.md written, %d lines" % t.count("\n"))

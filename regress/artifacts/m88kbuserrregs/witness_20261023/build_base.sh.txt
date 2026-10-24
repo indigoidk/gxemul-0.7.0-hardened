@@ -1,0 +1,50 @@
+#!/bin/bash
+# T36 pre-fix baseline build, WSL Gentoo, scratch clone /tmp/gxt36/base.
+# Never writes into GXEMUL-SEC, build/, est/ or build-asan/.  Foreground; one build.
+set -u
+SRC=/mnt/c/DocumentNoSnc/CC/GXEMUL/build
+SEC=/mnt/c/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC
+SP=/mnt/c/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/t36
+B=/tmp/gxt36/base
+echo "BUILD_BASE_START $(date '+%F %T')"
+rm -rf /tmp/gxt36
+mkdir -p /tmp/gxt36
+cp -a "$SRC" "$B" || { echo "COPY FAILED"; exit 9; }
+echo "copied $SRC -> $B"
+
+echo "== restore HEAD 66920157 blobs over the five files the SEC working tree carries uncommitted =="
+for f in src/cpus/cpu_alpha_palcode.c src/devices/dev_lca.c src/devices/dev_pcc2.c src/devices/dev_sh4.c \
+         src/include/thirdparty/mvme_pcctworeg.h; do
+    cp "$SP/headblobs/$f" "$B/$f"
+    if cmp -s "$SP/headblobs/$f" "$B/$f"; then r=HEAD-BLOB; else r=MISMATCH; fi
+    echo "  $f  $r  md5=$(md5sum < "$B/$f" | cut -c1-32)"
+done
+
+echo "== cmp the three files the round will edit, clone vs GXEMUL-SEC (== HEAD, checked git-side) =="
+for f in src/cpus/memory_rw.c src/devices/dev_luna88k.c src/devices/dev_m8820x.c; do
+    if cmp -s "$B/$f" "$SEC/$f"; then r=CLEAN; else r=DIFFERS; fi
+    echo "  $f  $r  md5=$(md5sum < "$B/$f" | cut -c1-32)"
+done
+
+echo "== clean: src/cpus generated tables + tools + objects (make clean there), every other .o, the binary =="
+( cd "$B/src/cpus" && make clean > /tmp/gxt36/cpus_clean.log 2>&1; echo "  cpus make clean rc=$?" )
+find "$B/src" -name '*.o' -delete
+rm -f "$B/gxemul"
+echo "  objects left: $(find "$B/src" -name '*.o' | wc -l)   tmp_*.c left in cpus: $(ls "$B"/src/cpus/tmp_*.c 2>/dev/null | wc -l)"
+
+echo "== build (make -j8, foreground) =="
+cd "$B" || exit 9
+make -j8 > /tmp/gxt36/make.log 2>&1
+rc=$?
+echo "  MAKE_RC=$rc"
+cp /tmp/gxt36/make.log "$SP/make_base.log"
+echo "  errors in log: $(grep -c ' error' /tmp/gxt36/make.log)   warnings: $(grep -c 'warning:' /tmp/gxt36/make.log)"
+echo "  objects built: $(find "$B/src" -name '*.o' | wc -l)"
+ls -la --time-style=full-iso "$B/gxemul" 2>&1 | sed 's/^/  /'
+for f in src/cpus/memory_rw.c src/devices/dev_luna88k.c src/devices/dev_m8820x.c src/cpus/tmp_m88k_loadstore.c \
+         src/devices/dev_pcc2.c; do
+    if [ "$B/gxemul" -nt "$B/$f" ]; then r=FRESH; else r=STALE-OR-ABSENT; fi
+    echo "  [ gxemul -nt $f ] -> $r"
+done
+md5sum "$B/gxemul" | sed 's/^/  /'
+echo "BUILD_BASE_DONE $(date '+%F %T')"

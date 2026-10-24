@@ -290,13 +290,13 @@ DEVICE_ACCESS(m8820x)
 			/*  #433: ignoring a guest write to SSR corrupts nothing the model
 			    maintains -- but the first version of this comment gave a WRONG
 			    REASON, saying SSR is "written by the MODEL".  Measured: NOTHING
-			    in the tree ever writes reg[CMMU_SSR]; the model writes only PFSR
-			    and PFAR (memory_m88k.c:382-405).  The right reason is stronger:
-			    SSR reads as zero, V-bit clear, so DROPPING the write is what makes
-			    the command arm's own argument true -- if a guest could store here
-			    it could set the V bit, and a dropped PROBE would then read back a
-			    plausible-looking VALID translation instead of a deterministic
-			    miss.  The two decisions are coupled, and row D10 pins them.  */
+			    in the tree ever writes reg[CMMU_SSR]; the model's FAULT PATHS write only PFSR
+			    and PFAR (memory_m88k.c:382-405 and, since #570, memory_rw.c's refused-device
+			    arm).  The right reason is stronger: SSR reads as zero, V-bit clear, so
+			    DROPPING the write is what makes the command arm's own argument true --
+			    if a guest could store here it could set the V bit, and a dropped PROBE
+			    would then read back a plausible-looking VALID translation instead of a
+			    deterministic miss.  The two decisions are coupled, and row D10 pins them.  */
 			m8820x_unimplemented(d, "write to CMMU_SSR");
 		}
 		break;
@@ -323,14 +323,14 @@ DEVICE_ACCESS(m8820x)
 	 *    PFSR, PFAR   no translation consumer at all.  m88k_translate_v2p never reads
 	 *                 them; they are status OUTPUTS.  The strongest evidence in the
 	 *                 round is that THE MODEL ITSELF already relies on this: the fault
-	 *                 path writes PFSR (memory_m88k.c:382-384, dev_luna88k.c:614) and
-	 *                 PFAR (memory_m88k.c:399,405 -- TWO DISCRETE LINES, and the file has
-	 *                 to be named again: a bare ":399-405" after a dev_luna88k.c citation
-	 *                 reads as dev_luna88k.c:399-405, which is a keyboard scancode switch)
-	 *                 DIRECTLY through reg[], with no purge, ~10^5
-	 *                 times per boot -- against 2 guest writes per boot through this
-	 *                 handler.  If a PFSR write owed a purge the model would already
-	 *                 be wrong, five orders of magnitude more often than here.
+	 *                 path writes PFSR (memory_m88k.c:382-384) and PFAR (memory_m88k.c:399,405 --
+	 *                 TWO DISCRETE LINES, the file named again: a bare ":399-405" once read as a
+	 *                 dev_luna88k.c keyboard scancode switch) DIRECTLY through reg[], with no
+	 *                 purge, ~10^5 times per boot (memory_m88k.c:382-405's translation-fault writer
+	 *                 alone) -- against 2 guest writes per boot through this handler.  #570's
+	 *                 refused-device arm (memory_rw.c) also writes both directly with no purge; its
+	 *                 frequency was NOT measured.  If a PFSR write owed a purge the model would
+	 *                 already be wrong, five orders of magnitude more often than here.
 	 *    SAR          IS read -- at dev_m8820x.c:110, as the address operand of an SCR
 	 *                 flush command.  So "nothing reads it" would be wrong.  What is
 	 *                 true is that its only reader is that command, and THAT ARM DOES
@@ -358,7 +358,7 @@ DEVICE_ACCESS(m8820x)
 	 *  reg[] is exactly M8820X_LENGTH/4 words and relative_addr is bounded by
 	 *  M8820X_LENGTH at registration, so the computed index cannot reach batc[] or
 	 *  patc_*[]; and the only code that iterates the cmmu[] POINTER ARRAY
-	 *  (cpu_m88k.c:354-355) touches batc[] and patc_*[] and never reg[] -- not "the
+	 *  (cpu_m88k.c:358-359) touches batc[] and patc_*[] and never reg[] -- not "the
 	 *  only code that iterates a CMMU", since PATC and BATC are iterated elsewhere.
 	 *
 	 *  NOT FOLDED IN, filed instead: a SAPR/UAPR write does not invalidate the guest's
@@ -450,11 +450,11 @@ DEVICE_ACCESS(m8820x)
 		 *  
 		 *  AN EARLIER VERSION OF THIS SENTENCE ALSO CLAIMED the guest's PFSR reads
 		 *  would return zero, and a pass-2 seat showed that is FALSE: the fault path
-		 *  writes PFSR DIRECTLY through reg[] at memory_m88k.c:382-384, never through
-		 *  this handler, so dropping the handler's store would not touch it at all.
-		 *  The SAR consequence stands on its own; the PFSR one was reasoning by
-		 *  analogy from the register beside it.  Removing a purge and removing a
-		 *  store are different changes and only the first is argued for here.
+		 *  writes PFSR DIRECTLY through reg[] at memory_m88k.c:382-384 (and, since #570, in
+		 *  memory_rw.c's refused-device arm), never through this handler, so dropping its
+		 *  store would not touch it at all.  The SAR consequence stands on its own; the PFSR
+		 *  one was reasoning by analogy from the register beside it.  Removing a purge and
+		 *  removing a store are different changes and only the first is argued for here.
 		 */
 		if (writeflag == MEM_WRITE)
 			regs[relative_addr / sizeof(uint32_t)] = idata;
@@ -495,15 +495,15 @@ DEVICE_ACCESS(m8820x)
 		 *  exit(1), so an ordinary guest LOAD of an unmodelled register terminated the
 		 *  host process -- measured at 1007 of 1024 offsets on a read.
 		 *
-		 *  The MMU objection to continuing does not apply here, and that is a measured
-		 *  fact rather than a hope: every register the emulator's own translation
-		 *  consults -- SAPR and UAPR read at memory_m88k.c:135,137, PFSR and PFAR
-		 *  written at :382-405 -- is a HANDLED case label above.  Nothing reaching this
-		 *  arm can alter what the emulator translates.  The defined-but-unhandled
-		 *  registers are all cache diagnostics (CDP0-3, CTP0-3, and the 88204-only
-		 *  CSSP1-3) against a model that has no cache -- and the neighbouring CSSP0 arm
-		 *  ALREADY answers exactly this way, silently, on a path a real boot exercises
-		 *  1024 times.  Continuing here is the same policy, said out loud once.
+		 *  The MMU objection to continuing does not apply here, and that is a measured fact
+		 *  rather than a hope: every register the emulator's own translation consults --
+		 *  SAPR and UAPR read at memory_m88k.c:135,137, PFSR and PFAR written at :382-405
+		 *  and, since #570, in memory_rw.c's refused-device arm -- is a HANDLED case label
+		 *  above.  Nothing reaching this arm can alter what the emulator translates.  The
+		 *  defined-but-unhandled registers are all cache diagnostics (CDP0-3, CTP0-3, and
+		 *  the 88204-only CSSP1-3) against a model that has no cache -- and the neighbouring
+		 *  CSSP0 arm ALREADY answers exactly this way, silently, on a path a real boot
+		 *  exercises 1024 times.  Continuing here is the same policy, said out loud once.
 		 *
 		 *  On a read the caller gets the regs[] value fetched above, which is zero for
 		 *  anything never stored; a write is dropped rather than stored, because

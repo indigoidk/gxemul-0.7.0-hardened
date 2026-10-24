@@ -1,0 +1,38 @@
+#!/bin/bash
+# T36 / #570 builder -- section 5.5: put the four FIXED product files (from GXEMUL-SEC) into the work tree, rebuild,
+# prove freshness and zero warnings, cmp against SEC, and compare every object with the pre-edit hashes.
+# Foreground, one build.  Writes only /tmp/gxt36/work, /tmp/gxt36/work_*.log and this scratch dir.
+set -u
+SEC=/mnt/c/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC
+SP=/mnt/c/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/t36/build
+W=/tmp/gxt36/work
+FILES="src/cpus/memory_rw.c src/cpus/cpu_m88k.c src/devices/dev_luna88k.c src/devices/dev_m8820x.c"
+echo "BUILD_WORK_FIXED_START $(date '+%F %T %z')"
+[ -e "$W/.MUTANT" ] && { echo "work tree carries a .MUTANT sentinel: $(cat "$W/.MUTANT") -- refusing"; exit 9; }
+for f in $FILES; do
+    cp "$SEC/$f" "$W/$f"
+    if cmp -s "$SEC/$f" "$W/$f"; then r=CLEAN; else r=DIFFERS; fi
+    echo "  copied $f  cmp vs SEC: $r  md5=$(md5sum < "$W/$f" | cut -c1-32)"
+done
+rm -f "$W"/src/cpus/*.o "$W/gxemul"
+echo "  removed src/cpus/*.o and the binary; objects left: $(find "$W/src" -name '*.o' | wc -l)"
+cd "$W" || exit 9
+make -j8 > /tmp/gxt36/work_fixed_make.log 2>&1
+rc=$?
+echo "  MAKE_RC=$rc (not the freshness test)"
+cp /tmp/gxt36/work_fixed_make.log "$SP/work_fixed_make.log"
+echo "  error lines: $(grep -c ' error' /tmp/gxt36/work_fixed_make.log)   'warning:' lines: $(grep -c 'warning:' /tmp/gxt36/work_fixed_make.log)"
+grep -n 'warning:' /tmp/gxt36/work_fixed_make.log | head -5 | sed 's/^/    /'
+echo "  compiled in this build (cc -c lines naming a source): $(grep -c -- ' -c ' /tmp/gxt36/work_fixed_make.log)"
+ls -la --time-style=full-iso "$W/gxemul" 2>&1 | sed 's/^/  /'
+for f in $FILES; do
+    if [ "$W/gxemul" -nt "$W/$f" ]; then r=FRESH; else r=STALE-OR-ABSENT; fi
+    echo "  [ gxemul -nt $f ] -> $r"
+done
+md5sum "$W/gxemul" | sed 's/^/  /'
+bash "$SP/obj_md5.sh" "$W" "$SP/objmd5_work_after.txt" > /dev/null
+echo "== object compare, pre-edit (unmodified HEAD build) vs fixed build =="
+join -1 2 -2 2 <(sort -k2 "$SP/objmd5_work_before.txt") <(sort -k2 "$SP/objmd5_work_after.txt") \
+    | awk '{ if ($2 == $3) same++; else { diff++; print "  CHANGED " $1 } } END { print "  identical: " same "   changed: " diff }'
+grep -E 'dev_m8820x\.o' "$SP/objmd5_work_before.txt" "$SP/objmd5_work_after.txt" | sed 's/^/  /'
+echo "BUILD_WORK_FIXED_DONE $(date '+%F %T %z')"

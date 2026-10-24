@@ -1,0 +1,174 @@
+#!/usr/bin/env python3
+"""T36 / #570 builder: apply the four-file repair to GXEMUL-SEC (exact-once replacements, LF preserved).
+Refuses (exit 1, nothing written for that file) if any old text is not found exactly once, or if
+dev_m8820x.c's line count would change (its DEVINIT's CHECK_ALLOCATION embeds __LINE__, so a comment-only
+edit must keep the line count for the object to stay byte-identical -- BUILD_SPEC section 11, Q22).
+usage: apply_fix570.py <GXEMUL-SEC root>"""
+import io
+import os
+import sys
+
+ROOT = sys.argv[1]
+T = "\t"
+
+
+def lines(*xs):
+    return "\n".join(xs) + "\n"
+
+
+EDITS = {}
+
+# ---------------------------------------------------------------- src/cpus/cpu_m88k.c (A6)
+EDITS["src/cpus/cpu_m88k.c"] = [(
+    lines('#include "thirdparty/m8820x_pte.h"',
+          '#include "thirdparty/m88k_dmt.h"'),
+    lines('#include "thirdparty/m8820x_pte.h"',
+          '/*  #570: memory_rw.c\'s m88k refused-device arm, compiled into this unit through',
+          '    tmp_m88k_tail.c, uses CMMU_PFSR, CMMU_PFAR and CMMU_PFSR_BERROR, which are',
+          '    defined only in m8820x.h; upstream adds the same include to this file.  */',
+          '#include "thirdparty/m8820x.h"',
+          '#include "thirdparty/m88k_dmt.h"'),
+)]
+
+# ---------------------------------------------------------------- src/cpus/memory_rw.c (A1-A4)
+I5 = T * 5
+I6 = T * 6
+I7 = T * 7
+EDITS["src/cpus/memory_rw.c"] = [(
+    lines("#ifdef MEM_M88K",
+          I5 + "/*  TODO: This is enough for",
+          I5 + "    OpenBSD/mvme88k's badaddr()",
+          I5 + "    implementation... but the",
+          I5 + "    faulting address should probably",
+          I5 + "    be included somewhere too!  */",
+          I5 + "m88k_exception(cpu, cache == CACHE_INSTRUCTION"),
+    lines("#ifdef MEM_M88K",
+          I5 + "/*  #570: record the bus error in the",
+          I5 + "    faulting side's CMMU first: PFSR =",
+          I5 + "    BERROR << 16 (the field OpenBSD/mvme88k's",
+          I5 + "    trap.c extracts) and PFAR = orig_paddr,",
+          I5 + "    the PHYSICAL address saved before paddr",
+          I5 + "    was made device-relative.  cmmu[0] is the",
+          I5 + "    instruction CMMU, cmmu[1] the data CMMU",
+          I5 + "    (memory_m88k.c's index); the other CMMU",
+          I5 + "    is not written.  A cpu without a CMMU",
+          I5 + "    gets no write and still takes the",
+          I5 + "    exception.  NO_EXCEPTIONS callers (the",
+          I5 + "    debugger) never get here: the test above",
+          I5 + "    keeps them out.  */",
+          I5 + "{",
+          I6 + "struct m8820x_cmmu *cmmu =",
+          I6 + "    cpu->cd.m88k.cmmu[cache ==",
+          I6 + "    CACHE_INSTRUCTION ? 0 : 1];",
+          I6 + "if (cmmu != NULL) {",
+          I7 + "cmmu->reg[CMMU_PFSR] =",
+          I7 + "    CMMU_PFSR_BERROR << 16;",
+          I7 + "cmmu->reg[CMMU_PFAR] =",
+          I7 + "    (uint32_t) orig_paddr;",
+          I6 + "}",
+          I5 + "}",
+          I5 + "m88k_exception(cpu, cache == CACHE_INSTRUCTION"),
+)]
+
+# ---------------------------------------------------------------- src/devices/dev_luna88k.c (A5)
+EDITS["src/devices/dev_luna88k.c"] = [(
+    lines(T + "case 0x3ffffff0:",
+          T * 2 + "/*  Accessed by OpenBSD/luna88k to trigger an illegal address  */",
+          T * 2 + "cpu->cd.m88k.cmmu[1]->reg[CMMU_PFSR] = CMMU_PFSR_BERROR << 16;",
+          T * 2 + "break;"),
+    lines(T + "case 0x3ffffff0:",
+          T * 2 + "/*  Accessed by OpenBSD/luna88k to trigger an illegal address.",
+          T * 2 + "    #570: refuse it.  memory_rw.c's refused-device arm then",
+          T * 2 + "    raises the access exception and writes PFSR and PFAR (for a",
+          T * 2 + "    load or store, in the data CMMU); this case used to write",
+          T * 2 + "    cmmu[1]'s PFSR only and serve 0.  The case is kept: without",
+          T * 2 + "    it the access would reach default:, which stops the cpu.  */",
+          T * 2 + "return 0;"),
+)]
+
+# ---------------------------------------------------------------- src/devices/dev_m8820x.c (A7, comment-only)
+C3 = T * 3 + "    "           # the SSR comment's continuation indent
+B1 = T + " *                 "  # the #435 block's table indent
+B2 = T * 2 + " *  "             # the PFSR/PFAR arm's and the default arm's comment indent
+EDITS["src/devices/dev_m8820x.c"] = [
+    (lines(C3 + "in the tree ever writes reg[CMMU_SSR]; the model writes only PFSR",
+           C3 + "and PFAR (memory_m88k.c:382-405).  The right reason is stronger:",
+           C3 + "SSR reads as zero, V-bit clear, so DROPPING the write is what makes",
+           C3 + "the command arm's own argument true -- if a guest could store here",
+           C3 + "it could set the V bit, and a dropped PROBE would then read back a",
+           C3 + "plausible-looking VALID translation instead of a deterministic",
+           C3 + "miss.  The two decisions are coupled, and row D10 pins them.  */"),
+     lines(C3 + "in the tree ever writes reg[CMMU_SSR]; the model writes only PFSR and",
+           C3 + "PFAR (memory_m88k.c:382-405 and, since #570, memory_rw.c's refused-device",
+           C3 + "arm).  The right reason is stronger: SSR reads as zero, V-bit clear, so",
+           C3 + "DROPPING the write is what makes the command arm's own argument true --",
+           C3 + "if a guest could store here it could set the V bit, and a dropped PROBE",
+           C3 + "would then read back a plausible-looking VALID translation instead of a",
+           C3 + "deterministic miss.  The two decisions are coupled, and row D10 pins them.  */")),
+    (lines(B1 + "path writes PFSR (memory_m88k.c:382-384, dev_luna88k.c:614) and",
+           B1 + "PFAR (memory_m88k.c:399,405 -- TWO DISCRETE LINES, and the file has",
+           B1 + "to be named again: a bare \":399-405\" after a dev_luna88k.c citation",
+           B1 + "reads as dev_luna88k.c:399-405, which is a keyboard scancode switch)"),
+     lines(B1 + "path writes PFSR (memory_m88k.c:382-384; #570: and memory_rw.c's arm -- no",
+           B1 + "longer dev_luna88k.c) and PFAR (memory_m88k.c:399,405 -- TWO DISCRETE LINES,",
+           B1 + "the file named again because a bare \":399-405\" after a dev_luna88k.c",
+           B1 + "citation read as a keyboard scancode switch; #570: and memory_rw.c's arm)")),
+    (lines(B2 + "writes PFSR DIRECTLY through reg[] at memory_m88k.c:382-384, never through",
+           B2 + "this handler, so dropping the handler's store would not touch it at all.",
+           B2 + "The SAR consequence stands on its own; the PFSR one was reasoning by",
+           B2 + "analogy from the register beside it.  Removing a purge and removing a",
+           B2 + "store are different changes and only the first is argued for here."),
+     lines(B2 + "writes PFSR DIRECTLY through reg[] at memory_m88k.c:382-384 (and, since #570, in",
+           B2 + "memory_rw.c's refused-device arm), never through this handler, so dropping its",
+           B2 + "store would not touch it at all.  The SAR consequence stands on its own; the PFSR",
+           B2 + "one was reasoning by analogy from the register beside it.  Removing a purge and",
+           B2 + "removing a store are different changes and only the first is argued for here.")),
+    (lines(B2 + "The MMU objection to continuing does not apply here, and that is a measured",
+           B2 + "fact rather than a hope: every register the emulator's own translation",
+           B2 + "consults -- SAPR and UAPR read at memory_m88k.c:135,137, PFSR and PFAR",
+           B2 + "written at :382-405 -- is a HANDLED case label above.  Nothing reaching this",
+           B2 + "arm can alter what the emulator translates.  The defined-but-unhandled",
+           B2 + "registers are all cache diagnostics (CDP0-3, CTP0-3, and the 88204-only",
+           B2 + "CSSP1-3) against a model that has no cache -- and the neighbouring CSSP0 arm",
+           B2 + "ALREADY answers exactly this way, silently, on a path a real boot exercises",
+           B2 + "1024 times.  Continuing here is the same policy, said out loud once."),
+     lines(B2 + "The MMU objection to continuing does not apply here, and that is a measured fact",
+           B2 + "rather than a hope: every register the emulator's own translation consults --",
+           B2 + "SAPR and UAPR read at memory_m88k.c:135,137, PFSR and PFAR written at :382-405",
+           B2 + "and, since #570, in memory_rw.c's refused-device arm -- is a HANDLED case label",
+           B2 + "above.  Nothing reaching this arm can alter what the emulator translates.  The",
+           B2 + "defined-but-unhandled registers are all cache diagnostics (CDP0-3, CTP0-3, and",
+           B2 + "the 88204-only CSSP1-3) against a model that has no cache -- and the neighbouring",
+           B2 + "CSSP0 arm ALREADY answers exactly this way, silently, on a path a real boot",
+           B2 + "exercises 1024 times.  Continuing here is the same policy, said out loud once.")),
+]
+
+rc = 0
+for rel, edits in EDITS.items():
+    p = os.path.join(ROOT, rel)
+    with io.open(p, "r", encoding="latin-1", newline="") as f:
+        src = f.read()
+    if "\r" in src:
+        print("REFUSE %s: CR characters present" % rel)
+        rc = 1
+        continue
+    new = src
+    ok = True
+    for old, rep in edits:
+        n = new.count(old)
+        if n != 1:
+            print("REFUSE %s: old text found %d times (want 1): %r" % (rel, n, old[:70]))
+            ok = False
+            break
+        new = new.replace(old, rep)
+    if ok and rel.endswith("dev_m8820x.c") and new.count("\n") != src.count("\n"):
+        print("REFUSE %s: line count would change %d -> %d" % (rel, src.count("\n"), new.count("\n")))
+        ok = False
+    if not ok:
+        rc = 1
+        continue
+    with io.open(p, "w", encoding="latin-1", newline="") as f:
+        f.write(new)
+    print("EDITED %-28s lines %d -> %d, %d edit(s)" % (rel, src.count("\n"), new.count("\n"), len(edits)))
+print("APPLY_FIX570_DONE rc=%d" % rc)
+sys.exit(rc)

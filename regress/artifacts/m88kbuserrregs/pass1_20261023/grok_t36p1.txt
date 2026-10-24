@@ -1,0 +1,167 @@
+The brief is truncated mid-premise. I will read the rest of the packet, then check the design against the tree rather than ratifying it.The packet’s design questions turn on a few premises I can check in the tree: whether the repair compiles, which accesses reach the arm, and which detector cells are actually reachable. I’ll read those sites next.The review is settled. I am checking the exact question wording so the verdict lines match the brief, then I will write the answer.VERDICT: READY WITH CHANGES -- the ruled repair is the right one, but it does not compile until `cpu_m88k.c` includes `m8820x.h`, and the contract, the comment records, the dead-run score, and the gate home have to be corrected before the edit.
+Q1: Repair stands: PFSR `0x00030000`, PFAR = unmasked `orig_paddr`, NULL around the two writes only, LUNA `return 0` with the case kept; `cpu_m88k.c` joins the edit set. Q2: The 24 rows close the diff once instruction, NULL, `no_exceptions`, VA≠PA, LUNA store, and sub-word are clause (e); an exit-1 stub scores 1/24 with `CONTROL=FAIL`, not 0/24. Q3: Detector is the witness probe moved to `regress/m88k_buserr_probe.py`, gated in gate 14 on the dummy LUNA image, pinned like `#568`. Q4: File R1 and R2 without blocking T36; leave R3 as a board question.
+
+None of S1–S15 or S17–S19 is false. S16 is true, and it is the change: the arm is compiled inside `cpu_m88k.c`, which does not include the header that defines the macros the repair uses. The witness’s three-file list omits that file.
+
+## Q1 — the repair
+
+**(a) CMMU selection.** READ. `cache == CACHE_INSTRUCTION ? 0 : 1` matches `memory_m88k.c:112` and the device comments (S6). Callers that can reach the arm on these machines:
+
+- Guest data `ld`/`st`/`xmem`, including `.usr`: `CACHE_DATA` or `CACHE_DATA | MEMORY_USER_ACCESS`. The mask `CACHE_FLAGS_MASK` (0x3) leaves `CACHE_DATA` (0), so index 1.
+- Instruction fetch (`cpu_m88k_instr.c:2989–2990`) and the single-step pre-read (`cpu_dyntrans.c:287–288`): `CACHE_INSTRUCTION` (1), so index 0.
+- Debugger examines and the disassembler look-behind pair `CACHE_NONE` or `CACHE_INSTRUCTION` with `NO_EXCEPTIONS`. The arm’s own guard (`memory_rw.c:603`) rejects them before the selector runs.
+
+No caller that reaches the arm is misrouted. `CACHE_NONE` is not a separate reachable cell: every bare `CACHE_NONE` that can run here is paired with `NO_EXCEPTIONS`, and `dev_ether.c`’s bare `CACHE_NONE` is test-machine DMA into RAM, not a refusing device access. On luna-88k, `ncpus > 4` is `exit(1)` (`machine_luna88k.c:103–106`); cpus 0–3 each get both CMMUs (`dev_luna88k.c:934–965`, `:1074–1077`). The arm writes the faulting cpu’s `cmmu[]`. `dev_m8820x.c:250–251` serves `d->cpu_nr` of the device the guest addresses. Those agree when the guest reads its own CMMU. The witness is cpu 0 only; `-n 2..4` stays NOT CLAIMED.
+
+**(b) The two values.** READ for the encoding; the low two bits are NOT CHECKABLE from a local primary source. PFSR = `CMMU_PFSR_BERROR << 16` = `3 << 16` = `0x00030000` (`m8820x.h:123–125`). That is the field OpenBSD tests with `(pfsr >> 16) & 7`. A raw `3` fails it: `(3 >> 16) & 7` is 0. PFAR = `(uint32_t)orig_paddr`, the physical address saved at `memory_rw.c:437` before `:494` makes `paddr` device-relative (S1). **P2:** write it unmasked. Warrant: upstream `4e3e72b1` stores `orig_paddr` with no mask, and the MC88200 User’s Manual, 2nd edition (not on disk; manuals.plus excerpts) says a bus-error PFAR holds the physical M-bus address of the transaction, while write-protection “destroys” PFAR, which is what this tree already does at `memory_m88k.c:399`. The P-bus presents A31–A2 plus byte enables. The retrieved excerpts have no PFAR bit diagram, so whether bits 1:0 are forced 0 is NOT CHECKABLE. Masking would be an extra invention. Every witness access is a word at a word-aligned address, so no row distinguishes the two. A sub-word row is clause (e), disclosed, not owed.
+
+**(c) NULL scope.** READ. **P4 holds.** The check wraps only the two stores. `m88k_exception`, the `!no_exceptions` guard, the `debug()` line, and `return MEMORY_ACCESS_FAILED` stay outside it. Nothing in the ruled design moves them (Q1(d)).
+
+No guest-reachable claimed refusal on a running CPU with a NULL `cmmu[]` slot exists on the default in-tree machines. MVME187 attaches both CMMUs only to `bootstrap_cpu` (`dev_mvme187.c:136–156`); `emul.c` starts that CPU and `machine_mvme88k.c` does not start a secondary. `-n 2` creates CPU 1 with NULL slots and does not run it. LUNA attaches both CMMUs to every CPU it starts. The 88110 machines and mvme188 attach none; barem88k, mvme188, and mvme197 install no devices. testm88k’s only `return 0` is `dev_fb.c:719–721`, and `#182` keeps the mapped length equal to `framebuffer_size` (`dev_fb.c:190–212`), so a claimed access cannot reach it. `dev_fbctrl`’s own access returns 1.
+
+The NULL check is licensed by transferred warrant (upstream r6577(e), and the same test at `memory_m88k.c:131–132`), not by a measured guest PFSR delta (R13). Removing it, or moving `m88k_exception` inside it, reds no row: both CMMUs exist on mvme187 and luna-88k. Disclose it. Do not row it. It is a host NULL dereference only if some later machine both runs a NULL-cmmu CPU and hits a claimed refusal.
+
+**(d) Exception unchanged.** READ. The vector expression, the guard, the `debug()` line, and the failure return stay. The design adds two stores and a NULL test in front of the existing call.
+
+**(e) LUNA return path.** READ. **P10.** `case 0x3ffffff0:` becomes `return 0;` and the PFSR store at `:626` is deleted. The case stays. Deleting it falls into `default:` (`:909–924`), which sets `cpu->running = 0`, and `memory_rw.c:591–592` then returns before the arm. `return 0` skips the common tail (`:927–930`), which only writes the already-zeroed read buffer. The load handler does not consume that buffer on failure (`cpu_m88k_instr_loadstore.c:189–195`).
+
+Post-fix, a data load at exactly `0x3ffffff0`: the case does not clear `cpu->running`, so `:591–592` does not fire; `res` is forced from 0 to −1 (`:595–596`); the selector takes `cmmu[1]`; both registers are written; vector 3 is raised; the function returns `MEMORY_ACCESS_FAILED`. A store at that address takes the same metadata and the same vector; the case does not look at `writeflag`, and the stored data is discarded. An instruction fetch selects `cmmu[0]` and raises vector 2, then R1 stops the CPU before a guest handler runs. Any width whose start address is exactly `0x3ffffff0` hits the case; `0x3ffffff1` hits `default:` and stops the CPU. Direction is already pinned on mvme187 by `ust`. A LUNA store row is clause (e).
+
+**(f) The build.** READ. **P1 is right, and it is load-bearing.** `tmp_m88k_tail.c:38–40` defines `MEM_M88K` and `#include`s `memory_rw.c` into `cpu_m88k.c`. `CMMU_PFSR`, `CMMU_PFAR`, and `CMMU_PFSR_BERROR` exist only in `thirdparty/m8820x.h`. That header is included by `memory_m88k.c`, `dev_m8820x.c`, `dev_luna88k.c`, and `dev_mvme187.c`, and by nothing under `src/cpus/`. `memory_m88k.c` is a separate object (`Makefile.skel:128–129`). As specified, the repair does not compile in the m88k translation unit.
+
+Place the include in `cpu_m88k.c`, after the existing `#include "thirdparty/m8820x_pte.h"` (`cpu_m88k.c:53`). Do not put it in `tmp_m88k_tail.c`: that file is generated (`Makefile.skel:140–141`). Order matters because `m8820x.h`’s `NBSG` uses `PDT_BITS` and `PG_BITS` from `m8820x_pte.h`. The header’s own `struct m8820x_cmmu` is inside `#if 0`; the live struct is `cpu_m88k.h:234–240`, and `reg[]` is 1024 `uint32_t`s, so index 67 (`0x10c / 4`) is in range. No token in `src/cpus/` uses `BATC8`, `BATC9`, `NBSG`, `INST_CMMU`, `DATA_CMMU`, `MAX_CMMUS`, or `CMMU_PFSR`/`CMMU_PFAR`. `m8820x_pte.h`’s `CACHE_INH`/`CACHE_WT`/`CACHE_GLOBAL`/`CACHE_MASK` are distinct from `memory.h`’s `CACHE_*`. No collision. `-Wall -Wextra -Wshadow` has no `-Wconversion`, so a bare `uint64_t` store into `uint32_t` would not warn; keep Grok’s `(uint32_t)` cast anyway.
+
+`cpu_m88k.c` joins the edit set and the S17 clearance. It is not in `tools/est_divergence.txt` and is byte-identical in `est/` (C0 part 5). The witness baseline’s three-file list is wrong.
+
+**(g) Records.** READ. **P9: yes, in this diff.** After the fix these sentences are false:
+
+- `dev_m8820x.c:293–294` — “model writes only PFSR and PFAR (`memory_m88k.c:382–405`)”.
+- `:325–327` — the fault-path citation, which already points at `dev_luna88k.c:614`. The write on HEAD is `:626`.
+- `:500–501` — “PFSR and PFAR written at `:382–405`”.
+- `:453` — “never through this handler” stays true (the guest store arm is not the writer). “Only at `memory_m88k.c`” becomes false, because `memory_rw.c` will also write `reg[]`.
+
+Replace the TODO at `memory_rw.c:615–619` with the write it asked for. `dev_m8820x.c` is a comment-only site. Do not change its store or purge behavior. Four product files: `memory_rw.c`, `dev_luna88k.c`, `cpu_m88k.c`, `dev_m8820x.c`. All four propagate to `est/`.
+
+**(h) What the contract may claim.** DERIVED from S3, the witness corrections, and the caller census. A claimed-and-refused data access on mvme187 — the three `unreadable` windows and VME population 1, and any other device that returns 0 while the CPU keeps running — writes data-CMMU PFSR `0x00030000` and PFAR equal to the physical address, and raises data access. The LUNA probe address returns failure through that arm: exception, both registers, and the access is no longer served as 0. On HEAD the LUNA half already writes PFSR (`luna pfsr` is green). The pre-fix LUNA symptom is the missing exception, the served 0, and the missing PFAR.
+
+The CHANGELOG and the probe contract must also say: an unclaimed physical address still takes `memory_rw.c:662–713` (zeros, no exception, no CMMU write); on luna-88k every other device `return 0` still stops the CPU before the arm; a free-running instruction-fetch refusal writes `cmmu[0]` only if it reaches the arm, and R1 then stops the CPU before a guest handler runs; population-2 VME declines stay declines; the 88110 machines have no CMMUs and no refusing devices. Do not claim that every 88K bus error now carries PFSR and PFAR.
+
+**(i) Sibling and boot.** READ for the guest; the rig image’s actual read of `0x3ffffff0` is NOT CHECKABLE (no luna88k OpenBSD tree on disk).
+
+**P3: `kept` is the right want.** Hardware and upstream update one CMMU. The translation path’s sibling clear (`memory_m88k.c:383–384`) is a different writer and this round does not copy it. OpenBSD 2.2’s user path (`trap.c:405–411`) skips `vm_fault` when either `ipfsr` or `dpfsr` has field 3. Once the faulting side is BERROR, the sibling value cannot flip that condition. The kernel data path (`:326–336`) branches only on `dpfsr`. The kernel instruction path (`:255–262`) prints only `ipfsr`. `eh.S:1009–1018` snapshots both registers into the frame; `trap.c` zeros the frame copy, not the CMMU register. Nothing under `sys/arch/mvme88k` reads `CMMU_PFAR` (define only, `m882xx.h:50`). `badaddr` never reads PFSR. Leave the four `icmmu` wants as `kept`.
+
+**P8: the round owes one before/after boot-to-`login:` on the luna rig.** HEAD serves a load at `0x3ffffff0` as 0 and raises nothing. The fix raises vector 3. In-file and upstream comments say OpenBSD/luna88k probes that address. Whether the rig image does, and how it recovers, is not established. That run is gate 7 (`gate_ab.sh`), part of the full battery, not a new targeted-gate dependency and not a detector row. Record it as measured or explicitly unmeasured. If the boot fails, stop. It does not change the LUNA disposition. The contract should say boot compatibility is unmeasured until that run.
+
+**(j) LUNA option set.** READ. The four named members are the real menu, and FAULT is available on M88K. (2) is the ruling and the right choice: one writer, exception and both registers, case kept so `default:` does not stop the CPU.
+
+Two unnamed members, both rejected. Installing `dev_unreadable` at that single address is this tree’s FAULT idiom (`machine_mvme88k.c` uses it three times), and it is the same outcome as (2) by another device. The address sits inside the luna88k register window, and the ruling keeps the case. Raising `m88k_exception` inside the case and then `return 1` splits the writer: the access succeeds and a second exception, or a success with a locally delivered fault, becomes possible. Do not port `DEV_RAM_FAIL` or the beyond-RAM hunk.
+
+## Q2 — the rows
+
+**(a)** DERIVED. Clause (a) is the witness: 8 of 24 red, `M88K_BUSERR_SYMPTOM=PRESENT 8/8`, controls green, on unmodified mvme187 and luna-88k. The post-fix half of witness clause (i) is owed and not yet measured: the same script all green, `SYMPTOM=ABSENT`. The formatter has already produced `0x30000` (`luna pfsr` on HEAD) and the `v3/0x1002a/<addr>` route. It has never produced a PFAR want from a model write. Nothing else is owed for (a). The P8 boot is a compatibility measurement, not part of (a).
+
+**(b)** DERIVED, and the prediction is right. No mutant has been built; reinstatement is the round’s measurement.
+
+- Arm reverted, LUNA `return 0` kept: `uld`/`ust`/`vme` `pfsr` and `pfar` read seeds, and so do `luna pfsr` and `luna pfar`. `luna route` stays green, because the unrepaired arm still raises vector 3. Of the eight symptom names, seven are STALE and `luna route` is FIXED, so the symptom line is MIXED and the probe exits 1.
+- Case reverted to the HEAD body, arm fixed: `luna route` is the fall-through with r4 = 0, which the STALE classifier matches exactly (`fall/0x0/0x0/r4=0x0`). `luna pfar` is the seed. `luna pfsr` stays green because the case writes `0x30000` itself. The six generic rows stay green.
+
+No row goes red for a reason other than the site that was put back. Neither reinstatement alone reds all eight symptom names. Together they cover both sites, and each site alone fails the detector. `luna pfsr` is not one of the eight symptom names; it is the extra row that goes red when the arm is gone and the case no longer writes.
+
+**(c)** READ from the witness probe (`run_piped`, `prereq_bad`, `row`, the score at lines 580–605). This is a memory-path round. The null medium is an absent binary or a non-emulator, not a build with a device removed. Removing `dev_m8820x` or a refusing device would not delete the arm, and a missing device is ambiguous. The gate pin does not exist yet, so the record form cannot yet be “by construction via a gate pin.” After gate 14 lands, the form is: by construction, via the sentinel, `CONTROL=OK`, and the 24/24 equality pins; the leg is not run.
+
+Do not record 0/24. Predicted from the source:
+
+- Absent binary: `subprocess.run` raises `FileNotFoundError` before any row. No sentinel. Python exits 1. A gate that requires `M88K_BUSERR_PROBE_DONE` (the `#568` shape: run with `|| true`, then a missing sentinel is red) goes red. There is no row score.
+- A non-emulator that exits 1 with empty stdout: `neg apparatus` passes, because its want is exactly `exit1/absent` (`hx(None)` is `"absent"`). The other 23 rows fail (`died:exit1`, or `unasm` `0/115`). `RESULT=1/24`, `CONTROL=FAIL`, `SYMPTOM=MIXED` (those got-strings are neither the seed nor the want, so OTHER). Exit 1. Sentinel is printed.
+- A non-emulator that exits 0: `neg apparatus` also fails (`exit0/absent`). `RESULT=0/24`, `CONTROL=FAIL`, `SYMPTOM=MIXED`. Sentinel is printed.
+
+The one green row on an exit-1 stub is the apparatus negative, which is built to pass when there is no machine. `#568`’s null was 5/38 for the same reason. The run is still red if the gate pins 24/24, `CONTROL=OK`, `SYMPTOM=ABSENT`, and the sentinel. All four fail on every dead shape above. Do not use `check_min`.
+
+**(d)** Section 7, checked against the code. READ. Axes 1–4, 8–12, 14, and 15 match. Corrections:
+
+- Axis 5’s set side is real at the guard and false as a body cell. See P6 below. Clause (e), and the witness’s discharge sentence is wrong.
+- Axis 6’s instruction label is clause (e) under P5, not a floor hole. `CACHE_NONE` is not a third label that reaches the repair.
+- Axis 7’s NULL cell has no guest-reachable producer on the default machines (P4). Clause (e).
+- Axis 10: device-relative `paddr` is the body-adjacent swap, because `debug()` reads it. The three offsets 0x10, 0x90, and 0x0 pin it. `vaddr` is not a field the m88k arm reads (P7).
+- Axis 13: the arm does not test width. Sampled word, aligned. Clause (e) (P2).
+
+The drafter’s floor formula over-includes {instruction}, {NULL}, and {`no_exceptions` set}. Those are not jointly reachable repair-path cells under R7. The floor the witness actually holds is {refused, `no_exceptions` clear, data, non-NULL} at two refusing devices plus the LUNA label, and {served}. That is the floor. Do not add rows for P4, P5, P6, P7, P10, or P2.
+
+**P5, choose (ii).** Disclose the instruction label under clause (e). Do not row it through a stepped session (i): that channel is the debugger pre-read (R2), and a later fix of R2 removes it, so the row would go green for the wrong reason. Do not sequence R1 first (iii). The selector’s data label is killed by `uld`/`ust`/`vme`/`luna` (a write to `cmmu[0]` only leaves the data seeds). The weaken-to-always-data mutant has no free-running guest channel, because R1 stops the CPU before the handler. That is a disclosure, not a floor breach.
+
+**P6.** The witness’s NOT CLAIMED sentence is false. A `NO_EXCEPTIONS` access to a `DM_DEFAULT` device does not call the device (`:584–585`). `res` is then forced to −1, the guard at `:603` fails because `!no_exceptions` is false, and `do_return_ok` returns success with a zeroed buffer and no PFSR/PFAR write. The repair body is not entered. Debugger examines do this. It is the complement of a guard the diff does not add, so under R4/R7 it is clause (e), not a floor row. `ok regs` already pins the served conjunct. Guest instructions cannot set `NO_EXCEPTIONS`. Correct the contract sentence. Do not ship “never reach a DM_DEFAULT handler.” For a device with `DM_READS_HAVE_NO_SIDE_EFFECTS` the device is called and the guard still skips the writes. The two axes are not independent for the repair body. The scored sessions’ step pre-read fetches the instruction in RAM, not the refusing data address.
+
+**P7.** A VA≠PA row is not owed. PFAR := `vaddr` is outside the (d) operand-swap set: the m88k arm does not read `vaddr`. Keep it unrowed, and correct the contract. The current reason understates reachability. APR invalid, or a NULL CMMU, returns physical = virtual before BATC (`memory_m88k.c:130–144`). The hardwired data-CMMU BATC8 `0xfff7ffb5` and BATC9 `0xfffffff5` are identity maps of `0xfff00000` and `0xfff80000`, so they do not separate the probe’s windows. The guest can separate them: a SAPR/UAPR store (`dev_m8820x.c:367–434`) sets `APR_V`, and a BWP store (`:463–486`) writes `batc[i]`. A BATC hit returns before the page walk, so no page table is required. One concrete map: BATC `0x0007ff81` sends VA `0x00046010` to PA `0xfff46010`. The sessions leave the APR invalid, which is why `vaddr` and `orig_paddr` agree. The session shape can program a BATC. Astra’s “translated VA differing from PA” stays a disclosed observation, not a floor row.
+
+**(e) Named variants.** DERIVED from the probe header and the wants. Each of these reds an existing row:
+
+| Variant | Row that goes red |
+|---|---|
+| Data access writes `cmmu[0]` | `uld`/`ust`/`vme`/`luna` `pfsr` and `pfar` (data seeds remain). `icmmu` also reds if the write lands on the instruction CMMU. |
+| Raw 3 instead of `3 << 16` | Every refused `pfsr` row. `(3 >> 16) & 7` is 0. The data seed’s field is 2, so a stale seed cannot pass as BERROR either. |
+| PFAR = device-relative `paddr` | `uld pfar` (0x10 vs `0xfff46010`), `vme pfar` (0x90 vs `0xfff40090`), `luna pfar` (0 vs `0x3ffffff0`). This is the (d) swap. The at-base LUNA access still reds. |
+| PFSR only | The three `pfar` rows and `luna pfar`. |
+| Both CMMUs, or sibling cleared to SUCCESS | The four `icmmu` rows. SUCCESS << 16 is 0, which is not either instruction seed. |
+| Conditioned on `writeflag == MEM_READ` | `ust pfsr`, `ust pfar`. |
+| Keyed to one device, base, or length | The other device’s `pfsr`/`pfar`. |
+| Exception dropped | `uld`/`ust`/`vme`/`luna` `route`. |
+| Writes placed outside `res <= 0` | `ok regs`. |
+| Guard widened to `res <= 1` | `ok route`. |
+| LUNA case left returning 1 | `luna route`. `luna pfar` reds too if the old body is kept. `luna pfsr` stays green. |
+| LUNA write deleted and the case still returns 1 | `luna route`, `luna pfsr` (the seed), `luna pfar`. Generic rows stay green. |
+
+These red no row. Disclosed debt, not a floor breach: NULL check removed, or the exception moved inside it (P4); PFAR := `vaddr` (P7); a sub-word address in PFAR (P2); the `no_exceptions` conjunct dropped (P6), once the false reason is corrected.
+
+**(f) Accept controls.** **P11:** `ok route` and `ok regs` are sufficient for this diff, which does not edit `dev_vme.c`. `ok regs` is the right channel for “a served access writes no fault metadata”: the four seeds survive the cased VBR load at `0xfff40088`. Population-2 staying a decline is `#568`’s 38-row detector. Do not add a population-2 row here, and do not add a `PFSR == 0` assertion to `vme_default_probe.py`. **P12:** no translation-fault row. The diff does not touch `memory_m88k.c`. Rows are owed per variant of this diff.
+
+**(g) Anchor.** DERIVED. One absolute PFAR row would satisfy R11. Three exist, at relative offsets 0x10, 0x90, and 0x0, and the probe uses literals rather than the device’s base symbol. If every address in one device shifted one word, the matching `pfar` row reds: the want stays the old absolute, and a repair that followed the device would write the new one. For the LUNA case the relative offset is already 0, so a one-word shift of the base changes the absolute want while a device-relative repair still writes 0 when the probe follows the case, or misses the device if the probe keeps the old absolute. PFSR is pinned by the constant `0x00030000`, not by position. The sibling is pinned by the four exact seeds.
+
+**(h) D2.** READ. The only relational compare the fix depends on is the existing `res <= 0`, after `res == 0` has been mapped to −1. The value 0 never arrives at that compare, so `<= 0` and `< 0` are the same test. Served edge: `ok route` / `ok regs` (`res >= 1`). Refused edge: every refused row (`res == -1`). Discharged. The window tests (`paddr >= base && paddr < end`) are not compares this diff introduces. The added tests are an equality (`cache == CACHE_INSTRUCTION`) and a NULL test, not a relational bound. Do not demand an edge row for `<=` versus `<`.
+
+**(i) Channels.** DERIVED. All 24 named channels can vary under their named mutants, except the instruction-side and NULL-side mutants the header already puts in NOT CLAIMED.
+
+`luna pfsr` is green on HEAD because the case writes `0x30000`. After the fix the same value comes from the arm. The named variant that reds `luna pfsr` while every generic `pfsr` row stays green is: delete the case’s write and leave `return 1`. The arm never runs, so the generic rows stay green, and `luna pfsr` reads the seed. `luna route` and `luna pfar` also red. A raw-3 or `cmmu[0]` mutant reds `luna pfsr` and the generic `pfsr` rows together. The unique channel is real.
+
+Route rows, all green on HEAD except `luna route`:
+
+- `uld` / `ust` / `vme` `route`: exception dropped. They do not catch “exception moved inside the NULL check.”
+- `luna route`: case left returning 1.
+- `ok route`: guard widened from `res <= 0` to `res <= 1`.
+
+`ok regs` catches writes outside the guard. The `icmmu` rows catch a write to both CMMUs and a sibling clear.
+
+**(j)** Closed over the diff once P4, P5, P6, P7, P10, and P2 are disclosed under (e) with the corrected reasons. One ask-again after a clean table (R15). Do not grow the row set for those cells at pass 1.
+
+## Q3 — shape and gate
+
+**(a)** Move `regress/artifacts/m88kbuserrregs/witness_20261023/m88k_buserr_probe.py` to `regress/m88k_buserr_probe.py` as the detector base. Before it moves, the header must: correct the `no_exceptions` sentence (P6); correct the VA≠PA sentence so it does not say the session cannot translate (P7); keep the `icmmu` wants as `kept` (P3); keep sub-word, NULL, instruction fetch, unclaimed, multi-cpu, xmem, the 88110, and the OpenBSD reader as NOT CLAIMED; name the four-file edit set, including `cpu_m88k.c` and the comment-only `dev_m8820x.c`; state the claim limit from Q1(h); and not record a flat null-medium 0/24. Post-fix, the same script is expected 24/24 with `SYMPTOM=ABSENT`. That half is still owed.
+
+**(b)** Gate 14 (`gate_arm.sh`), dummy LUNA image, not gate 11. Gate 14 needs only the binary and already hosts the mvme187 rung-3 probes and `#568`, whose session shape this probe copied. The default LUNA shape is a 4-byte dummy raw image. The rig shape was measured identical (`WITNESS_headbin_rig.out`) and stays a witness option. Cost, already in the gate: if `arm_flags_probe.py` prints no result line, `gate_arm.sh:100–106` skips the whole gate, including a probe placed after it. Place this probe in the `#568` position, after that first probe. Gate 11 `need_file`s `liveimage-luna88k-raw-20250518.img` and `boot` and skips the whole gate without them (`gate_m88k_rounding.sh:32–39`), which would also skip the mvme187 half. The P8 boot-to-login is a one-shot full-battery check, not a dependency of this gate.
+
+**(c)** Yes. One `CLASS_DETECTOR` line for `m88k_buserr_probe.py`. If the witness directory is committed with its `.py`, one `CLASS_WITNESS` line for `artifacts/m88kbuserrregs/witness_20261023/m88k_buserr_probe.py`, on the `#568` precedent (`check_probe_wiring.py` near lines 2878–2882). The checker’s domain is every tracked or staged `regress/**/*.py`. READ of that witness directory: the only `.py` is `m88k_buserr_probe.py`. Exploration and drivers are `*.py.txt` / `*.sh.txt` and are invisible to it. Confirm that again at commit time. Untracked, the file reds nothing today. The probe has no `pty.fork`, `forkpty`, or `drive_guest` token, so moving it should not move a gate-6 pin. That last point is a grep of the probe plus the gate-6 patterns in the packet, not a run of `derive_hygiene_pins.sh`.
+
+**(d)** Use `#568`’s gate-14 form, not `#569`’s `grep -ow`. These names contain spaces (`neg apparatus`, `mv devsig`). Hold the name list in the gate. Each row exactly once via `count "$LOG" "^$v  .*ok$"`. The probe’s `%-16s` and the 15-character assert exist so that pattern matches. Pin by literal equality: rows run = 24, rows correct = 24, red = 0, `M88K_BUSERR_CONTROL=OK` count 1, `M88K_BUSERR_SYMPTOM=ABSENT` count 1, sentinel `M88K_BUSERR_PROBE_DONE`. The six controls are already inside the 24 identity checks. Also pin `CONTROL=OK` on its own, so a renamed control fails loud. The probe already treats a missing control name as fail (`_status.get(n, False)`). Do not use `check_min`. A separate control census beyond that is not owed.
+
+**(e)** The ledger witness term `probe:regress/artifacts/m88kbuserrregs/witness_20261023/m88k_buserr_probe.py` (rung 3) is the right shape, matching `#568`. It is the pre-fix RED witness. It is untracked until the round commits it. Clause (i)’s post-fix green run is not that file’s current content. The gated copy at `regress/m88k_buserr_probe.py` is the detector, not the witness term.
+
+**(f)** `vme_default_probe.py` stays 38/38 and its pin does not move. Do not add PFSR or PFAR reads to it. Population-1 metadata lives in this probe’s `vme` cell, which is how Astra’s “metadata checks for actual faults” is met without editing `#568`. The P8 luna boot is measured separately, or recorded unmeasured.
+
+## Q4 — standing licence
+
+**R1: file it. Do not merge it into T36, and do not block this round on it.** Free-running, a refused m88k instruction fetch takes vector 2 and then `cpu_m88k_instr.c:2989–2993` reaches the dyntrans `bad:` tail (`cpu_dyntrans.c:1983–2014`), which sets `cpu->running = 0` on the faulting CPU (`:2014`) and requests the debugger (`:2002`, `:2021`) before the handler’s first instruction. “All machines stopped” in the transcript is the one-CPU consequence. It was not measured on a multi-cpu machine. The tail is generic dyntrans, so other architectures may do the same. Committed probes that key on the same message (`mips_subnorm_probe.py`, `ppc_halt_probe.py`, `sh_halt_probe.py`, and the alpha-ifetch artifacts) use it as a halt oracle on other ISAs. They do not depend on an m88k instruction-side PFSR. Severity is the project’s MED-class wrong-result: guest recovery never runs. It is a prerequisite for a free-running observation of the `cmmu[0]` cell. It is not a prerequisite for this round’s data-side fix. The ruling already orders T36 before later 88K fault rounds.
+
+**R2: file it. It does not block T36.** The single-step disassembly pre-read is `CACHE_INSTRUCTION` without `NO_EXCEPTIONS` (`cpu_dyntrans.c:287–290`). When the debugger steps onto a refusing device, its own read raises the exception and changes guest-visible vector, PFSR, and PFAR state. A grep of `regress/**/*.py` found the “could not read the instruction” / “UNIMPLEMENTED instruction” strings used as halt oracles on MIPS, PowerPC, and SH, and in alpha-ifetch artifacts, plus this witness’s unscored INFO line. No committed top-level m88k probe’s rows were found to require that pre-read to raise. That is not a proof that none exist if a probe jumps the PC onto a refusing device. `vme_default_probe.py` steps data accesses whose instructions sit in RAM. R2 contaminates any stepped instruction-fetch row, which is why P5 refuses option (i). It does not contaminate the data rows.
+
+**R3: do not file it in this round.** An unclaimed physical address is a different path (`memory_rw.c:662–713`, with the upstream TODOs at `:682` and `:709–710`): a read is served zeros, a write is dropped, no exception, no CMMU write, before and after this fix. The witness measured that (INFO `unclaimed`). `vmesbcp2.txt` lists local bus timeout, VME BERR*, and bus-error processing in its contents. The VSBchip2 LBTE text around line 3480 describes the VSBchip2 recording LST status when it is local-bus master. It does not say whether an unclaimed CPU-master local access asserts BERR*. Whether real MVME187 or LUNA hardware bus-errors there stays a board question. The CHANGELOG must not claim this fix covers it.
+
+**What the drafter got wrong, loudly.**
+
+1. S16 / P1. The repair as written does not compile. `cpu_m88k.c` is in the edit set. The witness’s three-file list is incomplete.
+2. P6’s discharge sentence is false. A `NO_EXCEPTIONS` access reaches the guard and does not enter the body. Clause (e), with that reason.
+3. Section 7’s floor includes the instruction label, the NULL cell, and `no_exceptions` set. Those are clause (e). The witness’s rows are the floor.
+4. P7 understates reachability. A programmed BATC separates VA and PA. The hardwired BATC8/BATC9 entries do not. The APR check precedes BATC.
+5. The LUNA half on HEAD already writes PFSR. Do not describe it as “PFSR not written.”
+6. The comment citation `dev_luna88k.c:614` is already stale. The write is at `:626`.
+7. Do not record the null medium as 0/24. An exit-1 empty stub is 1/24 with `CONTROL=FAIL`. An absent binary prints no sentinel.
+
+S1–S4, S6, S8–S11, S13–S15, and S17–S19 stand. S5’s caller list is right, and the selector does not misroute any caller that reaches the arm. S7’s “no reachable NULL cell on an unmodified running guest” holds for the default machines, with the `-n 2` caveat that the extra MVME187 CPU exists and is not started. S12 stands: no MC88200 manual is on disk. The web excerpts support the unmasked PFAR choice and do not settle bits 1:0.

@@ -1,0 +1,40 @@
+#!/bin/bash
+# T36: run the witness probe against the HEAD-66920157 scratch build, both LUNA shapes, with every session's
+# raw debugger transcript preserved.  Foreground.  Writes only /tmp/gxt36 and the round's artifacts dir.
+set -u
+B=/tmp/gxt36/base
+ART=/mnt/c/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/m88kbuserrregs/witness_20261023
+PROBE=$ART/m88k_buserr_probe.py
+IMAGES=/mnt/c/DocumentNoSnc/CC/GXEMUL/_images
+cd /tmp || exit 9
+echo "RUN_WITNESS_START $(date '+%F %T')"
+echo "binary: $(md5sum "$B/gxemul")"
+echo "probe:  $(md5sum "$PROBE")"
+if [ "$B/gxemul" -nt "$B/src/cpus/memory_rw.c" ] && [ "$B/gxemul" -nt "$B/src/devices/dev_luna88k.c" ] \
+   && [ "$B/gxemul" -nt "$B/src/devices/dev_m8820x.c" ]; then echo "freshness: gxemul -nt all three round files"; \
+   else echo "freshness: STALE"; fi
+rm -rf /tmp/gxt36/tr_dummy /tmp/gxt36/tr_rig
+mkdir -p /tmp/gxt36/tr_dummy /tmp/gxt36/tr_rig
+M88K_BUSERR_DUMP=/tmp/gxt36/tr_dummy python3 -u "$PROBE" "$B/gxemul" HEAD-66920157 \
+    > /tmp/gxt36/WITNESS_headbin.out 2>&1
+rc=$?
+echo "dummy-shape PROBE_RC=$rc  last line: $(tail -1 /tmp/gxt36/WITNESS_headbin.out)"
+M88K_BUSERR_DUMP=/tmp/gxt36/tr_rig python3 -u "$PROBE" "$B/gxemul" HEAD-66920157-rig "$IMAGES" \
+    > /tmp/gxt36/WITNESS_headbin_rig.out 2>&1
+rc2=$?
+echo "rig-shape   PROBE_RC=$rc2  last line: $(tail -1 /tmp/gxt36/WITNESS_headbin_rig.out)"
+cp /tmp/gxt36/WITNESS_headbin.out /tmp/gxt36/WITNESS_headbin_rig.out "$ART/"
+rm -rf "$ART/transcripts_headbin" "$ART/transcripts_headbin_rig"
+cp -r /tmp/gxt36/tr_dummy "$ART/transcripts_headbin"
+cp -r /tmp/gxt36/tr_rig "$ART/transcripts_headbin_rig"
+for f in WITNESS_headbin.out WITNESS_headbin_rig.out; do
+    if cmp -s "/tmp/gxt36/$f" "$ART/$f"; then echo "copied $f (cmp clean, $(wc -c < "$ART/$f") bytes)"; \
+    else echo "COPY MISMATCH $f"; fi
+done
+for d in tr_dummy:transcripts_headbin tr_rig:transcripts_headbin_rig; do
+    s=${d%%:*}; t=${d#*:}
+    n=$(ls /tmp/gxt36/$s | wc -l)
+    if diff -rq "/tmp/gxt36/$s" "$ART/$t" > /dev/null; then echo "copied $t ($n transcripts, diff -r clean)"; \
+    else echo "COPY MISMATCH $t"; fi
+done
+echo "RUN_WITNESS_DONE $(date '+%F %T')"

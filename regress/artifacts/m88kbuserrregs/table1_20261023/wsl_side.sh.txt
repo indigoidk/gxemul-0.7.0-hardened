@@ -1,0 +1,38 @@
+#!/bin/bash
+# T36 / #570 builder -- WSL side of BASELINE.out: md5 of the four product files in every tree, cmp against
+# GXEMUL-SEC, the WSL compiler, and `[ binary -nt <file> ]` for every binary.  READ-ONLY on every tree.
+set -u
+R=/mnt/c/DocumentNoSnc/CC/GXEMUL
+SEC=$R/GXEMUL-SEC
+FILES="src/cpus/memory_rw.c src/cpus/cpu_m88k.c src/devices/dev_luna88k.c src/devices/dev_m8820x.c"
+echo "WSL_SIDE_START $(date '+%F %T %z')"
+echo "== WSL compiler =="
+cc --version 2>&1 | head -1 | sed 's/^/  /'
+echo "  (cc resolves to: $(command -v cc) -> $(readlink -f "$(command -v cc)"))"
+echo "== md5 of the four product files per tree, and cmp against GXEMUL-SEC =="
+for t in "$SEC" "$R/est" "$R/build" "$R/build-asan" /tmp/gxsec-build /tmp/gxt36/work /tmp/gxt36/base; do
+    if [ ! -d "$t" ]; then echo "  tree $t: ABSENT"; continue; fi
+    echo "  tree $t:"
+    for f in $FILES; do
+        if [ ! -f "$t/$f" ]; then echo "    ABSENT  $f"; continue; fi
+        m=$(md5sum < "$t/$f" | cut -c1-32)
+        if [ "$t" = "$SEC" ]; then c="(the reference)"; elif cmp -s "$t/$f" "$SEC/$f"; then c="cmp CLEAN vs SEC"; else c="cmp DIFFERS vs SEC"; fi
+        echo "    $m  $f  $c"
+    done
+done
+echo "== sentinels =="
+for t in "$R/build" "$R/build-asan" /tmp/gxsec-build /tmp/gxt36/work /tmp/gxt36/base; do
+    if [ -e "$t/.MUTANT" ]; then echo "  $t/.MUTANT PRESENT: $(cat "$t/.MUTANT")"; else echo "  $t/.MUTANT absent"; fi
+done
+echo "== binaries: md5, mtime, and [ binary -nt <file> ] for the four product files =="
+for t in "$R/build" "$R/build-asan" /tmp/gxsec-build /tmp/gxt36/work /tmp/gxt36/base; do
+    b="$t/gxemul"
+    if [ ! -f "$b" ]; then echo "  $b: ABSENT"; continue; fi
+    echo "  $b  md5=$(md5sum < "$b" | cut -c1-32)  mtime=$(stat -c '%y' "$b")"
+    for f in $FILES; do
+        if [ "$b" -nt "$t/$f" ]; then r=FRESH; else r=NOT-NEWER; fi
+        echo "    [ gxemul -nt $f ] -> $r   (source mtime $(stat -c '%y' "$t/$f"))"
+    done
+done
+echo "  $R/est: source tree, part 2 N/A (no binary exists: $( [ -e "$R/est/gxemul" ] && echo 'a gxemul file IS present -- recheck' || echo 'confirmed absent'))"
+echo "WSL_SIDE_DONE $(date '+%F %T %z')"

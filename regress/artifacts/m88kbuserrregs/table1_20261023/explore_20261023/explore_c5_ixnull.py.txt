@@ -1,0 +1,115 @@
+#!/usr/bin/env python3
+"""explore_c5_ixnull.py -- T36 / #570 builder EXPLORATION, second set (not a row, not a leg, not the detector).
+
+E3  C5 (PASS1_RULINGS C5 / CHECKS #4): does a CMMU register access by a RUNNING CMMU-less cpu dereference NULL?
+    mvme187 -n 2; cpu 0 paused before it runs; cpu 1 (no CMMU) executes: ld r9,r2,0 (instruction-CMMU IDR window);
+    ld r10,r3,0 (data-CMMU IDR window); st r11,r3,4 with r11 = 0x37 (CMMU_SCR := FLUSH_SUPER_ALL, which reaches
+    m8820x_command() -- the function holding dev_m8820x.c:108, the line C5 names); or r31,r0,0x5678; br .
+    Reading (dev_m8820x.c:250, :284): the window decodes cpu_nr 0 and every dereference is of cpus[0]'s slots, so the
+    session should SURVIVE and cpu 1 should read cpu 0's IDR 0x00a90000 twice.
+E4  the instruction label x NULL CMMU joint cell: mvme187 -n 2; cpu 0 paused; cpu 1 (no CMMU), stepped, executes
+    jmp (r5) with r5 = 0xfff46010.  Reading: the step pre-read (R2) reaches memory_rw.c's arm with CACHE_INSTRUCTION
+    on a cpu whose cmmu[0] is NULL; HEAD raises vector 2 there (SXIP 0xfff46013) and the handler completes.
+Run against the HEAD-equivalent work binary.  usage: explore_c5_ixnull.py <gxemul> <dumpdir>
+"""
+import os, re, subprocess, sys, tempfile
+
+BIN, DUMP = sys.argv[1], sys.argv[2]
+_T = tempfile.mkdtemp(prefix="t36y_")
+DUMMY = os.path.join(_T, "dummy.bin")
+open(DUMMY, "wb").write(b"\0\0\0\0")
+PROMPT = "GXemul> "
+H, CODE1, RAMSCR = 0x10100, 0x10200, 0x20000
+SENT, FALL, LIVE = 0xdeadbeef, 0x1234, 0x5678
+MV_D, MV_I, UNREAD = 0xfff7f000, 0xfff77000, 0xfff46010
+
+
+def enc(op, rd, rs, imm):
+    return (op << 26) | (rd << 21) | (rs << 16) | imm
+def LD(rd, rs, o): return enc(0x05, rd, rs, o)
+def ST(rs, rb, o): return enc(0x09, rs, rb, o)
+def OR(rd, rs, i): return enc(0x16, rd, rs, i)
+def BR(frm, to): return 0xc0000000 | (((to - frm) >> 2) & 0x3ffffff)
+def JMP(r): return 0xf400c000 | r
+
+
+VEC = [(0x10, [OR(7, 0, 2), BR(0x14, H)]), (0x18, [OR(7, 0, 3), BR(0x1c, H)])]
+HND = (H, [LD(13, 3, 0x108), LD(14, 3, 0x10c), LD(15, 2, 0x108), LD(16, 2, 0x10c), OR(31, 0, LIVE), 0xc0000000])
+
+
+def place(blocks):
+    out = []
+    for at, ws in blocks:
+        for i, w in enumerate(ws):
+            out.append("put w 0x%x, 0x%08x" % (at + 4 * i, w))
+        out.append("unassemble 0x%x 0x%x" % (at, at + 4 * len(ws)))
+    return out
+
+
+def run(tag, argv, cmds):
+    inp = ("\n".join(cmds + ["quit"]) + "\n").encode()
+    try:
+        p = subprocess.run(argv, input=inp, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=90)
+        t, how = p.stdout.decode("latin-1", "replace").replace("\r", ""), \
+            ("sig%d" % -p.returncode) if p.returncode < 0 else "exit%d" % p.returncode
+    except subprocess.TimeoutExpired as e:
+        t, how = (e.output or b"").decode("latin-1", "replace"), "TIMEOUT"
+    open(os.path.join(DUMP, tag + ".txt"), "w").write("# argv: %s\n# how: %s\n%s" % (" ".join(argv), how, t))
+    return t, how
+
+
+def parts(t):
+    r = []
+    for p in t.split(PROMPT)[1:]:
+        c, _, o = p.partition("\n")
+        r.append((c.strip(), o))
+    return r
+
+
+GPR = re.compile(r"\br(\d+)\s*=\s*(0x[0-9a-fA-F]+)")
+PCR = re.compile(r"cpu(\d+):\s+pc\s+=\s+(0x[0-9a-fA-F]+)")
+CRR = re.compile(r"\b([A-Z][A-Z0-9]*)=(0x[0-9a-fA-F]+)")
+def regs(o):
+    m = PCR.search(o)
+    return (int(m.group(2), 16) if m else None), {int(a): int(b, 16) for a, b in GPR.findall(o)}
+def path(g):
+    v7, v6 = g.get(7), g.get(6)
+    return {(3, SENT): "v3", (2, SENT): "v2", (SENT, FALL): "fall"}.get((v7, v6), "odd(r6=%s,r7=%s)" % (v6, v7))
+def last(ps, c):
+    xs = [o for cc, o in ps if cc == c]
+    return xs[-1] if xs else ""
+
+
+print("EXPLORE_C5_IXNULL binary=%s" % BIN)
+base = [BIN, "-V", "-x", "-E", "mvme88k", "-e", "mvme187", "-M", "64", "-n", "2", "0x10000:%s" % DUMMY]
+
+# ---------------------------------------------------------------- E3: C5
+prog3 = (CODE1, [LD(9, 2, 0), LD(10, 3, 0), ST(11, 3, 4), OR(31, 0, LIVE), 0xc0000000])
+c1 = ["r2=0x%x" % MV_I, "r3=0x%x" % MV_D, "r11=0x37"] + ["r%d=0x%x" % (r, SENT) for r in (9, 10, 31)] + \
+     ["pc=0x%x" % CODE1]
+cmds = ["pause 0"] + place([prog3]) + ["tlbdump 1", "focus 1"] + c1 + ["focus 0", "pause 1", "step 5", "reg 1",
+        "reg 0,0"]
+t, how = run("E3_c5", base, cmds)
+ps = parts(t)
+pc1, g1 = regs(last(ps, "reg 1"))
+print("E3 how=%s  cpu1: pc=%s r9=%s r10=%s r31=%s  (cpu0's IDR is 0xa90000)  'cpu1: CMMU' lines in tlbdump 1: %d" % (
+    how, hex(pc1) if pc1 is not None else None, hex(g1.get(9, 0)), hex(g1.get(10, 0)), hex(g1.get(31, 0)),
+    last(ps, "tlbdump 1").count("cpu1: CMMU")))
+print("E3 transcript markers: 'unimplemented'=%d 'failed ]'=%d 'exception'=%d" % (
+    t.count("unimplemented"), t.count("failed ]"), t.count("exception")))
+
+# ---------------------------------------------------------------- E4: instruction label x NULL CMMU
+prog4 = (CODE1, [JMP(5), OR(6, 0, FALL), BR(CODE1 + 8, H)])
+c1 = ["r2=0x%x" % RAMSCR, "r3=0x%x" % RAMSCR, "r5=0x%x" % UNREAD] + \
+     ["r%d=0x%x" % (r, SENT) for r in (6, 7, 13, 14, 15, 16, 31)] + ["pc=0x%x" % CODE1]
+cmds = ["pause 0"] + place(VEC + [HND, prog4]) + ["tlbdump 1", "focus 1"] + c1 + ["focus 0", "pause 1", "step 9",
+        "reg 1", "reg 1,0"]
+t, how = run("E4_ixnull", base, cmds)
+ps = parts(t)
+pc1, g1 = regs(last(ps, "reg 1"))
+cr = {a: int(b, 16) for a, b in CRR.findall(last(ps, "reg 1,0"))}
+print("E4 how=%s  cpu1: pc=%s path=%s r31=%s SXIP=%s DMA0=%s  pre-read-msg=%d halt-msg=%d  'cpu1: CMMU' lines=%d" % (
+    how, hex(pc1) if pc1 is not None else None, path(g1), hex(g1.get(31, 0)), hex(cr.get("SXIP", 0)),
+    hex(cr.get("DMA0", 0)), t.count("could not read the instruction"), t.count("UNIMPLEMENTED instruction"),
+    last(ps, "tlbdump 1").count("cpu1: CMMU")))
+print("EXPLORE_C5_IXNULL_DONE")

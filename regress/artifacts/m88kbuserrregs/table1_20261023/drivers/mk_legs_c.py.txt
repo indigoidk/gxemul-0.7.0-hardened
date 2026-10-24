@@ -1,0 +1,49 @@
+#!/usr/bin/env python3
+"""T36 / #570 kill table -- variant maker, group C (the written values and targets; the LUNA case):
+L10 L11 L12 L13 L14 L15 L16 L21 L22.  Written to variants/<leg>/<basename>; anchors must match exactly once."""
+import io
+import os
+import sys
+
+SEC = "C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC"
+HERE = os.path.dirname(os.path.abspath(__file__))
+OUT = os.path.join(HERE, "variants")
+T = "\t"
+MRW, LUNA = "src/cpus/memory_rw.c", "src/devices/dev_luna88k.c"
+
+
+def rd(p):
+    with io.open(p, "r", encoding="latin-1", newline="") as f:
+        return f.read()
+
+
+def one(leg, rel, old, new):
+    src = rd(os.path.join(SEC, rel))
+    n = src.count(old)
+    if n != 1:
+        print("REFUSE %s: anchor found %d times" % (leg, n))
+        sys.exit(1)
+    d = os.path.join(OUT, leg)
+    os.makedirs(d, exist_ok=True)
+    with io.open(os.path.join(d, os.path.basename(rel)), "w", encoding="latin-1", newline="") as f:
+        f.write(src.replace(old, new))
+    print("WROTE %-4s %s" % (leg, rel))
+
+
+one("L10", MRW, T * 7 + "    CMMU_PFSR_BERROR << 16;", T * 7 + "    CMMU_PFSR_BERROR;")
+one("L11", MRW, T * 7 + "    (uint32_t) orig_paddr;", T * 7 + "    (uint32_t) paddr;")
+PFAR = T * 7 + "cmmu->reg[CMMU_PFAR] =\n" + T * 7 + "    (uint32_t) orig_paddr;\n"
+one("L12", MRW, PFAR, "")
+SIB = T * 7 + "cpu->cd.m88k.cmmu[cache == CACHE_INSTRUCTION\n" + T * 7 + "    ? 1 : 0]->reg[CMMU_PFS"
+one("L13", MRW, PFAR, PFAR + SIB + "R] = CMMU_PFSR_BERROR << 16;\n" +
+    T * 7 + "cpu->cd.m88k.cmmu[cache == CACHE_INSTRUCTION\n" + T * 7 + "    ? 1 : 0]->reg[CMMU_PFAR] = (uint32_t) orig_paddr;\n")
+one("L14", MRW, PFAR, PFAR + SIB + "R] = CMMU_PFSR_SUCCESS << 16;\n")
+NULLCK = T * 6 + "if (cmmu != NULL) {"
+one("L15", MRW, NULLCK, T * 6 + "if (cmmu != NULL && writeflag == MEM_READ) {")
+one("L16", MRW, NULLCK, T * 6 + "if (cmmu != NULL && strcmp(mem->devices[i].name, \"vme\") != 0) {")
+one("L21", LUNA, T * 2 + "return 0;\n\n" + T + "case PROM_ADDR:", T * 2 + "break;\n\n" + T + "case PROM_ADDR:")
+CASE = rd(os.path.join(SEC, LUNA))
+a = CASE.index(T + "case 0x3ffffff0:\n")
+b = CASE.index(T + "case PROM_ADDR:")
+one("L22", LUNA, CASE[a:b], "")
+print("MK_LEGS_C_DONE")

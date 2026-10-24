@@ -51,6 +51,10 @@
 #include "symbol.h"
 
 #include "thirdparty/m8820x_pte.h"
+/*  #570: memory_rw.c's m88k refused-device arm, compiled into this unit through
+    tmp_m88k_tail.c, uses CMMU_PFSR, CMMU_PFAR and CMMU_PFSR_BERROR, which are
+    defined only in m8820x.h; upstream adds the same include to this file.  */
+#include "thirdparty/m8820x.h"
 #include "thirdparty/m88k_dmt.h"
 #include "thirdparty/mvmeprom.h"
 

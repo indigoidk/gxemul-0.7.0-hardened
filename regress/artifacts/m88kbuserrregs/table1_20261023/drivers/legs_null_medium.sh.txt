@@ -1,0 +1,20 @@
+#!/bin/bash
+# T36 / #570 kill table -- clause (c), the null medium: L5 an exit-1 NON-EMULATOR in the binary's place; L5b the
+# binary ABSENT.  The FROZEN rev-2 detector, foreground.  Writes /tmp/gxt36/stub and the two table1 outputs.
+set -u
+SEC=/mnt/c/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC
+T1=$SEC/regress/artifacts/m88kbuserrregs/table1_20261023
+FROZEN=$T1/m88k_buserr_probe.rev2.frozen.py.txt
+echo "LEGS_NULL_MEDIUM_START $(date '+%F %T %z')"
+[ "$(md5sum < "$FROZEN" | cut -c1-32)" = d57c12ab7ade903946c7d80a8e153ab7 ] || { echo "FROZEN MD5 MISMATCH"; exit 9; }
+rm -rf /tmp/gxt36/stub; mkdir -p /tmp/gxt36/stub
+printf '#!/bin/sh\nexit 1\n' > /tmp/gxt36/stub/gxemul
+chmod +x /tmp/gxt36/stub/gxemul
+echo "stub: $(cat /tmp/gxt36/stub/gxemul | tr '\n' ';')  md5 $(md5sum < /tmp/gxt36/stub/gxemul | cut -c1-12)"
+cd /tmp || exit 9
+python3 -u "$FROZEN" /tmp/gxt36/stub/gxemul L5-stub > "$T1/L5_stub.out" 2>&1; rc=$?
+echo "L5  rc=$rc  $(grep -E '^M88K_BUSERR_(RESULT|CONTROL|SYMPTOM)=' "$T1/L5_stub.out" | cut -c1-60 | tr '\n' ' ') last: $(tail -1 "$T1/L5_stub.out")"
+echo "L5  green rows: $(grep -E ' ok$' "$T1/L5_stub.out" | awk '{print $1, $2}' | tr '\n' ';')"
+python3 -u "$FROZEN" /tmp/gxt36/stub/absent-gxemul L5b-absent > "$T1/L5b_absent.out" 2>&1; rc=$?
+echo "L5b rc=$rc  sentinel lines: $(grep -c '^M88K_BUSERR_PROBE_DONE' "$T1/L5b_absent.out")  rows emitted: $(grep -cE ' (ok|FAIL)$' "$T1/L5b_absent.out")  last: $(tail -1 "$T1/L5b_absent.out")"
+echo "LEGS_NULL_MEDIUM_DONE $(date '+%F %T %z')"

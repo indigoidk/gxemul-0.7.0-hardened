@@ -358,7 +358,10 @@ elif out=$(python "$SCORECHK" 2>&1); then
 	#  first written, before the review passes grew it).
 	#  RAISED 36 -> 37 ON 2026-10-21, DELIBERATELY.  One newly gated probe: vme_default_probe.py
 	#  (#568, pinned UNQUOTED in gate_arm.sh at 38 rows under the stem vme_default).
-	SCORE_CLAIMS_MANIFEST=37
+	#  RAISED 37 -> 38 ON 2026-10-24, DELIBERATELY.  One newly gated probe: m88k_buserr_probe.py
+	#  (#570, pinned UNQUOTED in gate_arm.sh at 31 rows under the stem m88k_buserr; the probe's own
+	#  docstring is checked -- its score-shaped strings were reworded in its documentation revision 2c).
+	SCORE_CLAIMS_MANIFEST=38
 	_spinned=$(printf '%s\n' "$out" | sed -n 's/^SCORE_CLAIMS_PINNED=//p')
 	if [ -z "$_spinned" ]; then
 		bad "check_score_claims printed no SCORE_CLAIMS_PINNED line -- the count cannot be pinned"

@@ -1,0 +1,69 @@
+#!/bin/bash
+# T36 / #570 kill table -- leg runner.  Run from a FROZEN copy (legs570.run-<stamp>.sh).  Foreground; legs in order.
+# usage: legs570.run-<stamp>.sh <leg>:<rel>:<tag>[:w] ...      (:w = also run the frozen 24-row witness)
+# Per leg: a cp -a of the FIXED work tree in /tmp/gxt36/legs/<leg>; the four product files cmp'd against GXEMUL-SEC
+# (the named baseline: HEAD 7fca7187 + #570's four files); a clone-local .MUTANT sentinel; the variant copied in;
+# `diff -u' (fixed vs variant) to table1_20261023/<leg>.diff (a FILE only); rm src/cpus/*.o; make; freshness by
+# [ gxemul -nt <file> ]; the FROZEN rev-2 detector -> <leg>_<tag>.out; restore by cp from SEC + cmp against SEC
+# (never against a backup); sentinel removed only after that cmp; the leg tree discarded.
+set -u
+SEC=/mnt/c/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC
+SPW=/mnt/c/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/t36/build
+T1=$SEC/regress/artifacts/m88kbuserrregs/table1_20261023
+FROZEN=$T1/m88k_buserr_probe.rev2.frozen.py.txt
+WITP=$SEC/regress/artifacts/m88kbuserrregs/witness_20261023/m88k_buserr_probe.py
+W=/tmp/gxt36/work
+FOUR="src/cpus/memory_rw.c src/cpus/cpu_m88k.c src/devices/dev_luna88k.c src/devices/dev_m8820x.c"
+echo "LEGS570_START $(date '+%F %T %z')  driver $(md5sum < "$0" | cut -c1-12)  $0"
+echo "frozen detector: $(md5sum "$FROZEN")"
+echo "frozen witness : $(md5sum "$WITP")"
+[ "$(md5sum < "$FROZEN" | cut -c1-32)" = d57c12ab7ade903946c7d80a8e153ab7 ] || { echo "FROZEN DETECTOR MD5 MISMATCH -- refusing"; exit 9; }
+[ "$(md5sum < "$WITP" | cut -c1-32)" = d59798b0383f433b191e214e7848fe49 ] || { echo "FROZEN WITNESS MD5 MISMATCH -- refusing"; exit 9; }
+for f in $FOUR; do cmp -s "$W/$f" "$SEC/$f" || { echo "WORK TREE != SEC for $f -- refusing"; exit 9; }; done
+[ "$W/gxemul" -nt "$W/src/cpus/memory_rw.c" ] || { echo "WORK BINARY NOT FRESH -- refusing"; exit 9; }
+mkdir -p /tmp/gxt36/legs /tmp/gxt36/legtr
+for spec in "$@"; do
+    IFS=: read -r LEG REL TAG WFLAG <<< "$spec"
+    L=/tmp/gxt36/legs/$LEG
+    VAR=$SPW/variants/$LEG/$(basename "$REL")
+    echo "---- $LEG ($TAG) $REL  $(date '+%T')"
+    [ -f "$VAR" ] || { echo "  NO VARIANT FILE $VAR -- leg skipped"; continue; }
+    rm -rf "$L"
+    cp -a "$W" "$L"
+    bad=0
+    for f in $FOUR; do cmp -s "$L/$f" "$SEC/$f" || { echo "  BASELINE MISMATCH $f"; bad=1; }; done
+    [ $bad -eq 0 ] || { echo "  leg skipped (baseline)"; rm -rf "$L"; continue; }
+    echo "$LEG $REL $TAG -- variant in place; restore from GXEMUL-SEC, cmp, then remove this file" > "$L/.MUTANT"
+    cp "$VAR" "$L/$REL"
+    if cmp -s "$L/$REL" "$SEC/$REL"; then echo "  VARIANT IDENTICAL TO THE FIXED FILE -- mis-built"; fi
+    diff -u "$SEC/$REL" "$L/$REL" | sed "1s#.*#--- fixed:$REL#; 2s#.*#+++ $LEG:$REL#" > "$T1/$LEG.diff"
+    echo "  variant md5 $(md5sum < "$L/$REL" | cut -c1-12)  diff: $(grep -c '^[-+][^-+]' "$T1/$LEG.diff") changed lines -> $LEG.diff"
+    ( cd "$L" && rm -f src/cpus/*.o gxemul && make -j8 > "$L/make.log" 2>&1 ); mrc=$?
+    nw=$(grep -c 'warning:' "$L/make.log"); ne=$(grep -c ' error' "$L/make.log")
+    if [ -f "$L/gxemul" ] && [ "$L/gxemul" -nt "$L/$REL" ]; then
+        echo "  build: make rc=$mrc, FRESH binary $(md5sum < "$L/gxemul" | cut -c1-12), warnings $nw, errors $ne"
+        [ "$nw" -gt 0 ] && grep 'warning:' "$L/make.log" | head -3 | sed 's/^/    /'
+        rm -rf "/tmp/gxt36/legtr/$LEG"; mkdir -p "/tmp/gxt36/legtr/$LEG"
+        ( cd /tmp && M88K_BUSERR_DUMP="/tmp/gxt36/legtr/$LEG" python3 -u "$FROZEN" "$L/gxemul" "$LEG-$TAG" \
+              > "$T1/${LEG}_${TAG}.out" 2>&1 ); prc=$?
+        echo "  detector rc=$prc  $(grep -E '^M88K_BUSERR_(RESULT|CONTROL)=' "$T1/${LEG}_${TAG}.out" | tr '\n' ' ') last: $(tail -1 "$T1/${LEG}_${TAG}.out")"
+        echo "  red: $(sed -n 's/^M88K_BUSERR_RED=//p' "$T1/${LEG}_${TAG}.out")"
+        if [ "$WFLAG" = "w" ]; then
+            ( cd /tmp && python3 -u "$WITP" "$L/gxemul" "$LEG-$TAG-witness24" > "$T1/${LEG}_${TAG}_witness24.out" 2>&1 ); wrc=$?
+            echo "  witness24 rc=$wrc  $(grep -E '^M88K_BUSERR_(RESULT|CONTROL)=' "$T1/${LEG}_${TAG}_witness24.out" | tr '\n' ' ') last: $(tail -1 "$T1/${LEG}_${TAG}_witness24.out")"
+            echo "  witness24 red: $(sed -n 's/^M88K_BUSERR_RED=//p' "$T1/${LEG}_${TAG}_witness24.out")"
+        fi
+    else
+        echo "  BUILD FAILED (make rc=$mrc, warnings $nw, errors $ne) -- a RESULT (mis-built); make.log kept"
+        cp "$L/make.log" "$T1/${LEG}_make.log"
+    fi
+    cp "$SEC/$REL" "$L/$REL"
+    if cmp -s "$L/$REL" "$SEC/$REL"; then
+        rm -f "$L/.MUTANT"
+        rm -rf "$L"
+        echo "  restored from SEC (cmp clean), sentinel removed, leg tree discarded"
+    else
+        echo "  RESTORE FAILED -- $L kept WITH its sentinel"
+    fi
+done
+echo "LEGS570_DONE $(date '+%F %T %z')"

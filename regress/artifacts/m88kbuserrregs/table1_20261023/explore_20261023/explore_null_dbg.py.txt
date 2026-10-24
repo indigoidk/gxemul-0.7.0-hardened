@@ -1,0 +1,136 @@
+#!/usr/bin/env python3
+"""explore_null_dbg.py -- T36 / #570 builder EXPLORATION (not a row, not a table leg, not the detector).
+
+Question (CHECKS_mainloop.md #2 and #10; BUILD_SPEC section 3): are the two new sessions BUILDABLE on an UNMODIFIED
+in-tree machine with the probe's existing piped-stdin idiom?
+  E1  `dbg noexc': mvme187, the `ok' program, a debugger `dump' of the unreadable window after `step 10'.
+  E2  `null surv' / `null route': mvme187 -n 2; cpu 0 paused before it runs; cpu 1 set up with `focus 1'; `tlbdump 1'
+      as the NULL premise; `pause 1'; `step 9'; `reg 1' / `reg 1,0'.
+Run against the HEAD-equivalent work binary (/tmp/gxt36/work/gxemul, md5 2efeec55...), where HEAD's arm has no CMMU
+write: E1 must show zeros / pc unchanged / fall / seeds kept, and E2 must show cpu 1 executing and taking vector 3.
+Encodings are copied from the frozen witness probe (witness_20261023/m88k_buserr_probe.py), which is not imported
+(importing it would run it).  usage: explore_null_dbg.py <gxemul> <dumpdir>
+"""
+import os, re, subprocess, sys, tempfile
+
+BIN, DUMP = sys.argv[1], sys.argv[2]
+_T = tempfile.mkdtemp(prefix="t36x_")
+DUMMY = os.path.join(_T, "dummy.bin")
+open(DUMMY, "wb").write(b"\0\0\0\0")
+PROMPT = "GXemul> "
+CODE, H, CODE1, RAMSCR = 0x10000, 0x10100, 0x10200, 0x20000
+SENT, FALL, LIVE = 0xdeadbeef, 0x1234, 0x5678
+SEEDS = (0x5a5a5a5a, 0x13572468, 0x2468ace0, 0x0badf00d)
+MV_D, MV_I, UNREAD, VME_VBR = 0xfff7f000, 0xfff77000, 0xfff46010, 0xfff40088
+
+
+def enc(op, rd, rs, imm):
+    return (op << 26) | (rd << 21) | (rs << 16) | imm
+def LD(rd, rs, o): return enc(0x05, rd, rs, o)
+def ST(rs, rb, o): return enc(0x09, rs, rb, o)
+def OR(rd, rs, i): return enc(0x16, rd, rs, i)
+def BR(frm, to): return 0xc0000000 | (((to - frm) >> 2) & 0x3ffffff)
+
+
+VEC = [(0x10, [OR(7, 0, 2), BR(0x14, H)]), (0x18, [OR(7, 0, 3), BR(0x1c, H)])]
+HND = (H, [LD(13, 3, 0x108), LD(14, 3, 0x10c), LD(15, 2, 0x108), LD(16, 2, 0x10c), OR(31, 0, LIVE), 0xc0000000])
+def CODEBLK(access):
+    return (CODE, [LD(10, 3, 0), LD(9, 2, 0), ST(20, 3, 0x108), ST(21, 3, 0x10c), ST(22, 2, 0x108), ST(23, 2, 0x10c),
+                   LD(11, 3, 0x108), LD(12, 3, 0x10c), LD(17, 2, 0x108), LD(18, 2, 0x10c), access,
+                   OR(6, 0, FALL), BR(CODE + 48, H)])
+CODE1BLK = (CODE1, [LD(4, 5, 0), OR(6, 0, FALL), BR(CODE1 + 8, H)])
+
+
+def place(blocks):
+    out = []
+    for at, ws in blocks:
+        for i, w in enumerate(ws):
+            out.append("put w 0x%x, 0x%08x" % (at + 4 * i, w))
+        out.append("unassemble 0x%x 0x%x" % (at, at + 4 * len(ws)))
+    return out
+
+
+def run(tag, argv, cmds):
+    inp = ("\n".join(cmds + ["quit"]) + "\n").encode()
+    try:
+        p = subprocess.run(argv, input=inp, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=90)
+        t, how = p.stdout.decode("latin-1", "replace").replace("\r", ""), \
+            ("sig%d" % -p.returncode) if p.returncode < 0 else "exit%d" % p.returncode
+    except subprocess.TimeoutExpired as e:
+        t, how = (e.output or b"").decode("latin-1", "replace"), "TIMEOUT"
+    open(os.path.join(DUMP, tag + ".txt"), "w").write("# argv: %s\n# how: %s\n%s" % (" ".join(argv), how, t))
+    return t, how
+
+
+def parts(t):
+    """[(command, output)] in order."""
+    r = []
+    for p in t.split(PROMPT)[1:]:
+        c, _, o = p.partition("\n")
+        r.append((c.strip(), o))
+    return r
+
+
+GPR = re.compile(r"\br(\d+)\s*=\s*(0x[0-9a-fA-F]+)")
+PCR = re.compile(r"cpu(\d+):\s+pc\s+=\s+(0x[0-9a-fA-F]+)")
+CRR = re.compile(r"\b([A-Z][A-Z0-9]*)=(0x[0-9a-fA-F]+)")
+def regs(o):
+    m = PCR.search(o)
+    return (int(m.group(2), 16) if m else None), {int(a): int(b, 16) for a, b in GPR.findall(o)}
+def path(g):
+    v7, v6 = g.get(7), g.get(6)
+    return {(3, SENT): "v3", (2, SENT): "v2", (SENT, FALL): "fall"}.get((v7, v6), "odd(r6=%s,r7=%s)" % (v6, v7))
+
+
+print("EXPLORE_NULL_DBG binary=%s" % BIN)
+base = [BIN, "-V", "-x", "-E", "mvme88k", "-e", "mvme187", "-M", "64"]
+
+# ---------------------------------------------------------------- E1: dbg noexc
+seed = ["r2=0x%x" % MV_I, "r3=0x%x" % MV_D, "r20=0x%x" % SEEDS[0], "r21=0x%x" % SEEDS[1], "r22=0x%x" % SEEDS[2],
+        "r23=0x%x" % SEEDS[3], "r5=0x%x" % VME_VBR] + ["r%d=0x%x" % (r, SENT) for r in (4, 6, 7, 9, 10, 11, 12, 13, 14,
+        15, 16, 17, 18, 31)]
+cmds = seed + place(VEC + [CODEBLK(LD(4, 5, 0)), HND]) + ["pc=0x%x" % CODE, "step 10", "dump 0x%x 0x%x" % (UNREAD,
+        UNREAD + 16), "reg", "step 9", "reg", "reg 0,0"]
+t, how = run("E1_dbg", base + ["0x%x:%s" % (CODE, DUMMY)], cmds)
+ps = parts(t)
+dump_out = [o for c, o in ps if c.startswith("dump")]
+regouts = [o for c, o in ps if c == "reg"]
+dl = dump_out[0].strip().splitlines()[0] if dump_out and dump_out[0].strip() else "(no dump output)"
+pc1, g1 = regs(regouts[0]) if regouts else (None, {})
+pc2, g2 = regs(regouts[-1]) if regouts else (None, {})
+print("E1 how=%s dump-line=[%s]" % (how, dl))
+print("E1 after dump: pc=%s r7=%s   at end: pc=%s path=%s r4=%s r31=%s d/i regs=%s seeds=%s" % (
+    hex(pc1) if pc1 is not None else None, hex(g1.get(7, 0)), hex(pc2) if pc2 is not None else None, path(g2),
+    hex(g2.get(4, 0)), hex(g2.get(31, 0)), "/".join(hex(g2.get(n, 0)) for n in (13, 14, 15, 16)),
+    "kept" if tuple(g2.get(n) for n in (13, 14, 15, 16)) == SEEDS else "CHANGED"))
+print("E1 readback before access: %s; IDR r10/r9: %s/%s" % ("/".join(hex(g2.get(n, 0)) for n in (11, 12, 17, 18)),
+      hex(g2.get(10, 0)), hex(g2.get(9, 0))))
+
+# ---------------------------------------------------------------- E2: null surv / null route
+c1 = ["r2=0x%x" % RAMSCR, "r3=0x%x" % RAMSCR, "r5=0x%x" % UNREAD] + \
+     ["r%d=0x%x" % (r, SENT) for r in (4, 6, 7, 13, 14, 15, 16, 31)] + ["pc=0x%x" % CODE1]
+cmds = ["pause 0"] + place(VEC + [HND, CODE1BLK]) + ["tlbdump 0", "tlbdump 1", "focus 1"] + c1 + ["focus 0", "reg 1",
+        "pause 1", "step 9", "reg 1", "reg 1,0", "reg 0"]
+t, how = run("E2_null", base + ["-n", "2", "0x%x:%s" % (CODE, DUMMY)], cmds)
+ps = parts(t)
+def first(pref):
+    return [o for c, o in ps if c == pref]
+tl0, tl1 = first("tlbdump 0"), first("tlbdump 1")
+print("E2 how=%s" % how)
+print("E2 pause lines: %s" % " | ".join(o.strip() for c, o in ps if c.startswith("pause")))
+print("E2 tlbdump 0: 'cpu0: CMMU' lines=%d   tlbdump 1: 'cpu1: CMMU' lines=%d (first line: %s)" % (
+    tl0[0].count("cpu0: CMMU") if tl0 else -1, tl1[0].count("cpu1: CMMU") if tl1 else -1,
+    tl1[0].strip().splitlines()[0][:60] if tl1 and tl1[0].strip() else "-"))
+r1s = first("reg 1")
+pcb, gb = regs(r1s[0]) if r1s else (None, {})
+pca, ga = regs(r1s[-1]) if r1s else (None, {})
+cr1 = {a: int(b, 16) for a, b in CRR.findall(first("reg 1,0")[0])} if first("reg 1,0") else {}
+pc0, g0 = regs(first("reg 0")[0]) if first("reg 0") else (None, {})
+print("E2 cpu1 before: pc=%s r5=%s r2=%s   after step 9: pc=%s path=%s r31=%s r4=%s  SXIP=%s DMA0=%s VBR=%s PSR=%s" % (
+    hex(pcb) if pcb is not None else None, hex(gb.get(5, 0)), hex(gb.get(2, 0)), hex(pca) if pca is not None else None,
+    path(ga), hex(ga.get(31, 0)), hex(ga.get(4, 0)), hex(cr1.get("SXIP", 0)), hex(cr1.get("DMA0", 0)),
+    hex(cr1.get("VBR", 0)), hex(cr1.get("PSR", 0))))
+print("E2 cpu0 (paused throughout): pc=%s" % (hex(pc0) if pc0 is not None else None))
+print("E2 step-trace lines prefixed 'cpu1:' = %d, 'cpu0:' = %d; device-failed lines = %d" % (
+    t.count("cpu1:\ts"), t.count("cpu0:\ts"), t.count("failed ]")))
+print("EXPLORE_NULL_DBG_DONE")

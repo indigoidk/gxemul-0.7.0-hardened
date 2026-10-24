@@ -1,0 +1,49 @@
+#!/bin/bash
+# T36 / #570 builder -- baseline control: the FROZEN witness probe (untouched, in witness_20261023/) against the
+# UNMODIFIED work binary.  Must reproduce the witness's 16/24 with the same eight reds.  Foreground.
+# Writes only /tmp/gxt36 and regress/artifacts/m88kbuserrregs/table1_20261023/.
+set -u
+W=/tmp/gxt36/work
+ART=/mnt/c/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/m88kbuserrregs
+WIT=$ART/witness_20261023
+T1=$ART/table1_20261023
+PROBE=$WIT/m88k_buserr_probe.py
+cd /tmp || exit 9
+echo "RUN_BASE_WITNESS_START $(date '+%F %T %z')"
+echo "== the witness directory's own MANIFEST.md5 (the frozen probe must still verify) =="
+( cd "$WIT" && md5sum -c MANIFEST.md5 2>&1 | sed 's/^/  /' | grep -v ': OK$'; echo "  verified OK: $(cd "$WIT" && md5sum -c MANIFEST.md5 2>/dev/null | grep -c ': OK$') of $(grep -c . "$WIT/MANIFEST.md5")" )
+echo "probe:  $(md5sum "$PROBE")   (witness: d59798b0383f433b191e214e7848fe49)"
+echo "binary: $(md5sum "$W/gxemul")   (witness base: 2efeec559ec5b3d16b200cccf4203631)"
+for f in src/cpus/memory_rw.c src/cpus/cpu_m88k.c src/devices/dev_luna88k.c src/devices/dev_m8820x.c; do
+    if [ "$W/gxemul" -nt "$W/$f" ]; then r=FRESH; else r=STALE; fi
+    echo "freshness: [ gxemul -nt $f ] -> $r"
+done
+rm -rf /tmp/gxt36/tr_work_base
+mkdir -p /tmp/gxt36/tr_work_base
+M88K_BUSERR_DUMP=/tmp/gxt36/tr_work_base python3 -u "$PROBE" "$W/gxemul" WORK-7fca7187-unmodified \
+    > /tmp/gxt36/base_witness24.out 2>&1
+rc=$?
+echo "PROBE_RC=$rc  last line: $(tail -1 /tmp/gxt36/base_witness24.out)"
+cp /tmp/gxt36/base_witness24.out "$T1/base_witness24.out"
+if cmp -s /tmp/gxt36/base_witness24.out "$T1/base_witness24.out"; then
+    echo "copied base_witness24.out (cmp clean, $(wc -c < "$T1/base_witness24.out") bytes)"; else echo "COPY MISMATCH"; fi
+rm -rf "$T1/transcripts_base_witness24"
+cp -r /tmp/gxt36/tr_work_base "$T1/transcripts_base_witness24"
+if diff -rq /tmp/gxt36/tr_work_base "$T1/transcripts_base_witness24" > /dev/null; then
+    echo "copied transcripts_base_witness24 ($(ls /tmp/gxt36/tr_work_base | wc -l) transcripts, diff -r clean)"; else echo "COPY MISMATCH transcripts"; fi
+echo "== row lines and summary lines vs the witness's WITNESS_headbin.out (label, binary path, elapsed excluded) =="
+norm() { grep -v -E '^m88kbuserrregs RUNG-3 WITNESS|^M88K_BUSERR_LABEL=|^M88K_BUSERR_ELAPSED=' "$1"; }
+if diff <(norm "$WIT/WITNESS_headbin.out") <(norm /tmp/gxt36/base_witness24.out) > /tmp/gxt36/base_witness24_vs_witness.diff; then
+    echo "  IDENTICAL: every row line, INFO line and summary line matches the witness ($(norm /tmp/gxt36/base_witness24.out | wc -l) lines compared)"
+else
+    echo "  DIFFERENT -- see diff:"; sed 's/^/    /' /tmp/gxt36/base_witness24_vs_witness.diff
+fi
+echo "== the summary lines =="
+grep -E '^M88K_BUSERR_(RESULT|CONTROL|SYMPTOM|RED)=|^M88K_BUSERR_PROBE_DONE' /tmp/gxt36/base_witness24.out | sed 's/^/  /'
+echo "== transcripts vs the witness's transcripts_headbin (the argv line names a private temp dir, so it is excluded) =="
+for f in /tmp/gxt36/tr_work_base/*.txt; do
+    b=$(basename "$f")
+    if diff <(grep -v '^# argv:' "$f") <(grep -v '^# argv:' "$WIT/transcripts_headbin/$b") > /dev/null; then r=IDENTICAL; else r=DIFFERS; fi
+    echo "  $b  $r"
+done
+echo "RUN_BASE_WITNESS_DONE $(date '+%F %T %z')"

@@ -1,0 +1,97 @@
+--- a/regress/m88k_buserr_probe.py (rev 2, md5 d57c12ab7ade903946c7d80a8e153ab7)
++++ b/regress/m88k_buserr_probe.py (rev 2b, md5 9046d77432e0e6438c93732ec0cc9827)
+@@ -1,12 +1,15 @@
+ #!/usr/bin/env python3
+-"""m88k_buserr_probe.py -- rung-3 DETECTOR for m88kbuserrregs (#570, TRIAGE.md T36): a refused m88k device access
+-records its bus error in the faulting side's CMMU (PFSR = BERROR << 16, PFAR = the physical address).
++"""m88k_buserr_probe.py -- rung-3 DETECTOR for m88kbuserrregs (#570, TRIAGE.md T36): a CLAIMED, REFUSED, unsuppressed
++m88k device access records its bus error in the faulting side's CMMU when that CMMU exists (PFSR = BERROR << 16,
++PFAR = the physical address).
+ 
+ REVISION 2 (2026-10-23), 31 rows.  Promoted from the rung-3 WITNESS (revision 1, 24 rows), which stays byte-identical
+ at regress/artifacts/m88kbuserrregs/witness_20261023/m88k_buserr_probe.py and remains the round's pre-fix witness.
+ This revision adds seven rows -- `ifetch route/pfsr/pfar/dcmmu', `dbg noexc', `null surv', `null route' -- per
+ PASS1_RULINGS.md B5a-B5c and section E, BUILD_SPEC.md sections 3, 10 and 11 (pass1_20261023/), and the PRETABLE
+ (table1_20261023/PRETABLE.out, with its AMENDMENT 1).
++Documentation revision 2b of the rev-2 detector (runtime/scoring unchanged, N = 31); measured as rev 2, md5 d57c12ab
++(table1_20261023/m88k_buserr_probe.rev2.frozen.py.txt).  2b: header sentences only, 2026-10-24 (PASS2_RULINGS D2, E).
+ 
+ DEFECT (HEAD 7fca7187, whose src/ equals 66920157's; both sites are the 0.7.0 import).  When a guest data load or
+ store reaches a device whose access function REFUSES it (returns 0 with the cpu still running), src/cpus/memory_rw.c's
+@@ -30,9 +33,10 @@
+     PFSR = CMMU_PFSR_BERROR << 16 (0x00030000) and PFAR = (uint32_t) orig_paddr (the PHYSICAL address saved before the
+     arm makes `paddr' device-relative).  The NULL check wraps the two writes only; the exception, the
+     `!no_exceptions' guard, the debug() line and the failure return are unchanged; the sibling CMMU is not written.
+-  * src/cpus/cpu_m88k.c: #include "thirdparty/m8820x.h" after m8820x_pte.h (upstream's placement, the transferred
+-    warrant) -- memory_rw.c is compiled inside cpu_m88k.c's translation unit (tmp_m88k_tail.c), and CMMU_PFSR,
+-    CMMU_PFAR and CMMU_PFSR_BERROR live only in that header.  Without it the repair does not compile.
++  * src/cpus/cpu_m88k.c: #include "thirdparty/m8820x.h" after m8820x_pte.h (this tree's placement, A6; upstream adds
++    the same include BEFORE m8820x_pte.h -- the position is not load-bearing) -- memory_rw.c is compiled inside
++    cpu_m88k.c's translation unit (tmp_m88k_tail.c), and CMMU_PFSR, CMMU_PFAR and CMMU_PFSR_BERROR live only in that
++    header.  Without it the repair does not compile.
+   * src/devices/dev_luna88k.c: the 0x3ffffff0 case returns 0, so the access is refused through the repaired arm (its
+     own PFSR write deleted; the case kept, because `default:' stops the cpu).
+   * src/devices/dev_m8820x.c: comment-only (the PFSR/PFAR writer citations).
+@@ -42,8 +46,8 @@
+ routed into that path.  Disclaimed -- never "every 88K bus error now carries PFSR and PFAR": an UNCLAIMED address (no
+ exception, no CMMU write; R3); on luna-88k every OTHER device refusal still stops the cpu before the arm; FREE-RUNNING
+ instruction-fetch refusals (vector 2, then the dyntrans `bad:' tail stops the cpu before any handler -- R1); callers
+-that pass NO_EXCEPTIONS (the debugger: the arm's own `!no_exceptions' term keeps them out -- `dbg noexc'); the
+-translation-fault writer (memory_m88k.c, not edited); a sub-word access's PFAR (the byte address is written, a
++that pass NO_EXCEPTIONS (e.g. the debugger's dump: the arm's own `!no_exceptions' term keeps them out -- `dbg noexc');
++the translation-fault writer (memory_m88k.c, not edited); a sub-word access's PFAR (the byte address is written, a
+ transferred warrant only -- no MC88200 manual is on disk); CMMU-less cpus (no write, the exception unchanged).
+ 
+ RUNG 3: real MC88100 instructions (ld/st/or/br/jmp) through real address decode and real memory_rw, on two
+@@ -102,9 +106,10 @@
+       HANDLED at 0xf000 (value 0x4a4a4a4a) and FELL at 0xf004 (value 0x46464646), zeroed by `put' before cpu 1 runs.
+ 
+ ROWS -- each with the variant(s) it is DESIGNED to catch (leg ids of table1_20261023/; L20 = L4, not run) and the
+-channel that differs.  *** DATED PREDICTIONS (PRETABLE.out section 5 + AMENDMENT 1) UNTIL THE TABLE RUNS; the
+-measured scores, per leg, are in table1_20261023/SCORES.txt. ***  `prereq:' = the row's cause-free prerequisite
+-string replaces its value (the session failed something the value depends on; the row stays red, claiming no cause).
++channel that differs.  *** PRE-TABLE PREDICTIONS (PRETABLE.out section 5 + AMENDMENT 1), subsequently compared with
++the measured table (27/27, table1_20261023/SCORES.txt; L22's prediction at BUILDER_QUESTIONS Q18 / BUILD_SPEC
++section 11 Q18). ***  `prereq:' = the row's cause-free prerequisite string replaces its value (the session failed
++something the value depends on; the row stays red, claiming no cause).
+   CONTROL rows -- a PREREQUISITE of the scored rows (apparatus, medium, device signature).  CONTROL=FAIL claims no cause.
+     neg apparatus  a bogus subtype `187': no machine, no register dump -- the session oracle can go red.  Green BY
+                    DESIGN on an exit-1 non-emulator (L5)
+@@ -150,9 +155,10 @@
+     ifetch dcmmu   the DATA CMMU keeps its seeds after an instruction refusal.  L6 (the data CMMU written), L13, L14
+                    (dPFSR := 0), L17
+     *** R2 DEPENDENCY, DISCLOSED (PASS1_RULINGS C2): stepped, the instruction refusal reaches the arm through the step
+-    loop's disassembly pre-read (cpu_dyntrans.c, CACHE_INSTRUCTION without NO_EXCEPTIONS).  When R2 is fixed the
+-    pre-read stops raising, the step's own fetch reaches R1's `bad:' tail and halts the cpu, and these four rows go
+-    red for that UNRELATED reason -- they are re-rooted when R1 and R2 land (the obligation is filed with them). ***
++    loop's disassembly pre-read (cpu_dyntrans.c, CACHE_INSTRUCTION without NO_EXCEPTIONS).  Predicted, source-derived;
++    not measured: when R2 is fixed the pre-read stops raising, the step's own fetch reaches R1's `bad:' tail and halts
++    the cpu, and these four rows go red for that UNRELATED reason -- they are re-rooted when R1 and R2 land (the
++    obligation is filed with them). ***
+   a NO_EXCEPTIONS caller (mvme187, the `ok' program in its own session) -- B5b
+     dbg noexc      after the seeds, the debugger command `dump 0xfff46010 0xfff46020' (cpus[bootstrap_cpu], CACHE_NONE |
+                    NO_EXCEPTIONS): zeros returned, pc unchanged (0x10028: no vector taken), the program then falls
+@@ -168,7 +174,8 @@
+     NULL.  *** SFRZ, DISCLOSED: the data fault left PSR.SFRZ set and no `rte' clears it (an `rte' would resume at SNIP,
+     the FELL store), so this second, non-trap fault is delivered as ERROR (vector 10), VBR1 + 0x50, where `br .' parks
+     cpu 1 (VBR1 + 0x10 parks it too).  The arm runs BEFORE m88k_exception, so the NULL test is exercised whatever
+-    the vector. ***  Stepped, the fetch rides R2 like the ifetch rows; with R2 fixed the step's own fetch reaches the
++    the vector. ***  Stepped, the fetch rides R2 like the ifetch rows.  Predicted, source-derived; not measured: with
++    R2 fixed the step's own fetch (cpu_m88k_instr.c:2989-2990, CACHE_INSTRUCTION without NO_EXCEPTIONS) reaches the
+     same arm, so the NULL-check observable survives and only the after-fault flow changes (R1's halt).
+     null route     part 1: HANDLED set, FELL clear, SXIP 0x10202, DMA0 0xfff46010.  L9 (exception moved inside the NULL
+                    check: fell), L17 (fell), L8 (the session dies in part 1)
+@@ -192,8 +199,13 @@
+   * sub-word accesses and byte addresses: every access is a word at a word-aligned address (PFAR's low bits are
+     UNKNOWN for silicon; the byte address is upstream's choice, a transferred warrant);
+   * a LUNA STORE at 0x3ffffff0 (the generic direction is pinned by `ust');
++  * a stepped instruction fetch AT 0x3ffffff0 (LUNA dispatch x instruction label -- clause (e); HEAD's case wrote
++    cmmu[1]'s PFSR for any access class and served it; the fix deletes that write);
+   * an UNCLAIMED physical address (INFO `unclaimed'; R3);
+   * luna-88k `-n 2..4' (per-cpu CMMU selection beyond the null session's mvme187 cpu 1), xmem, the 88110 (mvme197);
++  * instruction x NULL exception delivery has no scored row; `null surv' scores survival (`null route' scores the
++    data label's delivery; the INFO null cpu0 line prints cpu 1's end pc, unscored);
++  * preservation of another CPU's CMMU registers during a NULL-owning CPU's fault is not scored (`null owner', filed);
+   * FREE-RUNNING instruction-fetch refusals (R1: the cpu stops before any handler); the stepped ifetch and null rows
+     ride R2 (above);
+   * translation-fault semantics (memory_m88k.c is not edited);

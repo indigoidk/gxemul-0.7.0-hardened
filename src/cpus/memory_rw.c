@@ -612,11 +612,30 @@ not just the device in question.
 					    0, vaddr, 0, 0, 0, 0);
 #endif
 #ifdef MEM_M88K
-					/*  TODO: This is enough for
-					    OpenBSD/mvme88k's badaddr()
-					    implementation... but the
-					    faulting address should probably
-					    be included somewhere too!  */
+					/*  #570: record the bus error in the faulting side's
+					    CMMU first: PFSR = BERROR << 16 (the field
+					    OpenBSD/mvme88k's trap.c extracts) and PFAR =
+					    orig_paddr, the PHYSICAL address saved before paddr
+					    was made device-relative.  cmmu[0] is the instruction
+					    CMMU, cmmu[1] the data CMMU (memory_m88k.c's index);
+					    the other CMMU is not written.  For a CPU without a
+					    CMMU, this arm makes no register write; the exception
+					    call is unchanged.  `null route` scores data-access
+					    delivery; instruction-access delivery is unscored
+					    (`null surv` scores survival only).  NO_EXCEPTIONS
+					    callers (e.g. the debugger's dump) never get here:
+					    the test above keeps them out.  */
+					{
+						struct m8820x_cmmu *cmmu =
+						    cpu->cd.m88k.cmmu[cache ==
+						    CACHE_INSTRUCTION ? 0 : 1];
+						if (cmmu != NULL) {
+							cmmu->reg[CMMU_PFSR] =
+							    CMMU_PFSR_BERROR << 16;
+							cmmu->reg[CMMU_PFAR] =
+							    (uint32_t) orig_paddr;
+						}
+					}
 					m88k_exception(cpu, cache == CACHE_INSTRUCTION
 					    ? M88K_EXCEPTION_INSTRUCTION_ACCESS
 					    : M88K_EXCEPTION_DATA_ACCESS, 0);

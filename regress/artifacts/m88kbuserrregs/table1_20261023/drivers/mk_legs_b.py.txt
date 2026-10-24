@@ -1,0 +1,77 @@
+#!/usr/bin/env python3
+"""T36 / #570 kill table -- variant maker, group B (the inner NULL guard and where the exception sits):
+L8 L8b L9 L17 L18.  Written to variants/<leg>/<basename>; every anchor must match exactly once (else refuse)."""
+import io
+import os
+import sys
+
+SEC = "C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC"
+HERE = os.path.dirname(os.path.abspath(__file__))
+OUT = os.path.join(HERE, "variants")
+T = "\t"
+MRW = "src/cpus/memory_rw.c"
+
+
+def rd(p):
+    with io.open(p, "r", encoding="latin-1", newline="") as f:
+        return f.read()
+
+
+def put(leg, text):
+    d = os.path.join(OUT, leg)
+    os.makedirs(d, exist_ok=True)
+    with io.open(os.path.join(d, "memory_rw.c"), "w", encoding="latin-1", newline="") as f:
+        f.write(text)
+    print("WROTE %-4s %s" % (leg, MRW))
+
+
+def sub(src, leg, old, new):
+    n = src.count(old)
+    if n != 1:
+        print("REFUSE %s: anchor found %d times" % (leg, n))
+        sys.exit(1)
+    return src.replace(old, new)
+
+
+S = rd(os.path.join(SEC, MRW))
+NULLCK = T * 6 + "if (cmmu != NULL) {"
+put("L8", sub(S, "L8", NULLCK, T * 6 + "{"))
+put("L8b", sub(S, "L8b", NULLCK, T * 6 + "if (cmmu != NULL || cache == CACHE_INSTRUCTION) {"))
+EXC = (T * 5 + "m88k_exception(cpu, cache == CACHE_INSTRUCTION\n" +
+       T * 5 + "    ? M88K_EXCEPTION_INSTRUCTION_ACCESS\n" +
+       T * 5 + "    : M88K_EXCEPTION_DATA_ACCESS, 0);\n")
+TAIL = T * 7 + "    (uint32_t) orig_paddr;\n" + T * 6 + "}\n" + T * 5 + "}\n"
+put("L9", sub(S, "L9", TAIL + EXC,
+              T * 7 + "    (uint32_t) orig_paddr;\n" +
+              T * 7 + "m88k_exception(cpu, cache == CACHE_INSTRUCTION\n" +
+              T * 7 + "    ? M88K_EXCEPTION_INSTRUCTION_ACCESS\n" +
+              T * 7 + "    : M88K_EXCEPTION_DATA_ACCESS, 0);\n" +
+              T * 6 + "}\n" + T * 5 + "}\n"))
+put("L17", sub(S, "L17", TAIL + EXC, TAIL))
+BLOCK = (T * 5 + "{\n" +
+         T * 6 + "struct m8820x_cmmu *cmmu =\n" +
+         T * 6 + "    cpu->cd.m88k.cmmu[cache ==\n" +
+         T * 6 + "    CACHE_INSTRUCTION ? 0 : 1];\n" +
+         T * 6 + "if (cmmu != NULL) {\n" +
+         T * 7 + "cmmu->reg[CMMU_PFSR] =\n" +
+         T * 7 + "    CMMU_PFSR_BERROR << 16;\n" +
+         T * 7 + "cmmu->reg[CMMU_PFAR] =\n" +
+         T * 7 + "    (uint32_t) orig_paddr;\n" +
+         T * 6 + "}\n" +
+         T * 5 + "}\n")
+BLOCK4 = (T * 4 + "{\n" +
+          T * 5 + "struct m8820x_cmmu *cmmu =\n" +
+          T * 5 + "    cpu->cd.m88k.cmmu[cache ==\n" +
+          T * 5 + "    CACHE_INSTRUCTION ? 0 : 1];\n" +
+          T * 5 + "if (cmmu != NULL) {\n" +
+          T * 6 + "cmmu->reg[CMMU_PFSR] =\n" +
+          T * 6 + "    CMMU_PFSR_BERROR << 16;\n" +
+          T * 6 + "cmmu->reg[CMMU_PFAR] =\n" +
+          T * 6 + "    (uint32_t) orig_paddr;\n" +
+          T * 5 + "}\n" +
+          T * 4 + "}\n")
+L18 = sub(S, "L18", BLOCK, "")
+NORM = T * 4 + "if (res == 0)\n" + T * 5 + "res = -1;\n"
+L18 = sub(L18, "L18", NORM, NORM + "#ifdef MEM_M88K\n" + BLOCK4 + "#endif\n")
+put("L18", L18)
+print("MK_LEGS_B_DONE")

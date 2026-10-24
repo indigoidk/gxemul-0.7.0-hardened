@@ -3204,6 +3204,21 @@ MANIFEST = {
         (CLASS_RESEARCH, "argonlate fhfp1 check: the copy of tools/pipeline/stage_tokens.py (blob identical at 5dbc000e and 1a59a47e) that the measurement scripts here import from st/"),
     "artifacts/fableheldform/argonlate_20261020/st/check_stage_panels.py":
         (CLASS_RESEARCH, "argonlate fhfp1 check: the copy of tools/pipeline/check_stage_panels.py (blob identical at 5dbc000e and 1a59a47e) that the section-H simulations here ran"),
+    #  #570 m88kbuserrregs (a CLAIMED, REFUSED, unsuppressed m88k device access records its bus error in the
+    #  faulting side's CMMU when that CMMU exists): the gated detector and the rung-3 witness of
+    #  regress/artifacts/m88kbuserrregs/.  The kill table's frozen instrument, its drivers and the staged copies
+    #  are kept as *.py.txt / *.sh.txt, outside this checker's domain.
+    "m88k_buserr_probe.py":
+        (CLASS_DETECTOR, "#570 m88kbuserrregs: 31 rows on unmodified -E mvme88k -e mvme187 -M 64 [-n 2] and -E luna88k -e "
+                         "luna-88k; gated in gate_arm.sh (gate 14) under the stem m88k_buserr, pinned at 31; measured as "
+                         "rev 2 (md5 d57c12ab), shipped as documentation revision 2c (md5 a49f417d, a docstring-only "
+                         "re-freeze: repair1_20261024/rev2c_equivalence.txt); kill table "
+                         "artifacts/m88kbuserrregs/table1_20261023/ (SCORES.txt): pre-fix HEAD 21/31, fixed 31/31, "
+                         "null medium 1/31 CONTROL=FAIL, all 20 variant legs red, 27 of 27 measurements as predicted "
+                         "(L22's prediction: BUILDER_QUESTIONS Q18 / BUILD_SPEC section 11 Q18)"),
+    "artifacts/m88kbuserrregs/witness_20261023/m88k_buserr_probe.py":
+        (CLASS_WITNESS, "#570 m88kbuserrregs: the rung-3 pre-fix witness (rev 1, 24 rows, md5 d59798b0) -- 16/24 on HEAD "
+                        "(witness_20261023/WITNESS_headbin.out), 24/24 on the fixed build (table1_20261023/fixed_witness24.out)"),
 }
 
 #  DATED, NAMED DEBT -- not a count and not a silent allowlist.  gate_offline.sh MEASURED that

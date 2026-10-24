@@ -1,0 +1,836 @@
+#!/usr/bin/env python3
+"""m88k_buserr_probe.py -- rung-3 DETECTOR for m88kbuserrregs (#570, TRIAGE.md T36): a refused m88k device access
+records its bus error in the faulting side's CMMU (PFSR = BERROR << 16, PFAR = the physical address).
+
+REVISION 2 (2026-10-23), 31 rows.  Promoted from the rung-3 WITNESS (revision 1, 24 rows), which stays byte-identical
+at regress/artifacts/m88kbuserrregs/witness_20261023/m88k_buserr_probe.py and remains the round's pre-fix witness.
+This revision adds seven rows -- `ifetch route/pfsr/pfar/dcmmu', `dbg noexc', `null surv', `null route' -- per
+PASS1_RULINGS.md B5a-B5c and section E, BUILD_SPEC.md sections 3, 10 and 11 (pass1_20261023/), and the PRETABLE
+(table1_20261023/PRETABLE.out, with its AMENDMENT 1).
+
+DEFECT (HEAD 7fca7187, whose src/ equals 66920157's; both sites are the 0.7.0 import).  When a guest data load or
+store reaches a device whose access function REFUSES it (returns 0 with the cpu still running), src/cpus/memory_rw.c's
+refused-access arm (`if (res <= 0 && !no_exceptions)') raises the m88k data-access exception (vector 3) and wrote
+NOTHING into the data CMMU's P-bus fault status register (PFSR, offset 0x108) or P-bus fault address register (PFAR,
+0x10c); its TODO said "the faulting address should probably be included somewhere too".  A guest fault handler that
+reads them saw whatever they held before.  The LUNA probe address -- src/devices/dev_luna88k.c's `case 0x3ffffff0' --
+wrote PFSR = CMMU_PFSR_BERROR << 16 on cmmu[1] only (for ANY access class), wrote NO PFAR and `break'ed into
+`return 1': the access SUCCEEDED, serving 0, and no exception was raised at all.
+
+WHICH ACCESSES REACH THAT ARM -- a premise correction, measured by the witness: only an access a device CLAIMS and
+REFUSES.  An access to a physical address NO device claims never enters the device scan's success branch; it falls
+through to memory_rw.c's `Outside of physical RAM?' path, where memory_warn_about_unimplemented_addr() prints at most
+a warning -- or, under `-T', stops every cpu -- and a read is served zeros: no exception and no CMMU write, before or
+after #570 (INFO `unclaimed' below).  So the refusing devices used here are ones the in-tree machine descriptions
+install to model absent hardware: mvme187's `unreadable' window and VME population 1.
+
+THE FIX (#570, four product files, byte-identical in est/):
+  * src/cpus/memory_rw.c, the MEM_M88K block of the refused-access arm: select cmmu[0] for an instruction access and
+    cmmu[1] otherwise (`cache == CACHE_INSTRUCTION ? 0 : 1', memory_m88k.c's index); if that pointer is not NULL, write
+    PFSR = CMMU_PFSR_BERROR << 16 (0x00030000) and PFAR = (uint32_t) orig_paddr (the PHYSICAL address saved before the
+    arm makes `paddr' device-relative).  The NULL check wraps the two writes only; the exception, the
+    `!no_exceptions' guard, the debug() line and the failure return are unchanged; the sibling CMMU is not written.
+  * src/cpus/cpu_m88k.c: #include "thirdparty/m8820x.h" after m8820x_pte.h (upstream's placement, the transferred
+    warrant) -- memory_rw.c is compiled inside cpu_m88k.c's translation unit (tmp_m88k_tail.c), and CMMU_PFSR,
+    CMMU_PFAR and CMMU_PFSR_BERROR live only in that header.  Without it the repair does not compile.
+  * src/devices/dev_luna88k.c: the 0x3ffffff0 case returns 0, so the access is refused through the repaired arm (its
+    own PFSR write deleted; the case kept, because `default:' stops the cpu).
+  * src/devices/dev_m8820x.c: comment-only (the PFSR/PFAR writer citations).
+
+WHAT #570 MAY CLAIM, AND WHAT IT DISCLAIMS (PASS1_RULINGS A8).  Claimed: fault metadata for CLAIMED, REFUSED,
+unsuppressed device accesses that pass the running-transition check, on a cpu that has a CMMU, plus LUNA's probe case
+routed into that path.  Disclaimed -- never "every 88K bus error now carries PFSR and PFAR": an UNCLAIMED address (no
+exception, no CMMU write; R3); on luna-88k every OTHER device refusal still stops the cpu before the arm; FREE-RUNNING
+instruction-fetch refusals (vector 2, then the dyntrans `bad:' tail stops the cpu before any handler -- R1); callers
+that pass NO_EXCEPTIONS (the debugger: the arm's own `!no_exceptions' term keeps them out -- `dbg noexc'); the
+translation-fault writer (memory_m88k.c, not edited); a sub-word access's PFAR (the byte address is written, a
+transferred warrant only -- no MC88200 manual is on disk); CMMU-less cpus (no write, the exception unchanged).
+
+RUNG 3: real MC88100 instructions (ld/st/or/br/jmp) through real address decode and real memory_rw, on two
+UNMODIFIED in-tree machines: `-E mvme88k -e mvme187 -M 64' (machine_mvme88k.c) and `-E luna88k -e luna-88k'
+(machine_luna88k.c), each started with a 4-byte dummy raw image at 0x10000 (no PROM, no disk).  The `null' session
+adds `-n 2', a documented command-line option of the same in-tree machine (no machine edit, no device_add): mvme187
+attaches both CMMUs to the bootstrap cpu only (dev_mvme187.c), so cpu 1 has none, and the debugger's `pause 1' starts
+it (debugger_cmds.c's pause toggles `running').  An optional third argument names the rig images directory; the LUNA
+session then runs in luna_absentcpu_probe.py's rig shape (`-e luna-88k -d R:<images>/liveimage-luna88k-raw-20250518.img
+boot', cwd = the images directory) -- the witness measured the two shapes identical.  Every session is STEPPED and
+feeds the debugger on stdin (vme_default_probe.py's run_piped); no pseudo-terminal driver is used, and none is needed:
+a synchronous device refusal is visible while stepping, and a free-running run of the witness's exploration program
+gave the same stale registers (witness_20261023/explore2.out case 1).
+
+THE PROGRAM (the five witness sessions, `ifetch' and `dbg'; only the ACCESS word and its registers differ):
+    0x10   or r7,r0,2 ; br H         vector 2 (INSTRUCTION_ACCESS) marker -- VBR is 0 at reset (measured)
+    0x18   or r7,r0,3 ; br H         vector 3 (DATA_ACCESS) marker
+    CODE   ld r10,r3,0x0             data CMMU IDR           -- DEVICE SIGNATURE (0x00a90000; RAM cannot answer it)
+           ld r9,r2,0x0              instruction CMMU IDR    -- the same, for the sibling
+           st r20,r3,0x108 / st r21,r3,0x10c / st r22,r2,0x108 / st r23,r2,0x10c
+                                     SEED both CMMUs' PFSR and PFAR with four distinct values
+           ld r11,r3,0x108 / ld r12,r3,0x10c / ld r17,r2,0x108 / ld r18,r2,0x10c
+                                     LIVENESS through the same decode: each seed reads back
+           ACCESS                    the access under test (CODE + 0x28)
+           or r6,r0,0x1234 ; br H    FALL-THROUGH marker: runs only if the access raised nothing
+    H      ld r13,r3,0x108 / ld r14,r3,0x10c / ld r15,r2,0x108 / ld r16,r2,0x10c
+                                     the four registers AFTER the access, read by GUEST LOADS in the handler
+           or r31,r0,0x5678 ; br .   the handler ran to its end
+  So the reads happen on BOTH paths: a refused access enters vector 3 (or 2) and branches to H; an access that
+  raises nothing falls through to the same H.  r7 says which vector was entered, r6 whether it fell through, and
+  `reg 0,0' gives SXIP (the faulting instruction | V) and DMA0 (the faulting word address) -- the attribution
+  control: the exception came from THIS access.  19 steps reach H's `br .' on either path.  One fault per session:
+  the exception sets PSR.SFRZ, and a second fault while it is set becomes ERROR (cpu_m88k.c's m88k_exception).
+  `dbg' runs the `ok' program with `step 10' / `dump' / `reg' / `step 9': the debugger reads the unreadable window
+  between the readbacks and the accepted access.  `null' is described at its rows.
+
+ADDRESSES AND OFFSETS (each cited; literals on purpose, so a header edit cannot silently move them):
+  CMMU register offsets -- src/include/thirdparty/m8820x.h CMMU_IDR (0x000 / 4), CMMU_PFSR (0x108 / 4), CMMU_PFAR
+      (0x10c / 4); dev_m8820x.c serves a read as regs[relative_addr / 4] and STORES a guest write to PFSR/PFAR (which
+      is what makes the seed-and-readback liveness possible); IDR is never stored.  BERROR: m8820x.h CMMU_PFSR_BERROR
+      3, the field extract CMMU_PFSR_FAULT ((pfsr >> 16) & 7).
+  IDR seed 0x00a90000 = (M88200_ID << 21) | (9 << 16), M88200_ID 5 (m8820x.h; dev_mvme187.c, dev_luna88k.c).
+  mvme187 CMMUs: data 0xfff7f000, instruction 0xfff77000 (mvme187.h); cmmu[0] = instruction, cmmu[1] = data
+      (dev_mvme187.c; dev_m8820x.c's addr2 decode; memory_m88k.c uses the same index).
+  luna-88k CPU-0 CMMUs: data 0xfff06000, instruction 0xfff07000 (luna88k_board.h CMMU_D0 / CMMU_I0).
+  refused device #1 -- `unreadable addr=0xfff46000 len=0x1000' (machine_mvme88k.c, the ie0 placeholder):
+      dev_unreadable.c's access function is `return 0;'.  0xfff46010 is device-relative 0x10.
+  refused device #2 -- VME2 at 0xfff40000 (mvme88k_vme.h VME2_BASE): offset 0x90 is population 1 of #568
+      (vmedefaultkill), dev_vme.c's `default:' returns 0.  0xfff40090 is device-relative 0x90.
+  accepted device access -- VME VBR at 0xfff40088 (VME2_VBR), served by its cased arm from DEVINIT's
+      VME2_SET_VBR0(6) + VME2_SET_VBR1(7) = 0x67000000.
+  the LUNA probe address 0x3ffffff0 = LUNA88K_REGISTERS_BASE (dev_luna88k.c), `case 0x3ffffff0'; device-relative 0.
+  vectors -- cpu_m88k.h INSTRUCTION_ACCESS 2, DATA_ACCESS 3, ERROR 10; pc = VBR + 8 * vector; SXIP = pc | V (0x2),
+      | E (0x1) for an instruction access; DMT0/DMD0/DMA0 copied from the data unit on DATA_ACCESS only.
+  `null' session: cpu 1's code at 0x10200 (CODE1), J = 0x1020c, its VBR 0x30000 (set by the debugger), RAM markers
+      HANDLED at 0xf000 (value 0x4a4a4a4a) and FELL at 0xf004 (value 0x46464646), zeroed by `put' before cpu 1 runs.
+
+ROWS -- each with the variant(s) it is DESIGNED to catch (leg ids of table1_20261023/; L20 = L4, not run) and the
+channel that differs.  *** DATED PREDICTIONS (PRETABLE.out section 5 + AMENDMENT 1) UNTIL THE TABLE RUNS; the
+measured scores, per leg, are in table1_20261023/SCORES.txt. ***  `prereq:' = the row's cause-free prerequisite
+string replaces its value (the session failed something the value depends on; the row stays red, claiming no cause).
+  CONTROL rows -- a PREREQUISITE of the scored rows (apparatus, medium, device signature).  CONTROL=FAIL claims no cause.
+    neg apparatus  a bogus subtype `187': no machine, no register dump -- the session oracle can go red.  Green BY
+                   DESIGN on an exit-1 non-emulator (L5)
+    mv devsig      mvme187 data + instruction CMMU IDR = 0x00a90000 each (RAM, or no device, reads 0).  L19
+    mv cmmu rt     mvme187: the four seeds read back through the same decode.  L18 (misplaced writes overwrite the
+                   seeds), L19
+    luna devsig    luna-88k: the same two IDRs.  L19
+    luna cmmu rt   luna-88k: the four seeds read back.  L18, L19
+    unasm          every placed word re-read by the disassembler; LITERAL count
+  accept side (mvme187, `ld r4,r5,0' at VME VBR 0xfff40088 -- an ACCEPTED device access)
+    ok route       fall-through, r4 = 0x67000000.  L19 (`res <= 1') -- but the observable is prereq:nodev, because
+                   every served CMMU access faults first; the named "v3" channel is not reachable by a global widening
+    ok regs        all four seeds survive an accepted access.  L18 (the writes moved before the guard) -- observable
+                   prereq:readback, for the same reason; also L19
+  generic arm, data LOAD / data STORE / a SECOND refusing device (mvme187, at 0xfff46010 / 0xfff46010 / 0xfff40090)
+    uld route / ust route / vme route   vector 3, SXIP = CODE + 0x28 | V, DMA0 = the address (r4 keeps its sentinel
+                   for a load).  L17 (exception dropped: fall-through)
+    uld pfsr / ust pfsr / vme pfsr      data PFSR = 0x00030000.  HEAD: the seed 0x5a5a5a5a.  L3 (arm reinstated),
+                   L10 (raw 3), L6b (always cmmu[0]); ust: L15 (repair conditioned on MEM_READ); vme: L16 (VME
+                   excluded)
+    uld pfar / ust pfar / vme pfar      data PFAR = the PHYSICAL address.  HEAD: the seed 0x13572468.  L3, L11 (the
+                   device-relative paddr: 0x10 / 0x90), L12 (PFSR only), L6b; ust: L15; vme: L16
+    uld icmmu / ust icmmu / vme icmmu   the instruction CMMU keeps its seeds.  L13 (both CMMUs), L14 (sibling
+                   cleared as the translation-fault writer does), L6b.  (NOT L15/L16: a read-only or device-keyed
+                   repair leaves route and sibling alone.)
+  the LUNA probe address (luna-88k, `ld r4,r5,0' at 0x3ffffff0)
+    luna route     vector 3, SXIP, DMA0 = 0x3ffffff0, r4 keeps its sentinel.  HEAD: fall-through, SXIP 0, DMA0 0,
+                   r4 = 0 (SERVED).  L4 (= L20: the case reinstated), L21 (its write deleted, still served), L17,
+                   L22 (case deleted: `default:' stops the cpu -> prereq:handler)
+    luna pfsr      data PFSR = 0x00030000.  GREEN on HEAD (the case's own write).  L3, L10, L21 (its UNIQUE variant:
+                   the write deleted while the access stays served), L22, L6b
+    luna pfar      data PFAR = 0x3ffffff0.  HEAD: the seed.  L3, L4, L11 (0x0: the access is AT the base), L12, L21,
+                   L22, L6b
+    luna icmmu     the instruction CMMU keeps its seeds.  L13, L14, L22, L6b
+  the INSTRUCTION label (mvme187, `jmp (r5)' to 0xfff46010) -- B5a
+    ifetch route   ATTRIBUTION row, not in CONTROL_ROWS: vector 2, SXIP = 0xfff46013 (| V | E), DMA0 0.  The vector
+                   expression reads `cache' independently of the added selector, so this row CANNOT vary under the
+                   selector variant (L6) -- by construction.  Its variant: L17 (exception dropped / mis-routed: the
+                   step's fetch then reaches R1's `bad:' tail and the handler never runs -> prereq:handler)
+    ifetch pfsr    INSTRUCTION CMMU PFSR = 0x00030000.  HEAD: the seed 0x2468ace0 (red on HEAD).  L6 (always-data
+                   selector: cmmu[0] not written), L3, L10, L17
+    ifetch pfar    INSTRUCTION CMMU PFAR = 0xfff46010.  HEAD: the seed 0x0badf00d.  L6, L3, L11 (0x10), L12, L17
+    ifetch dcmmu   the DATA CMMU keeps its seeds after an instruction refusal.  L6 (the data CMMU written), L13, L14
+                   (dPFSR := 0), L17
+    *** R2 DEPENDENCY, DISCLOSED (PASS1_RULINGS C2): stepped, the instruction refusal reaches the arm through the step
+    loop's disassembly pre-read (cpu_dyntrans.c, CACHE_INSTRUCTION without NO_EXCEPTIONS).  When R2 is fixed the
+    pre-read stops raising, the step's own fetch reaches R1's `bad:' tail and halts the cpu, and these four rows go
+    red for that UNRELATED reason -- they are re-rooted when R1 and R2 land (the obligation is filed with them). ***
+  a NO_EXCEPTIONS caller (mvme187, the `ok' program in its own session) -- B5b
+    dbg noexc      after the seeds, the debugger command `dump 0xfff46010 0xfff46020' (cpus[bootstrap_cpu], CACHE_NONE |
+                   NO_EXCEPTIONS): zeros returned, pc unchanged (0x10028: no vector taken), the program then falls
+                   through its accepted access, and all four seeds survive.  The arm IS reached (res 0 -> -1); its
+                   `!no_exceptions' term keeps the body out.  L7 (that term dropped: the dump fails, cpu 0 vectors,
+                   the data CMMU is written)
+  a CMMU-LESS cpu (mvme187 -n 2, cpu 1) -- B5c, the {data, instruction} x {CMMU absent} cells CONJUNCTIVELY
+    cpu 0 runs the seeded `uld' program alone (19 steps) and parks in H's `br .' (nothing is scored from it).  cpu 1 is
+    set up by `focus 1' (pc, r5, the two marker values, its own VBR); `tlbdump 1' must show no CMMU (the NULL premise);
+    `pause 1'; part 1 `step 3': `ld r4,r5,0' at 0xfff46010 -> cpu 1's vector 3 stores HANDLED and branches to J (the
+    FELL store after the load runs only if no exception was raised); the markers and `reg 1,0' are read HERE (a second
+    fault zeroes DMA0).  Part 2 `step 5': J `jmp (r5)' -> the instruction fetch at 0xfff46010 is refused with cmmu[0]
+    NULL.  *** SFRZ, DISCLOSED: the data fault left PSR.SFRZ set and no `rte' clears it (an `rte' would resume at SNIP,
+    the FELL store), so this second, non-trap fault is delivered as ERROR (vector 10), VBR1 + 0x50, where `br .' parks
+    cpu 1 (VBR1 + 0x10 parks it too).  The arm runs BEFORE m88k_exception, so the NULL test is exercised whatever
+    the vector. ***  Stepped, the fetch rides R2 like the ifetch rows; with R2 fixed the step's own fetch reaches the
+    same arm, so the NULL-check observable survives and only the after-fault flow changes (R1's halt).
+    null route     part 1: HANDLED set, FELL clear, SXIP 0x10202, DMA0 0xfff46010.  L9 (exception moved inside the NULL
+                   check: fell), L17 (fell), L8 (the session dies in part 1)
+    null surv      the session reaches part 2's prompt alive with both marker dumps readable.  L8 (NULL check removed:
+                   cpu 1's data load dereferences NULL), L8b (the check conditioned on the data label: the instruction
+                   fetch dereferences NULL in part 2)
+  INFO (unscored): a load from an UNCLAIMED physical address (mvme187, 0x10000000: past the 64 MB of RAM, below every
+                   device) -- see the premise correction above.  (Revision 1's INFO ifetch line is now four rows.)
+
+SYMPTOM CLASSIFICATION (the "did it fail for the reason under test?" line): the TEN rows the fix changes -- uld/ust/vme
+pfsr and pfar, luna route, luna pfar, ifetch pfsr, ifetch pfar -- are each STALE (exactly the probe's own seed, or for
+luna route the fall-through with r4 served 0), FIXED (got == want) or OTHER.  M88K_BUSERR_SYMPTOM prints PRESENT n/10
+when all ten are STALE, ABSENT when all ten are FIXED, else MIXED with the list.  Neither PFSR seed carries BERROR in
+the field the guest tests: (0x5a5a5a5a >> 16) & 7 == 2 and (0x2468ace0 >> 16) & 7 == 0.
+
+CONTRACT (clause e).  DESIGNED to catch: the pre-fix defect and the variants named per row above (measured per leg in
+table1_20261023/SCORES.txt).  NOT CLAIMED, so a later escape is outside the contract rather than an argument:
+  * VA != PA.  PFAR := `vaddr' is not an operand the m88k arm reads (the MEM_MIPS block that reads it is compiled out),
+    and every session leaves the CMMUs' APR invalid, so physical = virtual (memory_m88k.c).  A guest COULD separate them
+    (a SAPR/UAPR store sets APR_V; a BWP store programs a BATC) -- these sessions do not;
+  * sub-word accesses and byte addresses: every access is a word at a word-aligned address (PFAR's low bits are
+    UNKNOWN for silicon; the byte address is upstream's choice, a transferred warrant);
+  * a LUNA STORE at 0x3ffffff0 (the generic direction is pinned by `ust');
+  * an UNCLAIMED physical address (INFO `unclaimed'; R3);
+  * luna-88k `-n 2..4' (per-cpu CMMU selection beyond the null session's mvme187 cpu 1), xmem, the 88110 (mvme197);
+  * FREE-RUNNING instruction-fetch refusals (R1: the cpu stops before any handler); the stepped ifetch and null rows
+    ride R2 (above);
+  * translation-fault semantics (memory_m88k.c is not edited);
+  * the OpenBSD reader itself (trap.c's `(dpfsr >> 16) & 7 == 3' and badaddr()'s eh.S recovery); a boot is measured
+    separately (table1_20261023/boot_ab/);
+  * the sibling CMMU's real latch semantics: the `icmmu' / `ifetch dcmmu' wants encode the ruling `kept' (A9); the
+    hardware behaviour is UNKNOWN, and a guest's snapshots CAN differ (do not read the rows as "unobservable");
+  * PFSR / PFAR bits beyond the exact values written; real MC88200 timing or the P-bus.
+  Clause (c) (null medium): measured at table1_20261023/L5_stub.out and L5b_absent.out (see SCORES.txt).
+
+GATE 14 (regress/gate_arm.sh) runs this probe in the block after #568's.  *** THAT BLOCK CAN BE SKIPPED WITHOUT
+RUNNING: gate_arm.sh has eleven earlier skip points (`grep -n -e gate_skip -e need_exec regress/gate_arm.sh': :84
+need_exec, :85 python3, :93 the load stub, and the eight probe-completion skips :105 :389 :430 :515 :638 :695 :816
+:949), and any one of them ends the gate before this block -- a SKIP, which is never evidence. ***
+
+TEST-FIRST SHAPE: on the pre-fix HEAD the ten symptom rows are red (M88K_BUSERR_SYMPTOM=PRESENT 10/10) while the six
+controls and the other fifteen scored rows are green; after #570 the same script is all green, SYMPTOM=ABSENT.
+
+usage: m88k_buserr_probe.py <gxemul> [label] [images-dir]
+       M88K_BUSERR_DUMP=<dir> also writes every session's raw debugger transcript to <dir>/<session>.txt
+       (unset: nothing is written; the rows and lines below are identical either way).
+Sentinel: M88K_BUSERR_PROBE_DONE (plus M88K_BUSERR_RESULT=n/N, M88K_BUSERR_CONTROL=OK|FAIL,
+M88K_BUSERR_SYMPTOM=PRESENT n/10|ABSENT|MIXED ..., M88K_BUSERR_REVISION=2)
+"""
+
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+
+if len(sys.argv) < 2:
+    sys.stderr.write("usage: m88k_buserr_probe.py <gxemul> [label] [images-dir]\n")
+    sys.exit(2)
+
+BIN = sys.argv[1]
+LABEL = sys.argv[2] if len(sys.argv) > 2 else "local"
+IMAGES = sys.argv[3] if len(sys.argv) > 3 else None
+DUMP = os.environ.get("M88K_BUSERR_DUMP") or None
+REVISION = 2
+#  A private dummy file: a shared /tmp path once let two concurrent runs race on it (vme_default_probe.py).
+_TMPDIR = tempfile.mkdtemp(prefix="m88k_buserr_")
+DUMMY = os.path.join(_TMPDIR, "dummy.bin")
+with open(DUMMY, "wb") as _f:
+    _f.write(b"\x00\x00\x00\x00")
+
+CODE = 0x00010000
+H = 0x00010100              # the reading handler both paths reach
+VEC_IACC = 0x10             # VBR 0 + 8 * M88K_EXCEPTION_INSTRUCTION_ACCESS (2)
+VEC_DACC = 0x18             # VBR 0 + 8 * M88K_EXCEPTION_DATA_ACCESS (3)
+SENT = 0xdeadbeef
+FALL = 0x1234               # r6: the access raised nothing
+LIVE = 0x5678               # r31: the handler ran to its end
+D_PFSR_SEED = 0x5a5a5a5a    # (>> 16) & 7 == 2: not BERROR under the guest's extract
+D_PFAR_SEED = 0x13572468
+I_PFSR_SEED = 0x2468ace0    # (>> 16) & 7 == 0
+I_PFAR_SEED = 0x0badf00d
+SEEDS = (D_PFSR_SEED, D_PFAR_SEED, I_PFSR_SEED, I_PFAR_SEED)
+IDR = (5 << 21) | (9 << 16)                 # 0x00a90000: (M88200_ID << 21) | (9 << 16)
+BERROR = 3 << 16                            # CMMU_PFSR_BERROR << 16 = 0x00030000
+OFF_IDR, OFF_PFSR, OFF_PFAR = 0x000, 0x108, 0x10c
+MV_DCMMU, MV_ICMMU = 0xfff7f000, 0xfff77000   # MVME187_SBC_CMMU_D / _I
+LU_DCMMU, LU_ICMMU = 0xfff06000, 0xfff07000   # CMMU_D0 / CMMU_I0
+UNREAD = 0xfff46010         # inside `unreadable addr=0xfff46000 len=0x1000': device-relative 0x10
+VME = 0xfff40000            # VME2_BASE
+VME_P1 = VME + 0x90         # population 1 (#568's FAULT): device-relative 0x90
+VME_VBR = VME + 0x88        # VME2_VBR, a CASED register: an accepted access
+VBR_SEED = 0x67000000       # dev_vme.c DEVINIT: VME2_SET_VBR0(6) + VME2_SET_VBR1(7)
+LUNA_PROBE = 0x3ffffff0     # LUNA88K_REGISTERS_BASE == the `case 0x3ffffff0' label
+UNCLAIMED = 0x10000000      # INFO only: past mvme187's 64 MB, below its lowest device (0xff780000)
+STVAL = 0xa5a5a5a5
+ACCESS_PC = CODE + 4 * 10
+SXIP_DATA = ACCESS_PC | 0x2               # M88K_XIP_V
+SXIP_IFETCH = UNREAD | 0x2 | 0x1          # M88K_XIP_V | M88K_XIP_E: an instruction access at 0xfff46010
+H_END = H + 4 * 5
+NSTEPS = 19                               # 10 + access + 2 (vector or fall-through) + 6 handler
+#  the `null' session (mvme187 -n 2): cpu 1's own code, vectors and RAM markers
+CODE1 = 0x00010200
+J = CODE1 + 12                            # cpu 1's `jmp (r5)': the instruction refusal
+VBR1 = 0x00030000                         # cpu 1's VBR, set by the debugger (4 KB aligned)
+VBR1_IACC, VBR1_DACC, VBR1_ERROR = VBR1 + 8 * 2, VBR1 + 8 * 3, VBR1 + 8 * 10
+MARK_H, MARK_F = 0x0000f000, 0x0000f004   # RAM: below CODE, above both vector tables' first page
+HANDLED_V, FELL_V = 0x4a4a4a4a, 0x46464646
+SXIP_NULL = CODE1 | 0x2                   # cpu 1's refused data load at CODE1
+PROMPT = "GXemul> "
+RIG_IMG = "liveimage-luna88k-raw-20250518.img"
+
+
+# ------------------------------------------------------------------- encodings
+class Ins(object):
+    __slots__ = ("word", "mnem", "ops")
+
+    def __init__(self, word, mnem, ops):
+        self.word, self.mnem, self.ops = word, mnem, ops
+
+
+def enc(op26, rd, rs1, imm):
+    assert 0 <= op26 < 64 and 0 <= rd < 32 and 0 <= rs1 < 32 and 0 <= imm <= 0xffff
+    return (op26 << 26) | (rd << 21) | (rs1 << 16) | imm
+
+
+def LD(rd, rs1, off):       # op26 0x05 (vme_default_probe.py's table)
+    return Ins(enc(0x05, rd, rs1, off), "ld", "r%d,r%d,0x%x" % (rd, rs1, off))
+
+
+def ST(rs, rs1, off):       # op26 0x09
+    return Ins(enc(0x09, rs, rs1, off), "st", "r%d,r%d,0x%x" % (rs, rs1, off))
+
+
+def OR_I(rd, rs1, imm):     # op26 0x16; the disassembler prints this immediate in hex
+    assert rd != 0
+    return Ins(enc(0x16, rd, rs1, imm), "or", "r%d,r%d,0x%x" % (rd, rs1, imm))
+
+
+def BR_TO(frm, to):         # op26 0x30, d26 = (to - frm) / 4
+    return Ins(0xc0000000 | (((to - frm) >> 2) & 0x3ffffff), "br", "0x%08x" % to)
+
+
+def BR_SELF():              # d26 = 0; the operand is filled in on placement
+    return Ins(0xc0000000, "br", None)
+
+
+def JMP(rs2):               # jmp (rS2) = 0xf400c000 | rs2 (luna88kprom.c's `jmp (r1)' = 0xf400c001)
+    return Ins(0xf400c000 | rs2, "jmp", "(r%d)" % rs2)
+
+
+def blocks_for(access):
+    vec = [(VEC_IACC, [OR_I(7, 0, 2), BR_TO(VEC_IACC + 4, H)]),
+           (VEC_DACC, [OR_I(7, 0, 3), BR_TO(VEC_DACC + 4, H)])]
+    code = [LD(10, 3, OFF_IDR), LD(9, 2, OFF_IDR),
+            ST(20, 3, OFF_PFSR), ST(21, 3, OFF_PFAR), ST(22, 2, OFF_PFSR), ST(23, 2, OFF_PFAR),
+            LD(11, 3, OFF_PFSR), LD(12, 3, OFF_PFAR), LD(17, 2, OFF_PFSR), LD(18, 2, OFF_PFAR),
+            access,
+            OR_I(6, 0, FALL), BR_TO(CODE + 4 * 12, H)]
+    assert CODE + 4 * code.index(access) == ACCESS_PC
+    hnd = [LD(13, 3, OFF_PFSR), LD(14, 3, OFF_PFAR), LD(15, 2, OFF_PFSR), LD(16, 2, OFF_PFAR),
+           OR_I(31, 0, LIVE), BR_SELF()]
+    assert H + 4 * (len(hnd) - 1) == H_END
+    return vec + [(CODE, code), (H, hnd)]
+
+
+def null_cpu1_blocks():
+    """cpu 1's code and vectors in the `null' session.  CODE1: the refused DATA load, the FELL store (reached only if
+       the load raised nothing), br J; J: the instruction refusal.  VBR1 + 0x18 (vector 3): the HANDLED store, br J.
+       VBR1 + 0x10 (vector 2) and VBR1 + 0x50 (ERROR, 10): park."""
+    code1 = [LD(4, 5, 0), ST(21, 0, MARK_F), BR_TO(CODE1 + 8, J), JMP(5)]
+    assert CODE1 + 4 * 3 == J
+    return [(CODE1, code1),
+            (VBR1_IACC, [BR_SELF()]),
+            (VBR1_DACC, [ST(20, 0, MARK_H), BR_TO(VBR1_DACC + 4, J)]),
+            (VBR1_ERROR, [BR_SELF()])]
+
+
+# ------------------------------------------------------------------- sessions
+def hx(v):
+    return "absent" if v is None else "0x%x" % v
+
+
+def argv_for(machine):
+    if machine == "mvme187":
+        return [BIN, "-V", "-x", "-E", "mvme88k", "-e", "mvme187", "-M", "64", "0x%x:%s" % (CODE, DUMMY)], None
+    if machine == "mvme187-n2":     # the documented cpu-count option; cpu 1 gets no CMMU (dev_mvme187.c)
+        return ([BIN, "-V", "-x", "-E", "mvme88k", "-e", "mvme187", "-M", "64", "-n", "2", "0x%x:%s" % (CODE, DUMMY)],
+                None)
+    if machine == "187":            # the apparatus negative control: no such subtype
+        return [BIN, "-V", "-x", "-E", "mvme88k", "-e", "187", "-M", "64", "0x%x:%s" % (CODE, DUMMY)], None
+    if machine == "luna-88k":
+        if IMAGES:
+            return ([BIN, "-V", "-x", "-e", "luna-88k", "-d", "R:" + os.path.join(IMAGES, RIG_IMG), "boot"],
+                    IMAGES)
+        return [BIN, "-V", "-x", "-E", "luna88k", "-e", "luna-88k", "0x%x:%s" % (CODE, DUMMY)], None
+    raise ValueError(machine)
+
+
+def seeds(pairs):
+    return ["r%d=0x%x" % (r, v) for r, v in pairs]
+
+
+def place(blocks):
+    """blocks: [(addr, [Ins])] -> (debugger commands, [(addr, Ins)]).  Every block is re-read with
+       `unassemble' (end-exclusive) right after it is written."""
+    cmds, placed = [], []
+    for at, insns in blocks:
+        for i, ins in enumerate(insns):
+            a = at + 4 * i
+            if ins.ops is None:
+                ins = Ins(ins.word, ins.mnem, "0x%08x" % a)
+            cmds.append("put w 0x%x, 0x%08x" % (a, ins.word))
+            placed.append((a, ins))
+        cmds.append("unassemble 0x%x 0x%x" % (at, at + 4 * len(insns)))
+    return cmds, placed
+
+
+def run_piped(machine, cmds, tag, timeout=90):
+    argv, cwd = argv_for(machine)
+    inp = ("\n".join(list(cmds) + ["quit"]) + "\n").encode("latin-1")
+    try:
+        p = subprocess.run(argv, input=inp, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout,
+                           cwd=cwd)
+        text = p.stdout.decode("latin-1", "replace").replace("\r", "")
+        rc = p.returncode
+        how = ("sig%d" % -rc) if rc < 0 else ("exit%d" % rc)
+    except subprocess.TimeoutExpired as e:
+        text, how = (e.output or b"").decode("latin-1", "replace").replace("\r", ""), "TIMEOUT"
+    if DUMP:
+        with open(os.path.join(DUMP, "%s.txt" % tag), "w") as f:
+            f.write("# argv: %s\n# cwd: %s\n# how: %s\n" % (" ".join(argv), cwd, how))
+            f.write(text)
+    return text, how
+
+
+DIS_RE = re.compile(r"^[su]([0-9a-f]{8}): ([0-9a-f]{8})\s+(?:<-\s+)?(\S+)(?:\t(\S+))?[ \t]*$", re.M)
+GPR_RE = re.compile(r"\br(\d+)\s*=\s*(0x[0-9a-fA-F]+)")
+PC_RE = re.compile(r"cpu\d+:\s+pc\s+=\s+(0x[0-9a-fA-F]+)")
+CR_RE = re.compile(r"\b([A-Z][A-Z0-9]*)=(0x[0-9a-fA-F]+)")
+
+
+class Res(object):
+    pass
+
+
+def parts_of(text):
+    """[(command, output)] in transcript order (the text after each prompt, split at its first newline)."""
+    out = []
+    for part in text.split(PROMPT)[1:]:
+        cmd, _, o = part.partition("\n")
+        out.append((cmd.strip(), o))
+    return out
+
+
+def regs_of(o):
+    """(pc, {gpr: value}) from one `reg' output, or (None, None) when it holds no register dump."""
+    m = PC_RE.search(o)
+    if not m:
+        return None, None
+    return int(m.group(1), 16), {int(g.group(1)): int(g.group(2), 16) for g in GPR_RE.finditer(o)}
+
+
+def crs_of(o):
+    return {g.group(1): int(g.group(2), 16) for g in CR_RE.finditer(o)}
+
+
+def analyse(text, how, placed):
+    """Split the transcript at the prompts; parse every unassemble, the last `reg' and the last `reg 0,0'."""
+    r = Res()
+    r.how, r.text, r.placed = how, text, placed
+    r.dis, r.regs, r.pc, r.cr = {}, None, None, None
+    for cmd, out in parts_of(text):
+        if cmd.startswith("unassemble"):
+            for m in DIS_RE.finditer(out):
+                r.dis[int(m.group(1), 16)] = (int(m.group(2), 16), m.group(3), m.group(4) or "")
+        elif cmd == "reg":
+            pc, gp = regs_of(out)
+            if pc is not None:
+                r.regs, r.pc = gp, pc
+        elif cmd == "reg 0,0":
+            cr = crs_of(out)
+            if cr:
+                r.cr = cr
+    return r
+
+
+UNASM = {"ok": 0, "n": 0, "bad": []}
+
+
+def check_unasm(r, scored=True):
+    ok = n = 0
+    for a, ins in r.placed:
+        n += 1
+        d = r.dis.get(a)
+        if d is not None and d == (ins.word, ins.mnem, ins.ops):
+            ok += 1
+        elif scored:
+            UNASM["bad"].append("0x%x:%08x %s %s -> %r" % (a, ins.word, ins.mnem, ins.ops, d))
+    if scored:
+        UNASM["ok"] += ok
+        UNASM["n"] += n
+    return ok, n
+
+
+def std_regs(dcmmu, icmmu, extra):
+    regs = [(2, icmmu), (3, dcmmu), (20, D_PFSR_SEED), (21, D_PFAR_SEED), (22, I_PFSR_SEED), (23, I_PFAR_SEED)]
+    return regs + [(rr, SENT) for rr in (4, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 31)] + extra
+
+
+def session(tag, machine, dcmmu, icmmu, access, extra, scored=True):
+    cmds, placed = place(blocks_for(access))
+    cmds = seeds(std_regs(dcmmu, icmmu, extra)) + cmds + ["pc=0x%x" % CODE, "step %d" % NSTEPS, "reg", "reg 0,0"]
+    t, how = run_piped(machine, cmds, tag)
+    r = analyse(t, how, placed)
+    check_unasm(r, scored)
+    return r
+
+
+TIMEOUTS = ("TIMEOUT",)
+
+
+def died(r):
+    return ("timeout:%s" if r.how in TIMEOUTS else "died:%s") % r.how
+
+
+def g(r, n):
+    return r.regs.get(n) if r.regs is not None else None
+
+
+def prereq_bad(r):
+    """None when the session's own prerequisites held; else a cause-free reason (the row stays red)."""
+    if r.regs is None:
+        return died(r)
+    if g(r, 10) != IDR or g(r, 9) != IDR:
+        return "nodev d=%s i=%s: device signature absent, check not made" % (hx(g(r, 10)), hx(g(r, 9)))
+    back = (g(r, 11), g(r, 12), g(r, 17), g(r, 18))
+    if back != SEEDS:
+        return "readback %s: seeds did not round-trip, check not made" % "/".join(hx(v) for v in back)
+    if r.pc != H_END or g(r, 31) != LIVE:
+        return "handler pc=%s r31=%s: the reads did not complete" % (hx(r.pc), hx(g(r, 31)))
+    return None
+
+
+def path_of(r):
+    v7, v6 = g(r, 7), g(r, 6)
+    if v7 == 3 and v6 == SENT:
+        return "v3"
+    if v7 == 2 and v6 == SENT:
+        return "v2"
+    if v7 == SENT and v6 == FALL:
+        return "fall"
+    return "odd(r6=%s,r7=%s)" % (hx(v6), hx(v7))
+
+
+def route(r, load):
+    cr = r.cr or {}
+    s = "%s/%s/%s" % (path_of(r), hx(cr.get("SXIP")), hx(cr.get("DMA0")))
+    if load and g(r, 4) != SENT:
+        s += " r4=%s" % hx(g(r, 4))
+    return s
+
+
+def kept_i(r):
+    """'kept' when the instruction CMMU's PFSR/PFAR still hold their seeds after the access."""
+    if (g(r, 15), g(r, 16)) == (I_PFSR_SEED, I_PFAR_SEED):
+        return "kept"
+    return "ipfsr=%s ipfar=%s" % (hx(g(r, 15)), hx(g(r, 16)))
+
+
+def kept_d(r):
+    """'kept' when the data CMMU's PFSR/PFAR still hold their seeds after the access."""
+    if (g(r, 13), g(r, 14)) == (D_PFSR_SEED, D_PFAR_SEED):
+        return "kept"
+    return "dpfsr=%s dpfar=%s" % (hx(g(r, 13)), hx(g(r, 14)))
+
+
+DUMP16_RE = re.compile(r"^0x([0-9a-f]{8})  ((?:[0-9a-f]{8} ?){1,4})", re.M)
+
+
+def dump_words(o, addr):
+    """The 32-bit words a `dump' line printed for `addr', or 'failed' / None."""
+    for line in o.splitlines():
+        if line.startswith("0x%08x  " % addr):
+            if "(memory access failed)" in line:
+                return "failed"
+            m = DUMP16_RE.match(line)
+            if m:
+                return [int(w, 16) for w in m.group(2).split()]
+    return None
+
+
+rows = []
+SYMPTOM = []                # (row name, classification)
+
+
+def row(name, got, want, note=""):
+    assert name not in [n for n, _ in rows], "DUPLICATE ROW NAME %r" % name
+    assert len(name) <= 15, name     # `%-16s ' keeps a gate's `^$v  .*ok$' satisfiable
+    ok = (got == want)
+    rows.append((name, ok))
+    print("%-16s %-34s %-34s %-62s %s" % (name, str(got), str(want), note, "ok" if ok else "FAIL"))
+    sys.stdout.flush()
+    return ok
+
+
+def symptom(name, got, want, stale):
+    SYMPTOM.append((name, "FIXED" if got == want else ("STALE" if got == stale else "OTHER")))
+
+
+print("m88kbuserrregs RUNG-3 DETECTOR (revision %d) -- binary=%s label=%s" % (REVISION, BIN, LABEL))
+print("machines: -E mvme88k -e mvme187 -M 64 [-n 2] and -E luna88k -e luna-88k (UNMODIFIED); luna shape: %s"
+      % ("rig (%s)" % IMAGES if IMAGES else "dummy raw image at 0x%x" % CODE))
+print("seeds: dPFSR=%s dPFAR=%s iPFSR=%s iPFAR=%s; want BERROR<<16=%s" % (tuple(hx(v) for v in SEEDS) + (hx(BERROR),)))
+t0 = time.time()
+print("%-16s %-34s %-34s %-62s %s" % ("row", "got", "want", "note", ""))
+
+# ================================================================ apparatus
+#  APPARATUS NEGATIVE CONTROL: the session oracle must be able to go red.
+cmds, _ = place([(CODE, [OR_I(4, 0, LIVE), BR_SELF()])])
+t, how = run_piped("187", seeds([(4, SENT)]) + cmds + ["pc=0x%x" % CODE, "step 1", "reg"], "neg_apparatus")
+rn = analyse(t, how, [])
+row("neg apparatus", "%s/%s" % (how, hx(g(rn, 4))), "exit1/absent",
+    "bogus subtype `187' -> no machine -> no register dump")
+
+# ================================================================ accept side (mvme187): an ACCEPTED device access
+r_ok = session("ok", "mvme187", MV_DCMMU, MV_ICMMU, LD(4, 5, 0), [(5, VME_VBR)])
+bad = prereq_bad(r_ok)
+row("mv devsig", died(r_ok) if r_ok.regs is None else "%s/%s" % (hx(g(r_ok, 10)), hx(g(r_ok, 9))),
+    "%s/%s" % (hx(IDR), hx(IDR)), "DEVICE SIGNATURE: mvme187 data/instr CMMU IDR (RAM reads 0)")
+row("mv cmmu rt", died(r_ok) if r_ok.regs is None else "/".join(hx(g(r_ok, n)) for n in (11, 12, 17, 18)),
+    "/".join(hx(v) for v in SEEDS), "LIVENESS: four seeds stored and read back via the CMMU decode")
+row("ok route", bad if bad else "%s/r4=%s" % (path_of(r_ok), hx(g(r_ok, 4))), "fall/r4=%s" % hx(VBR_SEED),
+    "ld VME VBR 0xfff40088 (cased): served 0x67000000, no exception")
+row("ok regs", bad if bad else "/".join(hx(g(r_ok, n)) for n in (13, 14, 15, 16)), "/".join(hx(v) for v in SEEDS),
+    "an ACCEPTED device access writes no fault metadata")
+
+
+# ================================================================ generic arm: three refused accesses (mvme187)
+def refused(tag, access, extra, addr, load, what):
+    r = session(tag, "mvme187", MV_DCMMU, MV_ICMMU, access, extra)
+    bad = prereq_bad(r)
+    w_route = "v3/%s/%s" % (hx(SXIP_DATA), hx(addr & ~3))
+    g_route = bad if bad else route(r, load)
+    g_pfsr = bad if bad else hx(g(r, 13))
+    g_pfar = bad if bad else hx(g(r, 14))
+    row(tag + " route", g_route, w_route, "%s: vector 3, SXIP, DMA0 -- the exception is THIS access" % what)
+    row(tag + " pfsr", g_pfsr, hx(BERROR), "data CMMU PFSR after the fault (seeded %s)" % hx(D_PFSR_SEED))
+    row(tag + " pfar", g_pfar, hx(addr), "data CMMU PFAR after the fault (seeded %s)" % hx(D_PFAR_SEED))
+    row(tag + " icmmu", bad if bad else kept_i(r), "kept", "instruction CMMU PFSR/PFAR keep their seeds")
+    symptom(tag + " pfsr", g_pfsr, hx(BERROR), hx(D_PFSR_SEED))
+    symptom(tag + " pfar", g_pfar, hx(addr), hx(D_PFAR_SEED))
+    return r
+
+
+refused("uld", LD(4, 5, 0), [(5, UNREAD)], UNREAD, True, "ld 0xfff46010 (unreadable)")
+refused("ust", ST(8, 5, 0), [(5, UNREAD), (8, STVAL)], UNREAD, False, "st 0xfff46010 (unreadable)")
+refused("vme", LD(4, 5, 0), [(5, VME_P1)], VME_P1, True, "ld 0xfff40090 (VME pop. 1)")
+
+# ================================================================ the LUNA probe address (luna-88k)
+r_lu = session("luna", "luna-88k", LU_DCMMU, LU_ICMMU, LD(4, 5, 0), [(5, LUNA_PROBE)])
+bad = prereq_bad(r_lu)
+row("luna devsig", died(r_lu) if r_lu.regs is None else "%s/%s" % (hx(g(r_lu, 10)), hx(g(r_lu, 9))),
+    "%s/%s" % (hx(IDR), hx(IDR)), "DEVICE SIGNATURE: luna-88k data/instr CMMU IDR")
+row("luna cmmu rt", died(r_lu) if r_lu.regs is None else "/".join(hx(g(r_lu, n)) for n in (11, 12, 17, 18)),
+    "/".join(hx(v) for v in SEEDS), "LIVENESS: the four seeds read back")
+if bad:
+    g_lr = bad
+else:
+    cr = r_lu.cr or {}
+    g_lr = "%s/%s/%s/r4=%s" % (path_of(r_lu), hx(cr.get("SXIP")), hx(cr.get("DMA0")), hx(g(r_lu, 4)))
+w_lr = "v3/%s/%s/r4=%s" % (hx(SXIP_DATA), hx(LUNA_PROBE), hx(SENT))
+row("luna route", g_lr, w_lr, "ld 0x3ffffff0: a refused access raises vector 3, serves nothing")
+g_lpfsr = bad if bad else hx(g(r_lu, 13))
+g_lpfar = bad if bad else hx(g(r_lu, 14))
+row("luna pfsr", g_lpfsr, hx(BERROR), "data CMMU PFSR (seeded %s)" % hx(D_PFSR_SEED))
+row("luna pfar", g_lpfar, hx(LUNA_PROBE), "data CMMU PFAR (seeded %s)" % hx(D_PFAR_SEED))
+row("luna icmmu", bad if bad else kept_i(r_lu), "kept", "instruction CMMU PFSR/PFAR keep their seeds")
+SYMPTOM.append(("luna route", "FIXED" if g_lr == w_lr else
+                ("STALE" if g_lr == "fall/0x0/0x0/r4=0x0" else "OTHER")))
+symptom("luna pfar", g_lpfar, hx(LUNA_PROBE), hx(D_PFAR_SEED))
+
+# ================================================================ the INSTRUCTION label (mvme187): B5a
+#  Stepped, the step loop's disassembly pre-read reaches the arm with CACHE_INSTRUCTION (R2, disclosed in the header):
+#  the selector picks cmmu[0], and vector 2 runs its marker code.  `ifetch route' is an ATTRIBUTION row: the vector
+#  expression reads `cache' on its own, so it cannot see the selector; `ifetch pfsr/pfar' carry the selector variant.
+r_if = session("ifetch", "mvme187", MV_DCMMU, MV_ICMMU, JMP(5), [(5, UNREAD)])
+bad = prereq_bad(r_if)
+cri = r_if.cr or {}
+g_ir = bad if bad else "%s/%s/%s" % (path_of(r_if), hx(cri.get("SXIP")), hx(cri.get("DMA0")))
+row("ifetch route", g_ir, "v2/%s/%s" % (hx(SXIP_IFETCH), hx(0)),
+    "jmp (r5) to 0xfff46010: vector 2, SXIP|V|E, no data unit (attribution row)")
+g_ipfsr = bad if bad else hx(g(r_if, 15))
+g_ipfar = bad if bad else hx(g(r_if, 16))
+row("ifetch pfsr", g_ipfsr, hx(BERROR), "INSTRUCTION CMMU PFSR after the refused fetch (seeded %s)" % hx(I_PFSR_SEED))
+row("ifetch pfar", g_ipfar, hx(UNREAD), "INSTRUCTION CMMU PFAR after the refused fetch (seeded %s)" % hx(I_PFAR_SEED))
+row("ifetch dcmmu", bad if bad else kept_d(r_if), "kept", "the DATA CMMU keeps its seeds after an instruction refusal")
+symptom("ifetch pfsr", g_ipfsr, hx(BERROR), hx(I_PFSR_SEED))
+symptom("ifetch pfar", g_ipfar, hx(UNREAD), hx(I_PFAR_SEED))
+
+# ================================================================ a NO_EXCEPTIONS caller (mvme187, its own session): B5b
+#  The `ok' program, with the debugger's `dump' of the unreadable window between the readbacks (step 10) and the
+#  accepted access.  The dump runs on cpus[bootstrap_cpu] with CACHE_NONE | NO_EXCEPTIONS: the device is not called,
+#  res 0 -> -1, and the arm's `!no_exceptions' term keeps its body out -- zeros, no vector, no CMMU write.  A later
+#  fault would overwrite the evidence, so the session has none: its access is the accepted VBR load.
+_cmds, _placed = place(blocks_for(LD(4, 5, 0)))
+_cmds = seeds(std_regs(MV_DCMMU, MV_ICMMU, [(5, VME_VBR)])) + _cmds + \
+    ["pc=0x%x" % CODE, "step 10", "dump 0x%x 0x%x" % (UNREAD, UNREAD + 16), "reg", "step 9", "reg", "reg 0,0"]
+t, how = run_piped("mvme187", _cmds, "dbg")
+r_db = analyse(t, how, _placed)
+check_unasm(r_db)
+_dump_o = [o for c, o in parts_of(t) if c.startswith("dump")]
+_reg_o = [o for c, o in parts_of(t) if c == "reg"]
+bad = prereq_bad(r_db)
+if bad:
+    g_db = bad
+elif not _dump_o or len(_reg_o) < 2:
+    g_db = "nodump: the dump or the post-dump reg produced no output"
+else:
+    _w = dump_words(_dump_o[0], UNREAD)
+    _dcls = ("failed" if _w == "failed" else "zeros" if _w == [0, 0, 0, 0] else
+             "nodump" if _w is None else "other(%s)" % "/".join(hx(v) for v in _w))
+    _pca, _ = regs_of(_reg_o[0])
+    _kept = ("kept" if tuple(g(r_db, n) for n in (13, 14, 15, 16)) == SEEDS else
+             "/".join(hx(g(r_db, n)) for n in (13, 14, 15, 16)))
+    g_db = "%s/%s/%s/%s" % (_dcls, hx(_pca), path_of(r_db), _kept)
+row("dbg noexc", g_db, "zeros/%s/fall/kept" % hx(ACCESS_PC),
+    "debugger dump of 0xfff46010: zeros, no vector, seeds survive")
+
+# ================================================================ a CMMU-LESS cpu (mvme187 -n 2, cpu 1): B5c, conjunctive
+#  cpu 0: the seeded `uld' program, alone, then parked (nothing scored from it -- its results are printed as INFO).
+#  cpu 1: part 1 the refused DATA load (cmmu[1] NULL), part 2 the refused INSTRUCTION fetch (cmmu[0] NULL; delivered as
+#  ERROR because the data fault left PSR.SFRZ set -- see the header).  Prerequisites are cpu 1's own.
+_blocks = blocks_for(LD(4, 5, 0)) + null_cpu1_blocks()
+_cmds, _placed = place(_blocks)
+_c1 = ["focus 1"] + seeds([(5, UNREAD), (20, HANDLED_V), (21, FELL_V), (4, SENT)]) + \
+    ["VBR=0x%x" % VBR1, "pc=0x%x" % CODE1, "focus 0"]
+_cmds = seeds(std_regs(MV_DCMMU, MV_ICMMU, [(5, UNREAD)])) + _cmds + \
+    ["put w 0x%x, 0x0" % MARK_H, "put w 0x%x, 0x0" % MARK_F, "pc=0x%x" % CODE, "step %d" % NSTEPS, "reg 0",
+     "tlbdump 1"] + _c1 + \
+    ["pause 1", "step 3", "dump 0x%x 0x%x" % (MARK_H, MARK_H + 8), "reg 1", "reg 1,0",
+     "step 5", "dump 0x%x 0x%x" % (MARK_H, MARK_H + 8), "reg 1"]
+t, how = run_piped("mvme187-n2", _cmds, "null")
+r_nl = analyse(t, how, _placed)
+check_unasm(r_nl)
+_ps = parts_of(t)
+_tlb1 = [o for c, o in _ps if c == "tlbdump 1"]
+_dumps = [o for c, o in _ps if c.startswith("dump")]
+_r1 = [o for c, o in _ps if c == "reg 1"]
+_cr1 = [o for c, o in _ps if c == "reg 1,0"]
+_r0 = [o for c, o in _ps if c == "reg 0"]
+
+
+def _marks(o):
+    w = dump_words(o, MARK_H)
+    if not isinstance(w, list) or len(w) < 2:
+        return None
+    hm, fm = w[0], w[1]
+    if hm == HANDLED_V and fm == 0:
+        return "handled"
+    if fm == FELL_V and hm == 0:
+        return "fell"
+    if hm == HANDLED_V and fm == FELL_V:
+        return "both"
+    if hm == 0 and fm == 0:
+        return "neither"
+    return "odd(%s/%s)" % (hx(hm), hx(fm))
+
+
+_m1 = _marks(_dumps[0]) if len(_dumps) >= 1 else None
+_m2 = _marks(_dumps[1]) if len(_dumps) >= 2 else None
+_pc1a = regs_of(_r1[0])[0] if len(_r1) >= 1 else None
+_pc1b = regs_of(_r1[1])[0] if len(_r1) >= 2 else None
+_crn = crs_of(_cr1[0]) if _cr1 else {}
+if not _tlb1:
+    _premise = "premise: no `tlbdump 1' output, the NULL cell was not shown"
+elif "cpu1: CMMU" in _tlb1[0]:
+    _premise = "premise: cpu1 has a CMMU, the cell under test is not the NULL cell"
+else:
+    _premise = None
+#  the failed-access lines the arm prints after part 1's marker dump: the instruction refusal reached the arm
+_after1 = t.split("dump 0x%x" % MARK_H, 1)[1] if ("dump 0x%x" % MARK_H) in t else ""
+_after1 = _after1.split("\n", 1)[1] if "\n" in _after1 else ""
+_after1 = _after1.split("dump 0x%x" % MARK_H, 1)[0]
+
+if _m1 is None:
+    g_nr = died(r_nl) if how != "exit0" else "nodump: part 1's marker dump produced no marker line"
+elif _premise:
+    g_nr = _premise
+elif _pc1a != J:
+    g_nr = "cpu1 pc=%s after part 1: it did not reach J (0x%x), check not made" % (hx(_pc1a), J)
+else:
+    g_nr = "%s/%s/%s" % (_m1, hx(_crn.get("SXIP")), hx(_crn.get("DMA0")))
+if how != "exit0":
+    g_ns = died(r_nl)
+elif _premise:
+    g_ns = _premise
+elif _pc1a != J:
+    g_ns = "cpu1 pc=%s after part 1: the fetch at J was never reached, check not made" % hx(_pc1a)
+elif _pc1b is None or _pc1b == J:
+    g_ns = "cpu1 pc=%s after part 2: the fetch was not attempted, check not made" % hx(_pc1b)
+elif "failed ]" not in _after1:
+    g_ns = "part 2 printed no failed-access line: the instruction refusal did not reach the arm, check not made"
+else:
+    g_ns = "%s/%s" % (how, "readable" if (_m1 is not None and _m2 is not None) else "unreadable")
+row("null surv", g_ns, "exit0/readable",
+    "-n 2 cpu 1 (no CMMU): alive after the data AND instruction refusals")
+row("null route", g_nr, "handled/%s/%s" % (hx(SXIP_NULL), hx(UNREAD)),
+    "cpu 1's refused load: HANDLED set, FELL clear, SXIP, DMA0")
+_pc0, _g0 = regs_of(_r0[0]) if _r0 else (None, None)
+_g0 = _g0 or {}
+_v76 = (_g0.get(7), _g0.get(6))
+_p0 = "absent" if not _g0 else "v3" if _v76 == (3, SENT) else "fall" if _v76 == (SENT, FALL) else "odd"
+print("INFO null cpu0   (unscored) pc=%s path=%s dPFSR=%s dPFAR=%s r31=%s; cpu1 end pc=%s markers-after-part2=%s"
+      % (hx(_pc0), _p0, hx(_g0.get(13)), hx(_g0.get(14)), hx(_g0.get(31)), hx(_pc1b), _m2))
+
+# ================================================================ INFO (unscored): an UNCLAIMED physical address
+#  An UNCLAIMED physical address never reaches the refused-access arm (the premise correction in the header).
+ru = session("info_unclaimed", "mvme187", MV_DCMMU, MV_ICMMU, LD(4, 5, 0), [(5, UNCLAIMED)], scored=False)
+cru = ru.cr or {}
+print("INFO unclaimed   ld 0x%08x (no device, past RAM): how=%s path=%s r4=%s SXIP=%s dPFSR=%s dPFAR=%s "
+      "iPFSR=%s iPFAR=%s non-existant-msg=%d unasm=%d/%d"
+      % (UNCLAIMED, ru.how, path_of(ru) if ru.regs else "absent", hx(g(ru, 4)), hx(cru.get("SXIP")),
+         hx(g(ru, 13)), hx(g(ru, 14)), hx(g(ru, 15)), hx(g(ru, 16)), ru.text.count("non-existant"),
+         *check_unasm(ru, scored=False)))
+
+# ================================================================ disassembly cross-check
+#  LITERAL want, derived by hand from the final program listing BEFORE the first run (BUILD_SPEC.md section 11, Q9):
+#  each standard scored session places 23 words (vectors 2 + 2, CODE 13, handler 6) -- ok, uld, ust, vme, luna,
+#  ifetch and dbg: 7 x 23 = 161; the null session places those 23 plus cpu 1's 8 (CODE1 4, VBR1+0x10 1, VBR1+0x18 2,
+#  VBR1+0x50 1) = 31.  161 + 31 = 192.  The apparatus session and INFO unclaimed are not counted.  Computing it from
+#  the session list would let a shrunk list pass its own count.
+row("unasm", "%d/%d" % (UNASM["ok"], UNASM["n"]), "192/192", "every placed word re-read by the disassembler")
+for b in UNASM["bad"][:8]:
+    print("  unasm mismatch: %s" % b)
+
+# ================================================================ score + done
+npass = sum(1 for _, ok in rows if ok)
+print("SCORE %d/%d" % (npass, len(rows)))
+CONTROL_ROWS = ("neg apparatus", "mv devsig", "mv cmmu rt", "luna devsig", "luna cmmu rt", "unasm")
+_status = dict(rows)
+control_ok = all(_status.get(n, False) for n in CONTROL_ROWS)    # a renamed control fails loudly
+assert len(SYMPTOM) == 10, SYMPTOM
+_cls = [c for _, c in SYMPTOM]
+if all(c == "STALE" for c in _cls):
+    sym = "PRESENT %d/10" % len(_cls)
+elif all(c == "FIXED" for c in _cls):
+    sym = "ABSENT"
+else:
+    sym = "MIXED " + ",".join("%s=%s" % (n, c) for n, c in SYMPTOM)
+print("M88K_BUSERR_RESULT=%d/%d" % (npass, len(rows)))
+print("M88K_BUSERR_CONTROL=%s" % ("OK" if control_ok else "FAIL"))
+print("M88K_BUSERR_SYMPTOM=%s" % sym)
+print("M88K_BUSERR_REVISION=%d" % REVISION)
+print("M88K_BUSERR_LABEL=%s" % LABEL)
+print("M88K_BUSERR_ELAPSED=%.3fs" % (time.time() - t0))
+red = [n for n, ok in rows if not ok]
+if red:
+    print("M88K_BUSERR_RED=%s" % ",".join(red))
+shutil.rmtree(_TMPDIR, ignore_errors=True)
+print("M88K_BUSERR_PROBE_DONE")
+sys.stdout.flush()
+sys.exit(0 if control_ok and npass == len(rows) else 1)

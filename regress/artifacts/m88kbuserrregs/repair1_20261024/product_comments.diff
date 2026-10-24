@@ -1,0 +1,80 @@
+--- a/src/cpus/memory_rw.c
++++ b/src/cpus/memory_rw.c
+@@ -612,19 +612,19 @@
+ 					    0, vaddr, 0, 0, 0, 0);
+ #endif
+ #ifdef MEM_M88K
+-					/*  #570: record the bus error in the
+-					    faulting side's CMMU first: PFSR =
+-					    BERROR << 16 (the field OpenBSD/mvme88k's
+-					    trap.c extracts) and PFAR = orig_paddr,
+-					    the PHYSICAL address saved before paddr
+-					    was made device-relative.  cmmu[0] is the
+-					    instruction CMMU, cmmu[1] the data CMMU
+-					    (memory_m88k.c's index); the other CMMU
+-					    is not written.  A cpu without a CMMU
+-					    gets no write and still takes the
+-					    exception.  NO_EXCEPTIONS callers (the
+-					    debugger) never get here: the test above
+-					    keeps them out.  */
++					/*  #570: record the bus error in the faulting side's
++					    CMMU first: PFSR = BERROR << 16 (the field
++					    OpenBSD/mvme88k's trap.c extracts) and PFAR =
++					    orig_paddr, the PHYSICAL address saved before paddr
++					    was made device-relative.  cmmu[0] is the instruction
++					    CMMU, cmmu[1] the data CMMU (memory_m88k.c's index);
++					    the other CMMU is not written.  For a CPU without a
++					    CMMU, this arm makes no register write; the exception
++					    call is unchanged.  `null route` scores data-access
++					    delivery; instruction-access delivery is unscored
++					    (`null surv` scores survival only).  NO_EXCEPTIONS
++					    callers (e.g. the debugger's dump) never get here:
++					    the test above keeps them out.  */
+ 					{
+ 						struct m8820x_cmmu *cmmu =
+ 						    cpu->cd.m88k.cmmu[cache ==
+--- a/src/devices/dev_m8820x.c
++++ b/src/devices/dev_m8820x.c
+@@ -290,8 +290,8 @@
+ 			/*  #433: ignoring a guest write to SSR corrupts nothing the model
+ 			    maintains -- but the first version of this comment gave a WRONG
+ 			    REASON, saying SSR is "written by the MODEL".  Measured: NOTHING
+-			    in the tree ever writes reg[CMMU_SSR]; the model writes only PFSR and
+-			    PFAR (memory_m88k.c:382-405 and, since #570, memory_rw.c's refused-device
++			    in the tree ever writes reg[CMMU_SSR]; the model's FAULT PATHS write only PFSR
++			    and PFAR (memory_m88k.c:382-405 and, since #570, memory_rw.c's refused-device
+ 			    arm).  The right reason is stronger: SSR reads as zero, V-bit clear, so
+ 			    DROPPING the write is what makes the command arm's own argument true --
+ 			    if a guest could store here it could set the V bit, and a dropped PROBE
+@@ -323,14 +323,14 @@
+ 	 *    PFSR, PFAR   no translation consumer at all.  m88k_translate_v2p never reads
+ 	 *                 them; they are status OUTPUTS.  The strongest evidence in the
+ 	 *                 round is that THE MODEL ITSELF already relies on this: the fault
+-	 *                 path writes PFSR (memory_m88k.c:382-384; #570: and memory_rw.c's arm -- no
+-	 *                 longer dev_luna88k.c) and PFAR (memory_m88k.c:399,405 -- TWO DISCRETE LINES,
+-	 *                 the file named again because a bare ":399-405" after a dev_luna88k.c
+-	 *                 citation read as a keyboard scancode switch; #570: and memory_rw.c's arm)
+-	 *                 DIRECTLY through reg[], with no purge, ~10^5
+-	 *                 times per boot -- against 2 guest writes per boot through this
+-	 *                 handler.  If a PFSR write owed a purge the model would already
+-	 *                 be wrong, five orders of magnitude more often than here.
++	 *                 path writes PFSR (memory_m88k.c:382-384) and PFAR (memory_m88k.c:399,405 --
++	 *                 TWO DISCRETE LINES, the file named again: a bare ":399-405" once read as a
++	 *                 dev_luna88k.c keyboard scancode switch) DIRECTLY through reg[], with no
++	 *                 purge, ~10^5 times per boot (memory_m88k.c:382-405's translation-fault writer
++	 *                 alone) -- against 2 guest writes per boot through this handler.  #570's
++	 *                 refused-device arm (memory_rw.c) also writes both directly with no purge; its
++	 *                 frequency was NOT measured.  If a PFSR write owed a purge the model would
++	 *                 already be wrong, five orders of magnitude more often than here.
+ 	 *    SAR          IS read -- at dev_m8820x.c:110, as the address operand of an SCR
+ 	 *                 flush command.  So "nothing reads it" would be wrong.  What is
+ 	 *                 true is that its only reader is that command, and THAT ARM DOES
+@@ -358,7 +358,7 @@
+ 	 *  reg[] is exactly M8820X_LENGTH/4 words and relative_addr is bounded by
+ 	 *  M8820X_LENGTH at registration, so the computed index cannot reach batc[] or
+ 	 *  patc_*[]; and the only code that iterates the cmmu[] POINTER ARRAY
+-	 *  (cpu_m88k.c:354-355) touches batc[] and patc_*[] and never reg[] -- not "the
++	 *  (cpu_m88k.c:358-359) touches batc[] and patc_*[] and never reg[] -- not "the
+ 	 *  only code that iterates a CMMU", since PATC and BATC are iterated elsewhere.
+ 	 *
+ 	 *  NOT FOLDED IN, filed instead: a SAPR/UAPR write does not invalidate the guest's

@@ -1,0 +1,136 @@
+#!/usr/bin/env python3
+"""explore_conj.py -- T36 / #570 builder EXPLORATION, third set (not a row, not a leg, not the detector).
+
+E5  BUILD_SPEC section 10's CONJUNCTIVE null session, in the STEPPED form the probe's piped-stdin idiom can host
+    (a `continue' cannot be piped: the debugger and the guest console share stdin, vme_default_probe.py:46-48).
+    mvme187 -n 2.  cpu 0 runs the seeded `uld' program alone (19 steps) and parks in H's `br .'.  cpu 1 (no CMMU) is
+    set up with `focus 1' (pc, r5, two marker values, its OWN VBR = 0x30000 by the debugger), RAM markers at 0xf000
+    (HANDLED) / 0xf004 (FELL) are zero-initialised with `put', then `pause 1' and:
+      step 3   cpu 1: ld r4,r5,0 (refused DATA load, cmmu[1] NULL) -> its vector 3 at 0x30018 stores HANDLED and
+               branches to J; (the FELL store after the load runs only if no exception was raised); br J
+      dump     the two markers  -- the data-cell observation, BEFORE the instruction refusal
+      step 5   cpu 1: J: jmp (r5) -> the instruction fetch at 0xfff46010 is refused with cmmu[0] NULL (stepped, the
+               R2 pre-read reaches the arm); PSR.SFRZ is still set from the first fault, so the vector is ERROR (10,
+               VBR + 0x50), where a `br .' parks cpu 1
+      dump     the two markers again (readable after the instruction cell)
+    Run against the HEAD-equivalent work binary: expect HANDLED set, FELL clear both times, two device-failed lines,
+    the SFRZ => ERROR message, cpu 1 parked at 0x30050, the session alive.
+usage: explore_conj.py <gxemul> <dumpdir>
+"""
+import os, re, subprocess, sys, tempfile
+
+BIN, DUMP = sys.argv[1], sys.argv[2]
+_T = tempfile.mkdtemp(prefix="t36z_")
+DUMMY = os.path.join(_T, "dummy.bin")
+open(DUMMY, "wb").write(b"\0\0\0\0")
+PROMPT = "GXemul> "
+CODE, H, CODE1, VBR1 = 0x10000, 0x10100, 0x10200, 0x30000
+J = CODE1 + 12
+MARK_H, MARK_F = 0xf000, 0xf004
+HANDLED, FELLV = 0x4a4a4a4a, 0x46464646
+SENT, FALL, LIVE = 0xdeadbeef, 0x1234, 0x5678
+SEEDS = (0x5a5a5a5a, 0x13572468, 0x2468ace0, 0x0badf00d)
+MV_D, MV_I, UNREAD = 0xfff7f000, 0xfff77000, 0xfff46010
+
+
+def enc(op, rd, rs, imm):
+    return (op << 26) | (rd << 21) | (rs << 16) | imm
+def LD(rd, rs, o): return enc(0x05, rd, rs, o)
+def ST(rs, rb, o): return enc(0x09, rs, rb, o)
+def OR(rd, rs, i): return enc(0x16, rd, rs, i)
+def BR(frm, to): return 0xc0000000 | (((to - frm) >> 2) & 0x3ffffff)
+def JMP(r): return 0xf400c000 | r
+BRSELF = 0xc0000000
+
+
+VEC0 = [(0x10, [OR(7, 0, 2), BR(0x14, H)]), (0x18, [OR(7, 0, 3), BR(0x1c, H)])]
+HND = (H, [LD(13, 3, 0x108), LD(14, 3, 0x10c), LD(15, 2, 0x108), LD(16, 2, 0x10c), OR(31, 0, LIVE), BRSELF])
+CODE0 = (CODE, [LD(10, 3, 0), LD(9, 2, 0), ST(20, 3, 0x108), ST(21, 3, 0x10c), ST(22, 2, 0x108), ST(23, 2, 0x10c),
+                LD(11, 3, 0x108), LD(12, 3, 0x10c), LD(17, 2, 0x108), LD(18, 2, 0x10c), LD(4, 5, 0),
+                OR(6, 0, FALL), BR(CODE + 48, H)])
+CODE1B = (CODE1, [LD(4, 5, 0), ST(21, 0, MARK_F), BR(CODE1 + 8, J), JMP(5)])
+VEC1 = [(VBR1 + 0x10, [BRSELF]), (VBR1 + 0x18, [ST(20, 0, MARK_H), BR(VBR1 + 0x1c, J)]), (VBR1 + 0x50, [BRSELF])]
+
+
+def place(blocks):
+    out = []
+    for at, ws in blocks:
+        for i, w in enumerate(ws):
+            out.append("put w 0x%x, 0x%08x" % (at + 4 * i, w))
+        out.append("unassemble 0x%x 0x%x" % (at, at + 4 * len(ws)))
+    return out
+
+
+def run(tag, argv, cmds):
+    inp = ("\n".join(cmds + ["quit"]) + "\n").encode()
+    try:
+        p = subprocess.run(argv, input=inp, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=90)
+        t, how = p.stdout.decode("latin-1", "replace").replace("\r", ""), \
+            ("sig%d" % -p.returncode) if p.returncode < 0 else "exit%d" % p.returncode
+    except subprocess.TimeoutExpired as e:
+        t, how = (e.output or b"").decode("latin-1", "replace"), "TIMEOUT"
+    open(os.path.join(DUMP, tag + ".txt"), "w").write("# argv: %s\n# how: %s\n%s" % (" ".join(argv), how, t))
+    return t, how
+
+
+def parts(t):
+    r = []
+    for p in t.split(PROMPT)[1:]:
+        c, _, o = p.partition("\n")
+        r.append((c.strip(), o))
+    return r
+
+
+GPR = re.compile(r"\br(\d+)\s*=\s*(0x[0-9a-fA-F]+)")
+PCR = re.compile(r"cpu(\d+):\s+pc\s+=\s+(0x[0-9a-fA-F]+)")
+CRR = re.compile(r"\b([A-Z][A-Z0-9]*)=(0x[0-9a-fA-F]+)")
+DMP = re.compile(r"^0x0000f000  ([0-9a-f]{8}) ([0-9a-f]{8}) ", re.M)
+def regs(o):
+    m = PCR.search(o)
+    return (int(m.group(2), 16) if m else None), {int(a): int(b, 16) for a, b in GPR.findall(o)}
+def path(g):
+    v7, v6 = g.get(7), g.get(6)
+    return {(3, SENT): "v3", (2, SENT): "v2", (SENT, FALL): "fall"}.get((v7, v6), "odd(r6=%s,r7=%s)" % (v6, v7))
+def marks(o):
+    m = DMP.search(o)
+    return ("H=%s F=%s" % (m.group(1), m.group(2))) if m else "(no marker line: %r)" % o.strip()[:60]
+
+
+print("EXPLORE_CONJ binary=%s" % BIN)
+argv = [BIN, "-V", "-x", "-E", "mvme88k", "-e", "mvme187", "-M", "64", "-n", "2", "0x%x:%s" % (CODE, DUMMY)]
+c0 = ["r2=0x%x" % MV_I, "r3=0x%x" % MV_D] + ["r%d=0x%x" % (20 + i, v) for i, v in enumerate(SEEDS)] + \
+     ["r5=0x%x" % UNREAD] + ["r%d=0x%x" % (r, SENT) for r in (4, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 31)]
+c1 = ["r5=0x%x" % UNREAD, "r20=0x%x" % HANDLED, "r21=0x%x" % FELLV, "r4=0x%x" % SENT, "VBR=0x%x" % VBR1,
+      "pc=0x%x" % CODE1]
+cmds = c0 + place(VEC0 + [CODE0, HND, CODE1B] + VEC1) + \
+    ["put w 0x%x, 0x0" % MARK_H, "put w 0x%x, 0x0" % MARK_F, "pc=0x%x" % CODE, "step 19", "reg 0", "tlbdump 1",
+     "focus 1"] + c1 + ["focus 0", "reg 1,0", "pause 1", "step 3", "dump 0x%x 0x%x" % (MARK_H, MARK_H + 8), "reg 1",
+     "step 5", "dump 0x%x 0x%x" % (MARK_H, MARK_H + 8), "reg 1", "reg 1,0", "reg 0"]
+t, how = run("E5_conj", argv, cmds)
+ps = parts(t)
+dumps = [o for c, o in ps if c.startswith("dump")]
+r1 = [o for c, o in ps if c == "reg 1"]
+r10 = [o for c, o in ps if c == "reg 1,0"]
+r0 = [o for c, o in ps if c == "reg 0"]
+pc0a, g0a = regs(r0[0]) if r0 else (None, {})
+print("E5 how=%s" % how)
+print("E5 cpu0 after its 19 steps: pc=%s path=%s dPFSR/dPFAR=%s/%s r31=%s" % (
+    hex(pc0a) if pc0a is not None else None, path(g0a), hex(g0a.get(13, 0)), hex(g0a.get(14, 0)), hex(g0a.get(31, 0))))
+cr_before = {a: int(b, 16) for a, b in CRR.findall(r10[0])} if r10 else {}
+print("E5 cpu1 before: VBR=%s PSR=%s ; 'cpu1: CMMU' lines in tlbdump 1 = %d" % (
+    hex(cr_before.get("VBR", 0)), hex(cr_before.get("PSR", 0)),
+    ([o for c, o in ps if c == "tlbdump 1"] or [""])[0].count("cpu1: CMMU")))
+for k, (d, rr) in enumerate(zip(dumps, r1)):
+    pc, g = regs(rr)
+    print("E5 after part %d: markers %s ; cpu1 pc=%s r4=%s" % (k + 1, marks(d), hex(pc) if pc is not None else None,
+          hex(g.get(4, 0))))
+cr_after = {a: int(b, 16) for a, b in CRR.findall(r10[-1])} if len(r10) > 1 else {}
+print("E5 cpu1 at end: SXIP=%s DMA0=%s PSR=%s VBR=%s" % (hex(cr_after.get("SXIP", 0)), hex(cr_after.get("DMA0", 0)),
+      hex(cr_after.get("PSR", 0)), hex(cr_after.get("VBR", 0))))
+pc0b, g0b = regs(r0[-1]) if r0 else (None, {})
+print("E5 cpu0 at end: pc=%s (parked; its CMMU readings above were taken before cpu 1 ran)" % (
+    hex(pc0b) if pc0b is not None else None))
+print("E5 markers: device-failed lines=%d  'SFRZ already set'=%d  'could not read'=%d  'UNIMPLEMENTED'=%d" % (
+    t.count("failed ]"), t.count("SFRZ already set"), t.count("could not read the instruction"),
+    t.count("UNIMPLEMENTED instruction")))
+print("EXPLORE_CONJ_DONE")

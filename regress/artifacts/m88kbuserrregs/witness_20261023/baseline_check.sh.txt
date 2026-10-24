@@ -1,0 +1,37 @@
+#!/bin/bash
+# T36 baseline check (git-bash side): build/ vs GXEMUL-SEC working tree vs HEAD blob.
+# Object reads only (git show / ls-files); never status/diff.
+SEC=/c/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC
+BLD=/c/DocumentNoSnc/cc/GXEMUL/build
+cd "$SEC" || exit 9
+echo "HEAD=$(git rev-parse HEAD)"
+echo "== the three files the round will edit =="
+for f in src/cpus/memory_rw.c src/devices/dev_luna88k.c src/devices/dev_m8820x.c; do
+    hb=$(git show "HEAD:$f" | md5sum | cut -c1-32)
+    wt=$(md5sum < "$SEC/$f" | cut -c1-32)
+    bd=$(md5sum < "$BLD/$f" | cut -c1-32)
+    if cmp -s "$SEC/$f" "$BLD/$f"; then c1=CLEAN; else c1=DIFFERS; fi
+    if [ "$hb" = "$wt" ]; then c2=CLEAN; else c2=DIFFERS; fi
+    echo "$f  build-vs-SEC:$c1  SEC-vs-HEAD:$c2  md5 head=$hb wt=$wt build=$bd"
+done
+echo "== every git-tracked file under src/ (shared set; divergence set excluded) =="
+div=$(grep -vE '^\s*(#|$)' tools/est_divergence.txt)
+n=0; same=0; diff=0; absent=0; skipped=0
+difflist=""
+while IFS= read -r f; do
+    if printf '%s\n' "$div" | grep -qxF "$f"; then skipped=$((skipped+1)); continue; fi
+    n=$((n+1))
+    if [ ! -f "$BLD/$f" ]; then absent=$((absent+1)); difflist="$difflist ABSENT:$f"; continue; fi
+    if cmp -s "$SEC/$f" "$BLD/$f"; then same=$((same+1)); else diff=$((diff+1)); difflist="$difflist DIFF:$f"; fi
+done < <(git ls-files src/)
+echo "shared tracked files considered=$n  build==SEC: $same  differ: $diff  absent-in-build: $absent  (divergence-set skipped: $skipped)"
+for x in $difflist; do echo "  $x"; done
+echo "== working tree vs HEAD for the same tracked src/ set (object reads only) =="
+wn=0; wsame=0; wdiff=0; wlist=""
+while IFS= read -r f; do
+    wn=$((wn+1))
+    if git show "HEAD:$f" | cmp -s - "$SEC/$f"; then wsame=$((wsame+1)); else wdiff=$((wdiff+1)); wlist="$wlist $f"; fi
+done < <(git ls-files src/)
+echo "tracked src/ files=$wn  SEC-wt==HEAD: $wsame  differ: $wdiff"
+for x in $wlist; do echo "  WT-DIFF:$x"; done
+echo BASELINE_CHECK_DONE

@@ -1,0 +1,122 @@
+#!/usr/bin/env python3
+"""T36 / #570: the gate-14 block (regress/gate_arm.sh) and the two MANIFEST lines (tools/pipeline/check_probe_wiring.py),
+each inserted IDENTICALLY into (a) the working-tree file and (b) a staged copy built from the HEAD blob, written to
+table1_20261023/staged/.  Exact-once anchors; LF preserved; refuses on any miss.  Then proves the two insertions are
+the same text (the WT diff and the staged diff, each against its own pre-image).
+usage: apply_wiring570.py <GXEMUL-SEC> <wiring scratch dir> <table1 dir>"""
+import difflib
+import io
+import os
+import sys
+
+SEC, WIR, T1 = sys.argv[1], sys.argv[2], sys.argv[3]
+STG = os.path.join(T1, "staged")
+os.makedirs(STG, exist_ok=True)
+
+ROWS = ["neg apparatus", "mv devsig", "mv cmmu rt", "ok route", "ok regs",
+        "uld route", "uld pfsr", "uld pfar", "uld icmmu", "ust route", "ust pfsr", "ust pfar", "ust icmmu",
+        "vme route", "vme pfsr", "vme pfar", "vme icmmu",
+        "luna devsig", "luna cmmu rt", "luna route", "luna pfsr", "luna pfar", "luna icmmu",
+        "ifetch route", "ifetch pfsr", "ifetch pfar", "ifetch dcmmu", "dbg noexc", "null surv", "null route", "unasm"]
+assert len(ROWS) == 31 and len(set(ROWS)) == 31 and all(len(r) <= 15 for r in ROWS)
+
+GATE_ANCHOR = "#  ------------------------------------------------------------ hpcmipsctor (#444) + #536\n"
+GATE_BLOCK = "\n".join([
+    "#  ------------------------------------------------------------ m88kbuserrregs (#570)",
+    "#  A REFUSED m88k device access -- a device CLAIMS it and returns 0 with the cpu still running -- now records its",
+    "#  bus error in the faulting side's CMMU (memory_rw.c's refused-device arm: PFSR = BERROR << 16, PFAR = the physical",
+    "#  address), and luna-88k's 0x3ffffff0 probe case is refused through that arm instead of being served 0.  The",
+    "#  rung-3 witness (regress/artifacts/m88kbuserrregs/witness_20261023/, 16/24 on HEAD) is NOT run here; this is its",
+    "#  detector: 31 rows, the witness's 24 plus the instruction label (ifetch x4), a NO_EXCEPTIONS caller (dbg noexc)",
+    "#  and a CMMU-less cpu (null surv, null route; mvme187 -n 2).  Needs only the binary: mvme187 -M 64 [-n 2] and",
+    "#  luna-88k, each with a 4-byte dummy image at 0x10000 -- no PROM, no rig image.  Kill table:",
+    "#  regress/artifacts/m88kbuserrregs/table1_20261023/ (SCORES.txt).  Like #568's block above, it runs only if none",
+    "#  of this gate's eleven earlier skip points fired (the probe header names them).",
+    "M88KBELOG=$LOGDIR/m88k_buserr.log",
+    "python3 -u m88k_buserr_probe.py \"$PMAX\" gate > \"$M88KBELOG\" 2>&1 || true",
+    "if ! grep -q \"M88K_BUSERR_PROBE_DONE\" \"$M88KBELOG\"; then",
+    "    check \"m88k buserr probe completed\" \"no\" \"yes\"",
+    "else",
+    "    check \"m88k buserr probe completed\" \"yes\" \"yes\"",
+    "    check \"m88k buserr sentinel once\" \"$(grep -c '^M88K_BUSERR_PROBE_DONE$' \"$M88KBELOG\")\" \"1\"",
+    "    mbres=$(sed -n 's/^M88K_BUSERR_RESULT=//p' \"$M88KBELOG\")",
+    "    check \"m88k_buserr rows run\"     \"${mbres#*/}\" 31",
+    "    check \"m88k_buserr rows correct\" \"${mbres%/*}\" \"31\"",
+    "    check \"m88k buserr controls\" \"$(grep -c '^M88K_BUSERR_CONTROL=OK$' \"$M88KBELOG\")\" \"1\"",
+    "    check \"m88k buserr symptom absent\" \"$(grep -c '^M88K_BUSERR_SYMPTOM=ABSENT$' \"$M88KBELOG\")\" \"1\"",
+    "    for v in " + " ".join('"%s"' % r for r in ROWS) + "; do",
+    "        check \"m88k buserr row: $v\" \"$(count \"$M88KBELOG\" \"^$v  .*ok$\")\" \"1\"",
+    "    done",
+    "    check \"m88k buserr rows emitted\" \"$(( $(count \"$M88KBELOG\" \" ok$\") + $(count \"$M88KBELOG\" \" FAIL$\") ))\" \"31\"",
+    "    check \"m88k buserr rows green\"   \"$(count \"$M88KBELOG\" \" ok$\")\"   \"31\"",
+    "    check \"m88k buserr rows red\"     \"$(count \"$M88KBELOG\" \" FAIL$\")\" \"0\"",
+    "fi",
+    "", "", ""])
+
+MAN_ANCHOR = "\n}\n\n#  DATED, NAMED DEBT"
+MAN_BLOCK = "\n".join([
+    "",
+    "    #  #570 m88kbuserrregs (a refused m88k device access records its bus error in the faulting side's CMMU): the",
+    "    #  gated detector and the rung-3 witness of regress/artifacts/m88kbuserrregs/.  The kill table's frozen",
+    "    #  instrument and drivers are kept as *.py.txt / *.sh.txt, outside this checker's domain.",
+    "    \"m88k_buserr_probe.py\":",
+    "        (CLASS_DETECTOR, \"#570 m88kbuserrregs: 31 rows on unmodified -E mvme88k -e mvme187 -M 64 [-n 2] and -E luna88k -e \"",
+    "                         \"luna-88k (rev 2); gated in gate_arm.sh (gate 14) under the stem m88k_buserr, pinned at 31; kill \"",
+    "                         \"table artifacts/m88kbuserrregs/table1_20261023/ (SCORES.txt): pre-fix HEAD 21/31, fixed 31/31, \"",
+    "                         \"null medium 1/31 CONTROL=FAIL, all 20 variant legs red, 27 of 27 measurements as predicted\"),",
+    "    \"artifacts/m88kbuserrregs/witness_20261023/m88k_buserr_probe.py\":",
+    "        (CLASS_WITNESS, \"#570 m88kbuserrregs: the rung-3 pre-fix witness (rev 1, 24 rows, md5 d59798b0) -- 16/24 on HEAD \"",
+    "                        \"(witness_20261023/WITNESS_headbin.out), 24/24 on the fixed build (table1_20261023/fixed_witness24.out)\"),",
+])
+
+
+def rd(p):
+    with io.open(p, "r", encoding="utf-8", newline="") as f:
+        return f.read()
+
+
+def wr(p, t):
+    with io.open(p, "w", encoding="utf-8", newline="") as f:
+        f.write(t)
+
+
+def ins_before(text, anchor, block, what):
+    n = text.count(anchor)
+    if n != 1:
+        print("REFUSE %s: anchor found %d times" % (what, n))
+        sys.exit(1)
+    if anchor.startswith("\n}"):
+        return text.replace(anchor, block + anchor)
+    return text.replace(anchor, block + anchor)
+
+
+def added(a, b):
+    return [l for l in difflib.ndiff(a.splitlines(True), b.splitlines(True)) if l.startswith(("+ ", "- "))]
+
+
+jobs = [
+    ("gate_arm.sh WT", os.path.join(WIR, "gate_arm.WT_before.sh"), os.path.join(SEC, "regress", "gate_arm.sh"),
+     GATE_ANCHOR, GATE_BLOCK),
+    ("gate_arm.sh staged", os.path.join(WIR, "gate_arm.HEAD.sh"), os.path.join(STG, "gate_arm.sh"),
+     GATE_ANCHOR, GATE_BLOCK),
+    ("checker WT", os.path.join(WIR, "check_probe_wiring.WT_before.py.txt"),
+     os.path.join(SEC, "tools", "pipeline", "check_probe_wiring.py"), MAN_ANCHOR, MAN_BLOCK),
+    ("checker staged", os.path.join(WIR, "check_probe_wiring.HEAD.py.txt"), os.path.join(STG, "check_probe_wiring.py.txt"),
+     MAN_ANCHOR, MAN_BLOCK),
+]
+res = {}
+for what, pre, dst, anchor, block in jobs:
+    t0 = rd(pre)
+    if what.endswith("WT") and rd(dst) != t0:
+        print("REFUSE %s: the working-tree file changed since its pre-image was taken" % what)
+        sys.exit(1)
+    t1 = ins_before(t0, anchor, block, what)
+    wr(dst, t1)
+    res[what] = added(t0, t1)
+    print("WROTE %-18s %s  (+%d lines, -%d)" % (what, dst, sum(1 for l in res[what] if l[0] == "+"),
+                                              sum(1 for l in res[what] if l[0] == "-")))
+same_g = res["gate_arm.sh WT"] == res["gate_arm.sh staged"]
+same_c = res["checker WT"] == res["checker staged"]
+print("INSERTIONS IDENTICAL: gate_arm.sh %s, check_probe_wiring.py %s" % (same_g, same_c))
+print("APPLY_WIRING570_DONE")
+sys.exit(0 if same_g and same_c else 1)

@@ -1,0 +1,28 @@
+#!/bin/bash
+# T36 / #570 builder -- the two-part clearance, RUN (not asserted): part 1 = the four product files cmp clean against
+# GXEMUL-SEC; part 2 = [ binary -nt file ] for every tree that has a binary.  est/ is a SOURCE tree: part 2 N/A.
+# Read-only.
+set -u
+R=/mnt/c/DocumentNoSnc/CC/GXEMUL
+SEC=$R/GXEMUL-SEC
+FOUR="src/cpus/memory_rw.c src/cpus/cpu_m88k.c src/devices/dev_luna88k.c src/devices/dev_m8820x.c"
+echo "CLEARANCE_START $(date '+%F %T %z')"
+echo "SEC md5s: $(for f in $FOUR; do printf '%s=%s ' "$(basename "$f")" "$(md5sum < "$SEC/$f" | cut -c1-12)"; done)"
+echo "divergence set (derived; none of the four may be in it): $(grep -vE '^\s*(#|$)' "$SEC/tools/est_divergence.txt" | tr '\n' ' ')"
+for t in "$R/est" "$R/build" "$R/build-asan" /tmp/gxsec-build /tmp/gxt36/work; do
+    p1=CLEAN
+    for f in $FOUR; do cmp -s "$t/$f" "$SEC/$f" || p1="DIFFERS($f)"; done
+    if [ "$t" = "$R/est" ]; then
+        if [ -e "$t/gxemul" ]; then p2="UNEXPECTED BINARY PRESENT"; else p2="N/A (source tree, no binary)"; fi
+    elif [ ! -f "$t/gxemul" ]; then
+        p2="NO BINARY"
+    else
+        p2=FRESH
+        for f in $FOUR; do [ "$t/gxemul" -nt "$t/$f" ] || p2="NOT-NEWER($f)"; done
+        p2="$p2 (binary $(md5sum < "$t/gxemul" | cut -c1-12), $(stat -c '%y' "$t/gxemul" | cut -c1-19))"
+    fi
+    if [ -e "$t/.MUTANT" ]; then s="SENTINEL PRESENT: $(cat "$t/.MUTANT")"; else s="no sentinel"; fi
+    printf '  %-34s part1 %-10s part2 %s; %s\n' "$t" "$p1" "$p2" "$s"
+done
+echo "  leg trees left in /tmp/gxt36/legs: $(ls /tmp/gxt36/legs 2>/dev/null | wc -l)"
+echo "CLEARANCE_DONE $(date '+%F %T %z')"

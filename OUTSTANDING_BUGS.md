@@ -31,8 +31,8 @@
 > 3. `qhslowifetch` (HIGH) -- a failed slow-path instruction fetch exits the host; user-reachable on 32-bit PowerPC.
 >    T6; PPC970 stops first at `ppc64xlateexit`.
 > 4. `ppcdsformxo` (HIGH, new) -- DS-form XO bits: ldu/lwa/stdu run as ld/std at EA+1/+2.  T2; design owed.
-> 5. `m88kbuserrregs` (MED, new) -- 88K bus errors carry no PFSR/PFAR; the carrier of the reopened PFAR item.  T36;
->    before any 88K fault round.
+> 5. `m88kbuserrregs` (MED, FIXED by `#570` on 2026-10-24, held for Fable) -- 88K bus errors carry no PFSR/PFAR; the carrier of the reopened PFAR item.  T36;
+>    ~~before any 88K fault round~~ -- shipped: the refused-device arm writes PFSR/PFAR on the faulting CMMU and the LUNA probe address faults through it, with a 31-row rung-3 detector in gate 14; see the 2026-10-24 section at the end.
 > 6. `ppccrandcorc` (MED, new) -- crandc/crorc compute NAND/NOR.  T18.
 > 7. `mipsprimundec` (MED, new) -- MIPS primary opcodes with no case stop the CPU, from user mode.  T120.
 > 8. `mvme187memcoob` (MED) -- the MEMC host over-read: the bounds repair first, then the dev_mvme187.c exits that
@@ -25715,3 +25715,63 @@ the detector.
   GLM (`ollama_glm_t1p2_A_Q12.txt:39`); split from the wiring gap by the adjudication (F24: a hash pin detects textual
   drift, not continued discrimination; a per-run positive control in the `diff_autodev_gen.sh:189` shape is the remedy
   candidate, not mandatory now).
+
+### 2026-10-24 -- `m88kbuserrregs` fixed by `#570` (held for Fable); `m88kifetchhalt`, `m88kstepprefetch`, `m88kunclaimedberr`, `mvme187cmmuowner`, `m88kcitedrift570` and `m88kbuserrdebt` filed
+
+`#570` makes `src/cpus/memory_rw.c`'s MEM_M88K refused-device arm record the bus error in the faulting side's CMMU
+(`PFSR = CMMU_PFSR_BERROR << 16`, `PFAR = orig_paddr`, the physical address; the instruction CMMU for a fetch, the data
+CMMU otherwise; under a NULL check, the exception unchanged), includes `thirdparty/m8820x.h` in `src/cpus/cpu_m88k.c`
+(the arm is compiled there and the macros live only in that header -- the research ruling's repair did not compile),
+turns `src/devices/dev_luna88k.c`'s `case 0x3ffffff0:` into a REFUSAL that takes the same arm (it used to write
+`cmmu[1]`'s PFSR, serve 0 and raise nothing), and corrects four `src/devices/dev_m8820x.c` comments (object
+byte-identical).  It ships `regress/m88k_buserr_probe.py`, a 31-row rung-3 detector on unmodified mvme187 and luna-88k
+(the 24 witness rows + the instruction label, the `no_exceptions`-set cell and the NULL-CMMU cell in a two-cpu session,
+including the instruction x NULL joint cell), gated in gate 14 with every row identity pinned.  Measured in
+`regress/artifacts/m88kbuserrregs/table1_20261023/` (pre-fix 21/31 with the ten symptom rows red; fixed 31/31; the
+frozen witness 24/24; 27 of 27 legs match the pre-table; clause (c) measured; clearance clean on every tree; GATE 14 1310
+checks with the `#570` block 31/31 and `#568`'s pin 38/38; GATE 11 111 checks; the luna rig boots to `login:` on both
+binaries).  Panel: Astra, Grok, GLM 5.3, DeepSeek on pass 1, adjudicated by Astra (AMEND: the NULL cell is reachable via
+the debugger's `pause`, the instruction x NULL joint cell owed, C5 withdrawn); pass 2 on the diff: Astra, Grok, GLM 5.3, DeepSeek (DO NOT SHIP on one claimed breach, REJECTED in adjudication and filed as clause-(e) debt) and Gemini 4 Argon (back on the roster, read the tree through agy) -- no executable defect; F2 by Astra on five seats: AMEND, no L2 breach, comment/docstring/record corrections made before commit (`repair1_20261024/`, revision 2b of the detector's documentation, the measured rev 2 artifact untouched); Fable HELD
+with its question; Argon not fired (seat failure).  The row's witness is the frozen rung-3 probe
+(`witness_20261023/m88k_buserr_probe.py`, RED on HEAD 16/24).  Not claimed: unclaimed addresses, luna-88k's other
+refusals (they still stop the cpu), free-running instruction-fetch refusals, PFAR's low bits, translation-fault
+semantics.
+
+* **`m88kifetchhalt` (MED, open)** -- new.  cpus/cpu_m88k_instr.c:2989-2993 + cpus/cpu_dyntrans.c:1983-2014: a refused
+  m88k instruction fetch takes the instruction-access exception, then the dyntrans `bad:` tail stops the FAULTING cpu
+  (`cpu->running = 0`) and requests the debugger before the guest's handler executes -- free-running, the guest never
+  recovers from an instruction-fetch bus error.  Witnessed by `#570`'s probe on a one-cpu machine (its `INFO ifetch`
+  line); multi-cpu unmeasured; generic dyntrans code, other ISAs unmeasured.  Prerequisite for a FREE-RUNNING
+  instruction-label row only; `#570`'s stepped `ifetch` rows are re-rooted when this lands.
+* **`m88kstepprefetch` (LOW, open)** -- new.  cpus/cpu_dyntrans.c:287-290: the single-step loop's disassembly pre-read
+  fetches with CACHE_INSTRUCTION and without NO_EXCEPTIONS, so stepping onto a refusing device address makes the
+  DEBUGGER's own read raise the guest's instruction-access exception (vector, PFSR/PFAR, pc) before the cpu's fetch
+  runs.  No committed probe's scored rows depend on it (`#568`'s vector-3 pins would shift); `#570`'s four `ifetch` rows
+  and its null session's instruction cell DO, disclosed in their contract -- when this is fixed they red for an
+  unrelated reason (the real fetch then reaches `m88kifetchhalt`'s path) and are re-rooted.
+* **`m88kunclaimedberr` (LOW, open, research)** -- new.  cpus/memory_rw.c:662-713 (upstream's TODOs at :682, :709-710): a
+  guest access to a physical address NO device claims is served zeros / dropped with no exception and no CMMU write on
+  m88k (measured: `#570`'s witness, `INFO unclaimed`, `ld 0x10000000`).  Whether real MVME187 / LUNA-88K hardware
+  asserts BERR* there is a board question -- no MC88200 manual on disk; `_scratchpad/vmesbcp2.txt:341-348` lists
+  "Sources of Local BERR*" and "Bus Error Processing" in its contents.  Doc-gated; `#570`'s contract disclaims the path;
+  upstream's beyond-RAM hunk (both registers written with the exception commented out) was refused.
+* **`mvme187cmmuowner` (LOW, open)** -- new.  devices/dev_mvme187.c:136-156 + devices/dev_m8820x.c:250-252, 542-543: the
+  MVME187 attaches its two CMMUs to `cpus[bootstrap_cpu]` but registers their register windows with `addr2=0/1`, which
+  the m8820x decoder reads as `cpu_nr = 0`; with the random-bootstrap option (emul.c:510-511; main.c:450) selecting a
+  NONZERO bootstrap cpu on `-n >= 2`, a guest CMMU register access dereferences `cpus[0]`'s NULL cmmu pointer.  GPT-6
+  Astra's pass-1 finding, upheld CONDITIONALLY in adjudication (the option alone does not guarantee a nonzero cpu);
+  source-derived, UNMEASURED; distinct from `#570`'s NULL check (the FAULTING cpu's own pointer).
+* **`m88kcitedrift570` (LOW, open)** -- new.  regress: eight line citations into `src/cpus/cpu_m88k.c` and
+  `src/devices/dev_luna88k.c` shifted by `#570`'s +4 lines in each file -- `diff_m8820x.c:996`; `diff_m8invread.c:161,643`;
+  `luna_intmask_probe.py:2,23`; `m8820x_sites_probe.py:23,27`; `readiness_predicate_test.py:70` (several already stale
+  before `#570`) -- plus `repro_m8sarpurge.c:14`, which names the LUNA PFSR writer `#570` removed (historical
+  writer-census debt).  Found across `#570`'s pass 2 (the drafter, Argon, Astra's F2).  Not swept in `#570`: two are
+  gate-run probes whose md5s the gate logs print and no gate reads a citation functionally.  Remedy: re-key each to a
+  construct name or a verified-unique grep anchor, re-deriving every target.
+* **`m88kbuserrdebt` (LOW, open)** -- new.  `regress/m88k_buserr_probe.py`'s clause-(e) cells, disclosed in its contract
+  and not rowed: another cpu's CMMU registers preserved during a CMMU-less cpu's fault (`null owner` -- DeepSeek's pass-2
+  breach claim, rejected under the DEPENDS-ON bound and filed), instruction x NULL exception DELIVERY (survival and the
+  data label's delivery are scored), a stepped instruction fetch and a store at `0x3ffffff0`, `PFAR := vaddr`, a sub-word
+  PFAR, `res == -1` for `res <= 0`, a supervisor-mode condition on the writes.  Coverage debt, ranked below live
+  defects; the cheapest to row later are `null owner` and the stepped LUNA fetch; the delivery cell depends on
+  `m88kstepprefetch` / `m88kifetchhalt`.

@@ -1,0 +1,453 @@
+# T36 / round #570 (m88kbuserrregs) -- PRETABLE.out, the pre-table check (CLAUDE.md "THE PRE-TABLE CHECK", MANDATORY
+# for a round shipping a kill-table-backed detector).  Written by the builder (Opus 5.5) on 2026-10-23 BEFORE table 1:
+# its mtime precedes every leg (L1-L21), prefix_HEAD.out and fixed.out.  The only probe runs that precede it are the
+# baseline receipts in BASELINE.out (part D: the frozen witness on the unmodified work binary, 16/24 as the witness)
+# -- a baseline control, not a table leg.
+#
+# Sources: read at HEAD 7fca7187.  The four product files are byte-identical to HEAD in the SEC working tree, est/,
+# build/, build-asan/, /tmp/gxsec-build and /tmp/gxt36/work (BASELINE.out parts A and C), so the line numbers below
+# are HEAD's.  Seat rows cited as <seat>:<line> are lines of pass1_20261023/<seat>_t36p1*.txt.
+#
+# Rows covered: 31 = the 24 witness rows + the 7 new rows of BUILD_SPEC.md section 3.  The 7 new rows' SESSIONS do
+# not exist yet; section 0 states the design every prediction below assumes.  Where that design departs from the
+# spec's wording, BUILDER_QUESTIONS.md asks the main loop to rule (ids Q1..Qn there); a ruling that changes a design
+# owes an amendment to this file BEFORE table 1, appended below the PRETABLE_DONE line with its date, never an edit
+# in place.
+#
+# Every prediction here is a PREDICTION, read off the source.  None has been measured.  The kill table's measured
+# scores are what the record carries; a leg that disagrees with this file is a RESULT (mis-built / dead target /
+# mis-cut row), never a silent re-aim.
+
+====================================================================================================================
+0. THE SEVEN NEW ROWS -- the cells and observables assumed here (design detail and alternatives: BUILDER_QUESTIONS)
+====================================================================================================================
+  ifetch route / ifetch pfsr / ifetch pfar / ifetch dcmmu  (B5a)
+      The witness's INFO ifetch session, made SCORED: mvme187, the same seeded program with ACCESS = `jmp (r5)', r5 =
+      0xfff46010 (the `unreadable' window).  prereq_bad() applies; its 23 placed words count toward `unasm'.
+      Channel: the step loop's disassembly pre-read (cpu_dyntrans.c:287-290: CACHE_INSTRUCTION, no NO_EXCEPTIONS --
+      R2) reaches memory_rw.c's arm with cache == CACHE_INSTRUCTION.  Wants: route = v2/0xfff46013/0x0 (path v2,
+      SXIP = 0xfff46010|V|E, DMA0 0 because only DATA_ACCESS copies the data unit, cpu_m88k.c:912); pfsr = r15 =
+      cmmu[0] PFSR = 0x30000 (HEAD: the seed 0x2468ace0); pfar = r16 = cmmu[0] PFAR = 0xfff46010 (HEAD: 0xbadf00d);
+      dcmmu = r13/r14 (cmmu[1]) still the data seeds -> "kept".  R2 dependency and the re-root obligation (C1/C2) go
+      in the row notes and the contract.
+  dbg noexc  (B5b)
+      A DEDICATED mvme187 session cloned from `ok' (ACCESS = `ld r4,r5,0' at VME VBR 0xfff40088, accepted): `step 10'
+      (IDR loads, seeds, readbacks), then the debugger command `dump 0xfff46010 0xfff46020' (debugger_cmds.c:684,
+      :716-717: cpus[bootstrap_cpu], CACHE_NONE | NO_EXCEPTIONS, one 16-byte memory_rw), then `reg' (pc after the
+      dump), `step 9', `reg', `reg 0,0'.  got = "<dump>/<pc after dump>/<path at end>/<data+instr seeds at end>";
+      want = "zeros/0x10028/fall/kept".  prereq_bad() applies (handler completed = "cpu running").
+  null surv / null route  (B5c)
+      A SEPARATE mvme187 session with `-n 2'.  cpu 0 is `pause'd before it executes anything; `focus 1' sets cpu 1's
+      pc = CODE1 (0x10200), r2 = r3 = 0x20000 (RAM, so the shared handler H never addresses a CMMU window), r5 =
+      0xfff46010, sentinels in r4/r6/r7/r13-r16/r31; `tlbdump 1' records the NULL premise (no "cpu1: CMMU" line --
+      cpu_m88k.c:354-357 skips NULL slots); `pause 1'; `step 9'; `reg 1'; `reg 1,0'.  CODE1 = ld r4,r5,0 ; or
+      r6,r0,0x1234 ; br H.  cpu 1's VBR is 0 (the cpu struct is zeroed_alloc'ed, cpu.c:71), so its vector 3 is the
+      shared `or r7,r0,3 ; br H' at 0x18.  No RAM-flag dispatcher and no guest VBR write (BUILDER_QUESTIONS Q1).
+      null surv: got = "<how>/<regs1 parsed?>", want "exit0/regs".  null route: got = cpu 1's path/SXIP/DMA0, want
+      "v3/0x10202/0xfff46010"; cause-free prerequisite strings when the session died, when `tlbdump 1' shows a CMMU on
+      cpu 1 (the cell is not the NULL cell), or when cpu 1 did not reach H_END with r31 = 0x5678.
+  Bookkeeping these designs imply (Q-items): `unasm' literal 115 -> 174 (115 + ifetch 23 + dbg 23 + null 13: vectors
+  4, H 6, CODE1 3); SYMPTOM list 8 -> 10 (the two ifetch symptom rows, STALE = their instruction seeds), printed
+  PRESENT n/10 | ABSENT | MIXED.
+
+====================================================================================================================
+1. SIBLING PARITY
+====================================================================================================================
+  A. The neighbouring arch arms of the same device-failure block (memory_rw.c:603-625):
+     | arm                 | exception                     | fault metadata written                                  |
+     | MEM_MIPS :608-613   | IBE / DBE (by `cache')        | NONE: BadVAddr is written only for TLB, MOD..ADES and   |
+     |                     |                               | VCE (cpu_mips.c:2053; IBE 6, DBE 7, cop0.h:189-190)     |
+     | MEM_M88K :614-623   | vector 2 / 3 (by `cache')     | HEAD: NONE (the TODO :615-619).  FIXED: faulting-side   |
+     |   (the edited arm)  |                               | CMMU PFSR + PFAR, sibling kept, NULL-checked            |
+     | every other arch    | none in this block            | none (debug() + MEMORY_ACCESS_FAILED only; what their   |
+     |   (no #ifdef block) |                               | callers do with FAILED was not read -- not this diff)   |
+     Asymmetry -> owed: no row (no other arm records a fault address here); ONE SENTENCE owed in the records: the fix
+     gives m88k fault metadata no sibling arch in this block has -- never "parity with MIPS".
+  B. The other writers of the same two registers (census: grep 'CMMU_PFSR\]|CMMU_PFAR\]' src, 5 hits, + the guest
+     store arm dev_m8820x.c:459-460):
+     | writer                         | PFSR                       | PFAR             | sibling       | NULL test     |
+     | memory_m88k.c:382-405          | status<<16, faulting side  | pfar, or 0 for a | PFSR :=       | faulting cmmu |
+     |   (translation fault)          |                            | WRITE fault      | SUCCESS<<16   | NULL returns  |
+     |                                |                            |                  | (:383-384)    | at :130-132;  |
+     |                                |                            |                  |               | :383 none     |
+     | dev_luna88k.c:626 (HEAD case)  | BERROR<<16 on cmmu[1] for  | none             | none          | none          |
+     |                                | ANY cache class            |                  |               |               |
+     | memory_rw.c arm (FIXED)        | BERROR<<16, faulting side  | orig_paddr       | KEPT          | yes, writes   |
+     |                                | (cmmu[cache==INSTR?0:1])   |                  |               | only          |
+     | dev_m8820x.c:459-460 (guest st)| the stored word            | the stored word  | --            | n/a (owner c) |
+     Asymmetries -> owed: (1) the sibling clear exists in the translation path and NOT in the arm (A9, deliberate)
+     -> rows: uld/ust/vme/luna icmmu + ifetch dcmmu pin `kept'; sentence: the contract's sibling note may not say "no
+     guest can observe the sibling" (codex:29).  (2) the arm's NULL test -> rows null surv / null route.  (3) the HEAD
+     case wrote cmmu[1] even for an instruction access (glm-Q12:14); the fix deletes that write -> no row (no LUNA
+     instruction-fetch row; R1/R2) -> one CHANGELOG sentence.
+
+====================================================================================================================
+2. CLAIM -> ROW  (the sentences the #570 comments WILL assert -- drafted here; step 5 may not add a claim that is not
+   in this list without an amendment below)
+====================================================================================================================
+  memory_rw.c, replacing the TODO :615-619:
+   CL1  "the bus error is recorded in the faulting side's CMMU before the exception is raised"
+          -> uld/ust/vme/luna/ifetch pfsr+pfar (written) and the five route rows (exception still raised)
+   CL2  "PFSR = CMMU_PFSR_BERROR << 16 (0x00030000, the field OpenBSD/mvme88k's trap.c extracts)"
+          -> uld/ust/vme/luna/ifetch pfsr, exact value
+   CL3  "PFAR = orig_paddr, the PHYSICAL address saved before the device-relative subtraction (:437 vs :494)"
+          -> uld/ust/vme/luna/ifetch pfar: absolute 0xfff46010 / 0xfff40090 / 0x3ffffff0 vs relative 0x10 / 0x90 / 0x0
+   CL4  "cmmu[0] is the instruction CMMU, cmmu[1] the data CMMU (memory_m88k.c:112's index)"
+          -> data rows (cmmu[1]) and ifetch pfsr/pfar (cmmu[0])
+   CL5  "the other CMMU is not written"            -> uld/ust/vme/luna icmmu, ifetch dcmmu
+   CL6  "a cpu with no CMMU gets no write"         -> null surv (no host fault on the NULL slot)
+   CL7  "... and still takes the exception"        -> null route
+   CL8  "the !no_exceptions test keeps debugger reads out: no write, no exception" -> dbg noexc
+   CL9  "reached only by an access a device CLAIMS and REFUSES while the cpu keeps running"
+          -> claims/refuses: ok route + ok regs (served: no write, no exception) vs the refused rows.
+          "while the cpu keeps running": NO ROW -- a device that stops the cpu returns at :591-592 before the arm
+          (outside the repair path, unrowed by design; luna-88k's other refusals all do this -- witness correction 2)
+   CL10 "an unclaimed address takes the 'Outside of physical RAM?' path and is unchanged" -> NO ROW (INFO
+          `unclaimed' stays unscored; R3, clause (e); the contract discloses it)
+   CL11 (if written) "a sub-word access records the byte address" -> NO ROW: transferred warrant only (upstream; P2
+          UNKNOWN for silicon), clause (e).  RECOMMENDATION: the comment should not assert it.
+  cpu_m88k.c:
+   CL12 "#570: memory_rw.c's m88k instantiation (tmp_m88k_tail.c:38-40) uses CMMU_PFSR / CMMU_PFAR /
+          CMMU_PFSR_BERROR, which this header defines" -> NO ROW: the build is the check (the repair does not compile
+          without it; gate 1 / every leg's build)
+  dev_luna88k.c, the case at :624-627:
+   CL13 "refused: memory_rw.c's arm raises the access exception and writes PFSR and PFAR"
+          -> luna route, luna pfsr, luna pfar (a word LOAD).  A store (P10) and an instruction fetch at this address
+          are NOT rowed -> the comment should say "for a load or store" at most, with the store disclosed (e)
+   CL14 "(it used to write cmmu[1]'s PFSR only and serve 0)" -> the HEAD behaviour, measured by the witness
+          (WITNESS_headbin.out: luna route fall/r4=0x0, luna pfsr 0x30000); no post-fix row owed
+   CL15 "the case is kept: default: would stop the cpu" -- a COUNTERFACTUAL-consequence claim (semantic trigger) ->
+          luna route's prerequisite channel (a deleted case reaches :909-924, `cpu->running = 0', :591-592 returns,
+          the handler never runs, luna route reads "handler ...").  No leg in the table builds "case deleted"
+          (BUILDER_QUESTIONS Q9 offers one)
+  dev_m8820x.c (comment-only, A7):
+   CL16 :293-294 "the model writes only PFSR and PFAR" gains its second writer (memory_rw.c's arm)
+   CL17 :325-327 the stale "dev_luna88k.c:614" becomes memory_rw.c's arm (PFSR and PFAR)
+   CL18 :453 "never through this handler ... at memory_m88k.c:382-384" gains memory_rw.c's arm
+   CL19 :500-501 "PFSR and PFAR written at :382-405" gains memory_rw.c's arm
+          -> all four: no new observable beyond CL2/CL3 (the pfsr/pfar rows).  NO-ROW sentence: comment-only, no
+          behaviour change -- to be MEASURED in step 5 by an object compare (dev_m8820x.o md5 before == after)
+  The probe header (B1) is the detector's own text; its rows are its claims, and its NOT CLAIMED list is the no-row
+  sentence set (P7 VA!=PA, P10 LUNA store, P2 sub-word, unclaimed, luna -n 2..4, xmem, 88110, OpenBSD reader, R1
+  free-running instruction fetch).
+
+====================================================================================================================
+3. GUARD FIELD vs BODY FIELD, and the partition the body induces on each lvalue
+====================================================================================================================
+  The edited lines are memory_rw.c :614-623 (inside the guard :603) and dev_luna88k.c :624-627.  DEPENDS-ON, walked
+  to the enclosing function's boundary (MEMORY_RW_ONE_PAGE :230-786; DEVICE_ACCESS(luna88k) :554-931):
+  Dominating predicates of the arm (B9's corrected list, in control-flow order):
+   T1 :245  `misc_flags & PHYSICAL || cpu->translate_v2p == NULL' -- m88k always has translate_v2p; every guest row
+            is non-PHYSICAL.  Cell held: translating.  (PHYSICAL callers -- e.g. dev_luna88k.c:613-614 -- also carry
+            NO_EXCEPTIONS, so they meet T7's set cell, not the body.)
+   T2 :259  `!ok' after translate_v2p -> return :268.  Cell held: ok = 2 (APR invalid, or a NULL CMMU,
+            memory_m88k.c:130-144).  The other cell is the translation-fault path (memory_m88k.c, not edited -- P12).
+   T3 :436  outer device range.  Held: in range.  Out of range = unclaimed (R3).
+   T4 :480-481  device match in the scan.  Held: matched (unreadable, vme, luna88k).  Unmatched = unclaimed.
+   T5 :584-585  device call `!no_exceptions || DM_READS_HAVE_NO_SIDE_EFFECTS' -- COUPLED with T7 and with `res'
+            (codex:59): NO_EXCEPTIONS + DM_DEFAULT (all three refusing devices) skips the call, res stays 0 -> -1.
+   T6 :591  `running_before_device_access && !cpu->running' -> return :592.  The cell is "running before AND
+            stopped after" (codex:58).  Held: not taken.  Taken = outside the repair path (CL9), unrowed by design.
+   T7 :595-596 + :603  `res == 0 -> -1', then `res <= 0 && !no_exceptions' -- THE guard.
+   T8 (added) `cache == CACHE_INSTRUCTION ? 0 : 1' -- the selector (equality).
+   T9 (added) `cmmu != NULL' -- the NULL test.
+   (:283-298 watchpoint, :491-492 #95 zero-fill, :495-524 clamp, :526-581 dyntrans: no early return, no gating.)
+  Dominating predicates of the LUNA case: the early windows :567-568, :578-579, :590, :600, :610 all test `addr >='
+  a base above 0x3ffffff0 (FUSE 0x43000000, NVRAM 0x45000000, NVRAM_88K2 0x47000000, TRI_PORT 0x71000000 --
+  luna88k_board.h:58-60, :70, :118), and `addr = relative_addr + 0x3ffffff0' (:558) is never below 0x3ffffff0, so
+  none can be true when the case is reached: jointly unreachable, discharged without rows (codex:126; D2 below).
+  Then `switch (addr)' :622, case :624.
+
+  GUARD fields: res, no_exceptions (T7); cache (T8); cpu->cd.m88k.cmmu[idx] (T9).
+  BODY fields:  cmmu->reg[CMMU_PFSR], cmmu->reg[CMMU_PFAR] (written); orig_paddr, cache, cpu (read: writes,
+                selector, exception); writeflag, mem->devices[i].name, paddr (read by debug() :604-607, inside the
+                guard, outside the NULL-guarded block -- body-adjacent, legitimate (d) operand sources, glm-Q34:30).
+  Guard != body, and where they DISAGREE:
+   * cmmu[idx] (T9) vs cpu (exception target): cmmu[] pointers are written only at machine setup
+     (dev_mvme187.c:137, :149 for cpus[bootstrap_cpu]; dev_luna88k.c:946, :957 for cpunr < ncpus) and never cleared.
+     The disagreeing state -- a RUNNING cpu that takes exceptions and has a NULL slot -- is mvme187 `-n 2' cpu 1
+     after `pause 1' (debugger_cmds.c:1302) -> null surv / null route.
+   * orig_paddr (:437) vs paddr (:494): disagree whenever base + offset != offset -> rowed at three disagreeing
+     points (0x10, 0x90, 0x0 relative vs absolute).
+   * cache (T8) vs no_exceptions (T7): coupled for the debugger (CACHE_NONE | NO_EXCEPTIONS) -> dbg noexc.
+   * the shared field reg[PFSR]/reg[PFAR] ("who else writes it, and can they set my value?"): the guest seed store
+     (dev_m8820x.c:459-460) sets values the fix never writes (seeds chosen so (x >> 16) & 7 is 2 and 0, not 3);
+     the translation-fault writer cannot run in these sessions (APR invalid); the HEAD LUNA case writes the SAME PFSR
+     value as the fix (0x30000), which is why `luna pfsr' is green on HEAD and the clause-(b) legs (L3/L4) are what
+     separate the two writers.
+  Partition the body induces, per lvalue (7n-5: EXHAUSTED = every cell of the BODY-TESTED partition rowed):
+   | lvalue            | body test(s)                       | cells                    | held by                   | status    |
+   | res               | ==0 -> -1 (:595); <= 0 (:603)      | >=1 served / -1 refused  | ok rows / every refused   | EXHAUSTED |
+   | no_exceptions     | !no_exceptions (:603; T5 coupled)  | clear / set              | guest rows / dbg noexc    | EXHAUSTED |
+   | cache             | == CACHE_INSTRUCTION (selector,    | INSTRUCTION / other      | ifetch rows / data rows   | EXHAUSTED |
+   |                   |   vector expression)               | (other: DATA driven;     |                           |           |
+   |                   |                                    |  NONE w/o NO_EXC only    |                           |           |
+   |                   |                                    |  from dev_ether, codex:9)|                           |           |
+   | cmmu[idx] pointer | != NULL (added)                    | non-NULL / NULL          | refused rows / null rows  | EXHAUSTED |
+   | orig_paddr        | none (written verbatim)            | --                       | 0xfff46010, 0xfff40090,   | SAMPLED   |
+   |                   |                                    |                          | 0x3ffffff0; untested:     |           |
+   |                   |                                    |                          | sub-word residues (P2),   |           |
+   |                   |                                    |                          | VA!=PA (P7)               |           |
+   | cpu (accessing)   | none                               | --                       | cpu 0 (all), cpu 1 (null) | SAMPLED   |
+   | writeflag         | none (debug() only)                | --                       | read: uld vme luna null;  | SAMPLED   |
+   |                   |                                    |                          | write: ust; instr x write |           |
+   |                   |                                    |                          | unreachable (codex:61)    |           |
+   | paddr (relative)  | none (debug() only)                | --                       | 0x10, 0x90, 0x0           | SAMPLED   |
+   | devices[i]        | none (name in debug() only)        | -- (SAMPLES, codex:60)   | unreadable, vme, luna88k  | SAMPLED   |
+   | len / alignment   | none in the arm (alignment traps   | per width: byte {0..3},  | word, residue 0 only      | SAMPLED   |
+   |                   |  first, loadstore.c:168-186)       | half {0,2}, word {0},    |                           | (P2, (e)) |
+   |                   |                                    | double {0 mod 8} codex:62|                           |           |
+   | LUNA addr         | switch (addr) :622                 | the case / other labels /| the case (word load)      | edited    |
+   |                   |                                    | default:                 |                           | arm only  |
+  D2 (bound compares the fix depends on): `res <= 0' at B = 0 -- B+1 = 1 served (ok rows), B-1 = -1 refused (every
+  refused row), the at-member 0 is mapped away at :595-596.  DISCHARGED.  T8 and T9 are an equality and a NULL test,
+  not bounds.  The LUNA early windows' `addr >=' compares cannot reach the case (above) -- discharged, no rows.
+
+====================================================================================================================
+4. CHANNEL per row -- the mutant(s) each row kills (leg ids from BUILD_SPEC section 6; L6b proposed in Q6) and the
+   observable that differs under it.  "prereq:<kind>" = the row's cause-free prerequisite string replaces its value.
+====================================================================================================================
+   1 neg apparatus  CONTROL (apparatus).  Bogus subtype `187' -> exit 1, no register dump.  Green by DESIGN on the
+                    exit-1 stub (L5); no product variant reaches it.
+   2 mv devsig      CONTROL (device signature).  r10/r9 = 0x00a90000.  L19: the IDR load itself faults -> r10/r9
+                    stay 0xdeadbeef.
+   3 mv cmmu rt     CONTROL (liveness).  r11/r12/r17/r18 = the seeds.  L18: the misplaced write overwrites the data
+                    CMMU after every served CMMU access -> r11 0x30000, r12 0xfff7f108.  L19: never loaded.
+   4 ok route      L19 (res <= 1).  THE NAMED "v3" CHANNEL IS NOT REACHED: every served CMMU access faults first,
+                    so the observable is prereq:nodev (codex:116).  Also red under L18 (prereq:readback).
+   5 ok regs        L18 (writes outside res <= 0).  NAMED "changed seeds" CHANNEL NOT REACHED: the readback
+                    prerequisite fails first (prereq:readback).  Also L19 (prereq:nodev).
+   6 uld route      L17 (exception dropped): path fall, SXIP 0, DMA0 0.
+   7 uld pfsr       HEAD/L3 (seed 0x5a5a5a5a), L10 (0x3), L6b (seed).
+   8 uld pfar       HEAD/L3 (seed 0x13572468), L11 (0x10), L12 (seed), L6b (seed).
+   9 uld icmmu      L13 (iPFSR/iPFAR := 0x30000/0xfff46010), L14 (iPFSR := 0), L6b (written).
+  10 ust route      L17 (fall: the store is abandoned, no vector).
+  11 ust pfsr       HEAD/L3, L10, L15 (direction-conditioned: seed), L6b.
+  12 ust pfar       HEAD/L3, L11, L12, L15, L6b.
+  13 ust icmmu      L13, L14, L6b.  (NOT L15 -- codex:114: a read-only repair leaves route and sibling alone.)
+  14 vme route      L17.
+  15 vme pfsr       HEAD/L3, L10, L16 (VME excluded: seed), L6b.
+  16 vme pfar       HEAD/L3, L11 (0x90), L12, L16, L6b.
+  17 vme icmmu      L13, L14, L6b.  (NOT L16 -- codex:115.)
+  18 luna devsig    CONTROL.  L19.
+  19 luna cmmu rt   CONTROL.  L18, L19.
+  20 luna route     HEAD (fall/0x0/0x0/r4=0x0: served 0), L4 = L20 (the same), L21 (the same), L17 (fall, r4 kept:
+                    the arm returns FAILED, the load writes no register).
+  21 luna pfsr      L3 (seed: the case's write gone, the arm unrepaired), L10 (0x3), L21 (seed: write deleted, still
+                    served -- the row's UNIQUE variant, codex:117), L6b.  GREEN on HEAD, L4, L20 (the case writes it).
+  22 luna pfar      HEAD/L3/L4/L20/L21 (seed), L11 (0x0: the access is AT the device base), L12, L6b.
+  23 luna icmmu     L13, L14, L6b.
+  24 unasm          CONTROL (literal count).  L5: "0/174".
+  25 ifetch route   L17: without the exception the pre-read and to_be_translated both fail, `bad:' stops the cpu
+                    (R1, cpu_m88k_instr.c:2989-2993), the handler never runs -> prereq:handler.  (No enumerated
+                    variant changes the VECTOR expression; this row would also see vector 3 for an instruction refusal.)
+  26 ifetch pfsr    HEAD/L3 (seed 0x2468ace0), L6 (cmmu[0] not written: seed), L10 (0x3), L17 (prereq:handler).
+  27 ifetch pfar    HEAD/L3 (seed 0xbadf00d), L6, L11 (0x10), L12, L17.
+  28 ifetch dcmmu   L6 (the data CMMU written: 0x30000/0xfff46010), L13, L14 (dPFSR := 0), L17.
+  29 dbg noexc      L7: the dump enters the body -> "(memory access failed)", cpu 0 vectors (pc 0x18 after the
+                    dump), path v3 at the end, data seeds 0x30000/0xfff46010.  Every component differs.
+  30 null surv      L8: cpu 1's refused load dereferences its NULL cmmu[1] -> host SIGSEGV -> how = sig11, no regs.
+  31 null route     L9: no exception for cpu 1 -> the abandoned load falls through -> path fall (FELL r6 set,
+                    r7 clear).  L17: the same.  L8: prereq:died.
+  CHANNEL CHECK (is each named channel able to vary under its named mutant?): yes for 1-3, 6-31.  For 4 and 5 the
+  NAMED channel (v3 on an accepted access; changed seeds after an accepted access) cannot be reached by ANY global
+  widening, because the probe's own prerequisites are served device accesses that fire first; the row still reds,
+  through its prerequisite string.  NOT VACUOUS (the got string varies), but the header must name the channel that
+  is actually available (codex:116; B6).  This answers the CHANNEL line's write-time question for this round: the
+  channel under each mutant WAS knowable at writing time, and for two rows it is not the one grok:108-109 named.
+
+====================================================================================================================
+5. PREDICTED red set per leg (31-row detector; section 0's designs).  The measured table is compared against this.
+====================================================================================================================
+   leg   variant                                     predicted red rows                                       score
+   pre   HEAD binary (prefix_HEAD.out)               uld/ust/vme pfsr+pfar, luna route, luna pfar,            21/31
+                                                     ifetch pfsr, ifetch pfar  (SYMPTOM=PRESENT 10/10)
+   fix   the four-file fix (fixed.out)               none  (SYMPTOM=ABSENT)                                   31/31
+   L1    frozen witness, fixed binary                24/24, SYMPTOM=ABSENT                                    24/24
+   L3    arm reinstated, case fixed                  uld/ust/vme pfsr+pfar, luna pfsr, luna pfar,             21/31
+                                                     ifetch pfsr, ifetch pfar  (luna route GREEN)
+   L4    case reinstated, arm fixed                  luna route, luna pfar  (luna pfsr GREEN)                 29/31
+   L5    exit-1 non-emulator stub                    all but `neg apparatus'; CONTROL=FAIL, SYMPTOM=MIXED,    1/31
+                                                     exit 1, sentinel printed
+   L5b   binary absent                               FileNotFoundError before row 1: no rows, NO sentinel      --
+   L6    selector always-data                        ifetch pfsr, ifetch pfar, ifetch dcmmu                    28/31
+   L6b   (proposed, Q6) selector always-instruction  uld/ust/vme/luna pfsr+pfar, uld/ust/vme/luna icmmu        19/31
+   L7    `!no_exceptions' dropped                    dbg noexc                                                30/31
+   L8    NULL check removed                          null surv, null route                                    29/31
+   L9    exception moved inside the NULL check       null route                                               30/31
+   L10   raw 3                                       uld/ust/vme/luna/ifetch pfsr                             26/31
+   L11   PFAR := device-relative paddr               uld/ust/vme/luna/ifetch pfar                             26/31
+   L12   PFSR only                                   uld/ust/vme/luna/ifetch pfar                             26/31
+   L13   both CMMUs (inside the NULL check)          uld/ust/vme/luna icmmu, ifetch dcmmu                     26/31
+   L14   sibling cleared (inside the NULL check)     uld/ust/vme/luna icmmu, ifetch dcmmu                     26/31
+   L15   conditioned on writeflag == MEM_READ        ust pfsr, ust pfar                                       29/31
+   L16   device-keyed (VME excluded, Q7)             vme pfsr, vme pfar                                       29/31
+   L17   exception dropped                           uld/ust/vme/luna route, ifetch route/pfsr/pfar/dcmmu,    22/31
+                                                     null route
+   L18   writes before the guard (Q8 form)           mv cmmu rt, ok route, ok regs, uld/ust/vme x4, luna      6/31
+                                                     cmmu rt, luna x4, ifetch x4, dbg noexc (25 rows; green:
+                                                     neg apparatus, mv/luna devsig, unasm, null surv/route)
+   L19   guard widened to res <= 1                   mv devsig, mv cmmu rt, ok x2, uld/ust/vme x4, luna       4/31
+                                                     devsig, luna cmmu rt, luna x4, ifetch x4, dbg noexc (27;
+                                                     green: neg apparatus, unasm, null surv, null route)
+   L20   case left returning 1, write kept           == L4 BEHAVIOURALLY (Q5): luna route, luna pfar          29/31
+   L21   case write deleted, still returning 1       luna route, luna pfsr, luna pfar                         28/31
+  Consequences for BUILD_SPEC section 6's expected column (all in BUILDER_QUESTIONS): "nothing else red" for
+  L10-L19 cannot hold as worded, because grok's table predates the ifetch/dbg/null rows -- L10-L14 also red the
+  matching ifetch row, L17 also reds the four ifetch rows and null route -- and because L18/L19 fire in every
+  session's own prerequisites; L6 also reds ifetch dcmmu; L20 is L4.  Proposed criterion: "the red set equals this
+  section's predicted set".
+
+====================================================================================================================
+6. DIFF AGAINST THE BRIEF'S SECTION 7 (packet.md:1091-1125) AND PASS1_RULINGS B9
+====================================================================================================================
+  axis 1 claim                 unchanged (unclaimed is not this arm; R3).
+  axis 2 device call           NOT an independent cell: coupled with no_exceptions and res (T5; codex:59).
+  axis 3 cpu stopped           relabelled "running before AND stopped after" (codex:58); "unobservable" was wrong
+                               (glm-Q12:34) -- it is outside the repair path, unrowed by design (CL9).
+  axis 4 res                   unchanged; D2 discharged.
+  axis 5 !no_exceptions        set cell: unrowed -> ROWED (dbg noexc; B5b).
+  axis 6 selector              instruction label: unrowed -> ROWED (four stepped ifetch rows, R2-dependent; B5a).
+  axis 7 NULL check            "no reachable cell found" -> REACHABLE and ROWED (null surv, null route; B5c).
+  axis 8 writeflag             debug()-only read inside the guard: a legitimate (d) operand source (L15); P10 stays
+                               (e); instruction x write is unreachable (codex:61).
+  axis 9 refusing device       SAMPLES, not a body partition (codex:60).
+  axis 10 PFAR operand         relabelled: `paddr' is read by debug() inside the guard, outside the NULL-guarded
+                               block (glm-Q34:30); `vaddr' is read by NO live m88k code in this unit (the MEM_MIPS
+                               block is compiled out) and the sessions leave the APR invalid (P7, clause (e)).
+  axis 11 PFSR value           unchanged.
+  axis 12 sibling              + ifetch dcmmu (the sibling of cmmu[0]).
+  axis 13 width/alignment      + per-width residues (codex:62); misaligned wider accesses trap before memory_rw
+                               (cpu_m88k_instr_loadstore.c:168-186).
+  axis 14 which cpu            + cpu 1 (mvme187 -n 2, the null rows); luna -n 2..4 still NOT CLAIMED.
+  axis 15 LUNA dispatch        + the early-window exclusions, discharged (section 3).
+  NEW (B9) T1 translation branch, T2 translation success / early return, T3 outer device range, T4 device match --
+                               each held at one cell by every row; the other cells are other paths.
+  Section 7's floor sentence is REPLACED by B5: floor = {refused, no_exceptions clear} x {data, instruction} x
+  {non-NULL, NULL} as far as jointly reachable, plus served and no_exceptions-set -- all rowed by the 31 rows
+  (instruction x NULL is not rowed: cpu 1's instruction fetch would need a refused fetch on a CMMU-less cpu, which
+  free-running halts (R1) and stepped rides R2 -- disclosed as clause (e), Q10).
+
+====================================================================================================================
+7. WHERE MY READING DIFFERS FROM THE BRIEF, THE RULINGS OR THE SPEC (each with its line; detail in BUILDER_QUESTIONS)
+====================================================================================================================
+  R-a  C5 / CHECKS #4 / PASS1_RULINGS line 17-19 ("dev_m8820x.c:108 dereferences ... for the ACCESSING cpu") is NOT
+       what the code does.  :108 is in m8820x_command(struct cpu *cpu, ...) (:106), whose ONLY caller is :284,
+       `m8820x_command(c, d)', with `c = cpu->machine->cpus[d->cpu_nr]' (:250).  So :108 dereferences the CMMU
+       OWNER's slot, exactly as :251-252 do.  On mvme187 every CMMU window decodes cpu_nr 0 (:542-543, addr2 0/1),
+       and cpus[0] owns both CMMUs, so a CMMU access by CMMU-less cpu 1 reads/writes cpu 0's CMMUs and dereferences
+       nothing NULL.  C5 as filed is refuted by reading; the NULL dereference at :250-252 exists only in C4's
+       configuration (a random non-zero bootstrap cpu).  The B5c constraint "cpu 1 never touches the CMMU window"
+       stays harmless (this design keeps it), but its stated reason is wrong.
+  R-b  A6's ordering warrant (grok:32 "order matters because NBSG uses PDT_BITS and PG_BITS") is wrong: NBSG
+       (m8820x.h:182) is an object-like macro, expanded only at a use, and nothing in src/ uses it; upstream itself
+       placed the include BEFORE m8820x_pte.h (trunk_src.diff:1921-1922).  Either order compiles; "directly after
+       :53" is fine, the reason is not.
+  R-c  B5c's dispatcher premise ("both cpus start at one pc, so the program begins with a RAM-flag dispatcher") does
+       not follow: `focus 1' (debugger_cmds.c:1125) makes `pc=' / `rN=' / `VBR=' act on cpu 1 (debugger_expr.c:167
+       resolves names as cpu[debugger_cur_cpu].<name>; cpu_m88k.c:141-153 registers pc, r0-r31 and the control
+       registers by name), and `reg 1' / `reg 1,0' (debugger_cmds.c:1653) read cpu 1's registers.  Markers can live
+       in registers (the probe's existing path_of idiom), not RAM.
+  R-d  Stepping with two RUNNING cpus advances BOTH, one instruction each per step (machine_run,
+       machines/machine.c:710; single-step run_instr executes one instruction, cpu_dyntrans.c:272-327).  The design
+       therefore pauses cpu 0 before cpu 1 runs, so each cpu's step count is exact.
+  R-e  B5b's "already killed by `ok regs'" dissent (GLM-Q12:34) is correctly rejected by the ruling: under L7 the
+       accepted access is unaffected; only a NO_EXCEPTIONS access to a refusing device changes -- the dump.
+  R-f  The 24-row detector's grok:98-111 table (B6) predates the new rows; section 5 above re-derives the red set for
+       31 rows.  Notably L6 reds ifetch dcmmu too, and L18/L19's named channels are unreachable (section 4).
+
+PRETABLE_DONE
+
+####################################################################################################################
+AMENDMENT 1 -- 2026-10-23 ~22:3x -0500, still BEFORE table 1 (no leg, no prefix/fixed run has happened).
+Cause: BUILD_SPEC.md section 10 and PASS1_RULINGS.md section E were found in the spec files (BUILD_SPEC mtime
+21:53:27) after the body above was drafted from the 21:46 text; plus three HEAD-binary explorations
+(explore_20261023/: E1-E2 explore_null_dbg.out, E3-E4 explore_c5_ixnull.out, E5 explore_conj.out -- explorations,
+not rows, not legs).  The body above is NOT edited; where this amendment differs, this amendment rules.  Every design
+point marked [Q<n>] still needs the main loop's ruling (BUILDER_QUESTIONS.md).
+####################################################################################################################
+
+AM-1  THE NULL SESSION IS REDESIGNED to section 10's CONJUNCTIVE form, in the STEPPED shape the piped idiom can carry
+      [Q1].  Measured on the HEAD binary as E5 (explore_conj.out): mvme187 `-n 2'; cpu 0 runs the seeded `uld' program
+      alone (19 steps) and parks in H's `br .'; `tlbdump 1' (no "cpu1: CMMU" line = the NULL premise); RAM markers
+      0xf000 (HANDLED) / 0xf004 (FELL) zero-initialised by `put'; `focus 1' sets cpu 1's pc = 0x10200, r5 = 0xfff46010,
+      r20 = 0x4a4a4a4a, r21 = 0x46464646 and its OWN VBR = 0x30000 by `VBR=' [Q3]; `pause 1'; then
+        part 1  `step 3': ld r4,r5,0 (refused DATA load, cmmu[1] NULL) -> cpu 1's vector 3 at 0x30018: st r20 -> HANDLED,
+                br J  (the FELL store `st r21,r0,0xf004' after the load runs only if no exception was raised; br J)
+                -> `dump 0xf000 0xf008', `reg 1', `reg 1,0'   [E5: H=4a4a4a4a F=0, pc J=0x1020c; SXIP/DMA0 read HERE,
+                because the second fault zeroes DMA0 (cpu_m88k.c:870-879; E5: DMA0 0 at the end)]
+        part 2  `step 5': J: jmp (r5) -> the instruction fetch at 0xfff46010 is refused with cmmu[0] NULL (stepped:
+                the R2 pre-read reaches memory_rw.c's arm); SFRZ is still set, so the vector is ERROR (10), VBR1+0x50,
+                where `br .' parks cpu 1 [Q2]  -> `dump 0xf000 0xf008', `reg 1'   [E5: markers unchanged, pc 0x30050,
+                one "SFRZ already set" line, three device-failed lines in the session: cpu 0's, cpu 1's data, cpu 1's
+                instruction]
+      ROWS:  null route = part 1: "<handled|fell|both|neither>/<SXIP>/<DMA0>", want "handled/0x10202/0xfff46010".
+             null surv  = "<how>/<both marker dumps readable>", want "exit0/readable".
+      PREREQUISITES (cause-free strings, cpu 1 only [Q4]): `tlbdump 1' shows no cpu1 CMMU; cpu 1 at J after part 1;
+             cpu 1 OFF J after part 2 (the fetch was attempted); for null surv also a device-failed line after part 1's
+             dump (the instruction refusal reached the arm).  cpu 0's results feed no null row.
+      The B5c constraint "cpu 1 never touches the CMMU window" is WITHDRAWN (section E; E3 MEASURED it: cpu 1 read both
+      IDR windows -- cpu 0's 0x00a90000 -- and stored an SCR command that reaches m8820x_command(), :108; exit0, no
+      fault).  cpu 1 still touches no CMMU window, because nothing in its path needs one.
+
+AM-2  THE {data, instruction} x {CMMU present, absent} CROSS-PRODUCT (section 10 / E B5c), with the rows holding each:
+        data x present         uld/ust/vme/luna pfsr, pfar, icmmu (+ their route rows as attribution)
+        instruction x present  ifetch pfsr, ifetch pfar, ifetch dcmmu (+ ifetch route as attribution CONTROL, AM-5)
+        data x absent          null route (HANDLED set and FELL clear = the exception stayed OUTSIDE the NULL check;
+                               reaching part 1's dump = survival through the data cell)
+        instruction x absent   null surv (reaching part 2's prompt with both dumps readable = survival through the
+                               instruction refusal's arm with cmmu[0] NULL)
+      The joint cell licenses no cpu-number, address or device-name products (section E, Q3 bound).
+
+AM-3  WHICH BODY each field list of section 3 enumerates (section 10):
+        OUTER refusal-guard body (`if (res <= 0 && !no_exceptions)', :603-625): debug() reads writeflag,
+            mem->devices[i].name and paddr (:604-607); the M88K block reads cache and cpu (selector, exception) and
+            the inner guard's operands; return MEMORY_ACCESS_FAILED.  writeflag / paddr / devices[i] are body fields
+            of THIS body only.
+        INNER NULL-guard body (added): reads the selected cmmu pointer, orig_paddr and the constant
+            CMMU_PFSR_BERROR; writes cmmu->reg[CMMU_PFSR] and cmmu->reg[CMMU_PFAR].  Nothing else.
+      So section 3's "body-adjacent" writeflag / paddr / devices[i] are OUTER-body fields; the inner body reads none of
+      them.
+
+AM-4  VARIANT CLASSES (section 10: VALUE corruption vs guard-OPERAND swaps):
+        VALUE / TARGET corruption (inner body; who is written stays right, what or where is wrong):
+            L10 raw 3 (PFSR value); L11 PFAR := paddr and L12 PFAR not written (PFAR value); L6 always-data and L6b
+            always-instruction [Q12] (target CMMU); L13 both CMMUs and L14 sibling cleared (extra target).  Not
+            built, clause (e): PFAR := vaddr (P7), sub-word PFAR (P2).
+        GUARD-OPERAND swaps and PLACEMENT (which accesses are written, or where the exception sits):
+            inner guard: L8 NULL check removed; L8b NULL check conditioned on the data label [Q15]; L15 + writeflag;
+            L16 + device name [Q13]; L9 exception moved inside it.  Outer guard / body: L7 `!no_exceptions' dropped;
+            L19 `res <= 1'; L18 writes moved before it [Q14]; L17 exception dropped.
+
+AM-5  CHANNEL changes to section 4:
+        25 ifetch route  an ATTRIBUTION CONTROL (section 10; E B5a): the vector expression (:620-622) reads `cache'
+                         independently of the added selector, so it CANNOT vary under L6 -- VACUOUS against the selector
+                         by construction.  Its variant: L17 (exception dropped / mis-routed) [Q7: CONTROL_ROWS or not].
+        26-27            ifetch pfsr / ifetch pfar carry L6 (unchanged).
+        30 null surv     L8 (sig11 in part 1), L8b (sig11 in part 2 -- the instruction refusal's dereference).
+        31 null route    L8 (died before part 1's dump), L9 (fell: no exception for a NULL-CMMU cpu), L17 (fell).
+                         GREEN under L8b: part 1's dump precedes the crash and is flushed at the next prompt
+                         (debugger.c:380-383 fflush(stdout) after printing the prompt).
+
+AM-6  PREDICTED red sets -- changes to section 5 only (everything else stands):
+        L8    null surv, null route                                                         29/31 (unchanged)
+        L8b   null surv                                                                     30/31 (NEW leg)
+        L9    null route                                                                    30/31 (unchanged)
+        L17   uld/ust/vme/luna route, ifetch route/pfsr/pfar/dcmmu, null route              22/31 (unchanged; null
+              surv GREEN: part 2's fetch takes R1's halt, cpu 1 stops off J, both dumps readable)
+        L18   as section 5 (null rows GREEN: cpu 1's accesses are a refused load, RAM stores and a refused fetch)
+        L19   as section 5 (null rows GREEN for the same reason; cpu 0's uld path may halt at its ERROR vector, which
+              feeds no null row)
+        L3/L4 on BOTH instruments (section 10): frozen 24-row witness L3 16/24 (uld/ust/vme pfsr+pfar, luna pfsr,
+              luna pfar), L4 22/24 (luna route, luna pfar); 31-row detector L3 21/31, L4 29/31 (section 5).
+        unasm literal: re-derived by hand before the first run [Q9]: 115 + ifetch 23 + dbg 23 + null 31 (VEC0 4,
+              CODE0 13, H 6, CODE1 4, VEC1 4) = 192 under Q4(a); 169 under Q4(b) (null 8).
+
+AM-7  Section 7 R-a (C5) and R-b (A6) are now RULED the same way by section E (C5 withdrawn; "order matters"
+      withdrawn).  R-c/R-d stand and are now MEASURED (E2, E5).  New: section 10's "vector 2" for cpu 1's instruction
+      refusal is contradicted by cpu_m88k.c:811-819 once the data fault has set SFRZ (measured E5: ERROR) -- the arm
+      still runs first (memory_rw.c:614-622 order), so the NULL test and L8b's dereference are reached either way [Q2].
+      And section 10's machine-wide-breakpoint concern (cpu_dyntrans.c:1802-1804) does not arise: the stepped form
+      uses no breakpoint.
+
+PRETABLE_AMENDMENT_1_DONE

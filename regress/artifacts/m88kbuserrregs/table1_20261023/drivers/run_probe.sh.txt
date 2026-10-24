@@ -1,0 +1,20 @@
+#!/bin/bash
+# T36 / #570 builder -- run ONE probe file against ONE binary, foreground, with the session transcripts kept.
+# usage: run_probe.sh <probe.py> <gxemul> <label> <out file> <transcript dir> [images-dir]
+# Prints the probe's md5, the binary's md5 and freshness context, the exit status and the completion sentinel.
+set -u
+PROBE=$1; BIN=$2; LABEL=$3; OUT=$4; TR=$5; IMGS=${6:-}
+echo "RUN_PROBE_START $(date '+%F %T %z')"
+echo "probe : $(md5sum "$PROBE")"
+if [ -e "$BIN" ]; then echo "binary: $(md5sum "$BIN")  mtime $(stat -c '%y' "$BIN")"; else echo "binary: ABSENT ($BIN)"; fi
+rm -rf "$TR"; mkdir -p "$TR"
+cd /tmp || exit 9
+if [ -n "$IMGS" ]; then
+    M88K_BUSERR_DUMP="$TR" python3 -u "$PROBE" "$BIN" "$LABEL" "$IMGS" > "$OUT" 2>&1
+else
+    M88K_BUSERR_DUMP="$TR" python3 -u "$PROBE" "$BIN" "$LABEL" > "$OUT" 2>&1
+fi
+rc=$?
+echo "PROBE_RC=$rc  lines=$(wc -l < "$OUT")  last line: $(tail -1 "$OUT")"
+grep -E '^M88K_BUSERR_(RESULT|CONTROL|SYMPTOM|REVISION|RED)=' "$OUT" | sed 's/^/  /'
+echo "RUN_PROBE_DONE $(date '+%F %T %z')"

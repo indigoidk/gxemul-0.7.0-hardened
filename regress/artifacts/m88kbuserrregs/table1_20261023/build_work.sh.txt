@@ -1,0 +1,58 @@
+#!/bin/bash
+# T36 / #570 builder -- the WORK tree /tmp/gxt36/work, built UNMODIFIED (HEAD 7fca7187 + the peer's five dirty
+# files replaced by their HEAD blobs, exactly as the witness's build_base.sh did for /tmp/gxt36/base).
+# WSL Gentoo, foreground, one build.  Writes only /tmp/gxt36/work, /tmp/gxt36/work_*.log and this scratch dir.
+# Never writes into GXEMUL-SEC, build/, est/ or build-asan/ (build/ is only READ, as the cp -a source).
+set -u
+SRC=/mnt/c/DocumentNoSnc/CC/GXEMUL/build
+SEC=/mnt/c/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC
+SP=/mnt/c/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/t36/build
+W=/tmp/gxt36/work
+echo "BUILD_WORK_START $(date '+%F %T %z')"
+[ -d /tmp/gxt36 ] || { echo "no /tmp/gxt36 (the witness's base clone dir) -- refusing"; exit 9; }
+[ -e "$W" ] && { echo "$W already exists -- refusing to overwrite (remove it by hand if intended)"; exit 9; }
+cp -a "$SRC" "$W" || { echo "COPY FAILED"; exit 9; }
+echo "copied $SRC -> $W"
+
+echo "== restore HEAD 7fca7187 blobs over the five files the SEC working tree (and build/) carry uncommitted =="
+for f in src/cpus/cpu_alpha_palcode.c src/devices/dev_lca.c src/devices/dev_pcc2.c src/devices/dev_sh4.c \
+         src/include/thirdparty/mvme_pcctworeg.h; do
+    cp "$SP/headblobs/$f" "$W/$f"
+    if cmp -s "$SP/headblobs/$f" "$W/$f"; then r=HEAD-BLOB; else r=MISMATCH; fi
+    echo "  $f  $r  md5=$(md5sum < "$W/$f" | cut -c1-32)"
+done
+echo "  src/machines/.index left as build/ has it (generated; the witness did the same): md5=$(md5sum < "$W/src/machines/.index" | cut -c1-32)"
+
+echo "== cmp the FOUR product files, work clone vs GXEMUL-SEC (SEC WT == HEAD for all four, checked git-side) =="
+for f in src/cpus/memory_rw.c src/cpus/cpu_m88k.c src/devices/dev_luna88k.c src/devices/dev_m8820x.c; do
+    if cmp -s "$W/$f" "$SEC/$f"; then r=CLEAN; else r=DIFFERS; fi
+    echo "  $f  $r  md5=$(md5sum < "$W/$f" | cut -c1-32)"
+done
+
+echo "== clean: src/cpus make clean (generated tables, generators, objects), every other .o, the binary =="
+( cd "$W/src/cpus" && make clean > /tmp/gxt36/work_cpus_clean.log 2>&1; echo "  cpus make clean rc=$?" )
+rm -f "$W"/src/cpus/*.o
+find "$W/src" -name '*.o' -delete
+rm -f "$W/gxemul"
+echo "  objects left: $(find "$W/src" -name '*.o' | wc -l)   tmp_*.c left in cpus: $(ls "$W"/src/cpus/tmp_*.c 2>/dev/null | wc -l)   gxemul present: $([ -e "$W/gxemul" ] && echo yes || echo no)"
+
+echo "== build (make -j8, foreground) =="
+cd "$W" || exit 9
+make -j8 > /tmp/gxt36/work_make.log 2>&1
+rc=$?
+echo "  MAKE_RC=$rc  (not the freshness test; see below)"
+cp /tmp/gxt36/work_make.log "$SP/work_make.log"
+echo "  error lines: $(grep -c ' error' /tmp/gxt36/work_make.log)   'warning:' lines: $(grep -c 'warning:' /tmp/gxt36/work_make.log)"
+echo "  objects built: $(find "$W/src" -name '*.o' | wc -l)"
+echo "  CFLAGS line (from the cpu_m88k.o compile): $(grep -m1 -E ' -c .*cpu_m88k\.c|cpu_m88k\.c.* -c ' /tmp/gxt36/work_make.log | cut -c1-200)"
+ls -la --time-style=full-iso "$W/gxemul" 2>&1 | sed 's/^/  /'
+for f in src/cpus/memory_rw.c src/cpus/cpu_m88k.c src/devices/dev_luna88k.c src/devices/dev_m8820x.c \
+         src/cpus/tmp_m88k_tail.c src/devices/dev_pcc2.c; do
+    if [ "$W/gxemul" -nt "$W/$f" ]; then r=FRESH; else r=STALE-OR-ABSENT; fi
+    echo "  [ gxemul -nt $f ] -> $r"
+done
+md5sum "$W/gxemul" | sed 's/^/  /'
+echo "  base binary for comparison: $(md5sum /tmp/gxt36/base/gxemul)"
+if cmp -s "$W/gxemul" /tmp/gxt36/base/gxemul; then echo "  work binary BYTE-IDENTICAL to the witness's base binary"; \
+else echo "  work binary differs from the base binary (expected only if the build embeds a timestamp/path)"; fi
+echo "BUILD_WORK_DONE $(date '+%F %T %z')"

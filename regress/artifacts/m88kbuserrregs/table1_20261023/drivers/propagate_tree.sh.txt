@@ -1,0 +1,37 @@
+#!/bin/bash
+# T36 / #570 builder -- section 7: copy the four FIXED product files from GXEMUL-SEC into ONE build tree, rebuild it
+# (rm src/cpus/*.o; make -j8; foreground), and print both parts of the clearance.  Touches ONLY the four files
+# (build/'s five peer files are left exactly as they are) plus the rebuilt objects and binary.
+# usage: propagate_tree.sh <tree root> <name>
+set -u
+SEC=/mnt/c/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC
+SP=/mnt/c/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/t36/build
+T=$1; NAME=$2
+FOUR="src/cpus/memory_rw.c src/cpus/cpu_m88k.c src/devices/dev_luna88k.c src/devices/dev_m8820x.c"
+PEER="src/cpus/cpu_alpha_palcode.c src/devices/dev_lca.c src/devices/dev_pcc2.c src/devices/dev_sh4.c src/include/thirdparty/mvme_pcctworeg.h"
+echo "PROPAGATE_START $NAME $(date '+%F %T %z')  tree $T"
+[ -d "$T" ] || { echo "no tree $T"; exit 9; }
+[ -e "$T/.MUTANT" ] && { echo "tree carries a .MUTANT sentinel: $(cat "$T/.MUTANT") -- refusing"; exit 9; }
+echo "  peer files before (md5, untouched by this script):"
+for f in $PEER; do [ -f "$T/$f" ] && echo "    $(md5sum < "$T/$f" | cut -c1-12)  $f"; done
+for f in $FOUR; do
+    cp "$SEC/$f" "$T/$f"
+    if cmp -s "$SEC/$f" "$T/$f"; then r=CLEAN; else r=DIFFERS; fi
+    echo "  copied $f  part 1 (cmp vs SEC): $r"
+done
+cd "$T" || exit 9
+rm -f src/cpus/*.o
+make -j8 > "/tmp/gxt36/prop_$NAME.log" 2>&1
+rc=$?
+cp "/tmp/gxt36/prop_$NAME.log" "$SP/prop_$NAME.log"
+echo "  MAKE_RC=$rc (not the freshness test); 'warning:' lines: $(grep -c 'warning:' "/tmp/gxt36/prop_$NAME.log"); error lines: $(grep -c ' error' "/tmp/gxt36/prop_$NAME.log")"
+grep 'warning:' "/tmp/gxt36/prop_$NAME.log" | head -5 | sed 's/^/    /'
+ls -la --time-style=full-iso "$T/gxemul" | sed 's/^/  /'
+echo "  binary md5 $(md5sum < "$T/gxemul" | cut -c1-32)"
+for f in $FOUR; do
+    if [ "$T/gxemul" -nt "$T/$f" ]; then r=FRESH; else r=NOT-NEWER; fi
+    echo "  part 2 [ gxemul -nt $f ] -> $r"
+done
+echo "  peer files after (md5):"
+for f in $PEER; do [ -f "$T/$f" ] && echo "    $(md5sum < "$T/$f" | cut -c1-12)  $f"; done
+echo "PROPAGATE_DONE $NAME $(date '+%F %T %z')"

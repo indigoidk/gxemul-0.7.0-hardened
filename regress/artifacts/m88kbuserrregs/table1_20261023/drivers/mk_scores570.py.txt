@@ -1,0 +1,157 @@
+#!/usr/bin/env python3
+"""T36 / #570 -- SCORES.txt from the table's outputs: per leg the instrument revision and its md5, the denominator,
+the score, the measured red set, the PRETABLE section-5 (+ AMENDMENT 1) predicted red set, MATCH or RESULT, and one
+line on why the red is the reason under test.  Reads only; writes SCORES.txt.  usage: mk_scores570.py <table1 dir>"""
+import io
+import os
+import re
+import sys
+
+T1 = sys.argv[1]
+REV2, REV1 = "rev2 frozen (m88k_buserr_probe.rev2.frozen.py.txt, md5 d57c12ab)", "rev1 frozen witness (md5 d59798b0)"
+G = ["uld pfsr", "uld pfar", "ust pfsr", "ust pfar", "vme pfsr", "vme pfar"]
+ICM = ["uld icmmu", "ust icmmu", "vme icmmu", "luna icmmu"]
+ROW31 = (["neg apparatus", "mv devsig", "mv cmmu rt", "ok route", "ok regs"] +
+         [d + " " + c for d in ("uld", "ust", "vme") for c in ("route", "pfsr", "pfar", "icmmu")] +
+         ["luna devsig", "luna cmmu rt", "luna route", "luna pfsr", "luna pfar", "luna icmmu",
+          "ifetch route", "ifetch pfsr", "ifetch pfar", "ifetch dcmmu", "dbg noexc", "null surv", "null route", "unasm"])
+CMMUSESS = (["mv cmmu rt", "ok route", "ok regs"] + [d + " " + c for d in ("uld", "ust", "vme")
+            for c in ("route", "pfsr", "pfar", "icmmu")] + ["luna cmmu rt", "luna route", "luna pfsr", "luna pfar",
+            "luna icmmu", "ifetch route", "ifetch pfsr", "ifetch pfar", "ifetch dcmmu", "dbg noexc"])
+#  leg, output, instrument, N, predicted red set, what, why the red is the reason under test
+LEGS = [
+    ("pre", "prefix_HEAD.out", REV2, 31, G + ["luna route", "luna pfar", "ifetch pfsr", "ifetch pfar"],
+     "HEAD binary 2efeec55 (clause (a), pre-fix)",
+     "all ten reds are STALE (SYMPTOM=PRESENT 10/10): the seeds survive every refused access, LUNA serves 0"),
+    ("fix", "fixed.out", REV2, 31, [], "the #570 fix, work binary 3cd0501c (clause (a), post-fix)",
+     "--"),
+    ("L1", "fixed_witness24.out", REV1, 24, [], "the FROZEN 24-row witness on the fixed binary (witness clause (i))",
+     "--"),
+    ("L3", "L3_armHEAD.out", REV2, 31, G + ["luna pfsr", "luna pfar", "ifetch pfsr", "ifetch pfar"],
+     "clause (b): memory_rw.c's arm reinstated verbatim from HEAD (blob 3d47dd66), the LUNA case fixed",
+     "no metadata write anywhere: every pfsr/pfar row reads its seed; luna route stays green (the arm still faults)"),
+    ("L3/w24", "L3_armHEAD_witness24.out", REV1, 24, G + ["luna pfsr", "luna pfar"],
+     "the same L3 binary on the frozen witness", "as L3 on the 24-row instrument (B3's 16/24 prediction)"),
+    ("L4", "L4_caseHEAD.out", REV2, 31, ["luna route", "luna pfar"],
+     "clause (b): dev_luna88k.c's case reinstated verbatim from HEAD (blob 6ecc6908), the arm fixed",
+     "the case serves 0 again (fall, r4=0) and writes PFSR but no PFAR; luna pfsr stays green"),
+    ("L4/w24", "L4_caseHEAD_witness24.out", REV1, 24, ["luna route", "luna pfar"],
+     "the same L4 binary on the frozen witness", "as L4 on the 24-row instrument (B3's 22/24 prediction)"),
+    ("L5", "L5_stub.out", REV2, 31, [r for r in ROW31 if r != "neg apparatus"],
+     "clause (c): an exit-1 non-emulator in the binary's place",
+     "every session is 'died:exit1'; neg apparatus passes by design; CONTROL=FAIL, sentinel printed, exit 1"),
+    ("L6", "L6_seldata.out", REV2, 31, ["ifetch pfsr", "ifetch pfar", "ifetch dcmmu"],
+     "(d) the added selector weakened to always-data",
+     "the instruction refusal writes cmmu[1]: the instruction seeds survive, the data CMMU is written"),
+    ("L6b", "L6b_selinstr.out", REV2, 31, G + ["luna pfsr", "luna pfar"] + ICM,
+     "(d) the added selector weakened to always-instruction (Q16)",
+     "every data refusal writes cmmu[0]: the data seeds survive, the instruction CMMU is written"),
+    ("L7", "L7_noexcdrop.out", REV2, 31, ["dbg noexc"],
+     "(d) the `!no_exceptions' conjunct dropped from the outer guard",
+     "the debugger dump enters the body: (memory access failed), cpu 0 vectors, the data CMMU is written"),
+    ("L8", "L8_nullrm.out", REV2, 31, ["null surv", "null route"], "(d) the added NULL check removed",
+     "cpu 1's refused data load dereferences its NULL cmmu[1]: the session dies, sig11"),
+    ("L8b", "L8b_nulldata.out", REV2, 31, ["null surv"],
+     "(d) the NULL check conditioned on the data label (Q15)",
+     "part 1 survives (route green, its dump flushed); cpu 1's instruction fetch dereferences NULL in part 2: sig11"),
+    ("L9", "L9_excinnull.out", REV2, 31, ["null route"], "(d) the exception moved inside the NULL check",
+     "cpu 1 takes no exception: FELL set, HANDLED clear, SXIP/DMA0 0"),
+    ("L10", "L10_raw3.out", REV2, 31, ["uld pfsr", "ust pfsr", "vme pfsr", "luna pfsr", "ifetch pfsr"],
+     "PFSR value: raw 3 instead of 3 << 16", "every PFSR row reads 0x3"),
+    ("L11", "L11_pfarrel.out", REV2, 31, ["uld pfar", "ust pfar", "vme pfar", "luna pfar", "ifetch pfar"],
+     "PFAR value: the device-relative paddr", "PFAR reads 0x10 / 0x10 / 0x90 / 0x0 / 0x10, not the physical address"),
+    ("L12", "L12_pfsronly.out", REV2, 31, ["uld pfar", "ust pfar", "vme pfar", "luna pfar", "ifetch pfar"],
+     "PFAR not written (PFSR only)", "every PFAR row reads its seed"),
+    ("L13", "L13_bothcmmu.out", REV2, 31, ICM + ["ifetch dcmmu"], "target: both CMMUs written",
+     "the sibling CMMU is written: its seeds change"),
+    ("L14", "L14_sibclear.out", REV2, 31, ICM + ["ifetch dcmmu"],
+     "target: the sibling's PFSR cleared to SUCCESS (the translation-fault writer's shape)",
+     "the sibling PFSR reads 0"),
+    ("L15", "L15_readonly.out", REV2, 31, ["ust pfsr", "ust pfar"], "guard operand: writes only for MEM_READ",
+     "the refused store writes nothing"),
+    ("L16", "L16_novme.out", REV2, 31, ["vme pfsr", "vme pfar"], "guard operand: the VME device excluded (Q17)",
+     "the VME population-1 refusal writes nothing"),
+    ("L17", "L17_excdrop.out", REV2, 31, ["uld route", "ust route", "vme route", "luna route", "ifetch route",
+                                          "ifetch pfsr", "ifetch pfar", "ifetch dcmmu", "null route"],
+     "placement: the exception dropped",
+     "refused data accesses fall through; the stepped fetch reaches R1's `bad:' tail (handler never runs)"),
+    ("L18", "L18_preguard.out", REV2, 31, CMMUSESS,
+     "placement: the NULL-checked writes moved to just before the outer guard (Q14)",
+     "every served CMMU access also writes PFSR/PFAR, so each CMMU session's readback prerequisite fails"),
+    ("L19", "L19_res1.out", REV2, 31, ["mv devsig", "luna devsig"] + CMMUSESS,
+     "outer guard widened to res <= 1",
+     "the first served IDR load faults, so every CMMU session's device-signature prerequisite fails"),
+    ("L21", "L21_casewrdel.out", REV2, 31, ["luna route", "luna pfsr", "luna pfar"],
+     "the LUNA case's write deleted, the case still served (break)",
+     "served 0, no exception, no write: route, pfsr and pfar all read the pre-fix shape"),
+    ("L22", "L22_casedel.out", REV2, 31, ["luna route", "luna pfsr", "luna pfar", "luna icmmu"],
+     "the LUNA case deleted (CL15's counterfactual, Q18)",
+     "the access reaches default:, which stops the cpu: the handler never runs (prereq:handler)"),
+]
+ROW_RE = re.compile(r"^(\S+(?: \S+)?)\s{2,}.*\s(ok|FAIL)$")
+
+
+def parse(path):
+    with io.open(path, encoding="latin-1") as f:
+        text = f.read()
+    rows = {}
+    for line in text.splitlines():
+        if line.startswith(("INFO ", "row ", "  unasm mismatch")):
+            continue
+        m = re.match(r"^(.{16}) ", line)
+        if m and (line.endswith(" ok") or line.endswith(" FAIL")):
+            rows[m.group(1).strip()] = line.endswith(" ok")
+    kv = dict(re.findall(r"^M88K_BUSERR_([A-Z]+)=(.*)$", text, re.M))
+    return rows, kv, "M88K_BUSERR_PROBE_DONE" in text
+
+
+out = ["T36 / #570 (m88kbuserrregs) -- SCORES.txt, the kill table (BUILD_SPEC sections 4-6, 10, 11).  Generated by "
+       "mk_scores570.py.txt from the outputs in this directory.",
+       "Named baseline for every variant: HEAD 7fca7187 + the four #570 files (GXEMUL-SEC working set; work binary "
+       "3cd0501c).  Each leg: a cp -a of the work tree in /tmp/gxt36/legs/<leg>, one file replaced, rm src/cpus/*.o,",
+       "make, `[ gxemul -nt <file> ]' FRESH, 0 warnings (legs_batch*.out), restored by cp from SEC + cmp, sentinel removed, "
+       "tree discarded.  The variant vs the fixed file is <leg>.diff (a file only; L3/L4 are HEAD blobs verbatim).",
+       "Criterion (section 11, Q14): the MEASURED red set equals PRETABLE section 5's predicted set as amended "
+       "(AMENDMENT 1); a mismatch is a RESULT.", ""]
+nmatch = nres = 0
+for leg, fn, inst, n, pred, what, why in LEGS:
+    p = os.path.join(T1, fn)
+    if not os.path.isfile(p):
+        out.append("%-7s MISSING OUTPUT %s" % (leg, fn))
+        nres += 1
+        continue
+    rows, kv, done = parse(p)
+    red = sorted(k for k, v in rows.items() if not v)
+    ok = MATCH = (sorted(pred) == red and len(rows) == n and done)
+    nmatch += 1 if MATCH else 0
+    nres += 0 if MATCH else 1
+    out.append("%-7s %-6s %s  [%s, N=%d]  %s" % (leg, kv.get("RESULT", "?"), "MATCH " if MATCH else "RESULT",
+                                               inst.split(" (")[0], n, fn))
+    out.append("        variant : %s" % what)
+    out.append("        measured: %d red / %d rows emitted; CONTROL=%s; SYMPTOM=%s; sentinel %s" % (
+        len(red), len(rows), kv.get("CONTROL", "?"), kv.get("SYMPTOM", "?")[:60], "present" if done else "ABSENT"))
+    out.append("        red     : %s" % (", ".join(red) if red else "(none)"))
+    if not MATCH:
+        out.append("        PREDICTED: %s" % (", ".join(sorted(pred)) or "(none)"))
+    out.append("        why     : %s" % why)
+p = os.path.join(T1, "L5b_absent.out")
+with io.open(p, encoding="latin-1") as f:
+    t5b = f.read()
+b_ok = ("M88K_BUSERR_PROBE_DONE" not in t5b and "FileNotFoundError" in t5b)
+nmatch += 1 if b_ok else 0
+nres += 0 if b_ok else 1
+out.append("%-7s %-6s %s  [%s]  L5b_absent.out" % ("L5b", "--", "MATCH " if b_ok else "RESULT", "rev2 frozen"))
+out.append("        variant : clause (c): the binary ABSENT")
+out.append("        measured: FileNotFoundError before row 1, no row emitted, NO sentinel (the gate's sentinel pin reds)")
+out.append("L20     not run: L20 = L4 (HEAD's case verbatim IS 'left returning 1, write kept'; section 11, Q13)")
+out += ["", "SUMMARY: %d measurements MATCH their prediction, %d RESULT (mismatch).  Instrument revisions: the detector "
+        "rev2 (31 rows) froze BEFORE any table run (md5 d57c12ab, identical to regress/m88k_buserr_probe.py at freeze "
+        "time); the witness rev1 (24 rows, md5 d59798b0) is the untouched witness_20261023 file." % (nmatch, nres),
+        "CLAUSE (c): measured at table1_20261023/L5_stub.out (1/31: only `neg apparatus' green, by design; "
+        "CONTROL=FAIL; SYMPTOM=MIXED; sentinel printed; exit 1) and L5b_absent.out (no sentinel, no rows).",
+        "Every variant leg (L3, L4, L6, L6b, L7, L8, L8b, L9-L19, L21, L22: 20 builds) is red on the 31-row detector; "
+        "no build failed, none warned.",
+        "SCORES_DONE"]
+with io.open(os.path.join(T1, "SCORES.txt"), "w", encoding="ascii", newline="\n") as f:
+    f.write("\n".join(out) + "\n")
+print("\n".join(out[-6:]))

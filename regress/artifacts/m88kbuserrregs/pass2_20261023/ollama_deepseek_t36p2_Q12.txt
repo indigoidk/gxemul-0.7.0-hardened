@@ -1,0 +1,55 @@
+VERDICT: DO NOT SHIP -- floor breach in detector (no row catches CMMU-owner confusion in the NULL-CMMU cell) and several L4 wrong records in comments/header  
+Q1: diff matches A1-A7 but product comments contain L4s: P2 (line citation), P1 (debugger parenthetical), P4 (~10^5), M6/P15 (instruction-x-NULL delivery)  
+Q2: clause (a)-(c),(e)-(h) mostly sound, but clause (d) floor is breached by AA1 (boot-CPU CMMU substitution) and header has L4s P3, P10, P14
+
+---
+
+## Q1 — The diff against the rulings
+
+**F1 (READ).** Hunk-by-hunk: `memory_rw.c` matches A1+A2+A3+A4; TODO replaced. `dev_luna88k.c` matches A5. `cpu_m88k.c` matches A6. `dev_m8820x.c` is comment-only at four sites, object identical per S21. No deviation from the adjudicated fix.
+
+**F2 (READ/REASONED).** Include comment C2 “upstream adds the same include to this file” is TRUE per S16; it is also SUFFICIENT because position is not load-bearing and collision check is clean. However, probe header P3 (“after m8820x_pte.h (upstream's placement…)”) is FALSE — upstream places it BEFORE. That is an L4 in the frozen header; must be corrected or explicitly noted as a records error.
+
+**F3 (comment audit).**
+- M1–M5 true per S10, S13, S19.
+- M6 true for data-x-NULL (null route scored) but the instruction-x-NULL delivery is not scored; sentence asserts an observable consequence without a row or explicit no-row sentence. **L4 (P15).**
+- M7 “NO_EXCEPTIONS callers (the debugger)” is TRUE-BUT-MISLEADING: single-step pre-read is a debugger path that *does* reach the arm, and some NO_EXCEPTIONS callers are not debugger. **L4 (P1).**
+- C1 true; C2 true.
+- L1 NOT CHECKABLE from packet (no OpenBSD/luna88k source on disk); kept from HEAD.
+- L2–L4 true per S11, S17, L22.
+- D1, D3, D4 true.
+- D2 **L4 (P4)**: “~10^5 times per boot” now appears to cover both translation-fault writer and the new arm; the count was measured only for the former.
+
+**F4 (READ).** P2 is an L4: `dev_m8820x.c:361` cites `cpu_m88k.c:354-355`, now shifted to `:358-359` by the +4 include. The diff edits that file but does not fix this citation. Must be fixed before commit. The five regress files are also shifted; file them rather than sweep.
+
+**F5 (REASONED).** LUNA `return 0` skipping the common tail is inert for a failing access; read buffer already zeroed. No defect.
+
+**Q1(f) answer.** L4s in the diff: P2, P1, P4, M6/P15. All should be fixed before commit — at minimum P2 and P4; P1 and M6 can be fixed by wording or explicit no-row sentence.
+
+---
+
+## Q2 — Detector and floor
+
+**F6 (READ).** Clause (a) satisfied at probe level: pre-fix 21/31 with SYMPTOM=PRESENT 10/10; post-fix 31/31 ABSENT; witness 24/24 post-fix after 16/24 pre-fix. P8: gate block never ran pre-fix because inserted after propagation, but probe-level receipt exists and literal pins would red. Record as “probe-level clause (a), gate insertion after propagation” — not the by-construction form, which is only for clause (c).
+
+**F7 (READ).** Clause (b) satisfied. L3 reds pfsr/pfar rows, keeps `luna route` green because the unrepaired arm still raises the exception. L4 reds `luna pfar`/`luna route`, keeps `luna pfsr` green because the case’s own write is restored. Reds are for the reason under test.
+
+**F8 (READ).** Clause (c) recorded correctly as measured at L5_stub.out and L5b_absent.out. Nothing owed.
+
+**F9 (REASONED).** Clause (d) floor breach. The null-CMMU cell is floor, but no row detects a mutant that uses the boot CPU’s CMMU when the faulting CPU has no CMMU. In the null session, cpu0 has CMMUs, cpu1 has none. A mutant that changes the selector to `cpu->machine->cpus[0]->cd.m88k.cmmu[...]` would write cpu0’s CMMU on cpu1’s fault, while `null route` and `null surv` stay green because cpu1 still takes the exception and survives. The repair’s effect for the faulting CPU is nulled, guard shape kept. This is a clause (d) breach, L2. **AA1.**
+
+**F10 (READ).** P6 (stepped instruction fetch at LUNA address) is clause (e), not floor; the floor cross-product does not include device identity. VA != PA, sub-word PFAR, LUNA store are clause (e). No other floor cell is unrowed, but the instruction-x-NULL delivery observable remains unrowed (P15, L4).
+
+**F11 (READ).** CHANNEL: L18/L19 red through prerequisite strings; header now names actual channels (`ok route` prereq:nodev, `ok regs` prereq:readback). Not vacuous. No other vacuous row beyond `ifetch route` against L6, already disclosed.
+
+**F12 (READ).** Single-row carriers L7, L8b, L9, L6 are valid; each reds for the intended reason. No breach there.
+
+**F13 (READ).** R2 dependency and ERROR vector disclosed correctly, except P10 wording states as fact an unmeasured prediction (“the step’s own fetch reaches the same arm…”) — should say “predicted (source-derived)”. L4 in header.
+
+**F14 (READ).** Gate block and MANIFEST lines are sound: literal row count, all 31 names, sentinel once, CONTROL=OK, SYMPTOM=ABSENT, emitted/green/red counts. Regex satisfiable; longest name 13 ≤ 15. Skip disclosure adequate.
+
+**Q2(i) — one ask-again.**
+- **AA1** — *CMMU owner confusion*: use boot CPU’s CMMU when faulting CPU’s pointer is NULL. Cell: data-x-absent and instruction-x-absent. **FLOOR (L2).**
+- **AA2** — *PFAR stores virtual address instead of physical*. Cell: data-x-present and instruction-x-present. **CLAUSE (e)** (VA != PA disclaimed).
+- **AA3** — *Device-specific skip* (e.g., only VME). Cell: data-x-present. **CLAUSE (e)** (device identity not in repair path).
+- **AA4** — *Sub-word PFAR uses byte address*. Cell: data-x-present. **CLAUSE (e)** (sub-word disclaimed).

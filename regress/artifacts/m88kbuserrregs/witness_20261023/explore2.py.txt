@@ -1,0 +1,117 @@
+#!/usr/bin/env python3
+"""T36 exploration 2 (not a deliverable): the same cells FREE-RUNNING to a breakpoint, so the stepped
+witness's symptom can be checked not to be a single-step artifact, and the instruction-fetch cell's
+free-running behaviour is measured rather than predicted.  The pty driver is vme_default_probe.py's run_pty
+(copied, argv made a parameter; a `continue' waits for the NEXT PROMPT, breakpoint or not, so a halt is
+reported instead of timing out)."""
+import os, pty, re, select, sys, tempfile, time
+
+BIN = sys.argv[1]
+TMP = tempfile.mkdtemp(prefix="t36y_")
+DUMMY = os.path.join(TMP, "dummy.bin")
+open(DUMMY, "wb").write(b"\0\0\0\0")
+CODE, H = 0x10000, 0x10100
+PROMPT = "GXemul> "
+
+
+def enc(op, rd, rs1, imm):
+    return (op << 26) | (rd << 21) | (rs1 << 16) | imm
+
+
+def LD(rd, rs, off): return enc(0x05, rd, rs, off)
+def ST(rd, rs, off): return enc(0x09, rd, rs, off)
+def OR(rd, rs, imm): return enc(0x16, rd, rs, imm)
+def BR(frm, to): return 0xc0000000 | (((to - frm) >> 2) & 0x3ffffff)
+def JMP(rs2): return 0xf400c000 | rs2
+
+
+def run_pty(argv, cmds, t_cmd=10.0, t_run=20.0):
+    pid, fd = pty.fork()
+    if pid == 0:
+        try:
+            os.execv(argv[0], argv)
+        finally:
+            os._exit(127)
+    buf = [""]
+
+    def pump(deadline, pred):
+        while True:
+            if pred():
+                return "ok"
+            left = deadline - time.time()
+            if left <= 0:
+                return "timeout"
+            r, _, _ = select.select([fd], [], [], min(left, 0.05))
+            if not r:
+                continue
+            try:
+                d = os.read(fd, 65536)
+            except OSError:
+                return "eof"
+            if not d:
+                return "eof"
+            buf[0] += d.decode("latin-1", "replace")
+
+    state = pump(time.time() + 20.0, lambda: PROMPT in buf[0])
+    failed = None if state == "ok" else "no-prompt"
+    if state == "ok":
+        for c in cmds:
+            start = len(buf[0])
+            os.write(fd, (c + "\n").encode("latin-1"))
+            t = t_run if c == "continue" else t_cmd
+            state = pump(time.time() + t, lambda start=start: buf[0].find(PROMPT, start + len(c)) >= 0)
+            if state != "ok":
+                failed = "timeout-after:" + c
+                break
+    try:
+        os.write(fd, b"quit\n")
+    except OSError:
+        pass
+    pump(time.time() + 3.0, lambda: False)
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+    for _ in range(40):
+        p, s = os.waitpid(pid, os.WNOHANG)
+        if p:
+            break
+        time.sleep(0.05)
+    else:
+        os.kill(pid, 9)
+        os.waitpid(pid, 0)
+        failed = failed or "killed"
+    return buf[0].replace("\r", ""), failed
+
+
+def program(cmmu_d, cmmu_i, access):
+    vec = [(0x10, [OR(7, 0, 2), BR(0x14, H)]), (0x18, [OR(7, 0, 3), BR(0x1c, H)])]
+    code = [LD(10, 3, 0x0), ST(20, 3, 0x108), ST(21, 3, 0x10c), ST(22, 2, 0x108), ST(23, 2, 0x10c),
+            LD(11, 3, 0x108), LD(12, 3, 0x10c), access, OR(6, 0, 0x1234), BR(CODE + 4 * 9, H)]
+    hnd = [LD(13, 3, 0x108), LD(14, 3, 0x10c), LD(15, 2, 0x108), LD(16, 2, 0x10c), OR(31, 0, 0x5678),
+           0xc0000000]
+    regs = [(3, cmmu_d), (2, cmmu_i), (20, 0x5a5a5a5a), (21, 0x13572468), (22, 0x2468ace0), (23, 0x0badf00d)] + \
+        [(r, 0xdeadbeef) for r in (4, 6, 7, 10, 11, 12, 13, 14, 15, 16, 31)]
+    return vec + [(CODE, code), (H, hnd)], regs
+
+
+MV = [BIN, "-V", "-x", "-E", "mvme88k", "-e", "mvme187", "-M", "64", "0x%x:%s" % (CODE, DUMMY)]
+LU = [BIN, "-V", "-x", "-E", "luna88k", "-e", "luna-88k", "0x%x:%s" % (CODE, DUMMY)]
+cases = [
+    ("FREE mvme187 unreadable ld 0xfff46010", MV, 0xfff7f000, 0xfff77000, [(5, 0xfff46010)], LD(4, 5, 0)),
+    ("FREE mvme187 ifetch jmp 0xfff46010", MV, 0xfff7f000, 0xfff77000, [(5, 0xfff46010)], JMP(5)),
+    ("FREE luna 0x3ffffff0 ld", LU, 0xfff06000, 0xfff07000, [(5, 0x3ffffff0)], LD(4, 5, 0)),
+]
+for name, argv, d, i, xregs, acc in cases:
+    blocks, regs = program(d, i, acc)
+    cmds = ["r%d=0x%x" % (r, v) for r, v in regs + xregs]
+    for at, words in blocks:
+        for k, w in enumerate(words):
+            cmds.append("put w 0x%x, 0x%08x" % (at + 4 * k, w))
+        cmds.append("unassemble 0x%x 0x%x" % (at, at + 4 * len(words)))
+    cmds += ["breakpoint add 0x%x" % (H + 0x14), "pc=0x%x" % CODE, "continue", "reg", "reg 0,0"]
+    out, failed = run_pty(argv, cmds)
+    print("=" * 30, name, "failed=%s" % failed)
+    i0 = out.find("pc=0x%x" % CODE)
+    print(out[i0:][-5000:] if i0 >= 0 else out[-5000:])
+print("EXPLORE2_DONE")
