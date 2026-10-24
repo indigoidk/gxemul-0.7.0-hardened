@@ -1,3 +1,22 @@
+# Records, 2026-10-24: `ppcdsformxo` names its landing commit cb21331c, and cb21331c's committed-tree proofs and pass-2 receipt
+
+`#571` landed as `cb21331c561253dc2e86d3c79a0ff6d214b5cbd4`.  Committed-tree proofs: `git ls-tree cb21331c regress/ppc_dsform_probe.py` -> `100644 blob 3c845404bbb039ea810007b48cd57945ef6a5e97` (the
+detector, mode 100644 -- a `.py` probe run by `gate_ppc.sh`; its committed blob md5 is `e0a1e67eb0283abccde3bbd53952487a`, the shipped revision 3 --
+the measured revision `0266228894811ba6c51cff82585753c9`, revision 1 `59e83491a5819a599c610b1aa8e8b847` and revision 2
+`3efd8cbec746b8224c32d6827b42db46` are preserved under `regress/artifacts/ppcdsformxo/table1_20261024/repair_p2/` with the
+three docstring-only diffs and their re-measures);
+the committed `regress/gate_ppc.sh` blob md5 is `5761a84d014a422f8e9381eba9412511` and the committed `tools/pipeline/check_probe_wiring.py` blob md5 is
+`3cedc47eb34321dcc99e13184629efae`, each equal to the round's staged copy (`regress/artifacts/ppcdsformxo/table1_20261024/staged/gate_ppc.sh.txt`,
+`staged/check_probe_wiring.py.txt` -- the HEAD-based copies carrying only this round's edits; the working tree's peer lines
+were not committed); `git diff --numstat cb21331c^ cb21331c` on those two files = `41 1 regress/gate_ppc.sh; 2 0 tools/pipeline/check_probe_wiring.py`.  Pass-2 receipt: `pass2_20261024/`
+(Astra, Grok, Argon via agy, GLM 5.3 x2, DeepSeek x2 -- seven LAND WITH CHANGES, records only; `PASS2_RULINGS.md`;
+`adj/codex_t2p2adj.txt` AMEND and `adj/grok_t2p2adj.txt` AMEND, both LANDING GO WITH THE CHANGES NAMED, all applied before
+the landing; `adj/final/codex_t2final*.txt`, Astra's exact-text readings of the landed records -- each reading's corrections were applied
+before the next, and the last cleared the commit).  The row's `commits` field
+now names `cb21331c`; its state stays `held` for Fable 5.1 with its question.
+
+Ledger (one field), this block, the `regress/pass2_ledger.tsv` receipt line and `matrix.html` only.
+
 # `#571` (ppcdsformxo): the PowerPC decoder folded the DS-form XO bits into the displacement, so `ldu` and `lwa` ran as `ld` at EA+1 / EA+2 and `stdu` ran as `std` at EA+1 with no base update -- opcodes 58 and 62 now decode their five forms, reserved encodings and the RA = 0 update forms stop the cpu, and a 39-row rung-3 detector gates it in gate 13
 
 **The defect** (`ppcdsformxo`, HIGH; filed 2026-10-22 from the external-fixes research, T2 of its batch; class
