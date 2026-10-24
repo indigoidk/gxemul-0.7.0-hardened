@@ -1,0 +1,49 @@
+VERDICT: SHIP WITH CHANGES -- narrow the added `#569` comments in the generator and gate block to the 16 actually-consumed slots; code and detector are otherwise sound.  
+Q1: Fix is exactly the repair; table is exactly the 24 NULL→name lines; comment overstates consumer reach for 8 no-consumer slots.  
+Q2: 123 rows discharge the amended spec; no vacuous rows; no in-contract clean sweep; one-time table is sufficient.  
+Q3: not in packet  
+Q4: not in packet  
+Q5: not in packet
+
+---
+
+### Q1 — the fix
+
+**(a)** READ from 7.1. The generator diff removes exactly the four lines of the `size == 0 && scaledness` arm and adds only the eight-line `#569` comment. `loadstore()`’s early return is kept per S1, and `cpu_m88k_instr.c` is untouched per S3/S4. Nothing else changed.
+
+**(b)** REASONED from 7.2 and the index formula. The table diff is exactly 24 changed lines, in eight hunks of three. The changed indices are:
+
+160, 164, 168, 176, 180, 184, 224, 228, 232, 240, 244, 248,  
+416, 420, 424, 432, 436, 440, 480, 484, 488, 496, 500, 504.
+
+For each, the new name equals the index-32 unscaled counterpart, as S18a says. Big-endian slots carry `_le` names because `print_function_name()` special-cases size 0 to always print `_le`; this is the existing byte idiom, not an error. The table still has 512 entries and 272 NULLs.
+
+**(c)** READ from 7.1/7.3/7.4 and S4. The comment’s first five claims are supported by the pin rows or by S5/S18b. The last claim — “xmem_slow() calls them unguarded while the ld/st decoder installs them as ic->f” — is false as a statement about all 24 slots. Only 16 of the 24 have a consumer today; the other 8 are marked “(no consumer)” in the driver header. The driver header itself is precise, but the generator comment and the gate block comment repeat the overstatement. This is an L4 wrong-record issue: the comments should say “16 of these 24” or otherwise name the consumer subset.
+
+**(d)** REASONED from 8.1 and the measured facts quoted in the brief. The separator logic is before the removed arm and unchanged; the other three NULL arms remain; `generated_functions` remains 198; `fresh_lsn` remains 198; the regenerated table `cmp`s clean against the committed table. No other generated output changes.
+
+---
+
+### Q2 — the detector
+
+**(a)** READ from 7.3/7.4. The row count is exactly:
+
+4 generator status rows + 2 × (5 structural + 24 repair pins + 9 accept pins + 21 counterpart pins) + 1 cmp = 123.
+
+The gate block pins each identity exactly once, the total 123, and the sentinel. This matches the amended B1–B12/E specification.
+
+**(b)** REASONED from R2/R9 and the disclosed PRETABLE sections. The structural rows `_present`, `_inits`, `_entries`, and `committed_lsn` are not vacuous. Their channel is a missing/malformed artifact or a changed initializer structure; that is the null-medium/structural role, and it is disclosed. They do not need a non-null-medium red leg if the record says their only red leg is the null medium.
+
+**(c)** READ from 7.4 lines 30–79. The header states the floor as all 24 cells, identifies the 16 consumer subset and 8 no-consumer cells, and explicitly lists what is not observed. It does not claim handler-body coverage or guest-path observation. No L4 issue in the driver header itself.
+
+**(d)** READ from S4/E and R7. The floor is exactly all 24 scaled-byte cells. The listed halfword kinds, scaled word with PC-sync, scaled doubleword, and immediate-form byte cells are outside that floor and are clause-(e) disclosure, not owed rows.
+
+**(e)** REASONED from R17/R1. The one-time 16-leg table includes pre-fix red, verbatim reinstatement, and null-medium legs. A per-run self-check is not required by the stated rules for this detector shape; it would be useful future strengthening but is not owed.
+
+**(f)** REASONED. No in-contract clean sweep exists. The contract partitions inputs into:
+
+1. the 54 hard-coded index/name pins in each artifact,  
+2. generator compile/execute/status rows,  
+3. structural counts and the fresh-vs-committed `cmp`.
+
+Any change that makes a contract-claimed slot dispatch differently must alter at least one of those, and the corresponding row reds. A change affecting only handler bodies, other table entries, scaled doubleword names, immediate-form byte cells, or size tests beyond the halfword edge is outside the disclosed contract. Thus all 123 rows cannot stay green while a contract-claimed cell changes.

@@ -1,0 +1,122 @@
+# R3_SOURCE_READING.out -- T1 / #569 repair R3, 2026-10-23 11:46:06 -0500.  The adjudication's check: the
+# corrected wording read against the consumers (cpu_m88k_instr.c :2377, :2411, :3606, :3622), not 'rows do not
+# observe comments'.  Line numbers are the working tree's (cpu_m88k_instr.c md5 8a67c4efb3839469c1f8dcf024d39576, == HEAD's: yes).
+
+## 1. the reworded #569 comment (generator, working tree)
+   254: 			/*  #569: no NULL arm for scaled byte accesses.  A
+   255: 			    byte's scale factor is 1, so a scaled byte access
+   256: 			    is the unscaled one, and print_function_name()
+   257: 			    already omits "_scaled" for size 0: these 24 slots
+   258: 			    name the unscaled byte handlers.  They were NULL,
+   259: 			    and cpu_m88k_instr.c indexes the table with no
+   260: 			    NULL check: the register-form ld/st decoder
+   261: 			    installs twelve of the slots as ic->f and
+   262: 			    xmem_slow() calls four; the other eight have no
+   263: 			    caller today and are repaired with them.  */
+
+## 2. the consumers
+-- xmem_slow: operand decode (user is iword & 0x80; the immediate form zeroes scaled and user)
+   2350: 	uint32_t iword = ic->arg[0];
+   2351: 	uint32_t tmp;
+   2352: 	int d      = (iword >> 21) & 0x1f;
+   2353: 	int s1     = (iword >> 16) & 0x1f;
+   2354: 	int s2     =  iword        & 0x1f;
+   2355: 	int imm16  =  iword        & 0xffff;
+   2356: 	int regofs = (iword & 0xf0000000) != 0;
+   2357: 	int scaled = iword & 0x200;
+   2358: 	int size   = iword & 0x400;
+   2359: 	int user   = iword & 0x80;
+   2360: 	uint32_t pc_before_memory_access;
+   2361: 	void (*xmem_load)(struct cpu*, struct m88k_instr_call*);
+   2362: 	void (*xmem_store)(struct cpu*, struct m88k_instr_call*);
+   2363: 	struct m88k_instr_call call;
+   2364: 
+   2365: 	SYNCH_PC;
+   2366: 	pc_before_memory_access = (uint32_t)cpu->pc;
+   2367: 
+   2368: 	if (!regofs) {
+   2369: 		/*  immediate offset:  */
+   2370: 		scaled = 0;
+   2371: 		size = (iword >> 26) & 1;
+   2372: 		user = 0;
+   2373: 	}
+-- xmem_slow: the load index :2377 and the store index :2411 (no SIGNEDNESS; always NO_PC_SYNC)
+   2377: 	xmem_load = m88k_loadstore[ (size? 2 : 0)
+   2378: 	    + (cpu->byte_order == EMUL_BIG_ENDIAN? M88K_LOADSTORE_ENDIANNESS : 0)
+   2379: 	    + (scaled? M88K_LOADSTORE_SCALEDNESS : 0)
+   2380: 	    + (user? M88K_LOADSTORE_USR : 0)
+   2381: 	    + (regofs? M88K_LOADSTORE_REGISTEROFFSET : 0)
+   2382: 	    + M88K_LOADSTORE_NO_PC_SYNC ];
+   2411: 	xmem_store = m88k_loadstore[ (size? 2 : 0)
+   2412: 	    + M88K_LOADSTORE_STORE
+   2413: 	    + (cpu->byte_order == EMUL_BIG_ENDIAN? M88K_LOADSTORE_ENDIANNESS : 0)
+   2414: 	    + (scaled? M88K_LOADSTORE_SCALEDNESS : 0)
+   2415: 	    + (user? M88K_LOADSTORE_USR : 0)
+   2416: 	    + (regofs? M88K_LOADSTORE_REGISTEROFFSET : 0)
+   2417: 	    + M88K_LOADSTORE_NO_PC_SYNC ];
+-- the immediate-form xmem is installed at :3043; the immediate-form ld/st index :3087 has no SCALEDNESS/USR/REGOFS
+   3041: 	case 0x00:
+   3042: 	case 0x01:
+   3043: 		ic->f = instr(xmem_slow);
+   3044: 		ic->arg[0] = iword;
+   3087: 			ic->f = m88k_loadstore[ opsize
+   3088: 			    + (store? M88K_LOADSTORE_STORE : 0)
+   3089: 			    + (signedness? M88K_LOADSTORE_SIGNEDNESS:0)
+   3090: 			    + (cpu->byte_order == EMUL_BIG_ENDIAN?
+   3091: 			       M88K_LOADSTORE_ENDIANNESS : 0) ];
+-- the register-form decoder: op and signedness (:3565-3575), store => unsigned (:3599-3600)
+   3565: 			int op = 0, opsize, user = 0, wt = 0;
+   3566: 			int signedness = 1, scaled = 0;
+   3567: 
+   3568: 			switch (iword & 0xf000) {
+   3569: 			case 0x2000: op = 1; /* st */  break;
+   3570: 			case 0x3000: op = 2; /* lda */ break;
+   3571: 			default:     if ((iword & 0xf800) >= 0x0800)
+   3572: 					op = 0; /* ld */
+   3573: 				     else
+   3574: 					op = 3; /* xmem */
+   3575: 			}
+   3598: 				} else {
+   3599: 					if (opsize >= 2 || op == 1)
+   3600: 						signedness = 0;
+   3601: 				}
+-- :3604-3614: 0x100 -> user, 0x80 -> wt, and wt -> goto bad BEFORE any index or xmem_slow install
+   3604: 			if (iword & 0x100)
+   3605: 				user = 1;
+   3606: 			if (iword & 0x80)
+   3607: 				wt = 1;
+   3608: 			if (iword & 0x200)
+   3609: 				scaled = 1;
+   3610: 
+   3611: 			if (wt) {
+   3612: 				fatal("wt bit not yet implemented! TODO\n");
+   3613: 				goto bad;
+   3614: 			}
+-- :3620-3629: the ld/st index (REGISTEROFFSET, never NO_PC_SYNC); :3653-3656: xmem_slow installed (register form)
+   3620: 			if (op == 0 || op == 1) {
+   3621: 				/*  ld or st:  */
+   3622: 				ic->f = m88k_loadstore[ opsize
+   3623: 				    + (op==1? M88K_LOADSTORE_STORE : 0)
+   3624: 				    + (signedness? M88K_LOADSTORE_SIGNEDNESS:0)
+   3625: 				    + (cpu->byte_order == EMUL_BIG_ENDIAN?
+   3626: 				       M88K_LOADSTORE_ENDIANNESS : 0)
+   3627: 				    + (scaled? M88K_LOADSTORE_SCALEDNESS : 0)
+   3628: 				    + (user? M88K_LOADSTORE_USR : 0)
+   3629: 				    + M88K_LOADSTORE_REGISTEROFFSET ];
+   3653: 			} else {
+   3654: 				/*  xmem:  */
+   3655: 				ic->f = instr(xmem_slow);
+   3656: 				ic->arg[0] = iword;
+
+## 3. the enumeration (scratchpad t1/build/r3_reading.py mirrors the index expressions above)
+repaired slots (24):               160 164 168 176 180 184 224 228 232 240 244 248 416 420 424 432 436 440 480 484 488 496 500 504
+register-form ld/st decoder :3622 -> 12 : 160 164 168 176 180 184 224 228 232 240 244 248
+xmem_slow :2377 load / :2411 store -> 4 : 416 420 432 436
+immediate-form ld/st :3087        -> 0 : -
+no caller today                   -> 8 : 424 440 480 484 488 496 500 504
+overlap decoder & xmem             -> none
+(record only) xmem_slow if the user bit reached it (N2): adds 480 484 496 500
+the comment's 'twelve ... four ... the other eight': MATCHES
+exit 0
+
+R3_READING_DONE

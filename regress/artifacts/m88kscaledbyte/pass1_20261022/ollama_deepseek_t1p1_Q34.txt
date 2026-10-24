@@ -1,0 +1,29 @@
+VERDICT: READY WITH CHANGES — detector needs both a committed-table reader and a generator-output runner; no floor cell requires a guest path.
+
+## Q3 — Detector shape
+
+### (a) Which shape carries the owed rows
+**READ** from section 9.1: the `#include` differential pattern is for product sources that are `#include`d into other files; `generate_m88k_loadstore.c` has its own `main()` and cannot be `#include`d without duplicate-main errors.  
+**READ** from section 9.2: the `#375` block reads the committed generated table with `awk`, no compiler.  
+**REASONED**: the committed-table reader alone verifies only the committed `tmp_m88k_loadstore.c`. If only the generator is reverted but the committed table is not regenerated, the reader passes; if only the committed table is reverted but the generator is fixed, the reader fails. The build (Makefile rule S14) regenerates the table from the generator, so the actual compiled code depends on the generator, not the committed copy. Therefore the detector must cover both:
+
+- a **committed-table reader** (like `#375`) to pin the tracked generated file;
+- a **generator-output runner** — compile and run the generator, compare its stdout to the expected repaired table — to catch generator regressions.
+
+The `#include` differential shape is not applicable. The answer is **both a reader and a runner**, not the two named shapes alone.
+
+### (b) What the gate row pins
+**READ** from section 7: the 24 repaired slots have known indices and expected handler names (the right-hand column with `[index]` dropped).  
+**REASONED**: the gate must pin **exact handler names at each of the 24 indices** — absolute checks, not only slot-to-counterpart equality, because R11 warns relative rows test decode against itself. It must also pin the **total NULL count = 272** (296 pre‑fix minus 24 repaired). Use **equality checks** (`check` with expected string) for each index and for the count; do not use `check_min` or presence-only, because R2 states a by-construction clause‑(c) claim fails where the gate pins with `check_min` or not at all. The generator-output runner should additionally check that the generated output matches the committed table (or the expected list) to prevent drift.
+
+### (c) Clause (c) null medium and record form
+**REASONED**: the detector is not a runtime probe or an instruction-handler round; it reads a generated table and runs a generator. The null medium for the committed-table reader is an **all-NULL table** (or an empty initializer list) — it carries none of the behaviour under test. The null medium for the generator-output runner is a **generator that emits an all-NULL table**.  
+Record form: **“(c): by construction via the 24 index-equality rows and the NULL-count row; leg not run”** — because the equality checks on the 24 repaired indices would fail on an all-NULL table, and the NULL-count check would fail (expected 272, got 512). This is a valid by-construction claim per R2, provided the reading confirms those rows are present and pinned by equality.
+
+### (d) Floor cells observable only on a guest path
+**READ** from section 7 producer table: only 8 of the 24 slots are reachable on a big-endian CPU today; the others have no producer.  
+**REASONED**: the floor for this round is the table entries themselves — the 24 repaired slots and the NULL count. These are observable by parsing the generated table or by running the generator, both offline. No floor cell requires a guest path; the pre-fix red, verbatim reinstatement, null medium, and nulled repair can all be simulated by altering the table or generator output offline. Therefore no floor cell is guest-path-only; stop.
+
+## Q4 — Standing licence
+
+While verifying the detector shape I found one additional item: the brief’s S14 notes that the committed table can drift from the generator output because no pre-commit check mentions `tmp_` or `generate_`. The round should include a gate row that **compares the generator’s stdout to the committed `tmp_m88k_loadstore.c`** (or to the expected list) to close that drift. This is not part of the settled repair but is a necessary control for the detector’s long-term validity.

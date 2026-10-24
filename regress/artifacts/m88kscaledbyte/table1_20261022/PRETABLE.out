@@ -1,0 +1,159 @@
+# PRETABLE.out -- T1 / #569 (row m88kscaledbyte), the pre-table check (D2; carrier "THE PRE-TABLE CHECK", mandatory)
+# Written by the builder BEFORE the driver exists and BEFORE any table run (prefix_HEAD, fixed, L1-L7): this file's
+# mtime is the order discriminator.  HEAD 5986c137 (cb2eba1e + a gate_ab.sh-only commit; none of the in-scope files
+# changed -- BASELINE.out section 1).  Line numbers are HEAD's.  Everything below about a leg's outcome is a
+# PREDICTION; the measured outcome lands in SCORES.txt and is compared against this file there.
+
+## 0. The rows this file PRESCRIBES (the driver regress/diff_m88k_loadstore_gen.sh must carry exactly these)
+
+Per artifact A in {fresh = the generator's own stdout, committed = src/cpus/tmp_m88k_loadstore.c}:
+  A1  A: present and parseable              file exists and holds a *m88k_loadstore[512] initializer   (explicit red, B5)
+  A2  A: m88k_loadstore[512] initializers   == 1
+  A3  A: initializer entries                == 512
+  A4  A: NULL entries                       == 272   (supplementary, B4: not a floor carrier)
+  A5  A: #define LS_N blocks                == 198   (regex '^#define LS_N ' WITH the trailing space: BASELINE.out
+                                                       section 4 measured 198 with it and 297 without -- the
+                                                       spaceless form also matches the 99 LS_NO_PC_SYNC lines)
+  A6  A: pin <i> <F|E> ...  x24             absolute name EQUALITY, expected names hard-coded (packet.md section 7):
+        F (floor, Grok :84-89, 16): 160 164 168 176 180 184 224 228 232 240 244 248 416 420 432 436
+        E (clause (e), Grok :89, 8): 424 440 480 484 488 496 500 504
+  A7  A: accept <i> ...  x9                 161 ld_u_2_le_scaled_regofs, 177 ld_u_2_be_scaled_regofs (halfword, the
+                                            D2 B+1 edge of :80's size > 0); 418/422 ld_u/st_4_le_scaled_regofs_nopcsync,
+                                            434/438 ..._4_be_... (scaled word xmem); 144 ld_u_1_le_regofs,
+                                            400 ld_u_1_le_regofs_nopcsync, 404 st_1_le_regofs_nopcsync (unscaled byte)
+  A8  A: cpart <i>  x21                     the counterparts at index-32 of the 24 pins, EXCEPT 144/400/404, which are
+                                            already rows in A7 ("each emitted once per artifact": no duplicate rows)
+Generator leg only:
+  G1  generator: compiles                   yes/no; a missing source is this row red, never a need_file skip (B5)
+  G2  generator: runs (exit status 0)
+  G3  generator: stderr generated_functions == 198
+Cross:
+  X1  fresh == committed (cmp)              byte equality
+TOTAL = 3 + 2 x (5 + 24 + 9 + 21) + 1 = 122 rows.  The driver ends `ROWS=122 FAIL=<m>` then `M88KLS_DONE`.
+Every row is emitted on every run (a missing artifact makes its rows RED, never absent), so the denominator is constant
+and GATE 2 pins it by EQUALITY.
+
+## 1. SIBLING PARITY -- the edited arm against its siblings and against the byte-endianness idiom
+
+The table printer in main() has four NULL arms, each with a matching early return in loadstore():
+  arm A  store && signedness          main :239-242   loadstore :98-99    128 NULLs   no legal encoding (no signed store)
+  arm B  !registeroffset && usr       main :244-247   loadstore :107-108   96 NULLs   .usr exists only with [rS2]/rS2
+  arm C  !registeroffset && scaledness main :249-252  loadstore :110-111   48 NULLs   scaling exists only with rS2
+  arm D  size == 0 && scaledness      main :254-257   loadstore :104-105   24 NULLs   THE EDITED ARM -- a LEGAL encoding
+         (counts: packet.md section 7's census, reproduced by BASELINE.out section 4: 296 = 128 + 96 + 48 + 24)
+The asymmetry: arms A-C NULL cells no legal instruction encodes; arm D NULLs cells the manual defines
+(mc88100.txt:6423-6429, xmem.bu rD,rS1[rS2]; :2960-2965 "For byte accesses ... the result is identical") and that
+four sites index unguarded or into ic->f (cpu_m88k_instr.c:2377/:2395 and :2411/:2426, xmem_slow; :3622, the register-
+form ld/st decoder; CHECKS #3).
+
+The NEAREST sibling is not A-C but the BYTE-ENDIANNESS idiom: loadstore() :101-102 returns early for size == 0 &&
+endianness (no big-endian byte definitions), print_function_name() :74-75 prints "_le" for a big-endian byte, and
+main() has NO NULL arm for it -- so the big-endian byte slots alias the little-endian byte handlers.  Arm D had the same
+two halves (early return :104-105; :80 omits "_scaled" for size 0) PLUS a NULL arm.  The fix removes only the NULL arm,
+so arm D becomes the endianness idiom exactly.  Rows that pin the parity: the 12 BE pins (176..504) expect "_le" names
+(the idiom in effect inside the edited cells); the cparts at 144/148/152, 208/212/216, 400/404/408, 464/468/472 pin the
+unedited big-endian byte aliases.
+Owed sentences (no row): arms A-C are held ONLY by the NULL-count row -- a NULL moved within them keeps 272 -- and no
+per-slot pin is rowed for them (clause (e), disclosed in the driver's contract header).  loadstore()'s :104-105 is KEPT
+(A2); the rows that see its deletion are G3 and A5 (S1 below), never a name pin.
+
+## 2. CLAIM -> ROW, for every sentence the #569 comment in the generator will assert
+(the comment replaces :254-257; its sentences, as they will be written:)
+  C1 "no NULL arm for scaled byte accesses"                 -> A6 (24 pins, both artifacts) and A4 (NULL == 272)
+  C2 "A byte's scale factor is 1, so a scaled byte access   -> NO ROW: an architecture statement the offline detector
+      is the unscaled one"                                     cannot observe; its warrant is mc88100.txt:2960-2965 and
+                                                               :6458-6460 (scale factor one for byte), cited in the
+                                                               CHANGELOG/report, not in product code
+  C3 "print_function_name() already omits "_scaled" for     -> A6: every expected pin name lacks "_scaled" (a size-0
+      size 0"                                                  "_scaled" name reds all 24); A7 161/177: the size-1 EDGE
+                                                               keeps "_scaled" (L7 moves that edge)
+  C4 "these 24 slots name the unscaled byte handlers"       -> A6 by absolute equality; A7/A8 pin the same 12 names
+                                                               independently at index-32 (relative row NOT used, B2)
+  C5 "They were NULL"                                       -> historical; its rows are the clause-(a) reds:
+                                                               prefix_HEAD.out (A6 x48 and A4 x2 red) and BASELINE.out
+                                                               section 5 (24 of 24 NULL at HEAD)
+  C6 "which xmem_slow() calls unguarded and the ld/st       -> NO ROW in this detector: a guest-path consequence (B11);
+      decoder installs as ic->f (cpu_m88k_instr.c)"            source-established (CHECKS #3, cpu_m88k_instr.c :2395,
+                                                               :2426, :3622; cpu_dyntrans.c :1906); the rung-3 witness
+                                                               is BLOCKED (witness_attempt_20261022/WITNESS_ATTEMPT.md)
+The driver header's contract sentences map to rows in the same way (section 5 below gives each row's mutant and channel);
+its "does NOT observe" sentences are deliberate no-row sentences (B11).
+
+## 3. GUARD FIELD vs BODY FIELD, with the partition the body induces on each lvalue (7n-5)
+
+Guard (the deleted predicate) reads:  size, scaledness.
+Body (what the 24 cells run after the deletion: main :259-262 printf + print_function_name(size, store, signedness,
+endianness, scaledness, usr, registeroffset, no_pc_sync)) reads all eight loop variables.  Partitions it induces:
+  size          tested == 0 (with endianness, :74) and > 0 (with scaledness, :80); otherwise only PRINTED (1 << size,
+                :69).  Body-tested partition {0} | {1,2,3}; the printed width distinguishes every value.
+  scaledness    truthy at :80                      {0} | {32}
+  store         truthy at :62                      {0} | {4}
+  signedness    truthy at :66, only when !store    {0} | {8}
+  endianness    :71 (>= 0, always true from main), :74 (with size == 0), :77 truthy   {0} | {16}, collapsed for size 0
+  usr           truthy at :83                      {0} | {64}
+  registeroffset truthy at :86                     {0} | {128}
+  no_pc_sync    truthy at :89                      {0} | {256}
+Body-only fields: store, signedness, endianness, usr, registeroffset, no_pc_sync.  All eight are written ONLY by the
+nested for-loop headers of main() (:221-234), independently, and the loops enumerate the whole product -- so every
+state where a body-only field "disagrees" with the guard occurs.  Inside the guard cell (size == 0 && scaledness) the
+dominating arms fix registeroffset = 128 (arm C) and exclude store && signedness (arm A), leaving
+{ld.bu, ld.b, st.b} x endianness{0,16} x usr{0,64} x no_pc_sync{0,256} = 24 cells -- EXHAUSTED by A6's 24 pins.
+No disagreeing-state row is owed beyond them.
+Which pins hold which cell outside the guard (the accept side, B3):
+  size 1, scaled     161 (LE), 177 (BE): ld.hu regofs sync -- the D2 B+1 edge of :80 (B-1 is size -1, outside the
+                     domain; codex :148).  EXHAUSTED for the edge compare (its two endian cells); other halfword kinds
+                     SAMPLED (ld.h/st.h, .usr, nopcsync not rowed).
+  size 2, scaled     418/422 (LE), 434/438 (BE): xmem word ld/st, nopcsync -- SAMPLED.
+  size 3, scaled     NOT ROWED (doubleword; Grok :91 "the far value") -- clause (e), disclosed.
+  size 0, unscaled   144, 400, 404 + the 21 cparts = all 24 regofs unscaled byte cells -- EXHAUSTED for the guard's
+                     scaledness = 0 region at size 0, registeroffset 128.  The unscaled byte cells with
+                     registeroffset 0 (the immediate forms, indices 0..127 / 256..383) are NOT rowed -- SAMPLED none,
+                     clause (e).
+
+## 4. The table (spec section 6) and the supplementary legs -- what each is, by id only
+  PRE  prefix_HEAD.out  the finished driver on unmodified HEAD (clause (a))
+  FIX  fixed.out        the driver on the fixed repo files (must be 0 red)
+  L1   GEN = HEAD's generator, TABLE = the fixed table          clause (b) at the generator site
+  L2   GEN = the fixed generator, TABLE = HEAD's table          clause (b) at the table site
+  L3   GEN = a comment-only generator source (the generator's own leading comment block, code removed)  clause (c)
+  L4   TABLE = a comment-only table (the table's own leading comment line, everything else removed)     clause (c)
+  L5   the v2 variant, grok_t1p1.txt:76 (= codex_t1p1.txt:115's v2 row; packet.md:1727)                clause (d)
+  L6   the endianness narrowing, ollama_glm_t1p1_Q12.txt:52/:64, built as the LITTLE-endian half left as before the
+       fix -- the half a big-endian-only pin set would miss (PASS1_RULINGS B7's stated reason)          clause (d)
+  L7   the v6 form, grok_t1p1.txt:80 / codex_t1p1.txt:130 (:80's compare moved by one)                 accept edge (B3)
+  SUPPLEMENTARY (not in the spec's seven; reported separately):
+  L5b  codex_t1p1.txt:100's predicate as written there ("no_pc_sync alone, applied after the existing exclusions"):
+       the spec's L5 pointer names grok :76 AND codex :100, which describe two DIFFERENT predicates (codex's own first
+       overall difference is 256, grok's is 416); both are measured rather than one chosen silently.
+  S1   PASS1_RULINGS B4's named mutant for the A5/G3 control rows: loadstore()'s :104-105 deleted.  Without it those two
+       rows' channel is a prediction (Grok :114 "count becomes 210").
+
+## 5. CHANNEL -- per row group: the mutant it kills (by leg id) and the observable that differs.  PREDICTED.
+  G1 compiles            L3                            compile status (a comment-only source has no main(): link fails)
+  G2 runs exit 0         L3                            exit status (no binary to run)
+  G3 generated_functions L3 (absent), S1 (210)         the count on stderr
+  fresh A1/A2/A3         L3                            presence / initializer count / entry count
+  fresh A4 NULL == 272   PRE 296, L1 296, L3 0, L5 284, L6 284, L5b 392   the NULL count (blind to a MOVED NULL, Grok :124)
+  fresh A5 LS_N == 198   L3 0, S1 210                  the #define LS_N count
+  fresh A6 pins          PRE/L1/L3 all 24; L5 and L5b the 12 no-PC-sync pins (416..504); L6 the 12 LE pins
+                         (160 164 168 224 228 232 416 420 424 480 484 488)      the symbol text at that index (NULL)
+  fresh A7 161/177       L3, L7                        the symbol text (L7: "_scaled" dropped from the halfword name)
+  fresh A7 418/422/434/438 L3, L5b                     the symbol text (L5b: NULL)
+  fresh A7 144           L3                            the symbol text
+  fresh A7 400/404       L3, L5b                       the symbol text
+  fresh A8 cparts        L3; L5b the 10 no-PC-sync cparts (384 388 392 408 448 452 456 464 468 472)
+  committed A1/A2/A3/A5  L4                            presence / initializer count / entry count / LS_N count
+  committed A4           PRE 296, L2 296, L4 0         the NULL count
+  committed A6 pins      PRE, L2, L4 (all 24)          the symbol text
+  committed A7/A8        L4                            the symbol text
+  X1 cmp                 L1 L2 L3 L4 L5 L6 L7 L5b S1   byte equality of the two artifacts (green under PRE and FIX:
+                                                       both artifacts are HEAD's, or both fixed)
+Predicted red counts (of 122): PRE 50, FIX 0, L1 26, L2 26, L3 63, L4 60, L5 14, L6 14, L7 3, L5b 30, S1 3.
+Rows with NO red leg in this table other than a null medium: committed A5 (the committed copy's LS_N count has no
+single-site mutant here -- S1 changes the generator only), A1/A2/A3 on both sides (their non-null mutants -- a dropped
+or duplicated initializer entry -- are not in the table).  Those are disclosed, not vacuous: each varies under its
+null medium, which is its measured channel.
+CHANNEL CHECK: every row above names a mutant under which its observable varies; none is survive-only.  SCORES.txt
+will diff the measured red set of every leg against these predictions, row by row.
+
+PRETABLE_DONE

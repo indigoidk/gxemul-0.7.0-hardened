@@ -1,0 +1,132 @@
+The brief's questions are in the omitted section. I'll read that first, then check the premises against the source rather than ratifying them.The questions are the repair, the owed rows, and the detector shape. I will re-read the generator, the four table producers, and the byte-order writers, and enumerate the 24 slots from the committed table.VERDICT: READY WITH CHANGES -- remove the whole arm at lines 254-257, keep the early return, regenerate the committed table and the est/ copies; pin absolute handler names at both endiannesses, and add the halfword accept row.
+Q1: The alias is the right repair for both xmem calls and all 24 slots, provided the committed table is regenerated with it. Q2: The floor is 16 reachable absolute-name pins; the identity-body medium does not apply, and slot[i] == slot[i-32] is not the pin. Q3: Compile the generator and read the committed table; equality of absolute names; no floor cell is guest-only. Q4: A little-endian load updates cpu->byte_order and leaves the PSR byte-order bit clear.
+
+## Q1 -- the repair
+
+**(a)** The repair is complete for both unguarded calls and for every one of the 24 slots. `xmem_slow` indexes the load at `cpu_m88k_instr.c:2377-2382` and calls it at `:2395`, then indexes the store at `:2411-2417` and calls it at `:2426`. Both add `NO_PC_SYNC`, `SCALEDNESS` when bit `0x200` is set, and `STORE` only on the second call. Removing the arm makes both indices name an existing function. READ.
+
+Scale factor 1 makes that function the one the architecture requires. The manual says a scaled byte shifts the index by 0 (`mc88100.txt:2961-2965`, `:6458-6460`). The fast byte path computes `reg(arg[1]) + reg(arg[2])` when `LS_SCALED` is absent (`cpu_m88k_instr_loadstore.c:248-253`) and moves one byte (`:298-303`, `:387-388`). `memory_readmax64` / `memory_writemax64` of length 1 return the same byte for both endian values (`memory.c:66-75`, `:99-108`). READ. `print_function_name` omits `_scaled` when `size == 0` (`generate_m88k_loadstore.c:80-81`) and prints `_le` for both endian values (`:74-75`). READ. So each repaired slot names the unscaled handler already stored at index − 32.
+
+I read all 24 committed slots; each is `NULL` today. Counterparts below were read in `tmp_m88k_loadstore.c` (array base line 3739, index i at line 3739+i). The repaired name is that counterpart.
+
+| idx | cell | producer today | repaired name (the counterpart) |
+|---|---|---|---|
+| 160 | ld.bu LE sync | register-form ld, if byte_order is LE | `m88k_instr_ld_u_1_le_regofs` |
+| 164 | st.b LE sync | register-form st, LE | `m88k_instr_st_1_le_regofs` |
+| 168 | ld.b LE sync | register-form signed ld, LE | `m88k_instr_ld_1_le_regofs` |
+| 176 | ld.bu BE sync | register-form ld, BE (in-tree default) | `m88k_instr_ld_u_1_le_regofs` |
+| 180 | st.b BE sync | register-form st, BE | `m88k_instr_st_1_le_regofs` |
+| 184 | ld.b BE sync | register-form signed ld, BE | `m88k_instr_ld_1_le_regofs` |
+| 224 | ld.bu LE .usr sync | same ld with bit `0x100` | `m88k_instr_ld_u_1_le_usr_regofs` |
+| 228 | st.b LE .usr sync | same st with bit `0x100` | `m88k_instr_st_1_le_usr_regofs` |
+| 232 | ld.b LE .usr sync | same signed ld with bit `0x100` | `m88k_instr_ld_1_le_usr_regofs` |
+| 240 | ld.bu BE .usr sync | same, BE | `m88k_instr_ld_u_1_le_usr_regofs` |
+| 244 | st.b BE .usr sync | same, BE | `m88k_instr_st_1_le_usr_regofs` |
+| 248 | ld.b BE .usr sync | same, BE | `m88k_instr_ld_1_le_usr_regofs` |
+| 416 | ld.bu LE nosync | xmem load half, LE, bit 9 set, bits 11:10 = 00, bit 7 clear, rD ≠ 0 | `m88k_instr_ld_u_1_le_regofs_nopcsync` |
+| 420 | st.b LE nosync | xmem store half, same word | `m88k_instr_st_1_le_regofs_nopcsync` |
+| 424 | ld.b LE nosync | none | `m88k_instr_ld_1_le_regofs_nopcsync` |
+| 432 | ld.bu BE nosync | xmem load half, BE | `m88k_instr_ld_u_1_le_regofs_nopcsync` |
+| 436 | st.b BE nosync | xmem store half, BE | `m88k_instr_st_1_le_regofs_nopcsync` |
+| 440 | ld.b BE nosync | none | `m88k_instr_ld_1_le_regofs_nopcsync` |
+| 480 | ld.bu LE .usr nosync | none today; xmem load after N2 | `m88k_instr_ld_u_1_le_usr_regofs_nopcsync` |
+| 484 | st.b LE .usr nosync | none today; xmem store after N2 | `m88k_instr_st_1_le_usr_regofs_nopcsync` |
+| 488 | ld.b LE .usr nosync | none | `m88k_instr_ld_1_le_usr_regofs_nopcsync` |
+| 496 | ld.bu BE .usr nosync | none today; xmem load after N2 | `m88k_instr_ld_u_1_le_usr_regofs_nopcsync` |
+| 500 | st.b BE .usr nosync | none today; xmem store after N2 | `m88k_instr_st_1_le_usr_regofs_nopcsync` |
+| 504 | ld.b BE .usr nosync | none | `m88k_instr_ld_1_le_usr_regofs_nopcsync` |
+
+Twelve distinct names. The big-endian and little-endian rows of each pair share one. Aliasing the eight slots with no producer today is the correct mapping for those index bits, and the arm is one predicate: a repair that left 424, 440, 480, 484, 488, 496, 500, or 504 as `NULL` would be a new predicate, which is the clause-(d) shape. They are not separately required to stop today's crash. 480, 484, 496, and 500 become required when N2 points xmem `.usr` at them; under this repair they are already the right handlers.
+
+**(b)** Keeping `:104-105` avoids the duplicate definitions. READ. With that return removed, generation still passes the other returns only for little-endian, register-offset, scaled bytes that are not signed stores: `no_pc_sync` × `.usr` × {ld.bu, ld.b, st.b} = 12 calls. `print_function_name` would emit the unscaled name, and `loadstore()` would emit a second `LS_N` / `LS_GENERIC_N` for each. The committed file has 198 `#define LS_N` lines; that count is the early-return image (512 − 128 signed-stores − 48 big-endian bytes that survive the signed-store arm − 96 non-register `.usr` − 48 non-register scaled − 12 of these scaled bytes, counted without double-subtracting). I re-derived 198 by walking the eight loops against the five returns, and the file count matches. Removing the arm in `main()` does not call `loadstore()`, so the count stays 198.
+
+The comma at `:235-237` is printed from the index bits, before any NULL arm. READ. The other NULL arms stay: signed stores 128, non-register `.usr` 96, non-register scaled 48. Those three populations are the bit cross-products of the predicates at `:239-252`, in arm order. 128 + 96 + 48 = 272 remain. The 24 changed lines are the only stdout change in the table.
+
+**(c)** Remove lines 254-257, the whole `if`, including `printf("\tNULL")`. Deleting only `continue` prints `NULL` and then `m88k_instr_<name>` as two initializer tokens. READ. Keep lines 104-105. Do not edit the decoder.
+
+**(d)** The diff owes the regenerated `src/cpus/tmp_m88k_loadstore.c` in the same commit. `cpu_m88k_instr.c:297` includes that file, and it is tracked. It also owes the same bytes under `est/src/cpus/` for both the generator and the table. `tools/est_divergence.txt:1-2` says every other `src/` file must be byte-identical between GXEMUL-SEC and est/, and precommit section A enforces that. Neither file is on the divergence list. READ. `build/` and `build-asan/` are not part of the diff. `Makefile.skel:134-135` regenerates the table from the generator binary. READ. What checks the committed copy against the generator is the gate in Q3: the same absolute names from the generator's stdout and from the committed file.
+
+**(e)** Premise audit.
+
+P1. The little-endian half is reachable. `cpu_m88k.c:130` is the constructor's initial assignment. READ. Nothing in `testm88k`, `barem88k`, `luna88k`, or `mvme88k` writes `byte_order` again. Two later writers do, with no architecture test: `emul.c:651-652` takes the file loader's order (`file_elf.c:693-694` reports `EMUL_LITTLE_ENDIAN` for `ELFDATA2LSB`), and `emul.c:737-738` applies `byte_order_override` from a config file (`emul_parse.c:493-499` accepts "little"). The M88K case at `emul.c:684-690` only aligns the PC. The load/store index uses `cpu->byte_order` (`cpu_m88k_instr.c:2378`, `:3090`, `:3625`). Instruction fetch and disassembly already branch on little-endian (`cpu_m88k.c:235-238`, `:1021-1024`). So indices 160, 164, 168, 224, 228, 232, 416, and 420 have a producer whenever `byte_order` is little. The repaired names do not differ by endianness, and the byte body does not either, so there is no second behavior to test. Reachability does change the pin set: a mutant that puts `NULL` back only on the little-endian half stays green if only the big-endian names are pinned, and that mutant restores the crash for a little-endian load. Grok's "endianness is not a floor axis" is wrong for the pin set. Both indices of each pair are owed, both equal to the same absolute name.
+
+P2. Confirmed for today's producers. The handler's `user` is `iword & 0x80` (`:2359`). The register-form decoder treats `0x80` as `.wt` and `goto bad` at `:3611-3614`, before either call to `xmem_slow` (`:3655`). The immediate form forces `user = 0` at `:2372`. Grep of `src/` shows `xmem_slow` referenced only at `:3043` and `:3655`. So 480, 484, 488, 496, 500, and 504 have no producer today. After N2, if the handler takes `.usr` from `0x100`, bit 7 stays a decode-time stop and bit 8 reaches the handler. That produces 480, 484, 496, and 500 only. 488 and 504 stay unsigned-load/store-impossible: xmem's index never adds `SIGNEDNESS`.
+
+P3. Confirmed. The xmem index is `(size ? 2 : 0)` plus endian, scaled, user, register-offset, and `NO_PC_SYNC`. The register-form ld/st index never adds `NO_PC_SYNC` (`:3622-3629`). The immediate ld/st index adds none of scaled, `.usr`, register-offset, or `NO_PC_SYNC` (`:3087-3091`). Signed and no-PC-sync are never combined. 424, 440, 488, and 504 have no producer, including after N2.
+
+S1, S3, S4, S5, S7, S8, S9, S10: re-read at these line numbers, which match the brief, so this is `GXEMUL-SEC/src/` and not a pristine tree. S5 extra: grep of `cpu_m88k_instr.c` for `op != 3` is empty. S10 extra: grep of `src/` for `m88k_loadstore[` finds only the four call sites, the generator's printf, and the definition. S2: the 24 indices were read as `NULL`; the 128/96/48 split was re-derived from the bit cross-product of the three earlier arms, and 128+96+48+24 = 296. S6: read; the stop is `cpu->running = 0` at `cpu_dyntrans.c:2014`. The same `bad:` label returns at `:1990-1991` when `translation_readahead` is set, so a readahead translation does not stop the CPU. Execution still does. S11, S12, S13: DERIVED from the packet. I did not reopen the sibling rows, the witness file, or git. S14's precommit "0 hits" sentence: NOT CHECKABLE here. I did not open `tools/precommit_check.sh`. The est/ half of S14: READ.
+
+**(f)** The option set's sound member is the settled alias. It is the idiom this table already uses for byte endianness: `loadstore()` returns early (`:101-102`) and the printer still emits the other cell's name (`:74-75`). The only other generator with that pair is `generate_mips_loadstore.c:46-47` and `:59-60`. No other `generate_*.c` prints a `NULL` arm. Clearing scaled in the decoder leaves `xmem_slow`'s own `scaled` (`:2357`) in place. Clearing it only inside `xmem_slow` leaves the register-form ld/st CPU stop. Emitting new `_scaled` byte functions means deleting `:104-105` and changing `:80`, twelve extra definitions of a multiply-by-1. The early return is what prevents that.
+
+**(g)** The CPU-stop half is closed by the same arm. Register-form scaled `ld.b` / `ld.bu` / `st.b` are the twelve sync rows above. After the repair `ic->f` is the unscaled byte handler, so `cpu_dyntrans.c:1906` does not fire. After N2, 480, 484, 496, and 500 already name the unscaled `.usr` no-PC-sync handlers. This round does not change N2's bit.
+
+## Q2 -- the owed rows
+
+**(a)** Clause (a), offline. The pre-fix red is a name mismatch: each floor index's symbol is `NULL`. That is observable on the generator's stdout and on the committed table. The seats' guest-path death was the rung-3 attempt, which the owner closed. Do not record the pre-fix tree as clause (c).
+
+Clause (b). Yes, the committed table is a second fixed site. Restoring the arm in the generator fails the stdout equalities. Restoring `NULL` in the committed file fails the file equalities. est/ is a third copy; precommit A catches an est-only skew by byte identity. The detector reads the SEC files.
+
+Clause (c). The identity body does not apply. The packet those seats answered called this an instruction-handler round (`packet.md:13-14`). The owner ruling makes the instrument an offline detector, and the edited product is the table printer plus the committed initializer, not `xmem_slow`'s body. R2's medium for a product file the gate compiles or reads is a comment-only file. Record form: `(c): by construction via the generator compile pin and the name equalities, leg not run`. A comment-only generator fails the compile check. A comment-only table makes the reader return empty, and every equality fails. A `check_min` or a `NULL`-count pin would not support that record.
+
+Clause (d). The repair adds no predicate. The (d) form reintroduces `NULL` under a different predicate. The observable is the symbol at the index that predicate still covers.
+
+**(b)** Notation confirmed. Grok's conjunct sits on the repair, so the `NULL` arm survives on the complement.
+
+- v1, `NULL` when `size == 0 && scaledness && !no_pc_sync`. Clause (d). First difference from the repair: index 160 stays `NULL`. Not a partial (b); (b) is the original predicate on all 24.
+- v2, `NULL` when `size == 0 && scaledness && no_pc_sync`. Clause (d). First difference: index 416.
+- v3, signedness added to the `NULL` predicate. Clause (d). First difference: index 168. Grok's "one" cell is a sample. The reachable signed cells are 168, 184, 232, and 248.
+- v4, `.usr` added. Clause (d). First difference: index 224. The reachable `.usr` cells are the six sync rows 224, 228, 232, 240, 244, 248. The no-PC-sync `.usr` rows are P2, clause (e).
+- v5 is the general (d) shape: still recognize scaled byte, omit the mapping on a subset. v1-v4 are instances. "Omit the effect" read as an identity xmem body is clause (c) for a runtime probe, which this round does not ship.
+- v6 is an accept/growth mutant, not a (d) mutant. The test it moves is `print_function_name` `:80`, `scaledness && size > 0`. Widening that to `size > 1` drops `_scaled` on halfword slots. First difference: index 161, `m88k_instr_ld_u_2_le_scaled_regofs` becomes `m88k_instr_ld_u_2_le_regofs`. Index 162 (word, size 2) is unchanged, so a word-only accept row stays green. `:74` and `:101` are the byte-endianness special case; widening them changes an endian suffix or suppresses a big-endian definition. `:104` widened to `size <= 1` stops emitting the halfword scaled definitions while the table still prints the `_scaled` name, so a name pin stays green and the emulator link fails. v6 as "alias the slot to the byte function" is `:80`, and the resulting name is the unscaled halfword function, whose scale is 1.
+
+**(c)** Inside `main()`, the predicates that dominate lines 254-257 are the three earlier arms. At the arm, register-offset is already true and signed stores are already gone. `:80` and `:74` are in the callee `print_function_name`. R5 stops at `main()`, so those two compares are clause (e), disclosed because the alias is true only while `:80` omits `_scaled` for `size == 0` and `:74` prints `_le` for both byte endian values.
+
+The floor, R7, is the cells a producer can emit. That is 16, not Astra's 24 and not Grok's sample:
+
+- sync, both endians, plain and `.usr`, all three kinds: 160, 164, 168, 176, 180, 184, 224, 228, 232, 240, 244, 248
+- no-PC-sync, both endians, plain, ld.bu and st.b only: 416, 420, 432, 436
+
+Astra's other eight (424, 440, 480, 484, 488, 496, 500, 504) are clause (e). Pin them in the same equality list so one check covers the arm; a miss of one of those eight is coverage debt, and a miss of one of the 16 is a floor breach. Grok's single signed cell and single `.usr` cell under-enumerate the cross-product. Endianness stays in the floor as a second index with the same name.
+
+**(d)** R12's death predicate is `size == 0 && scaledness`. The adjacent values are size 1 with scaled set, and size 0 with scaled clear. R8's edge of `:80`'s `size > 0` is the same halfword step. A word row is the other value of xmem's size bit (`0x400` selects index size 2), which has no halfword encoding. Both are owed. Doubleword is the far value; one row is enough disclosure, and it is not a floor row.
+
+v6 (`size > 1` at `:80`) passes a word-only row and fails a halfword row. A mutant that prints the byte name only for `size == 2` passes a halfword-only row and fails the word row. Owed accept names, all READ in the committed table:
+
+- halfword, index 161: `m88k_instr_ld_u_2_le_scaled_regofs`; index 177: `m88k_instr_ld_u_2_be_scaled_regofs`
+- scaled word xmem, index 434: `m88k_instr_ld_u_4_be_scaled_regofs_nopcsync`; index 438: `m88k_instr_st_4_be_scaled_regofs_nopcsync`. Little-endian twins 418 and 422 are the same obligation on the other half: `m88k_instr_ld_u_4_le_scaled_regofs_nopcsync` and `m88k_instr_st_4_le_scaled_regofs_nopcsync` (DERIVED from the printer; the big-endian pair was read)
+- unscaled byte, index 144 and 400: `m88k_instr_ld_u_1_le_regofs` and `m88k_instr_ld_u_1_le_regofs_nopcsync`; store index 404: `m88k_instr_st_1_le_regofs_nopcsync`
+
+Putting `:80` outside the DEPENDS-ON floor does not drop the halfword row. That row is the accept side of the deleted predicate in `main()`'s output.
+
+**(e)** `slot[i] == slot[i-32]` is true of an edit that changes both slots to the same wrong function, and it is true of `NULL == NULL`. The census owes the absolute name at each index. A share check between the two endiannesses is redundant once both names are absolute.
+
+**(f)** Bounded. One deleted arm, 24 indices, three accept pairs (halfword, xmem word, unscaled byte). The bound is the arm's own image plus the two adjacent values of `size == 0 && scaledness`. No open-ended follow-up.
+
+**(g)** Channels. Every row's observable is the symbol text.
+
+| row | variant it kills | observable |
+|---|---|---|
+| 16 floor equalities | pre-fix `NULL`; verbatim arm; v1 on the sync subset; v2 on the no-PC-sync subset; signedness on 168/184/232/248; `.usr` on the six sync `.usr` rows; `&& endianness` or `&& !endianness` on one half | that index is `NULL` or a different name |
+| eight clause-(e) equalities, same list | a subset `NULL` on a slot with no producer, including the four N2 will use | same |
+| halfword 161 and 177 | `:80` widened to `size > 1`; a byte-name alias of size 1 | name loses `_scaled` or loses `_2` |
+| word 434 and 438 (and LE 418, 422) | scaled word xmem aliased to the byte or unscaled-word handler | name loses `_scaled` or loses `_4` |
+| unscaled 144, 400, 404 | a repair that also retargets the unscaled byte slots | name changes |
+| generator stderr `generated_functions = 198` | deletion of `:104-105` (12 extra definitions) | count becomes 210 |
+
+The function-count row stays green on the pre-fix generator. It is a control on the line the repair keeps, not a floor row. The name rows do not see that deletion, because the table names would still be right and the duplicate shows up as a second definition.
+
+## Q3 -- detector shape
+
+**(a)** Both the generator and the committed table. Do not `#include` the generator: it has its own `main()`. Compiling it as a program is the compile half. The `#375` reader (`gate_offline.sh:26-72`, the `ls_entry` awk, READ at the comment) is the committed-file half.
+
+Generator reverted, table left repaired: stdout equalities go red, the file reader stays green until make overwrites the worktree. Table reverted, generator left repaired: the file reader goes red; stdout stays green. Make then rewrites the table from the generator (`Makefile.skel:134-135`), so a gate that runs only after an in-tree make can hide a skewed commit. On a clean tree the two checks cover the two directions. A `diff_*.c` that includes `xmem_slow` does not see the fix. The handler body is unchanged.
+
+**(b)** Pin absolute handler names at the 24 indices, in the generator's stdout and in `src/cpus/tmp_m88k_loadstore.c`, with `check` equality, plus the accept indices in Q2(d), plus `generated_functions = 198` on stderr, plus a compile-failure check that reds the gate. The `NULL` count of 272 is the wrong pin: moving a `NULL` onto a repaired slot and filling some other `NULL` keeps the count. `check_min` does not support the clause-(c) record. Presence pins, of the sort at `gate_offline.sh:522-546`, should name each floor equality so deleting one is a red row. DERIVED from the packet's gate excerpt; I read the `#375` header only.
+
+**(c)** Comment-only generator: `(c): by construction via the compile pin, leg not run`. Comment-only table: `(c): by construction via the name equalities, leg not run`. The identity xmem body is not the medium for this shape. See Q2(a).
+
+**(d)** No floor cell is observable only on a guest path. The cell's channel is which function the slot names. The exchanged byte and the preserved neighbors are what that existing unscaled function already does; the fix does not change its body. The halfword accept row is a name in the table.
+
+## Q4 -- else found
+
+`M88K_PSR_BO` is set only at `cpu_m88k.c:182-183`, and at that moment `:130` has just assigned big-endian, so the bit stays clear. The file loader and the config override later change `cpu->byte_order` and do not touch the PSR. The generic load/store path sets `DMT_BO` from `cpu->byte_order` (`cpu_m88k_instr_loadstore.c:111-112`). `ldcr` of a DMT then stops the CPU when that bit disagrees with the PSR (`cpu_m88k.c:472-477`). The table index still follows `cpu->byte_order`, and the fast byte path never writes the DMT, so P1's reachability stands. The PSR disagreement is a separate little-endian footgun, outside this round.

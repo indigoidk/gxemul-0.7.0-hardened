@@ -1,0 +1,79 @@
+VERDICT: NOT READY — Q1 repair is complete and correct; Q2 row set is under-specified: P1 makes the little-endian half reachable, so endianness is a floor axis, and the two seats’ DEPENDS-ON enumerations disagree with the producer table.
+
+Q1: Repair aliases all 24 scaled-byte slots to the correct unscaled handlers; keeping `loadstore()`’s early return avoids duplicate definitions; remove lines 254–257; committed `tmp_m88k_loadstore.c` must be regenerated.  
+Q2: Floor rows must cover the reachable little-endian and big-endian cells (16, not 24), include an absolute per-slot name check, and add a scaled-halfword accept row; the identity-body null medium is not settled until the detector shape is chosen.
+
+---
+
+## Q1 — the repair
+
+**(a) Complete and correct for all 24 slots.**  
+For every arm-D slot in section 7, removing `generate_m88k_loadstore.c:254-257` causes the table printer to fall through to `print_function_name()`. Because `size == 0`, the condition `scaledness && size > 0` at :80 is false, so no `_scaled` is appended. The endianness special case at :74-75 prints `_le` for both endian values when `size == 0`. The remaining flags (`usr`, `registeroffset`, `no_pc_sync`) are identical to the unscaled counterpart at index − 32. Therefore the printed name is exactly the counterpart listed in section 7. This holds for unsigned load, signed load, and store; for ordinary and `.usr`; for PC-sync and no-PC-sync; for LE and BE. The alias is architecturally correct because byte scale factor is 1 (S7).  
+*(REASONED from inlined source and section 7 census.)*
+
+Aliasing slots with no producer today (P2/P3) is correct and needed: the table should not contain `NULL` for any architecturally valid scaled-byte form, and after N2 fixes `.usr` decoding, the `.usr` no-PC-sync slots gain a producer.
+
+**(b) Early return avoids duplicate definitions; no other generated output changes.**  
+`loadstore()`’s early return at :104-105 still prevents emitting a second definition for the unscaled byte name. The separator logic at :235-237 prints the same number of commas regardless of whether an entry is `NULL` or a name. `generated_functions` is unchanged because `loadstore()` still returns early for those 24 cases. The other 272 `NULL` entries are produced by the three earlier arms and remain `NULL`.
+
+**(c) Exact lines to remove:** `generate_m88k_loadstore.c` lines **254, 255, 256, 257** — the entire `if (size == 0 && scaledness) { printf("\tNULL"); continue; }` arm. Removing only the `continue` (as Grok’s literal wording might suggest) would print both `\tNULL` and the handler name for the same entry, producing invalid C.
+
+**(d) Regenerate the committed table.**  
+Yes, `src/cpus/tmp_m88k_loadstore.c` is a tracked file (S14) and must be regenerated in the same diff, or the committed copy will disagree with what every build produces. `est/`, `build/`, and `build-asan/` are not shown to be tracked in this packet; if they are not tracked, updating them is not a commit obligation, but a rebuild will refresh them. The detector must read the committed copy or the generator output; Q3 must settle which.
+
+**(e) Premise audit P1–P3.**  
+- **P1 — little-endian half reachable:** Yes. `cpu_m88k.c:130` initialises big-endian, but `emul.c:651-652` applies the byte order reported by the ELF loader, and `file_elf.c:693-696` reports `EMUL_LITTLE_ENDIAN` for `ELFDATA2LSB`. `emul_parse.c:493-499` also accepts a machine `byte_order` of `"little"`. Therefore the little-endian half of the table is reachable on an m88k machine. Grok’s claim that “endianness is not a floor axis” is **false** for reachability; the repair is identical on both halves, but a mutant that alters only one half would not be caught by big-endian-only rows.  
+- **P2 — `.usr` no-PC-sync slots have no producer today:** Confirmed. `xmem_slow` reads `user` from bit `0x80`; the register-form decoder rejects bit `0x80` as `.wt` before `xmem_slow`, and the immediate form forces `user = 0`. After N2 fixes `xmem_slow` to read `0x100`, these slots gain a producer and the repair already aliases them correctly.  
+- **P3 — signed no-PC-sync slots have no producer at all:** Confirmed. `xmem_slow` never adds `SIGNEDNESS`, and neither decoder adds `NO_PC_SYNC` to a signed byte load. Those slots are unreachable today and remain so after N2.
+
+*(READ from packet source; P1–P3 derived from inlined source. I did not re-derive S1–S14 from anything outside the packet.)*
+
+**(f) No missing disposition.** The endianness alias already present in the same table is the fork’s idiom for identical-behaviour slots. Aliasing scaled byte to unscaled byte is the minimal and architecturally correct choice.
+
+**(g) CPU-stop half closed.** Scaled `ld.b`/`ld.bu`/`st.b` hit the same slots; after repair they resolve to valid handlers and the `ic->f == NULL` stop disappears. Post-N2 `.usr` xmem slots will also resolve correctly.
+
+---
+
+## Q2 — owed rows
+
+**(a) Floor, clause by clause.**
+
+- **(a) Pre-fix red:** Under an offline detector, the pre-fix red is a table-content assertion: the 24 arm-D indices must not be `NULL`. On the pre-fix committed table they are `NULL`, so the row fails. It is not a guest-path exchange.
+
+- **(b) Verbatim reinstatement:** If the committed `tmp_m88k_loadstore.c` is regenerated as part of the fix, then it is a second fixed site. A verbatim reinstatement must restore the `NULL` arm in the generator **and** regenerate the committed table. A detector that reads only the committed table would still fail if the table is reverted; one that reads only generator output would need the generator reverted. Both should be covered.
+
+- **(c) Null medium:** Not yet determinable. R2 selects the medium by instrument kind. If the detector is a committed-table reader, the instruction-handler identity body is not the applicable null medium; R2 does not explicitly name a null medium for a static table reader. This must be settled in Q3 before the floor is complete.
+
+- **(d) Nulled repair:** The repair is a pure deletion. The (d) mutant must re-introduce the removed `NULL` behaviour under a **different** predicate, not the original `size == 0 && scaledness`. Concrete examples: `size == 0 && scaledness && no_pc_sync`, `size == 0 && scaledness && signedness`, `size == 0 && scaledness && usr`.
+
+**(b) Candidate variants.**
+
+- **v1** (`&& no_pc_sync` leaves scaled `ld.b` dead): This is a (d) form — it reintroduces `NULL` for `no_pc_sync == 0` slots under a different predicate. Not equivalent. First difference from repaired table: index **160** (plain LE `ld.bu` sync) remains `NULL`.
+- **v2** (`&& !no_pc_sync` leaves xmem dead): Also a (d) form — reintroduces `NULL` for `no_pc_sync == 1` slots. First difference: index **416** (plain LE `ld.bu` no-sync) remains `NULL`.
+- **v3** (one signed scaled `ld.b`): A (d) form — reintroduces `NULL` for `signedness == 1` slots. First difference: index **168** (LE signed `ld.b` sync).
+- **v4** (one `.usr` scaled `ld.b` or `st.b`): A (d) form — reintroduces `NULL` for `usr == 1` slots. First difference: index **224** (LE `ld.bu` usr sync).
+- **v5** (Astra’s “repair-null variants”): Denotes exactly v1–v4 and similar predicate-restricted reintroductions of `NULL`.
+- **v6** (growth variant): Most likely modifies `print_function_name()` :80 (`scaledness && size > 0`) to widen the suppression of `_scaled`, so scaled halfword/word slots alias to byte/unscaled functions. This is not a (d) form for this repair; it is a separate growth mutant. The named `size` test is **:80**.
+
+*(Notation reading confirmed: v1/v2 attach the conjunct to the repair, leaving the `NULL` arm on the complement.)*
+
+**(c) DEPENDS-ON.**  
+R5 bounds the enumeration to the enclosing function (`main()`). The callee predicates `:74` (`size == 0 && endianness`) and `:80` (`scaledness && size > 0`) are **not floor axes**; they are clause-(e) disclosures. The floor is the cross-product of the dominating predicates in `main()` with the jointly reachable device-state lvalues. The dominating predicates are the three earlier `NULL` arms and the loop bounds; after those, the only additional predicate on the edited line is `size == 0 && scaledness`. The jointly reachable cells are those with a producer today (from P1–P3 and section 7):
+
+- Big-endian reachable: indices 176, 180, 184, 240, 244, 248, 432, 436 → **8 cells**.
+- Little-endian reachable (P1 says reachable): the LE twins of those eight → **8 cells**.
+- Unreachable signed no-PC-sync and `.usr` no-PC-sync slots (424, 488, 480, 484, 440, 504, 496, 500 and LE twins) → clause-(e) disclosure.
+
+Thus the **floor** is the 16 reachable cells, not Astra’s 24 and not Grok’s smaller set. Astra’s 24 includes unreachable cells; Grok omits the little-endian half and the `.usr` sync cells.
+
+**(d) Accept rows, de-escalation, rule D2.**  
+R12 owes accept rows for the predicate `size == 0 && scaledness`. The adjacent modelled value is `size == 1` (halfword). Even though `xmem` has no halfword form, scaled halfword `ld`/`st` exist and are accepted behaviour. A scaled-halfword row is owed. Rule D2 does not directly apply because `size == 0` is an equality, not a relational compare, but R12’s “adjacent modelled bit or value” supports the halfword row. A word-only accept row would **not** catch v6 if v6 reaches halfword slots.
+
+**(e) Anchoring.**  
+A relative comparison (slot i vs slot i−32) is invariant under an edit that changes both slots together. The census must also include an absolute form: each floor slot must equal its expected handler name from section 7. Otherwise a mutant that aliases both scaled and unscaled byte to the same wrong function would pass.
+
+**(f) Bounded.**  
+Yes. The floor is 16 reachable cells; each gets one absolute row. Accept rows: unscaled byte, scaled halfword, scaled word, ordinary immediate. Total finite and closed over the diff.
+
+**(g) Per-row variants and observables.**  
+For each floor slot row: mutant is a predicate-restricted `NULL` reintroduction (v1–v4) or a wrong alias; observable is the table entry name at that index. Accept rows: mutant is growth into adjacent size or loss of scale factor; observable is the computed address or exchanged byte.

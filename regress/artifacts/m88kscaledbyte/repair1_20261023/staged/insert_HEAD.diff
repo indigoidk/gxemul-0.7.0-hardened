@@ -1,0 +1,57 @@
+--- HEAD/regress/gate_offline.sh
++++ repair1_staged/regress/gate_offline.sh
+@@ -183,6 +183,54 @@
+ command -v cc >/dev/null 2>&1 || command -v gcc >/dev/null 2>&1 || \
+     gate_skip "no C compiler on PATH"
+ CC=$(command -v cc || command -v gcc)
++
++# ---- #569: the m88k load/store dispatch-table generator --------------------------
++# generate_m88k_loadstore.c printed NULL for the 24 scaled-byte slots of
++# m88k_loadstore[512], which cpu_m88k_instr.c indexes with no NULL check
++# (xmem_slow() calls the slot; the register-form ld/st decoder installs it as
++# ic->f). The fix deletes that NULL arm, so the slots name the unscaled byte
++# handlers. The driver compiles and runs the REAL generator in a scratch copy and
++# reads the COMMITTED table separately -- each alone stays green when only the
++# other is reverted -- against names hard-coded in the driver, never read from
++# either artifact. GEN and TABLE are cleared so this always tests the committed
++# files. A missing or non-compiling generator, one that fails to run, and a
++# missing table are each a red row inside the driver, never a skip. Placed after
++# the gate's compiler detection so the driver gets `$CC`; standalone it falls
++# back to cc, then gcc.
++MLSLOG=$LOGDIR/diff_m88k_loadstore_gen.log
++if [ ! -x "$HERE/diff_m88k_loadstore_gen.sh" ]; then
++    check "m88k loadstore generator: driver is executable" "no" "yes"
++else
++    GEN= TABLE= CC="$CC" "$HERE/diff_m88k_loadstore_gen.sh" > "$MLSLOG" 2>&1
++    sed 's/^/       /' "$MLSLOG"
++    check     "m88k loadstore generator: row failures" \
++              "$(sed -n 's/^ROWS=[0-9]* FAIL=\([0-9]*\)$/\1/p' "$MLSLOG")" "0"
++    check     "m88k loadstore generator: rows run (the denominator is the pin)" \
++              "$(sed -n 's/^ROWS=\([0-9]*\) FAIL=[0-9]*$/\1/p' "$MLSLOG")" "123"
++    check     "m88k loadstore generator: completion sentinel" \
++              "$(grep -c '^M88KLS_DONE$' "$MLSLOG")" "1"
++    #  EVERY ROW BY IDENTITY, each exactly once, from lists held HERE and not read
++    #  from the driver: a deleted, renamed or duplicated row is red by name, which
++    #  the total alone cannot say.  The lists are the driver's contract -- the 24
++    #  repaired slots; the 6 further accepts plus the 3 counterparts that are also
++    #  accepts; the other 21 counterparts -- in both artifacts, plus the generator
++    #  status rows and the cmp row: 4 + 2 x (5 + 24 + 9 + 21) + 1 = 123.
++    _mls_pin="160 164 168 176 180 184 224 228 232 240 244 248 416 420 424 432 436 440 480 484 488 496 500 504"
++    _mls_acc="161 177 418 422 434 438 144 400 404"
++    _mls_cp="128 132 136 148 152 192 196 200 208 212 216 384 388 392 408 448 452 456 464 468 472"
++    _mls_ids="gen_compiles gen_exit gen_stdout gen_count cmp_fresh_committed"
++    for _a in fresh committed; do
++        _mls_ids="$_mls_ids ${_a}_present ${_a}_inits ${_a}_entries ${_a}_nulls ${_a}_lsn"
++        for _i in $_mls_pin; do _mls_ids="$_mls_ids ${_a}_pin$_i"; done
++        for _i in $_mls_acc; do _mls_ids="$_mls_ids ${_a}_acc$_i"; done
++        for _i in $_mls_cp;  do _mls_ids="$_mls_ids ${_a}_cp$_i"; done
++    done
++    for _id in $_mls_ids; do
++        check "m88k loadstore generator: row $_id, exactly once" \
++              "$(grep -ow -- "$_id" "$MLSLOG" | wc -l | tr -d ' ')" "1"
++    done
++fi
++
+ need_file "$HERE/diff_ieee_store.c" "$SEC/src/$SRC"
+ 
+ # Pick a configured tree: it must have the generated config.h AND the header directory.

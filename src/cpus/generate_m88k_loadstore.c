@@ -251,10 +251,16 @@ int main(int argc, char *argv[])
 				continue;
 			}
 
-			if (size == 0 && scaledness) {
-				printf("\tNULL");
-				continue;
-			}
+			/*  #569: no NULL arm for scaled byte accesses.  A
+			    byte's scale factor is 1, so a scaled byte access
+			    is the unscaled one, and print_function_name()
+			    already omits "_scaled" for size 0: these 24 slots
+			    name the unscaled byte handlers.  They were NULL,
+			    and cpu_m88k_instr.c indexes the table with no
+			    NULL check: the register-form ld/st decoder
+			    installs twelve of the slots as ic->f and
+			    xmem_slow() calls four; the other eight have no
+			    caller today and are repaired with them.  */
 
 			printf("\tm88k_instr_");
 			print_function_name(size, store, signedness,

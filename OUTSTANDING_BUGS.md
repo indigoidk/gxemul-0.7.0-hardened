@@ -25,8 +25,8 @@
 > rows are filed in the 2026-10-22 section at the end of this file, and each carries its QUEUE marker in its ledger
 > `state_note`.
 >
-> 1. `m88kscaledbyte` (HIGH, new) -- m88k scaled byte ld/st/xmem use NULL table slots; a user-mode xmem calls a NULL
->    function in the host.  T1; the fix shape is disputed and pass 1 settles it.
+> 1. `m88kscaledbyte` (HIGH, FIXED by `#569` on 2026-10-23, held for Fable) -- m88k scaled byte ld/st/xmem use NULL table slots; a user-mode xmem calls a NULL
+>    function in the host.  T1; ~~the fix shape is disputed and pass 1 settles it~~ -- pass 1 settled it (the table alias) and `#569` ships it with a 123-row offline detector; see the 2026-10-23 section at the end.
 > 2. `ppcllscrcexit` (HIGH) -- lwarx/ldarx with Rc=1 and stwcx./stdcx. with Rc=0 exit the host.  T3; design owed.
 > 3. `qhslowifetch` (HIGH) -- a failed slow-path instruction fetch exits the host; user-reachable on 32-bit PowerPC.
 >    T6; PPC970 stops first at `ppc64xlateexit`.
@@ -25676,3 +25676,42 @@ unscheduled).  The filing's own pretest record and gap list are at `.../filing_2
 * **`mipspagemaskdead` (LOW, open)** -- `src/cpus/memory_mips_v2p.c:293` `case 0x00007ff:` is unreachable under
   `PAGEMASK_MASK_R4100`; the live 1 KB path is the `pmask == 0` arm (`:282-289`).  Found by Grok 4.7 on the
   critical-items adjudication (`crit_20261022/grok_crit.txt`, Q5); hygiene, to be settled by the VR41xx 1 KB round.
+
+### 2026-10-23 -- `m88kscaledbyte` fixed by `#569` (held for Fable); `m88kxmemaddrovl`, `m88klepsrbo`, `shdrivercliff` and `drvdiscrimloss` filed
+
+`#569` deletes the generator's NULL arm for scaled byte accesses (`src/cpus/generate_m88k_loadstore.c`), regenerates the
+committed `tmp_m88k_loadstore.c` (24 slots now name the unscaled byte handlers; 272 NULLs), and ships
+`regress/diff_m88k_loadstore_gen.sh` -- a 123-row offline detector that compiles and runs the generator AND reads the
+committed table, both pinned by absolute names, gated in gate 2 with every row identity pinned.  Measured in
+`regress/artifacts/m88kscaledbyte/table1_20261022/` (pre-fix 50/123 red; fixed 0/123; clause (b) at both sites L1/L2
+26; clause (c) measured L3 64 / L4 60; clause (d) L5/L6 14; accept L7 3; clearance clean on all four trees; GATE 2
+502 checks, GATE 11 111 checks).  Panel: Astra, Grok, GLM 5.3, DeepSeek on pass 1, adjudicated by Astra (AMEND, repair
+upheld); pass 2 by Grok, GLM 5.3 and DeepSeek (SHIP WITH CHANGES: the gate block's placement before gate 2's compiler selection, the generator comment's consumer claim) adjudicated by Astra (SHIP WITH THE NAMED REPAIRS), the repair made and measured (`repair1_20261023/`: committed-form gate 2 `PASS (485 checks)`, clearance clean), pass 3 on the repair diff by the same three seats (all CLOSE) adjudicated by Astra (CLOSE: zero breaches over 108 name pins, 10 structural, 4 status and 1 comparison row; the chain closes); Fable HELD with its question; Argon dropped (seat failure).  The rung-3 witness attempt
+is recorded BLOCKED (`regress/artifacts/m88kscaledbyte/witness_attempt_20261022/WITNESS_ATTEMPT.md`); the row's witness is
+the detector.
+
+* **`m88kxmemaddrovl` (MED, open)** -- `cpu_m88k_instr.c:X(xmem_slow)`: with `d == s1` or `d == s2` the store half
+  recomputes its effective address from the just-loaded `r[d]` (the load writes `r[d]` through `call.arg[0]` at
+  `:2385`/`:2395`; the store reuses `arg[1]`/`arg[2]` at `:2421`; the handler recomputes the address,
+  `cpu_m88k_instr_loadstore.c:248-256`), where the MC88100 manual specifies a read then a write to the same address
+  (`_scratchpad/mc88100.txt:8184-8187`).  Wrong-address access with possible secondary fault behaviour; unmeasured.
+  Found by GPT-6 Astra on `#569`'s pass 1 (`pass1_20261022/codex_t1p1.txt:200-202`), confirmed in source
+  (`CHECKS_mainloop.md` #7), graded by the adjudication (`adj/codex_t1p1adj.txt:65`).
+* **`m88klepsrbo` (MED, open; CPU-stop class)** -- `cpu_m88k.c`: PSR.BO is set only in the constructor while
+  `byte_order` is still big-endian (`:130`, `:182-183`); the ELF loader and a config `byte_order` set little-endian
+  later without touching the PSR; exception delivery then calls `m88k_stcr` with that PSR (`:827-832`) and its
+  byte-order mismatch check clears `running` (`:523-532`).  Grok 4.7's route through `ldcr` of a DMT (`:472-477`,
+  `cpu_m88k_instr_loadstore.c:111-112`) omits the `dmt[]` -> `cr[]` transfer that only DATA_ACCESS delivery makes
+  (`:908-918`); the adjudication supplied the direct chain (`adj/codex_t1p1adj.txt:67-69`); every line re-read at HEAD.
+  Unmeasured.
+* **`shdrivercliff` (LOW, open; harness)** -- the two shell drivers gate 2 runs (`regress/diff_autodev_gen.sh`,
+  `regress/diff_m88k_loadstore_gen.sh`) are outside `check_probe_wiring.py` (`.py` only) and gate 2's self-variant
+  manifest (`diff_*.c` only): deleting a driver's gate block leaves gate 2 green with nothing reporting the lost rows
+  (deleting only the driver is caught by the block's `-x` row).  DeepSeek (`pass2_20261023/ollama_deepseek_t1p2_B_Q345.txt:35`),
+  GLM (`ollama_glm_t1p2_B_Q345.txt:30`); filed by the adjudication (`f2/codex_t1f2.txt` F13/F19/F24).
+* **`drvdiscrimloss` (LOW, open; harness)** -- a post-ship edit of `diff_m88k_loadstore_gen.sh`'s comparator (a `row()`
+  that ignores its operands) keeps all 123 identities, the row count and the sentinel, so gate 2 stays green while the
+  detector no longer discriminates; only `table1_20261022/`'s one-time table and `RUNS.log`'s md5s witness that it did.
+  GLM (`ollama_glm_t1p2_A_Q12.txt:39`); split from the wiring gap by the adjudication (F24: a hash pin detects textual
+  drift, not continued discrimination; a per-run positive control in the `diff_autodev_gen.sh:189` shape is the remedy
+  candidate, not mandatory now).

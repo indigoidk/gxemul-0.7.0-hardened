@@ -1,0 +1,247 @@
+--- driver_v2/diff_m88k_loadstore_gen.sh
++++ driver_v3/diff_m88k_loadstore_gen.sh
+@@ -29,39 +29,54 @@
+ #
+ #  CONTRACT -- what this detector is designed to catch:
+ #    * the deleted arm's 24 cells, by ABSOLUTE name equality in both artifacts.
+-#      Rows marked F are the FLOOR, the 16 cells a producer indexes today (the
+-#      sync ld/st cells, both endians, plain and .usr: 160 164 168 176 180 184
+-#      224 228 232 240 244 248; the no-PC-sync plain ld.bu/st.b cells 416 420
+-#      432 436) -- an escape at one of them is a floor breach.  Rows marked E
+-#      are the 8 with no producer today (424 440 480 484 488 496 500 504;
+-#      480/484/496/500 gain xmem as a producer if m88kxmemusr is fixed) -- an
+-#      escape there is clause-(e) coverage debt;
+-#    * the accept side of the deleted predicate (size == 0 && scaledness): the
+-#      scaled HALFWORD edge 161/177 (the only rows that see the `size > 0` of
+-#      print_function_name moved by one), scaled word xmem 418 422 434 438,
+-#      and the 24 unscaled byte counterparts at index-32 (144 400 404 as accept
+-#      rows, the other 21 as cpart rows);
++#      ALL 24 ARE THE FLOOR: main()'s own loops emit every one of them, so an
++#      escape at any of the 24 is a floor breach.  16 are today's GUEST-
++#      CONSUMER subset, marked "(consumer)": the sync ld/st cells, both
++#      endians, plain and .usr (160 164 168 176 180 184 224 228 232 240 244
++#      248), and the no-PC-sync plain ld.bu/st.b cells (416 420 432 436).  The
++#      other 8 (424 440 480 484 488 496 500 504) are marked "(no consumer)" --
++#      a fact about today's callers, not a weaker pin; xmem becomes the
++#      consumer of 480 484 496 500 if m88kxmemusr is fixed;
++#    * the accept side of the deleted predicate (size == 0 && scaledness), by
++#      the de-escalation rule's row per adjacent modelled value: the scaled
++#      HALFWORD cells 161/177 (size 1, the adjacent size; with the `size > 0`
++#      in print_function_name moved by one they are the name rows that
++#      change), scaled word xmem 418 422 434 438, and the unscaled byte cells;
++#    * 54 DISTINCT NAME PINS PER ARTIFACT: the 24 repairs, their 24 unscaled
++#      counterparts at index-32, and 6 further accepts (161 177 418 422 434
++#      438).  Three counterparts are also accept cells (144 400 404); each of
++#      those indices is emitted ONCE, as an accept row, so 21 rows are
++#      "counterpart" rows;
+ #    * structure: one 512-entry initializer; 272 NULL entries, SUPPLEMENTARY (a
+-#      MOVED NULL keeps the count -- the absolute pins carry the floor); 198
+-#      `#define LS_N` blocks and the generator's own stderr generated_functions
+-#      == 198, the control on loadstore()'s kept size-0-scaled early return,
+-#      whose deletion keeps every name pin green and shows up only there;
++#      MOVED NULL keeps the count -- the absolute pins carry the floor);
++#    * a NARROW SUPPRESSION-COUNT CONTROL, NOT a definition-integrity check: 198
++#      `#define LS_N` blocks and the generator's stderr generated_functions ==
++#      198 see the deletion of loadstore()'s kept size-0-scaled early return
++#      (12 more blocks) and nothing finer -- duplicate or wrong definition
++#      NAMES keep both counts;
+ #    * fresh == committed, byte for byte;
+-#    * a missing or non-compiling generator, or a missing or unparseable table,
+-#      is an explicit RED row, never a skip.
++#    * the generator compiles and links, exits 0 and prints something, and the
++#      committed table is present and parseable -- each an explicit RED row,
++#      never a skip.
++#  ROWS: 4 generator status rows + 2 x (5 structural + 54 name pins) + 1 cmp =
++#  123, every row emitted on every run.  EVERY ROW CARRIES AN IDENTITY, its
++#  first field (gen_*, fresh_*, committed_*, cmp_fresh_committed), which
++#  occurs exactly once in the output; gate 2 pins each identity, the total and
++#  the sentinel.
+ #  NOT OBSERVED, deliberately: handler BODIES and the xmem exchange itself (the
+ #  exchanged byte, neighbour preservation, zero extension) -- guest-path
+ #  channels that belong to the BLOCKED rung-3 witness record,
+ #  regress/artifacts/m88kscaledbyte/witness_attempt_20261022/WITNESS_ATTEMPT.md;
+ #  per-slot positions of the other three NULL arms (held only by the count);
+-#  scaled doubleword names; the immediate-form byte cells; print_function_name's
+-#  size tests beyond the halfword edge; uniqueness of the generated definition
+-#  names (a collision fails the emulator's own compile, loudly).
++#  scaled doubleword names; the immediate-form byte cells; the size tests in
++#  print_function_name beyond the halfword edge; the generated DEFINITIONS
++#  beyond their count (unique names, flags, references -- the generated file
++#  is not compiled here).
+ #
+ #  (c): measured at regress/artifacts/m88kscaledbyte/table1_20261022/L3_commentgen.out
+ #  (a comment-only generator: the compile row and every fresh-side row red) and
+-#  .../L4_commenttable.out (a comment-only table: every committed-side row red);
+-#  .../L8_allnull.out is a second table-side medium.  Scores: SCORES.txt there.
++#  .../L4_commenttable.out (a comment-only table: every committed-side row red).
++#  .../L8_allnull.out (an all-NULL initializer) is supplementary.  SCORES.txt there.
+ #
+ #  Overrides, so a table of variants runs WITHOUT touching the repo:
+ #  GEN=<generator source>, TABLE=<committed table>, CC=<compiler>.  Gate 2
+@@ -85,13 +100,13 @@
+ 
+ rows=0
+ fails=0
+-row() {   # $1 label  $2 got  $3 want -- equality, and every row counts
++row() {   # $1 identity  $2 description  $3 got  $4 want -- equality; every row counts
+     rows=$((rows + 1))
+-    if [ "$2" = "$3" ]; then
+-        printf '  ok   %-60s %s\n' "$1" "$2"
++    if [ "$3" = "$4" ]; then
++        printf '  ok   %-20s %-50s %s\n' "$1" "$2" "$3"
+     else
+         fails=$((fails + 1))
+-        printf '  FAIL %-60s got=%s want=%s\n' "$1" "$2" "$3"
++        printf '  FAIL %-20s %-50s got=%s want=%s\n' "$1" "$2" "$3" "$4"
+     fi
+ }
+ note() { printf '  --   %s\n' "$1"; }
+@@ -99,41 +114,41 @@
+ note "GEN   $GEN"
+ note "TABLE $TABLE"
+ 
+-#  index class expected-name description.  F floor pin, E clause-(e) pin,
+-#  A accept, C counterpart (index - 32) of a pin.  index = 256*no_pc_sync +
+-#  128*registeroffset + 64*usr + 32*scaledness + 16*endianness + 8*signedness
+-#  + 4*store + size, the generator's own loop order.
++#  index class expected-name description.  R repair with a guest consumer today,
++#  N repair with none, A accept, C counterpart (index - 32) of a repair.
++#  index = 256*no_pc_sync + 128*registeroffset + 64*usr + 32*scaledness +
++#  16*endianness + 8*signedness + 4*store + size, the generator's loop order.
+ cat > "$WORK/spec" <<'EOF'
+-160 F m88k_instr_ld_u_1_le_regofs scaled ld.bu le sync
+-164 F m88k_instr_st_1_le_regofs scaled st.b le sync
+-168 F m88k_instr_ld_1_le_regofs scaled ld.b le sync
+-176 F m88k_instr_ld_u_1_le_regofs scaled ld.bu be sync
+-180 F m88k_instr_st_1_le_regofs scaled st.b be sync
+-184 F m88k_instr_ld_1_le_regofs scaled ld.b be sync
+-224 F m88k_instr_ld_u_1_le_usr_regofs scaled ld.bu le usr sync
+-228 F m88k_instr_st_1_le_usr_regofs scaled st.b le usr sync
+-232 F m88k_instr_ld_1_le_usr_regofs scaled ld.b le usr sync
+-240 F m88k_instr_ld_u_1_le_usr_regofs scaled ld.bu be usr sync
+-244 F m88k_instr_st_1_le_usr_regofs scaled st.b be usr sync
+-248 F m88k_instr_ld_1_le_usr_regofs scaled ld.b be usr sync
+-416 F m88k_instr_ld_u_1_le_regofs_nopcsync scaled ld.bu le nosync
+-420 F m88k_instr_st_1_le_regofs_nopcsync scaled st.b le nosync
+-424 E m88k_instr_ld_1_le_regofs_nopcsync scaled ld.b le nosync
+-432 F m88k_instr_ld_u_1_le_regofs_nopcsync scaled ld.bu be nosync
+-436 F m88k_instr_st_1_le_regofs_nopcsync scaled st.b be nosync
+-440 E m88k_instr_ld_1_le_regofs_nopcsync scaled ld.b be nosync
+-480 E m88k_instr_ld_u_1_le_usr_regofs_nopcsync scaled ld.bu le usr nosync
+-484 E m88k_instr_st_1_le_usr_regofs_nopcsync scaled st.b le usr nosync
+-488 E m88k_instr_ld_1_le_usr_regofs_nopcsync scaled ld.b le usr nosync
+-496 E m88k_instr_ld_u_1_le_usr_regofs_nopcsync scaled ld.bu be usr nosync
+-500 E m88k_instr_st_1_le_usr_regofs_nopcsync scaled st.b be usr nosync
+-504 E m88k_instr_ld_1_le_usr_regofs_nopcsync scaled ld.b be usr nosync
+-161 A m88k_instr_ld_u_2_le_scaled_regofs scaled ld.hu le sync, halfword edge
+-177 A m88k_instr_ld_u_2_be_scaled_regofs scaled ld.hu be sync, halfword edge
+-418 A m88k_instr_ld_u_4_le_scaled_regofs_nopcsync scaled word ld le nosync
+-422 A m88k_instr_st_4_le_scaled_regofs_nopcsync scaled word st le nosync
+-434 A m88k_instr_ld_u_4_be_scaled_regofs_nopcsync scaled word ld be nosync
+-438 A m88k_instr_st_4_be_scaled_regofs_nopcsync scaled word st be nosync
++160 R m88k_instr_ld_u_1_le_regofs scaled ld.bu le sync
++164 R m88k_instr_st_1_le_regofs scaled st.b le sync
++168 R m88k_instr_ld_1_le_regofs scaled ld.b le sync
++176 R m88k_instr_ld_u_1_le_regofs scaled ld.bu be sync
++180 R m88k_instr_st_1_le_regofs scaled st.b be sync
++184 R m88k_instr_ld_1_le_regofs scaled ld.b be sync
++224 R m88k_instr_ld_u_1_le_usr_regofs scaled ld.bu le usr sync
++228 R m88k_instr_st_1_le_usr_regofs scaled st.b le usr sync
++232 R m88k_instr_ld_1_le_usr_regofs scaled ld.b le usr sync
++240 R m88k_instr_ld_u_1_le_usr_regofs scaled ld.bu be usr sync
++244 R m88k_instr_st_1_le_usr_regofs scaled st.b be usr sync
++248 R m88k_instr_ld_1_le_usr_regofs scaled ld.b be usr sync
++416 R m88k_instr_ld_u_1_le_regofs_nopcsync scaled ld.bu le nosync
++420 R m88k_instr_st_1_le_regofs_nopcsync scaled st.b le nosync
++424 N m88k_instr_ld_1_le_regofs_nopcsync scaled ld.b le nosync
++432 R m88k_instr_ld_u_1_le_regofs_nopcsync scaled ld.bu be nosync
++436 R m88k_instr_st_1_le_regofs_nopcsync scaled st.b be nosync
++440 N m88k_instr_ld_1_le_regofs_nopcsync scaled ld.b be nosync
++480 N m88k_instr_ld_u_1_le_usr_regofs_nopcsync scaled ld.bu le usr nosync
++484 N m88k_instr_st_1_le_usr_regofs_nopcsync scaled st.b le usr nosync
++488 N m88k_instr_ld_1_le_usr_regofs_nopcsync scaled ld.b le usr nosync
++496 N m88k_instr_ld_u_1_le_usr_regofs_nopcsync scaled ld.bu be usr nosync
++500 N m88k_instr_st_1_le_usr_regofs_nopcsync scaled st.b be usr nosync
++504 N m88k_instr_ld_1_le_usr_regofs_nopcsync scaled ld.b be usr nosync
++161 A m88k_instr_ld_u_2_le_scaled_regofs scaled ld.hu le sync (halfword)
++177 A m88k_instr_ld_u_2_be_scaled_regofs scaled ld.hu be sync (halfword)
++418 A m88k_instr_ld_u_4_le_scaled_regofs_nopcsync scaled word ld le nosync (xmem)
++422 A m88k_instr_st_4_le_scaled_regofs_nopcsync scaled word st le nosync (xmem)
++434 A m88k_instr_ld_u_4_be_scaled_regofs_nopcsync scaled word ld be nosync (xmem)
++438 A m88k_instr_st_4_be_scaled_regofs_nopcsync scaled word st be nosync (xmem)
+ 144 A m88k_instr_ld_u_1_le_regofs unscaled ld.bu be sync
+ 400 A m88k_instr_ld_u_1_le_regofs_nopcsync unscaled ld.bu be nosync
+ 404 A m88k_instr_st_1_le_regofs_nopcsync unscaled st.b be nosync
+@@ -189,19 +204,20 @@
+     if [ ! -f "$file" ]; then present=absent
+     elif [ "$1" -ge 1 ]; then present=yes
+     else present="no m88k_loadstore[512] initializer"; fi
+-    row "$lbl: present and parseable" "$present" "yes"
+-    row "$lbl: m88k_loadstore[512] initializers" "$1" "1"
+-    row "$lbl: initializer entries" "$2" "512"
+-    row "$lbl: NULL entries (supplementary)" "$3" "272"
++    row "${lbl}_present" "present and parseable" "$present" "yes"
++    row "${lbl}_inits" "m88k_loadstore[512] initializers" "$1" "1"
++    row "${lbl}_entries" "initializer entries" "$2" "512"
++    row "${lbl}_nulls" "NULL entries (supplementary)" "$3" "272"
+     if [ -f "$file" ]; then nls=$(grep -c '^#define LS_N ' "$file"); else nls=absent; fi
+-    row "$lbl: #define LS_N blocks" "$nls" "198"
++    row "${lbl}_lsn" "#define LS_N blocks (suppression count)" "$nls" "198"
+     while read -r i c name desc; do
+         case $c in
+-        F|E) l="pin [$i] $c $desc" ;;
+-        A)   l="accept [$i] $desc" ;;
+-        *)   l="cpart [$i] $desc" ;;
++        R) id=${lbl}_pin$i; d="repair $desc (consumer)" ;;
++        N) id=${lbl}_pin$i; d="repair $desc (no consumer)" ;;
++        A) id=${lbl}_acc$i; d="accept $desc" ;;
++        *) id=${lbl}_cp$i;  d="counterpart $desc" ;;
+         esac
+-        row "$lbl: $l" "$(ent "$WORK/$lbl.ent" "$i")" "$name"
++        row "$id" "$d" "$(ent "$WORK/$lbl.ent" "$i")" "$name"
+     done < "$WORK/spec"
+ }
+ 
+@@ -217,24 +233,30 @@
+ else
+     gres="no -- the compile or link failed"
+ fi
+-row "generator: compiles and links" "$gres" "yes"
++row gen_compiles "generator: compiles and links" "$gres" "yes"
+ if [ "$compiled" != yes ] && [ -s "$WORK/cc.log" ]; then
+     sed -e "s|$WORK/||g" -e 's/^/  --   cc: /' "$WORK/cc.log" | head -6
+ fi
+ 
++#  EXECUTION is its own pair of rows: a generator that compiles and then exits
++#  non-zero, or prints nothing, is red here and not only downstream.
+ if [ "$compiled" = yes ]; then
+     ( cd "$WORK" && ./generate_m88k_loadstore > fresh.c 2> gen.err ); grc=$?
+ else
+     grc="not run"
+ fi
+-row "generator: exit status" "$grc" "0"
++row gen_exit "generator: exit status" "$grc" "0"
++if [ "$compiled" != yes ]; then sres="not run"
++elif [ -s "$WORK/fresh.c" ]; then sres=yes
++else sres="no -- stdout empty"; fi
++row gen_stdout "generator: stdout non-empty" "$sres" "yes"
+ if [ -f "$WORK/gen.err" ]; then
+     gf=$(sed -n 's/^.*: generated_functions = \([0-9][0-9]*\)$/\1/p' "$WORK/gen.err" | head -1)
+     [ -n "$gf" ] || gf="not reported"
+ else
+     gf=absent
+ fi
+-row "generator: stderr generated_functions" "$gf" "198"
++row gen_count "generator: stderr generated_functions" "$gf" "198"
+ 
+ # ---------------------------------------------------- both artifacts, same rows
+ artifact_rows fresh "$WORK/fresh.c"
+@@ -244,7 +266,7 @@
+ elif [ ! -f "$TABLE" ]; then cres="committed table absent"
+ elif cmp -s "$WORK/fresh.c" "$TABLE"; then cres=identical
+ else cres=differ; fi
+-row "fresh == committed, byte for byte (cmp)" "$cres" "identical"
++row cmp_fresh_committed "fresh == committed, byte for byte (cmp)" "$cres" "identical"
+ if [ "$cres" = differ ]; then
+     diff "$WORK/fresh.c" "$TABLE" | head -8 | sed 's/^/  --   diff: /'
+ fi
