@@ -1,3 +1,12 @@
+# Records, 2026-10-23: `m88kscaledbyte` names its landing commit 66920157, and 66920157's committed-tree proofs and pass-2/3 receipts
+
+`#569` landed as `66920157bbdd42349835695b3e813ce721f12132`.  Committed-tree proofs the pass-3 adjudication required (`regress/artifacts/m88kscaledbyte/pass3_20261023/f3/codex_t1f3.txt`, Q3):
+`git ls-tree 66920157 regress/diff_m88k_loadstore_gen.sh` -> `100755 blob 61ab213a332d6c7deccc32427355b117d401207d` (the driver is executable in the committed tree; `.gitignore`'s `regress/diff_*` needed `git add -f`, and `create mode 100755 regress/diff_m88k_loadstore_gen.sh`);
+the committed `regress/gate_offline.sh` blob md5 is `faebdd858d8d5222c9c46f59f1169c44` (the repair's staged copy, `repair1_20261023/staged/gate_offline.sh`), `git diff --numstat 66920157^ 66920157 -- regress/gate_offline.sh` = `48 0 regress/gate_offline.sh` (one hunk: the `#569` block after the compiler selection; the working tree's foreign hunks were not committed).
+Pass-2 receipt: `pass2_20261023/` (Grok, GLM 5.3, DeepSeek -- SHIP WITH CHANGES; `f2/codex_t1f2.txt` -- SHIP WITH THE NAMED REPAIRS); the repair `repair1_20261023/`; pass-3 receipt: `pass3_20261023/` (all CLOSE; `f3/codex_t1f3.txt` -- CLOSE).  The row's `commits` field now names `66920157`; its state stays `held` for Fable 5.1 with its question.
+
+Ledger (one field), this block and `matrix.html` only.
+
 # `#569` (m88kscaledbyte): the m88k load/store dispatch table left its 24 scaled-byte slots NULL, and the emulator indexed them unguarded -- one legal `xmem` or scaled `ld.b`/`st.b` form ended the process or stopped the CPU; the generator now names the unscaled byte handlers (a byte's scale is 1), the committed table is regenerated, and a 123-row offline detector compiles and runs the generator AND reads the committed table, gated in gate 2
 
 **The defect** (`m88kscaledbyte`, HIGH; filed 2026-10-22 from the external-fixes research, T1 of its batch).
