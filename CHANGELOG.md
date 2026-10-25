@@ -24,6 +24,16 @@ HELD markers are discharged by the seat's dated entries; its state stays `held` 
 Ledger (the `commits` field, two seat entries, the hold question and state note), this block, the `regress/pass2_ledger.tsv`
 receipt line, `matrix.html`, the detector's docstring revision, `SCORES_README.txt` and the revision's re-measure only.
 
+# `#573` Records (follow-up, 2026-10-25): `lecsrmask` names its landing commit `9ac43a17`; the committed-tree proofs; the pass-2 receipt
+
+`git ls-tree 9ac43a17` shows `regress/le_csrmask_probe.py` at `100644 blob e19c4f591507a34670ac9dae03021cb709ec462d` with blob md5 `4aa4b22155c87af8809c2b3602d98540` -- the revision every leg of
+`regress/artifacts/lecsrmask/pass1_20261025/final_055141/` froze (LF, no CR byte); the committed `src/devices/dev_le.c` blob md5 is
+`55d47bdae4109bd1ef48d94421909bbc`, the file the fix legs were built from (`final_055141/dev_le.c.fix.txt`); the committed `regress/gate_arm.sh` carries the #573 block
+and its `rows run` pin, `tools/precommit_check.sh` SCORE_CLAIMS_MANIFEST=41, `regress/gate_hygiene.sh` EXPECT_PTY_PROBES=79 with
+`le_csrmask_probe.py` grandfathered, `tools/pipeline/check_probe_wiring.py` the two MANIFEST keys.  Landing numstat (310 files):
+60 0 regress/gate_arm.sh; 3 2 regress/gate_hygiene.sh; 547 0 regress/le_csrmask_probe.py; 29 9 src/devices/dev_le.c; 12 0 tools/pipeline/check_probe_wiring.py; 1 1 tools/precommit_check.sh.  The ledger row's `commits` field names `9ac43a17`; its state stays `held` (the Fable question, the roster question, the
+clause-(d) decision -- `hold_question`).  The PASS-2 RECEIPT line is appended to `regress/pass2_ledger.tsv` (precommit section F).
+
 # `#573` (lecsrmask): the LANCE model stored every bit a guest wrote to CSR3, where the Am7990 implements three and reads the rest as zero -- the CSR3 store is masked to BSWP|ACON|BCON; CSR1 and CSR2 stay stored whole, on purpose, and the record says why
 
 **The defect** (`lecsrmask`, MED, WRONG-RESULT; filed 2026-10-22 from the external-fixes research, T18 of its batch, as "CSR1-3

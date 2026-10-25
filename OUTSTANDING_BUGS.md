@@ -25913,6 +25913,7 @@ phase, while `wdc_new_command_reset()` clears `atapi_phase` at `:917` (Astra, pa
 * **`srclistsubdir` (LOW, carrier) -- new.**  The carrier's primary-source inventory is derived by `ls _scratchpad/*.pdf`, which does
   not descend into `_scratchpad/lance/` (two Am7990/Am79C90 manuals and four reference drivers, present since 2026-07-25); this
   round's first draft said "no LANCE datasheet is on disk" on the strength of it.  Derive with `find _scratchpad -name '*.pdf'`.
+* **Landed** as `9ac43a17` (2026-10-25); the pass-2 receipt keyed to it in `regress/pass2_ledger.tsv`; the row stays `held` (see its hold question).
 * **OWED by `#573`**: the clause-(d) variant table (`killtable_20261025/README.txt`, `PRETABLE.out` written) -- a floor clause
   recorded UNMEASURED; the landing with that debt filed is the owner's decision for this round (the row's hold question, item 4;
   the adjudication pass found no earlier ruling that licenses it); the Argon seat's F2,
