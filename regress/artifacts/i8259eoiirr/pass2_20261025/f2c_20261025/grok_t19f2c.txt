@@ -1,0 +1,53 @@
+I will review the v2e instrument on its own terms: the new rows' construction against the product predicates, then the twelve F2b dispositions, then any cell the table still does not observe. The product diff stays out of scope.The tree's `dev_8259.c` is the pre-fix PIC. The mutant diffs and the frozen probe are the record of what v2e actually pins, so I'll read those next to the CPU-line wiring.VERDICT: RATIFY WITH CHANGES -- the six new kill rows kill the mutants they name; the helper recompute's false branch is still unobserved, so this pass does not close.
+BREACHES: one cell of `if (d->irr & ~d->ier) INTERRUPT_ASSERT; else INTERRUPT_DEASSERT`. Three shapes stay green on all 101 rows, including `nonspec ip2`: delete that if/else; replace it with `INTERRUPT_ASSERT`; drop the mask (`if (d->irr)`). `bus_isa` has already set Cause bit 10, so "still 1" does not prove the recompute ran. The row that catches all three is a Cause-bit-10 read immediately after the poll that acknowledges the only unmasked line while another line is pending and masked (HEAD 1, FIX 0). Constant-false remains the cell `nonspec ip2` kills. Swept and left closed: the other two added predicates, and the five GT guards, with `pic1 != NULL` and `n2 < 0` unreachable on Malta as already disclosed. The three measured escapes (`D_fold`, `D_retire_anypic`, `D_retire_anyline`) stay the disclosed ones.
+
+## Q1
+
+The frozen probe is the file named in the brief: `fixlegs_114055/i8259_eoi_probe.frozen.py.txt`, md5 `3f3ad40347fc0c8205ff38395b57fda2` (READ `RUN_IDENTITY.txt`). The workspace `dev_8259.c` is the pre-fix source. The fix text below is the inlined diff in `pass2_20261025/packet_Q34.md`, checked against the mutant hunks. `/tmp/gxt19/fix` is outside this workspace.
+
+`maskeoi isr` -- valid, not vacuous. READ `D_eoi_maskcond.diff`: the ISR arm runs only when `(d->isr & bit) && !(d->ier & bit)`. The session polls line 4 (the helper sets ISR bit 4), writes OCW1 `0x10` (READ pre-fix `dev_8259.c` OCW1: `d->ier = idata`, ISR untouched), then `e_eoi(4)` which is `0x64`. The legacy else clears IRR only. The mutant therefore leaves ISR `0x10`. SCORES: `maskeoi isr 0x10 want 0x00`, 100/101, the only red. A green run of this contract does not show that HEAD took the ISR arm (HEAD never sets ISR). It does show the mutant, which still acknowledges.
+
+`spec eoi one` -- valid, not vacuous. READ `B_spec_isr0.diff`: `d->isr &= ~bit` becomes `d->isr = 0`. Both polls run first, so `spec isr both` is still `0x18` and the only red is `spec eoi one 0x00`. FIX leaves bit 4 (`0x10`). HEAD, which never sets ISR, is `0x00`. The two-instruction gap cannot turn a cleared ISR back into `0x10`.
+
+`spec isr both` -- valid, not a second kill of `B_spec_isr0`. It is the same-session witness that the pre-EOI ISR was `0x18`, so `spec eoi one == 0x10` means bit 3 cleared and bit 4 kept. It is the same fact as `isr both`, in the session the specific EOI actually runs in. FIX leg reads `0x18` (`fixlegs_114055/RESULTS.txt`).
+
+`nonspec ip2` -- sound for the measured mutant, and green if the recompute is merely absent. This is the row that answers the bare-DEASSERT finding, and the channel is narrower than the predicate.
+
+- Bit 10 is the ISA CPU line. READ `cop0.h`: `STATUS_IM_SHIFT` is 8. READ `cpu_mips.c:250`: `templ.line = 1 << (STATUS_IM_SHIFT + i)` for `i` in 2..7. READ `machine_evbmips.c:69-72`: the Malta ISA bus is `cpu[N].2`. The probe's `1 << (8 + 2)` matches. `mips_cpu_interrupt_assert` ORs that bit into Cause with no `Status.IE` test (`cpu_mips.c:1884-1887`).
+- IE is clear in every register session. READ `cpu_mips_coproc.c:370-383`: Status starts at 0, then CU0/CU1 and, when there is no PROM, BEV. The rate session is the only `mtc0` of Status, and it is a separate process. Kernel mode with CU0 set, so `mfc0` does not take a coprocessor exception. The encoding is the standard `mfc0` (`0x40000000 | rt<<16 | rd<<11`), and the nonspec encoding check is 44/44.
+- `D_deassert` is an active `INTERRUPT_DEASSERT`. Deassert is `cause &= ~line`, not a count, and pic1's irq is that same `cpu[N].2` line. SCORES: `nonspec ip2 0x00 want 0x01`, only red. The row kills that mutant.
+- The bit is already 1 before the poll: `isa_interrupt_common` asserted it when the UARTs fired (`bus_isa.c:66-89`). Deleting the if/else, or always asserting, leaves 1. `nonspec ip2` stays green. The FIX value `poll once2 == 0x10` (not `0x18`) shows line 3 has not been re-asserted by the following read, so the window is real; the row samples the wrong side of it.
+
+`poll once2` -- valid, not vacuous. READ `D_latch_cond.diff`: `current_command = 0x0a` runs only when `i < 0`. This poll succeeds (line 3, line 4 still pending), so the command stays `0x0c` and the next command read acknowledges line 4 and returns `0x84`. SCORES: `poll once2 0x84` and `poll second 0x00`. FIX returns IRR `0x10`. `M_noack_irr` returns `0x18` on this same row, which is the uncleared IRR, so `0x10` is that byte after bit 3 clears. The opposite condition, revert only after success, is already `poll once` in the masked session (unsuccessful poll, FIX `0x10` against a sticky `0x00`).
+
+`quiet iack` -- valid, not vacuous. READ `D_gt_always.diff`: `if (n >= 0) odata = n` becomes `odata = n`. Nothing pending makes `pic8259_acknowledge` return -1 before it touches ISR (`pending == 0` return). `last_int` is 0 because `machine_new` memsets the machine (`machine.c:67`) and quiet does the `lw` of `GT_PCI0_INTR_ACK` (`0xc34`). SCORES: `quiet iack 0xffffffff want 0x00`. The other direction, deleting the assignment, stays on `gtboth iack` (`D_gt_noassign`, got `0x04`).
+
+`gt write isr` -- valid, not vacuous. READ `D_gt_write.diff`: `writeflag == MEM_READ` becomes `1`. `build_gt` does `sw` of zero to the IACK register, then reads ISR, then the `lw`. The ack uses the pending line, not the stored zero. SCORES: `gt write isr 0x10 want 0x00`, 100/101. HEAD's arm does not acknowledge; the fix's guard skips writes. The later `gt isr` value can still be `0x10` because the write already set it, which is why this sample has to sit before the read.
+
+Inserted reads against the old nonspec pins. DERIVED, and the FIX leg agrees. `mfc0` touches COP0 only. On the fix, the poll read has already stored `current_command = 0x0a`, so the extra `lbu` is an IRR read and does not acknowledge. On HEAD, `case 0x0c` scans and does not modify IRR or ISR, so a second scan is idle. FIX leg (`fixlegs_114055/RESULTS.txt`): `poll second 0x84`, `isr both 0x18`, `nonspec lowest 0x10`. HEAD witness: `poll once2 0x83`, `nonspec ip2 0x01`.
+
+Contract relabel. Right. READ the scorer: `ctrl_ok` fails only for `kind == "control"`. A both-columns poll byte or IACK value is a model output; a mutant that reddens it is a kill. `quiet poll`, `quiet isr`, and `quiet imr` stay control, the idle signature. In this frozen file `spec polls` is a symptom (`0x8383` / `0x8384`), and L0 is `75/101` with those 26 symptom rows red and `CONTROL=OK` (`legs_114659/L0`). L3 is `CONTROL=FAIL`, `0/101`.
+
+## Q2
+
+Overturn 1 of 12: **A4**, the sentence that the three added predicates are closed. The three named weakenings are rowed and the rows are real. The recompute is not closed; see Q3.
+
+The other eleven stand.
+
+- A1. READ `dev_footbridge.c:432-436`: it reads `last_int`, then `pic1->irq_base` / `pic2->irq_base`. The global "write-only" sentence was false. `dev_gt.c`'s IACK arm returns `n`, and `dev_8259.c` only writes `irq_base`.
+- A2. READ `timer.c:283-290`: one signal calls `timer_tick` until the catch-up budget runs out. READ `dev_8253.c:109-128`: each tick increments the count, and `DEVICE_TICK` re-asserts while the count is positive. No deterministic single-count row. The band filing stands.
+- A3. The constant-false cell is real and `nonspec ip2` kills the measured mutant. A3 does not claim the other branch.
+- A5, A8, A9, A11, A12. The new rows match A5. SMM remains the empty `0x68` arm. The revert-to-previous-RR approximation still aliases `0x0a` in this probe because the prior OCW3 is the IRR read; the filing stays right. The re-assert sentence in the frozen docstring is limited to the ns16550s and the 8253.
+- A6. The principle is right, and the frozen file already has `spec polls` as a symptom. The correction in `F2B_RULINGS.md` matches L0.
+- A7. READ `build_rate_handler`: `s2` increments once per exception entry, after the poll and the specific EOI. The band is on that count. The FIX leg's storm value is inside `1..1000`. Rejecting the pending-count reading is right.
+- A10. Records only.
+
+## Q3
+
+Denominator swept, by construction, against the fix diff and the 23-mutant table (`SCORES.txt`: 20 killed, 3 escaped, the three disclosed):
+
+- `d->isr & bit`. Mask conjunct: `maskeoi isr` / `D_eoi_maskcond`. Line conjuncts: `D_eoi_n4`, `D_eoi_n3`, and `spec eoi one`. Operand swap to `ier`: `D_eoi_ier`. Body clears every bit: `B_spec_isr0`. Always-legacy: `eoi acked`. Always the ISR arm: `eoi noack` (an unacknowledged `0x64` would keep IRR bit 4). Closed.
+- One-shot `current_command = 0x0a`. Deleted: `M_sticky`, red on `poll once2`. Only after failure: `D_latch_cond`, red on `poll once2`. Only after success: `poll once` (the masked poll returns nothing, FIX wants IRR `0x10`). Closed. Restore-previous-RR stays the filed `i8259ocw3revert` alias.
+- Recompute. Constant-false: `nonspec ip2` / `D_deassert`. **Not observed:** delete the if/else; constant-true `INTERRUPT_ASSERT`; `if (d->irr)` with `~d->ier` removed. `if (~d->ier)` falls in with constant-true on this machine because the IMR is not all-ones. The catching row is the masked-remainder Cause read above. `nonspec ip2` does not kill any of those three.
+- GT `writeflag == MEM_READ`: `gt write isr` / `D_gt_write`. `n >= 0` kept versus dropped: `quiet iack` and `gtboth iack`. `n == 2 && pic2`: `D_gt_nocasc`, red on `gtcasc iack` `0x02`. `n2 >= 0` when `n2 < 0`: unreachable. Every ISA event refolds pic1 bit 2 from `pic2->irr & ~pic2->ier` (`bus_isa.c:58-61`) before it returns, and the helper does not set bit 2. `pic1 != NULL`: Malta always has pic1; MVME5500 is the disclosed other machine.
+- Still disclosed, still escaped, not new: `D_fold` (two slave sources; `nonspec ip2` is master-side only), `D_retire_anypic`, `D_retire_anyline`.

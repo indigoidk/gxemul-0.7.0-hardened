@@ -1,0 +1,24 @@
+VERDICT: SHIP WITH CHANGES -- Q3(c) unresolved CPU-line stall with two slave requests; Q1(iii) unresolved GT IACK line vs vector byte.
+
+Q3
+(a) DERIVED. The hybrid EOI is the right contained form. The legacy branch clears IRR and recalculates only when `old_irr & ~ier` differs from new, so a masked line’s IRR clear does not move the output. This matches HEAD for the un-acknowledged path.
+(b) DERIVED. In fixed priority mode, IRQ0 is highest priority, so the lowest set ISR bit is the highest-priority in-service bit. `d->isr & -d->isr` clears exactly that bit. Correct.
+(c) NOT CHECKABLE from the packet. The helper recomputes only `d->irq`. For pic2 that is ISA line 2. If `isa_interrupt_assert(2)` only folds into pic1 IRR bit 2 and does NOT also recompute pic1 output, then this sequence leaves a request pending with CPU line low:
+  1. Master ack clears pic1 IRR bit 2 and deasserts pic1 output.
+  2. Slave ack clears one slave request but another slave request remains, so pic2 reasserts line 2, setting pic1 IRR bit 2.
+  3. Pic1 output is not recomputed, so CPU line stays low despite a pending unmasked master request.
+Single fact needed: does `isa_interrupt_assert(2)` call `pic8259_interrupt_assert` or equivalent on pic1? If yes, no bug; if no, this is a real defect.
+(d) DERIVED. `pic1 == NULL` on MVME5500 is reachable; the guard returns `last_int` without acknowledging. `n2 < 0` is likely unreachable because pic1 bit 2 pending implies pic2 has an unmasked pending request, assuming bus_isa sets pic1 bit 2 only from pic2 irq. That invariant is not inlined.
+(e) DERIVED. With no priority logic, a second line’s request arriving while one is in service will be acknowledged immediately: the helper picks the lowest unmasked IRR bit regardless of ISR. The guest can take a nested interrupt on a lower-priority line while a higher-priority handler is still in service. HEAD also allowed nested interrupts because ISR was never set and EOI consumed IRR, but the fix now sets ISR and changes EOI semantics, making the missing priority logic more visible. This is filed as `i8259priority` and is not blocking if no guest depends on priority arbitration.
+
+Q4
+(a) DERIVED. The hybrid specific EOI legacy branch is HEAD-identical for machines whose vector read acknowledges nothing: no ISR is set, so the else branch clears IRR and recalculates exactly as HEAD. Non-specific EOI also does nothing when ISR is zero. If PReP/footbridge never use the OCW3 poll or GT IACK read, `i8259isrnever` narrows to `isaiackreaders` and can likely close. If they can use those paths, the sibling remains valid.
+(b) READ / DERIVED. The exposure record should also explicitly mention “GT IACK read acknowledged nothing” as part of the defect. The listed items—EOI consume, 8253 rate storm, mask-blind poll—are correct but incomplete. MED WRONG-RESULT remains appropriate.
+(c) DERIVED. The row list is reasonable. `pit8259pendingptr`, `pit8259count0`, `i8259cmdhalt`, `i8259ocw2nonspec`, `i8259pollmask`, `algorisaintclear`, `isaiackreaders`, `i8259ltim`, `i8259priority`, and the cascade CPU-line row cover the known gaps. If Q1(iii) confirms the GT IACK consumer expects a vector byte, add a row for `i8259gtvector`.
+(d) READ / DERIVED. The landing details are sound. A 2.5-minute per leg runtime is acceptable for a weekly battery if the budget allows; otherwise the rate session could be shortened. The equality check on 77 rows is the house idiom and appropriate.
+(e) READ. The re-pin is honestly recorded: `witness_20261025b` ran on unmodified HEAD before any fix measurement, with timestamps and binary hashes. The pass-1 witness is superseded, not wrong, and should be retained as historical evidence.
+
+Q5
+- The two-slave-requests CPU-line stall from Q3(c) is the most likely missed defect. The prescribed table lists D_fold as an owed row, but the real diff may still have the issue depending on `isa_interrupt_assert`.
+- Q1(iii) remains unresolved in this firing: if Linux’s `mips_pcibios_iack` expects a vector byte (`irq_base + n`) rather than a line number, the GT IACK read’s `odata = n` is wrong, and this was not addressed by the fix.
+- The missing priority logic is known and filed, but the fix makes it more consequential because ISR is now set and EOI semantics depend on it.

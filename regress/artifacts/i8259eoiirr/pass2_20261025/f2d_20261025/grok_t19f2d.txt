@@ -1,0 +1,35 @@
+I will verify the enumeration against the probe, the frozen twin, and the score artifacts, and I will not treat a prior seat's cells as already closed. The product sources stay in scope only to check that each added predicate's partition is complete.The enumeration is in `PRETABLE.out`. I will read that block against the product predicates and the new probe rows, starting with the rows that close the cells this seat named.The product diff’s branches are the denominator. Next I will check each new row against its mutant and test the disclosures that claim a cell is unreachable.VERDICT: RATIFY -- the v2g enumeration's cells are closed: each added predicate's body partition has a row that sees its mutant, or an honest disclosure.
+BREACHES: zero -- denominator: `pending == 0`; scan lowest-vs-highest; ISR-set and IRR-clear; retire guard (all-true, `n != 0`, `d != pic1`, NULL pointer, `count == 0`); recompute (unmasked remains, nothing remains, only masked remains); poll ternary; one-shot after success and after failure; `d->isr & bit` (in service unmasked, in service masked, not in service alone, not in service with another, masked and not in service) and `d->isr &= ~bit`; non-specific lowest bit; GT `writeflag`, `pic1 != NULL`, `n == 2 && pic2 != NULL` (cascade, non-cascade with slave work, `pic2 == NULL`), `n2 >= 0`, `n >= 0`.
+
+## Q1
+
+The partition in section 2 is the one the fix bodies induce. The product tree at HEAD is still the pre-fix PIC; the predicates are the pass-2 diff, and the v2g mutant diffs still apply to that fix. No cell of those branches is missing a row or a disclosure.
+
+The nine new rows are valid by construction. The inserted `mfc0` reads do not change old rows: `mfc0` writes only `s5` (ack) or `a3` (pit), neither is rewritten later (`e_ocw3_read` scratches `t3`, `e_delay` scratches `t4`), and it performs no device access. The next device read observes state the poll already committed. L0 still fails the old symptom rows in those sessions the same way.
+
+Checked harder because this seat named them:
+
+- `maskrem ip2` is the mask cell. Both UARTs pending, IMR `0x10`, poll acknowledges line 3, `mfc0` is the next instruction. `D_recompute_raw` (`if (d->irr)`) is 122/123 with that row as its only red: Cause bit 10 is 1 against a FIX expectation of 0. `ack ip2` stays green on that mutant, which is the right split: after the only line is cleared, `d->irr` and `d->irr & ~d->ier` agree. `maskrem irr after` (FIX `0x10` / HEAD `0x18`) is the precondition that bit 4 was kept, not the kill.
+- `ack ip2` and `pit ip2` are the nothing-remains cell. `D_recompute_true` and `D_recompute_none` are 118/123 and red on both, plus `maskrem ip2` and the rate rows. Expectation is 0, so a line `bus_isa` left high fails the row. On the 8253 path the count decrement does not itself drop Cause: the deleted recompute still reads 1.
+- `isrother irr4` is the widened EOI test. `D_eoi_anyisr` (`if (d->isr)`) is 122/123, sole red `isrother irr4` 1 against 0. L0 leaves that contract green (HEAD consumes too). `isrother isr` (FIX `0x08`) stays green on this mutant; it witnesses that bit 3 was in service.
+- `gtmask iack` and `gtmask isr8` are the dropped `n == 2` conjunct. `D_gt_nocasc2` is 121/123, reds exactly those two: 8 against 4, and slave ISR 1 against 0. `gtmask irr` requires master bits 2 and 4, so the slave has an unmasked request; masking line 2 does not clear it. Both rows are contracts and green on L0.
+
+`D_scan_high` was killed on the unchanged v2f instrument first (94/101, including `poll first` and `gtboth iack`), then again on v2g (`poll first` `0x84` want `0x83`, `isrother poll` the same, `gtboth iack` `0x04` against fix `0x08`). `maskrem poll` stays `0x83`: only one unmasked bit.
+
+READ: `SCORES.txt`, `table_v2f_extra/SCORES.txt`, `D_scan_high/RESULTS_D_scan_high.txt`, `legs_133457/L0/RESULTS.txt` (91/123, the 32 symptom rows and no others), `witness_20261025f` and `fixlegs_132736` (123/123 both columns), L3 `0/123` with `I8259EOI_PROBE_DONE`. DERIVED: register liveness and the branch each mutant takes, from the probe helpers and the six new diffs plus `D_deassert.diff` and `D_latch_cond.diff`. NOT CHECKABLE: the claimed md5 `c1fa683e` (shell denied). The working-tree builders and `fixlegs_132736/i8259_eoi_probe.frozen.py.txt` share the same `mfc0` sites and row tuples; a hash would settle the byte identity.
+
+## Q2
+
+Zero dispositions overturned.
+
+C1 stands: the three escapes are the disclosed ones, and the v2g table has no fourth. C2–C4 match the kills above, including the v2f-extra order (raw, `D_eoi_anyisr`, and `D_gt_nocasc2` escaped 101/101; true/none were rate consequence-kills until `ack ip2` and `pit ip2`). C5 matches `bus_isa.c`: `pic1`/`pic2` NULL are not guest-reachable on this malta instrument, and `n2 < 0` is unreachable while `isa_interrupt_common` re-folds bit 2 on every ISA assert/deassert, including a slave OCW1 through pic2's `isa.2` path. The `0x0a`/`0x0b` read arms are HEAD's lines. C6 matches `D_scan_high`. C9 matches the reds: `D_eoi_n3` is 120/123 on `eoi acked3`, `spec eoi one`, and `spec eoi both` only, so `spec isr both` stayed green. C7 and C8 are record corrections; `SCORES_v2f.txt` does name the `fixlegs_114055` copy. I did not re-fetch the Linux ICW2 extract.
+
+## Q3
+
+No enumerated cell lacks a row or a disclosure, and none of the unreachability disclosures is constructible on this machine.
+
+The retire-guard false conjuncts need a pending 8253 count of at least 2. `timer0_tick` increments that count from the host timer (`dev_8253.c`); at count 1, masking line 0, acknowledging some other line, then acknowledging line 0 ends at 0 for both the correct guard and `D_retire_anyline`, because the real line-0 acknowledge then finds the count already 0. `D_retire_anypic` is the same shape on slave line 0. The NULL pointer is the not-malta machine: malta's `DEVINIT(8253)` always publishes it, and the guest cannot clear it. Count 0 with line 0 already asserted does not occur: `DEVICE_TICK` asserts only while the count is positive, and the only live decrement is the line-0 acknowledge, which clears IRR in the same call. `bus_isa`'s own decrement is the dead snapshot taken before `DEVINIT(8253)`.
+
+`i8259ocw3revert` is a filed constant (`current_command = 0x0a`), not an unreachability claim. `nonspec lowest` already pins lowest-bit (`0x10`); a highest-bit clear would read `0x08` and fail that row. The mutant was not built. That disclosure is honest.
+
+One disclosure I do not treat as a breach. `D_fold` is named and escaped 123/123, so it is clause (e). Its parenthetical calls the two-slave case a stall owed as `i8259cascline`. Pass-2 P4 still holds on the current `bus_isa.c`: pic2's irq is the ISA line-2 path, so the recompute's `INTERRUPT_ASSERT` on a second slave request re-enters `isa_interrupt_assert`, sets bit 2, and raises the CPU line. `D_fold`'s explicit IRR poke is redundant with that assert, which is why a register table cannot see it. The case is disclosed either way.

@@ -1,0 +1,262 @@
+PRETABLE.out -- i8259eoiirr (#574) -- the PRE-TABLE CHECK, written 2026-10-25 08:1x BEFORE any mutant table ran
+(its mtime is the order proof).  Instrument: i8259_eoi_probe.py v2b, md5 2aa4570bd96f598a75d35987a3e8306e, 77 rows
+(18 symptom rows), banked both-legs run pass2_20261025/fixlegs_080950/ (HEAD 77/77, FIX 77/77, CONTROL OK both).
+Fix under test: design (G') in /tmp/gxt19/fix (binary e527ab18; dev_8259.c +78 -29, dev_gt.c +18 -1, devices.h +2).
+
+1. SIBLING PARITY (each edited arm against its nearest sibling; an asymmetry is a row owed or a sentence owed)
+   a. the specific-EOI arm (edited: ISR-only when in service, legacy consume otherwise) vs the non-specific arm
+      (edited: lowest ISR bit).  Rows: `eoi acked`, `eoi acked3`, `eoi noack`, `masked eoi` (specific); `nonspec
+      lowest`, `nonspec twice` (non-specific).  Asymmetry: the non-specific arm has NO legacy-consume branch (on HEAD
+      its IRR effect was `irr &= ~isr` with isr always 0 -- a no-op), so an un-acknowledged 0x20 consumes nothing in
+      either column.  SENTENCE OWED, recorded here: that is HEAD's behaviour kept, not a new refusal.
+   b. the `case 0x0c` read arm (edited: acknowledges, one-shot) vs the `default` read arm (untouched, byte-identical:
+      the raw scan).  Rows: `poll byte`, `poll isr`, `poll irr4`, `poll once`, `poll masked`, `quiet poll`.  The
+      default arm has NO row: a read with current_command == 0 is OUTSIDE the contract (disclosed in the docstring).
+   c. the two acknowledge sites: the poll read (pic1 rows `ack*`, pic2 rows `casc*`) vs the GT IACK read (`gt*`,
+      `gtcasc*`).  Both rowed on both PICs.  Not rowed: a GT IACK read with NOTHING pending (returns last_int, as
+      HEAD; OUTSIDE), a GT IACK WRITE (the read-only guard; no malta guest writes it; OUTSIDE), the MVME5500 path
+      (pic1 == NULL; no witness machine; OUTSIDE).
+   d. pic1 vs pic2: the poll, the EOI and the GT path are rowed on pic2 through the mc146818 line (`casc*`,
+      `gtcasc*`); a MASKED poll on pic2 is not rowed (OUTSIDE; the mask logic is the same helper line).
+
+2. CLAIM -> ROW (every added comment sentence asserting an observable consequence)
+   "resets the highest-priority in-service bit (the lowest set ISR bit)"           -> `nonspec lowest`, `nonspec twice`
+   "when the line is in service ... resets that ISR bit and leaves the request"   -> `eoi acked`, `eoi acked3`, `eoi acked isr`
+   "when it is NOT ... the EOI still consumes the request as it always did"       -> `eoi noack`, `masked eoi`
+   "the read after an OCW3 poll ... is the interrupt acknowledge"                  -> `poll isr`, `poll irr4`, `poll3 isr`
+   "of the highest unmasked request -- the raw irr scan returned masked lines"     -> `poll masked`, `poll first`/`poll second`
+   "One read per poll: later reads return the IRR"                                 -> `poll once`
+   "Line 0 of pic1 is the 8253, whose pending-event count is retired here"         -> `rate storm` (band), `pit poll irr0`
+   "a PCI interrupt-acknowledge READ is the acknowledge ... then in pic2"          -> `gt isr`, `gt irr4 after`, `gtcasc isr2`, `gtcasc isr8`
+   "Nothing pending, no ISA PICs, or a write: last_int, as before"                 -> NO ROW (1c) -- sentence owed, recorded here
+   "pic2's irq is the cascade line (bus_isa.c folds it into pic1 bit 2)"           -> `casc irr2`, `gtcasc irr2` (controls)
+
+3. GUARD FIELD vs BODY FIELD (per predicate the fix depends on; the partition the body induces; who writes each)
+   specific-EOI hybrid predicate `d->isr & bit` -- body reads `d->irr`, `d->ier`, `d->irq`.  isr bit written by: the
+   helper (set), both EOI arms (clear), DEVINIT (memset).  irr bit written by: bus_isa assert/deassert/fold, the
+   helper (clear), the legacy branch (clear).  The four (isr bit, irr bit) cells for line 4: (1,0) after an ack with no
+   re-assert -> `poll irr4`/`eoi acked isr`; (1,1) ack + re-assert -> `eoi acked`; (0,1) -> `eoi noack`; (0,0) ->
+   `quiet *`.  Line 3: (1,1) `eoi acked3`, (1,0) `poll3 isr`.  Line 0: (1,0) `pit poll irr0`.  ier bit {0,1}: `masked
+   eoi` (ier 1, isr 0) and `poll masked`.  EXHAUSTED for lines 4 and 3 on the body-tested cells; SAMPLED on line 0.
+   helper `pending = irr & ~ier` {0, >0}: `quiet poll` (0) and every ack row (>0); `d == pic1 && n == 0 && ptr != NULL
+   && *ptr > 0`: (pic1, n 0, >0) -> `rate storm`, `pit poll irr0`; (pic1, n != 0) -> `poll isr` etc.; (pic2) ->
+   `casc isr8`, `gtcasc isr8`; (ptr NULL) UNREACHABLE on malta (DEVINIT(8253) always publishes) -- disclosed.
+   `current_command` {0x0a, 0x0b, 0x0c, other}: 0x0c rowed everywhere; 0x0a/0x0b rowed as the readbacks; `other`
+   (the default arm) OUTSIDE -- disclosed.
+   G4 `writeflag == MEM_READ` {read, write}: write cell UNROWED (no malta guest writes the IACK register) -- disclosed;
+   `n == 2 && pic2 != NULL` -> `gtcasc *`; `n2 >= 0` vs `n2 < 0`: n2 < 0 needs master bit 2 folded with no unmasked
+   slave request -- the fold is recomputed on every ISA event, so the cell is UNREACHABLE short of a masking race;
+   disclosed.
+
+4. CHANNEL (per symptom row: the mutant it kills and the observable that differs under it)
+   poll isr        M_noack_isr (helper does not set ISR)             ISR reads 0x00 instead of 0x10
+   poll irr4       M_noack_irr (helper does not clear IRR)           IRR bit 4 reads 1 instead of 0
+   poll once       M_sticky   (no revert to 0x0a after the ack)      second read 0x84/0x80 instead of the IRR
+   eoi acked       B_eoi      (the EOI arm's IRR clear reinstated, unconditional)   IRR bit 4 reads 0 instead of 1
+                   D_eoi_n4   (`(d->isr & bit) && (idata & 7) != 4`)                 same channel
+                   D_eoi_ier  (`d->ier & bit` in place of `d->isr & bit`)            same channel (line 4 unmasked)
+   eoi acked3      D_eoi_n3   (`... && (idata & 7) != 3`)            IRR bit 3 reads 0 instead of 1
+   poll3 isr       M_noack_isr                                       ISR 0x00 instead of 0x08
+   poll masked     D_scan_raw (`irr` in place of `irr & ~ier`)       0x84 instead of 0x00
+   poll second     M_noack_irr                                       0x83 instead of 0x84
+   isr both        M_noack_isr                                       0x00 instead of 0x18
+   nonspec lowest  B_nonspec  (`isr = 0` reinstated)                 0x00 instead of 0x10
+   casc isr2       M_noack_isr (pic1 path), B_poll                   0x00 instead of 0x04
+   casc isr8       M_noack_isr (pic2 path)                           0x00 instead of 0x01
+   pit poll irr0   M_noack_irr (line 0)                              1 instead of 0
+   gt isr          B_gt       (the IACK read reverted to last_int)   0x00 instead of 0x10
+   gt irr4 after   B_gt                                              1 instead of 0
+   gtcasc isr2     B_gt, D_gt_nocasc (the `n == 2` branch dropped)   0x00 instead of 0x04 (isr8 likewise)
+   rate storm      D_noretire (the decrement dropped), M_noack_irr   thousands of deliveries instead of 1..1000
+   VACUOUS-BY-CONSTRUCTION check: every row above names a register or count that the named mutant changes; no row is
+   a survive-only oracle.  Two mutant shapes have NO row and are recorded as EXPECTED ESCAPES, disclosed: D_gt_write
+   (the read-only guard dropped: a WRITE to the IACK register would acknowledge; no row writes it) and D_fold (the
+   manual cascade pre-fold re-added, the F2 defect: it strands a second slave request with the CPU line LOW -- a
+   CPU-line observable with two slave sources pending, which no register row reads; OWED as a filed row, not built
+   here, because the probe has no two-slave-source session).
+
+5. THE PRESCRIBED TABLE (run from frozen copies in scratch clones under /tmp/gxt19/m_*, each with its own sentinel;
+   the FIX column via GATE mode; score = rows green of 77; a mutant is KILLED when any row reds)
+   (a)  L0: the base binary in GATE mode (the pre-fix build against the FIX column)     expected 59/77 (18 symptom reds)
+   (c)  L3: /bin/false in GATE mode (the null medium)                                    expected CONTROL=FAIL, 0/77
+   (b)  B_eoi: both EOI arms' IRR clears + recalcs reinstated verbatim (hybrid removed)   expected killed (eoi acked*)
+        B_poll: the 0x0c read arm reinstated verbatim (raw scan, no ack, sticky)         expected killed (poll*, casc*)
+        B_gt: the GT IACK case reinstated verbatim                                       expected killed (gt*, gtcasc*)
+        B_nonspec: `isr = 0` reinstated in the 0x20 arm                                  expected killed (nonspec lowest)
+   (d)  D_eoi_n4, D_eoi_n3, D_eoi_ier, D_scan_raw, D_noretire, M_sticky, D_gt_nocasc, M_noack_isr, M_noack_irr,
+        D_gt_write (expected ESCAPE, disclosed), D_fold (expected ESCAPE on register rows, disclosed; owed CPU-line row)
+   This list is DIFFED against any later row rewrite (the #490 lesson): a rewrite that drops a prescribed mutant or its
+   row has dropped an obligation.
+
+INSTRUMENT REVISION before table 1: v2c, md5 13490a35e2592dfb876189c4e55695aa (v2b plus a dead-medium fast path in run_session;
+rows unchanged, 77/77 both legs re-measured: pass2_20261025/fixlegs_082756/).  Appended 2026-10-25 08:33:08.
+
+CORRECTION, 2026-10-25 08:5x (before the table on the revised instrument; the pass-2 adjudicator GPT-6 Astra, DO NOT SHIP, Q2):
+ * The CHANNEL line for `poll once` was WRONG.  As built in v2c (`build_ack`), the second read followed a second poll made with
+   NOTHING pending, so a sticky poll of an empty IRR and the intended IRR read both return 0x00: M_sticky was predicted KILLED by a
+   row that cannot see it.  v2d moves the one-shot row to the MASKED session -- the masked poll acknowledges nothing, the request
+   stays pending, and the next command-port read returns the IRR 0x10 (one-shot) vs the poll byte 0x00 (sticky) vs 0x84 (HEAD).
+   The v2c row is kept under the honest name `poll again` (it measures HEAD's unconsumed request, not the latch).
+ * An UNPRESCRIBED (d) shape: dropping `if (n >= 0) odata = n;` in the GT read leaves `last_int` while both acknowledges run; the
+   single-source rows `gt iack` (4) and `gtcasc iack` (8) stay green because last_int equals the acknowledged line there.  v2d adds
+   the session `gtboth` (UART IRQ 4 and RTC IRQ 8 pending together): the acknowledge returns 8 (line 2 outranks line 4), HEAD's
+   flat scan returns 4.  Prescribed mutant D_gt_noassign: `if (n >= 0) odata = n;` -> `;`.  Expected: killed by `gtboth iack`.
+ * The table on v2c (SCORES.txt, first run) stands as the record of what it measured; the table of record is re-run on v2d, every
+   mutant, from the frozen v2d copy.
+
+v2e BLOCK, 2026-10-25 11:23:49 (after the pass-2 ADJUDICATION F2b -- six RATIFY WITH CHANGES, the diff unchanged -- and BEFORE the v2e table of
+record; the candidate cells were MEASURED against the v2d instrument first, run_extra19.sh -> table_v2d_extra/SCORES.txt):
+
+1. THE CELLS F2b NAMED, and how each measured against v2d (the floor says a breach is measured, never inferred):
+   D_eoi_maskcond   `if (d->isr & bit)` -> `if ((d->isr & bit) && !(d->ier & bit))`      ESCAPED 84/84
+                    (d) the fix's added predicate qualified by the mask: Linux's mask-then-EOI order takes the legacy branch
+   D_latch_cond     `d->current_command = 0x0a` -> `if (i < 0) d->current_command = 0x0a`  ESCAPED 84/84
+                    (d) the added one-shot statement conditioned on an UNSUCCESSFUL poll (the v2d row sits in the masked session)
+   B_spec_isr0      `d->isr &= ~bit` -> `d->isr = 0` in the specific-EOI arm                ESCAPED 84/84
+                    (body) a specific EOI clearing the whole ISR: no v2d specific EOI ran with two service bits set
+   D_deassert       the helper's recompute -> an unconditional INTERRUPT_DEASSERT            ESCAPED 84/84
+                    (d) the added predicate `d->irr & ~d->ier` weakened to constant false: a CPU-line observable
+   D_gt_always      `if (n >= 0) odata = n` -> `odata = n`                                  ESCAPED 84/84
+                    (d) the GT read with nothing pending hands back -1
+   D_retire_anypic  the retire guard without `d == p->pic1`                                  ESCAPED 84/84
+   D_retire_anyline the retire guard without `n == 0`                                        ESCAPED 84/84
+                    (d) DISCLOSED cells (D5): observable only with a pending count >= 2, which only host time produces --
+                    filed pit8253retireguard with the band-row construction; NOT rowed in v2e
+   A cell F2b named that no mutant was built for: the two-SLAVE-request stall (D_fold) stays the owed i8259cascline row.
+
+2. THE v2e ROWS -- CHANNEL per row (the mutant it kills; the observable that differs under it):
+   maskeoi isr      D_eoi_maskcond      ISR reads 0x10 instead of 0x00 after EOI 0x64 of the acknowledged, then masked, line 4
+   poll once2       D_latch_cond        the command-port read after the SUCCESSFUL poll of line 3 (line 4 pending) reads 0x84
+                                        instead of the IRR 0x10 (HEAD 0x83)
+   spec eoi one     B_spec_isr0         ISR reads 0x00 instead of 0x10 after EOI 0x63 with lines 3 and 4 in service
+   nonspec ip2      D_deassert          CP0 Cause bit 10 reads 0 instead of 1 right after the acknowledge of line 3 with line 4
+                                        pending (the CPU line, read synchronously; Status.IE is clear in every register session)
+   quiet iack       D_gt_always         the GT IACK read with nothing pending reads 0xffffffff instead of last_int 0
+   gt write isr     D_gt_write          ISR reads 0x10 instead of 0x00 after a WRITE to the IACK register with line 4 pending
+                                        (the v2d disclosed escape becomes a kill)
+   spec isr both, spec polls, maskeoi irr4/poll/imr: the new sessions' own liveness and both-columns device values.
+   KINDS: the both-columns DEVICE values (poll byte, poll3 byte, poll first, casc poll, casc slave poll, pit poll, gt iack,
+   gtcasc iack, rate poll byte, quiet iack, maskeoi poll, spec polls) are CONTRACT rows from v2e on, not controls -- a model
+   value pinned either way is a contract about the model; a mutant that reds one is KILLED, not an instrument failure (F2b:
+   Grok, DeepSeek, GLM B, Astra; GLM A dissented and was outvoted by argument, not count).
+   VACUOUS-BY-CONSTRUCTION check: each row above names a register, a Cause bit or a value that its named mutant changes.
+   `nonspec ip2` is a CONTRACT row (1 in both columns) that kills a mutant: the CPU line is asserted on HEAD too.
+
+3. THE PRESCRIBED TABLE OF RECORD on v2e (ALL 23 mutants from the frozen v2e copy; every mutant re-run, the v2d table kept as
+   table_v2d/ + SCORES_v2d.txt): the 16 of the first list -- expected unchanged except that D_gt_write becomes KILLED (gt write
+   isr) -- plus the 7 above, expected: D_eoi_maskcond, D_latch_cond, B_spec_isr0, D_deassert, D_gt_always KILLED by their
+   named rows; D_retire_anypic and D_retire_anyline ESCAPED (disclosed); D_fold ESCAPED (disclosed).  This list is DIFFED
+   against any later row rewrite (the #490 lesson).
+
+CORRECTION to the v2e block, 2026-10-25 11:37:34 (before the table of record; from the v2e cycle's own L0 leg, legs_113314): the block
+listed `spec polls` among "the new sessions' own liveness and both-columns device values".  It is NOT both-columns: HEAD's
+second poll re-reports line 3 (0x8383) where the fix acknowledges line 4 (0x8384) -- the same fact `poll second` already pins.
+The L0 leg showed it red as a contract row (75/101 with 25 `[FIX] FAIL` lines, the 26th red being this row); it is relabelled a
+SYMPTOM row in v2f (the instrument re-pinned as witness_20261025e and re-measured; no other change).  26 symptom rows.
+
+v2g BLOCK, 2026-10-25 13:42:29 (after the repair's own pass F2c -- six RATIFY-class answers, one NOT RATIFY refuted by argument -- and BEFORE the
+v2g table of record).  F2c found cells of the SAME CLASS F2b found (unobserved cells of the fix's own predicates), so this
+revision is the CLASS CLOSURE the repair-chain amendment requires: the enumeration below is what the closing pass verifies.
+
+1. THE F2c CELLS, measured against the UNCHANGED v2f instrument first (run_extra2_19.sh -> table_v2f_extra/SCORES.txt):
+   D_recompute_raw   the recompute's mask term dropped (`if (d->irr)`)                        ESCAPED 101/101
+   D_recompute_true  the recompute replaced by an unconditional ASSERT                        KILLED 99/101
+   D_recompute_none  the recompute deleted                                                    KILLED 99/101
+   D_eoi_anyisr      `if (d->isr & bit)` -> `if (d->isr)`                                     ESCAPED 101/101
+   D_gt_nocasc2      `if (n == 2 && p->pic2 != NULL)` -> `if (p->pic2 != NULL)`               ESCAPED 101/101
+   D_scan_high       the scan picks the highest pending line                                  KILLED 94/101
+
+2. THE ENUMERATION -- every predicate the product diff adds, the partition its own body induces, one row or one disclosure per cell:
+   pic8259_acknowledge():
+     `pending == 0` (pending = irr & ~ier)   empty -> -1: quiet iack, poll masked, poll once | non-empty: every acknowledge row
+                                             mutant D_scan_raw (`irr` for `irr & ~ier`): masked irr4, poll masked, poll once
+     the scan (lowest set bit first)         one line: every ack row | two lines on one PIC: poll first 0x83, gtboth iack 8
+                                             mutant D_scan_high: measured above
+     ISR set / IRR cleared                   M_noack_isr (poll isr, poll3 isr, isr both, casc isr2/isr8, gt isr ...), M_noack_irr
+     the retire guard (pic1 && n == 0 &&     (pic1, line 0, count > 0): pit poll irr0 + rate storm (D_noretire) | (pic1, other
+       ptr && *ptr > 0)                      line): D_retire_anyline DISCLOSED | (pic2, line 0): D_retire_anypic DISCLOSED --
+                                             both observable only with a pending count >= 2, which only host time produces;
+                                             filed pit8253retireguard with the band-row construction | ptr NULL: no 8253 on the
+                                             machine (not malta) DISCLOSED | count == 0 with line 0 asserted: unreachable (the
+                                             tick asserts only while count > 0) DISCLOSED
+     the recompute `d->irr & ~d->ier`        unmasked request remains -> ASSERT: nonspec ip2 (D_deassert) | nothing remains ->
+                                             DEASSERT: ack ip2, pit ip2 (D_recompute_true, D_recompute_none) | only a MASKED
+                                             request remains -> DEASSERT: maskrem ip2 (D_recompute_raw)
+   the poll read arm (case 0x0c):
+     `i < 0 ? 0x00 : 0x80 | i`               nothing: quiet poll, poll masked | a line: every poll byte row
+     the one-shot `current_command = 0x0a`   after a successful poll: poll once2 (D_latch_cond, M_sticky) | after an
+                                             unsuccessful poll: poll once (M_sticky) | the revert TARGET (IRR, not the last
+                                             RR/RIS selection): filed i8259ocw3revert DISCLOSED
+   the specific-EOI arm `if (d->isr & bit)`  (in service, unmasked): eoi acked, eoi acked3 (B_eoi, D_eoi_n4, D_eoi_n3,
+                                             D_eoi_ier) | (in service, masked): maskeoi isr (D_eoi_maskcond) | (not in service,
+                                             nothing in service): eoi noack | (not in service, ANOTHER in service): isrother irr4
+                                             + isrother isr (D_eoi_anyisr) | (masked, not in service): masked eoi
+     the body `d->isr &= ~bit`               exactly its bit: spec eoi one (B_spec_isr0)
+     the legacy branch's recalc              HEAD's unchanged lines -- not a cell of the diff
+   the non-specific arm (lowest ISR bit)     nonspec lowest, nonspec twice (B_nonspec); highest-instead: by construction (0x10
+                                             vs 0x08) -- not built, DISCLOSED as by-construction
+   dev_gt.c GT_PCI0_INTR_ACK:
+     `writeflag == MEM_READ`                 write: gt write isr (D_gt_write) | read: every gt row
+     `pic1 != NULL`                          NULL (MVME5500): UNOBSERVABLE on a one-machine instrument DISCLOSED
+     `n == 2 && pic2 != NULL`                cascade with slave work: gtcasc, gtboth (D_gt_nocasc, B_gt) | non-cascade with
+                                             slave work pending: gtmask iack, gtmask isr8 (D_gt_nocasc2) | pic2 NULL:
+                                             UNOBSERVABLE DISCLOSED
+     `n2 >= 0`                               >= 0: gtcasc iack 8, gtboth iack 8 | < 0 (spurious cascade): unreachable while
+                                             bus_isa re-folds bit 2 on every ISA event DISCLOSED (named in the contract)
+     `n >= 0`                                >= 0: gt iack, gtboth iack (D_gt_noassign) | < 0: quiet iack (D_gt_always)
+   OUTSIDE the enumeration, disclosed: D_fold (the two-SLAVE-request stall: a CPU-line observable with two pic2 sources; owed
+   as i8259cascline; nonspec ip2 and the v2g Cause rows see only the master-side recompute).
+
+3. THE v2g ROWS -- CHANNEL per row (the mutant it kills; the observable that differs under it):
+   ack ip2           D_recompute_true, D_recompute_none   Cause bit 10 reads 1 instead of 0 right after the only line is acknowledged
+   pit ip2           D_recompute_true, D_recompute_none   the same with the 8253 as the source (the event retired, nothing remains)
+   maskrem ip2       D_recompute_raw (+ true, none)       Cause bit 10 reads 1 instead of 0 with only a MASKED request remaining
+   maskrem irr after (precondition)                       0x10: bit 3 acknowledged, the masked bit 4 kept (HEAD 0x18)
+   isrother irr4     D_eoi_anyisr                         IRR bit 4 reads 1 instead of 0 after EOI 0x64 of a line NOT in service
+   isrother isr      (symptom)                            ISR keeps bit 3: 0x08 (HEAD 0x00)
+   gtmask iack       D_gt_nocasc2                         the GT read returns 8 instead of 4 with the cascade line masked
+   gtmask isr8       D_gt_nocasc2                         slave ISR bit 0 reads 1 instead of 0
+   gtmask isr        (symptom)                            master ISR 0x10 (HEAD 0x00)
+   maskrem both irr / imr / poll, isrother both irr / poll, gtmask irr / imr: the new sessions' preconditions and both-columns
+   device values (contract).
+   VACUOUS-BY-CONSTRUCTION check: every row above names a register, a Cause bit or a value that its named mutant changes.
+
+4. THE PRESCRIBED TABLE OF RECORD on v2g (ALL 29 mutants from the frozen v2g copy; the v2f table kept as table_v2f/ +
+   SCORES_v2f.txt): the 23 of the v2f list -- expected unchanged -- plus the 6 above, expected: D_recompute_raw,
+   D_recompute_true, D_recompute_none, D_eoi_anyisr, D_gt_nocasc2 KILLED by their named rows; D_scan_high KILLED by poll first /
+   gtboth iack; D_fold, D_retire_anypic, D_retire_anyline ESCAPED (disclosed).  This list is DIFFED against any later row
+   rewrite (the #490 lesson).
+
+=== CORRECTION 2026-10-25 16:0x -- appended AFTER the table of record (13:43-15:31), from the class-closure verification pass F2d
+=== (pass2_20261025/f2d_20261025/F2D_RULINGS.md).  Records only; no measurement in this file changes.  Each item quotes what it
+=== refutes.
+1. THE RETIRE GUARD (v2g block, lines "the retire guard (pic1 && n == 0 && ptr && *ptr > 0)"): the sentence "both observable only
+   with a pending count >= 2, which only host time produces; filed pit8253retireguard with the band-row construction" is
+   WITHDRAWN (F2d D1: Astra and GLM B; dev_8253.c:118-129 asserts line 0 on every tick while the count is positive, the only retire
+   is pic8259_acknowledge's).  With ONE event in and line 0 masked, a foreign acknowledge (another master line by the poll; the
+   slave's line through the GT cascade) followed by the LEGACY specific EOI of line 0 (not in service: HEAD's consume, no retire)
+   and the next tick reads IRR bit 0 = 1 on the fix and 0 on D_retire_anyline / D_retire_anypic.  The two cells are therefore
+   OWED REPAIR (clause (d) by its letter: body-tested conjuncts of a predicate the fix adds, reachable, measured escapes), NOT
+   disclosed away.  The repair was attempted and classifier-stopped at 15:5x and, by the standing rule for a stopped attempt, is
+   not retried in this round; it is carried by the row pit8253retireguard.  The cell (pic2, line != 0) was UNLISTED (F2d D2, GLM A)
+   and is added here with the same disposition (no single-conjunct mutant fires only there; owed with the pair).
+2. MAPPINGS (F2d D4, Astra): the non-specific arm with an EMPTY ISR is a no-op in both columns (HEAD's isr = 0 on an all-zero ISR;
+   the fix's lowest-bit clear finds no bit) -- disclosed at 1.a above since 08:1x, now a cell of the v2g enumeration; "non-cascade
+   acknowledge WITHOUT slave work" maps to the gt session's rows (line 4 acknowledged, slave ISR 0), gtmask being the case WITH
+   slave work pending.
+3. THE NON-SPECIFIC ARM'S "highest-instead: by construction (0x10 vs 0x08) -- not built": stands as a disclosure and is OWED as a
+   mutant (D_nonspec_high; F2d D6), filed with pit8253retireguard.
+4. B_eoi's PRESCRIPTION (section (b) above: "both EOI arms' IRR clears + recalcs reinstated verbatim (hybrid removed)") vs the
+   mutant built: B_eoi.diff edits the specific-EOI arm only (the ISR-branch condition), B_nonspec.diff the 0x20 arm's ISR clear
+   only; neither reinstates HEAD's `irr &= ~isr` at the non-specific arm (a no-op on HEAD, live under the fix).  Clause (b) is
+   discharged for the ISR half (B_nonspec 122/123, nonspec lowest) and OWED for the IRR half (one mutant; F2d D7), filed with
+   pit8253retireguard.
+5. CHRONOLOGY (F2d D5, Astra): the v2g block header's "measured first as mutants against v2f" overstates the order.  The v2f-extra
+   sweep ran 13:23:36 - 13:42:08 (table_v2f_extra/SCORES.txt); the v2g re-pin on unmodified HEAD started 13:23:56
+   (witness_20261025f, banked 13:27:36) and both legs 13:27:36 (fixlegs_132736, banked 13:34:57): CONCURRENT, on separate scratch
+   clones.  The sweep completed before this block (13:42:29) and before the table of record (13:43:16); the re-pin preceded the
+   first FIX measurement of v2g.  Values unaffected.
+6. ROSTER ARITHMETIC (F2d D12.i): the v2g block header's "six RATIFY-class answers, one NOT RATIFY" reads FIVE RATIFY-class answers
+   plus one NOT RATIFY -- six answers in all (F2C_RULINGS.md lines 3-7 list them correctly).
+7. The probe docstring (regress/i8259_eoi_probe.py:124-126) carries the withdrawn ">= 2" sentence; the shipped copy is left byte-
+   identical to the measured frozen copy and the sentence is corrected with the pit8253retireguard repair.

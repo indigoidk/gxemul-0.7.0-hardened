@@ -1,0 +1,84 @@
+VERDICT: RATIFY WITH CHANGES -- the new rows close the three prior holes; correct the enumeration mappings, disclosure wording, and measurement chronology. Provisional until the roster completes.
+BREACHES: zero -- denominator: acknowledge selection/state updates, retire-guard cells, three recompute cells, poll result/latch cells, specific-EOI predicate/body, non-specific ISR cases, and five GT guards, including the disclosed exclusions assessed below.
+
+**Q1 — Enumeration and new rows**
+
+**READ:** The working probe and frozen v2g copies match MD5 `c1fa683e3a9295eb62491af043189500`. The packet’s instrument diff matches the actual v2f→v2g diff.
+
+**READ / DERIVED:** The three previous holes have valid discriminators. The distinction between those discriminators and their companion observations matters:
+
+| New row | Construction and mutant sensitivity |
+|---|---|
+| `ack ip2` | Acknowledging the sole pending UART request clears Cause.IP2. `D_recompute_true` and `D_recompute_none` produce **1 instead of 0**. |
+| `pit ip2` | The same immediate recompute observation for IRQ0: those mutants produce **1 instead of 0**. |
+| `maskrem ip2` | IRQ3 is acknowledged while IRQ4 remains masked. `D_recompute_raw` produces **1 instead of 0**. |
+| `maskrem irr after` | Correctly observes `0x10`. **Remains green under `D_recompute_raw`**: it witnesses retained masked work, not correct CPU-line recomputation. |
+| `isrother irr4` | EOI4 follows acknowledgement of IRQ3 only. `D_eoi_anyisr` produces **1 instead of 0** by incorrectly skipping the legacy consume. |
+| `isrother isr` | Correctly observes retained ISR3, `0x08`. **Remains green under `D_eoi_anyisr`**. |
+| `gtmask iack` | With cascade masked, master acknowledgement selects IRQ4. `D_gt_nocasc2` produces **8 instead of 4**. |
+| `gtmask isr8` | The same mutant incorrectly acknowledges the slave: **1 instead of 0**. |
+| `gtmask isr` | Correctly observes master ISR4, `0x10`. **Remains green under `D_gt_nocasc2`**. |
+
+These companion rows are valid. They must not be counted as independent kills of the associated predicate mutant. The individual mutant results confirm precisely these distinctions. [Probe builders and rows](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/i8259_eoi_probe.py:485), [table of record](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/i8259eoiirr/killtable_20261025/SCORES.txt).
+
+**READ / DERIVED:** The inserted `mfc0` instructions use otherwise unused capture registers and have no direct device side effect. Recorded old observations remain correct. However, “touches no device” alone does not prove invariance under every tick phase: each insertion adds an executed instruction. The banked measurements support the narrower claim that no old row regressed in these runs. [CP0 read implementation](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips_instr.c:2439).
+
+Two enumeration mappings should be explicit:
+
+- **Empty ISR at non-specific EOI:** `nonspec lowest/twice` enter with ISR `0x18` and `0x10`; neither exercises entry with zero. The earlier PRETABLE already discloses the zero-ISR no-op. Carry it into the v2g enumeration. Removing the guard is equivalent at zero because the bit-clearing expression remains zero.
+- **Non-cascade acknowledgement without slave work:** map this explicitly to `gt`; `gtmask` supplies the distinct case with slave work pending.
+
+These are mapping corrections, not undisclosed behavioral escapes. [Inherited disclosure](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/i8259eoiirr/killtable_20261025/PRETABLE.out:7).
+
+**Q2 — C1–C9**
+
+**READ / DERIVED:** I overturn **zero substantive dispositions**, with these required qualifications:
+
+| Disposition | Ruling |
+|---|---|
+| C1 | Uphold: three expressly disclosed escapes do not themselves establish three breaches. Correct the retirement rationale below. |
+| C2 | Amend “v2f rows only the first” to **“v2f directly samples only the first.”** The true/none mutants already failed two rate rows, scoring `99/101`. |
+| C3 | Uphold. `isrother irr4` directly closes my any-ISR finding. |
+| C4 | Uphold. `gtmask iack/isr8` directly close my dropped-cascade-conjunct finding. |
+| C5 | Uphold within this Malta instrument. Slave masking invokes its interrupt callback and synchronously refolds cascade bit 2; it does not supply a stale-cascade counterexample. |
+| C6 | Uphold. Highest-first selection is measured red on both instruments. |
+| C7 | Uphold the corrected arithmetic: 13 explicit rows plus four liveness rows, `84→101`. |
+| C8 | Uphold the qualification that the Linux extract is relayed rather than independently version-pinned. |
+| C9 | Uphold the technical distinction; correct the attribution. The coherent over-catch observation is GLM A’s; Astra supplied the prerequisite-versus-kill distinction. |
+
+C5 is supported by the [OCW1 recalculation](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_8259.c:212) and [ISA cascade fold](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/bus_isa.c:58).
+
+**READ:** Also correct the roster arithmetic: the six F2c answers comprise **five RATIFY-class answers and one NOT RATIFY**, not six plus one. [F2c roster](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/i8259eoiirr/pass2_20261025/f2c_20261025/F2C_RULINGS.md:3).
+
+**NOT CHECKABLE within the permitted record:** whether the asserted filing/draft corrections were actually applied; the saved amendment for each named record would settle that. An exact version-pinned Linux extract would settle the independent-source limitation in C8.
+
+**Q3 — Measurements, disclosures, and closure**
+
+**READ:** The recorded numerical results agree:
+
+| Measurement | Verified result |
+|---|---|
+| Six v2f-extra mutants, packet order | `101, 99, 99, 101, 101, 94` out of 101; controls OK |
+| v2g HEAD witness | `123/123`, controls OK |
+| v2g both legs | HEAD `123/123`; FIX `123/123`; controls OK |
+| Rate in both-leg run | HEAD `0x1c84`; FIX `0x03`, within their respective bands |
+| L0 | `91/123`; exactly 32 symptom failures; controls OK |
+| L3 | `0/123`; control failure; completion sentinel present |
+| v2g table | All 29 individual result totals agree with SCORES: **26 killed, three disclosed escapes** |
+| Historical v2f cycle | Witness/both legs `101/101`; L0 `75/101`, 26 symptom failures; L3 `0/101`; table `20/3` |
+
+The baseline identity names archive `94b247db`. A read-only comparison found **no `src/` differences between that revision and `fa66b70d`**, resolving the relevant source-provenance discrepancy.
+
+**READ — chronology correction required:** Section 4’s “in this order” is inaccurate. The v2f-extra sweep ran **13:23:36–13:42:08**, overlapping the v2g witness beginning **13:23:56** and both-leg run beginning **13:27:36**. For example, the old-instrument `D_eoi_anyisr` measurement began **13:32:57**. Thus all candidate measurements did **not** precede the re-pin. What is supported is:
+
+**v2f-extra completion 13:42:08 → enumeration block 13:42:29 → v2g table 13:43:16.**
+
+Correct the historical claim; the measurement values remain valid. [Extra sweep](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/i8259eoiirr/killtable_20261025/table_v2f_extra/SCORES.txt), [witness identity](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/i8259eoiirr/witness_20261025f/RUN_IDENTITY.txt).
+
+**DERIVED — disclosure corrections required:**
+
+- `pit ip2` establishes an empty unmasked **PIC request set**, not an empty timer backlog. The session never measures that backlog. `D_noretire` is killed by `rate storm`; neither immediate PIT row proves retirement.
+- “Observable only with pending count ≥2” is too strong. With count one, a foreign acknowledgement can prematurely consume it; clearing masked IRQ0 through its legacy EOI and observing the next PIT tick can distinguish correct reassertion from the mutant. Establishing that backlog still depends on host timing. I therefore retain the disclosed timing debt, but reject the claimed ≥2 necessity. [Timer count and assertion](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_8253.c:109).
+- Reconcile the inherited `B_eoi` description: PRETABLE prescribes restoration in **both** EOI arms, whereas the actual mutant changes only specific EOI. Non-specific IRR preservation is not measured by `nonspec lowest/twice`. State that limitation explicitly; do not credit the measured mutant with broader coverage. This is outside the current ISR-only predicate partition, not a newly measured escape. [Prescription](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/i8259eoiirr/killtable_20261025/PRETABLE.out:82), [actual mutant](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/i8259eoiirr/killtable_20261025/B_eoi.diff).
+
+With those corrections, the stated added-predicate denominator has no undisclosed behavioral cell or invalid discriminator established by this review. The null-PIC, null-timer-pointer, spurious-cascade, revert-target, two-slave, and retirement exclusions remain disclosures rather than measured coverage.

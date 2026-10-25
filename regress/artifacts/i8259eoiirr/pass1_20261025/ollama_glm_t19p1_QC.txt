@@ -1,0 +1,30 @@
+VERDICT: **READY WITH CHANGES** — ship **(A)** as the core (it is the only candidate that matches the packet's own datasheet reading, §2.6: "Nothing in OCW2 touches the IRR"; EOI resets an ISR bit only), but **(A) alone breaches the brief's own floor** ("must not make a never-deasserting source (the 8253 once `in_use`) a permanent level"): from the packet I can derive that under (A) nothing in the model ever clears IRR bit 0 for a PIT-programming guest, and under HEAD the erroneous EOI clear was the very thing manufacturing the timer's periodicity. (A) must ship with a one-way-source companion ((C)-style pulse for the 8253's line, or an acknowledge-side consumption of the pending count); without a companion ruled into the round, this is NOT READY.
+
+## 5. The 8253
+
+**5a — What clears IRR bit 0 under (A)? Nothing, on every machine this packet describes.** Enumeration of every bit-0 writer the packet gives (all READ, §2.2/§2.3):
+
+1. `isa_interrupt_assert` — sets only.
+2. `isa_interrupt_deassert` — clears, but runs only when a device deasserts line 0; `dev_8253.c` contains no `INTERRUPT_DEASSERT` (§2.4), and the pending-count decrement lives inside this handler, gated on the bit going 1→0 *through it* — so for the 8253 the decrement is dead code: the count is increment-only, a ratchet.
+3. The cascade fold — writes bit 2 of pic1 only.
+4. The two EOI arms — deleted by (A).
+5. OCW1 — assigns `d->ier` only; never touches `irr` (inlined access function).
+6. `dev_v3.c`'s copy — Iyonix only, same assert/deassert pair.
+7. `dev_algor.c`'s `&= ~0x18` / `&= ~0xc0` — algor only, and clears bits 3/4 (6/7), never bit 0.
+
+REASONED: the 8253 sits on line 0 (READ: the bus_isa "IRQ 0 … timer" special case; the planned detector row reads "IRR bit 0"). A guest's only model-level recourse after (A) is to mask line 0 permanently — hiding the bit from `irr & ~ier`, never clearing it. (This derivation is also the substance of 1(iv); I touch no other part of Q1.)
+
+**5b — Is the existing behavior a defect to file? Yes, and in its sharpest form: HEAD's periodic timer is a product of bug #574 itself.** REASONED from READ facts: the 8253 asserts every tick; in steady state that assert is a no-op (`isa_interrupt_common` early-returns when old == new). The visible periodicity comes entirely from the specific EOI's erroneous IRR clear: EOI drops IRR bit 0 and (via the arm's recalc) the CPU line; the next tick re-asserts — a 1→0→1 cycle per tick, which delivers periodic interrupts under either CPU trigger semantics. With the clear removed there is no cycle, and the count can never reach 0 (the only decrement is unreachable). File it as its own row: increment-only pending count + one-way assert = a permanent level whose apparent periodicity today is manufactured by the defect being fixed.
+
+**5c — Does (A) make it guest-visible where it was masked? Yes.** HEAD, specific-EOI guest (Linux, §2.7): mask → EOI → unmask leaves the line low until the next tick — one interrupt per tick, correct-looking. Under (A): unmask re-asserts at once. Level-triggered CPU input → immediate re-entry after the handler returns (livelock); edge-triggered → exactly one timer interrupt ever, then silence. Which occurs is NOT CHECKABLE from the packet (the CPU-side line-trigger semantics are not inlined; settled by how the interrupt framework/MIPS core treats a持续-asserted line). Either way the periodicity is gone. Note the planned 8253 probe row pins only register semantics and stays green under (A) — the lost periodicity is invisible to the detector as planned. Whether that is a real regression for malta additionally depends on whether those guests take time from irq 0 at all; the packet's only datum is the `dev_8253.c` comment "Linux/MALTA kernels like this" (READ, fragment, referent unstated). NOT CHECKABLE; settled by whether the malta kernel wires i8259 irq 0 as its clockevent, or by a malta boot under (A)-alone. Candidate coverage, REASONED: **(E) cannot cover the 8253** — (E) makes one-shots re-assert, the mirror of the 8253's problem (it never lets go); **(B) does not fix it either** — ISR gating only defers re-interruption while in service, and the EOI's ISR clear re-exposes the still-set IRR bit at once. Only a (C)-style pulse/ack treatment (or a 8253-side fix) does, which is presumably why the floor sentence exists.
+
+## 6. NetBSD/malta's EOI form
+
+**NOT CHECKABLE from the packet.** The single settling fact: the byte NetBSD's evbmips/malta ISA dispatch stores to the PIC command port at end-of-interrupt (in the malta ISA/PIC glue the brief names, or the MI i8259 code if evbmips consumes it): 0x20 = non-specific, 0x60|n = specific.
+
+Why it is load-bearing, REASONED: if NetBSD/malta issues **non-specific** EOI, that arm is already inert on IRR on HEAD (`irr &= ~isr` with nothing setting ISR, §2.2; witness row `nonspec irr4 … 0x01 ok`, §2.5) — so #574 never fired for that guest, (A) changes nothing EOI-visible for it, and any NetBSD PIT dependence *already* runs in the stuck-IRR regime today; a booting NetBSD/malta would then be empirical evidence the stuck level is survivable on this rig. If it issues **specific** EOI, NetBSD shares Linux's exposure and the 5c companion becomes load-bearing for it too. The exposure record cannot state which guests' behavior (A) actually changes until this byte is known.
+
+## Else noticed (one line each)
+
+- The poll byte is emitted by **both** `case 0x0c` and `default` of the read path (§2.2), so (B)'s "acknowledge = the poll read" has a surface-area problem the design must rule — which arm counts as the IACK — and that is exactly the surface the §4 (d) variant "conditioned on `current_command` only" would explore. Left for the Q2/Q4 firings.
+- Under (A) the EOI arms' recalc is provably dead (`old_irr == d->irr` after the edit, so the condition never fires); if the (C) companion reintroduces a clear for pulse-registered lines, the recalc revives for those lines only — a constraint on the (d)-variant table.

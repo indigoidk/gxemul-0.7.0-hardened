@@ -1682,6 +1682,62 @@ else
     check "le_csrmask rows red"     "$lebad" "0"
 fi
 
+#  ---- i8259eoiirr: the 8259 model's interrupt acknowledge (#574).
+#
+#  WHAT THIS PROTECTS.  The 8259 model had no acknowledge: the OCW3 poll read returned a mask-blind
+#  poll byte and set no in-service bit, the GT64120 IACK read returned the last asserted line and
+#  acknowledged nothing, and the specific EOI stood in for the acknowledge by clearing the REQUEST
+#  bit of the EOI'd line (the chip resets an in-service bit there; the request bit is cleared by the
+#  acknowledge).  Two guest-visible consequences on malta: a request a device still held was dropped
+#  until the device re-asserted, and the 8253 -- its pending-event count never retired -- was
+#  re-delivered once per 2^14-instruction tick instead of once per programmed period (7,415
+#  deliveries in 180M guest instructions at 18 Hz, artifacts/i8259eoiirr/rate_explore_20261025/).
+#  The fix adds pic8259_acknowledge() (ISR bit set, IRR bit cleared, the 8253's event retired),
+#  called by the one-shot poll read and by the GT IACK read; the specific EOI resets the ISR bit when
+#  the line is in service and otherwise CONSUMES the request as before (the legacy path for machines
+#  whose vector read acknowledges nothing); the non-specific EOI resets the lowest set ISR bit.
+#
+#  The probe is the re-pinned WITNESS (artifacts/i8259eoiirr/witness_20261025b/ and witness_20261025c/,
+#  the unmodified build before any fix measurement) and the DETECTOR (123 rows, 17 sessions; the floor
+#  legs and the kill table under artifacts/i8259eoiirr/pass2_20261025/ and killtable_20261025/).  It
+#  drives the UNMODIFIED `evbmips -e malta` with guest sb/lbu/lw through the real address decode,
+#  plus a guest interrupt handler at the general exception vector for the rate session -- no rig
+#  image, no disk -- which is why it lives here: this gate is the tree's general DEVICE-probe gate by
+#  accretion (the #497 block above; #573 landed its LANCE probe here for the same reason, and the
+#  `gatedevicesplit` row stays OWED).  The rate row is a BAND (HEAD thousands, the fix a handful),
+#  so a slow host cannot red it; the three long-wait sessions cost about a second each.
+I8259LOG=$LOGDIR/i8259_eoi.log
+python3 i8259_eoi_probe.py "$PMAX" GATE "$LOGDIR/i8259_eoi_raw" > "$I8259LOG" 2>&1 || true
+
+#  SENTINEL FIRST.  A preserved log is verified by its completion sentinel, never by its existence.
+if ! grep -q "I8259EOI_PROBE_DONE" "$I8259LOG"; then
+    check "i8259eoi probe completed" "no" "yes"
+else
+    check "i8259eoi probe completed" "yes" "yes"
+    check "i8259eoi controls" "$(count "$I8259LOG" '^I8259EOI_CONTROL=OK$')" "1"
+    #  `count' is grep -ac, a BASIC regex: `  *' is the one-or-more-spaces form (a `+' there is a
+    #  literal plus; the #573 block measured that against its own fix leg).  The row list below is
+    #  DERIVED from the banked fix leg by gen_gate_block_574.py, never typed.
+    for v in "ram:quiet" "ram:level" "ram:ack" "ram:ack3" "ram:masked" "ram:maskeoi" "ram:maskrem" "ram:nonspec" "ram:speceoi" "ram:isrother" "ram:casc" "ram:pit" "ram:gt" "ram:gtcasc" "ram:gtboth" "ram:gtmask" "ram:rate" "quiet irr" "quiet isr" "quiet poll" "quiet imr" "quiet iack" "level irr4" "level isr" "eoi noack" "reassert irr4" "eoi noack isr" "ack irr4" "poll byte" "ack ip2" "poll isr" "poll irr4" "poll again" "in-service irr4" "eoi acked" "eoi acked isr" "ack3 irr3" "poll3 byte" "poll3 isr" "in-service irr3" "eoi acked3" "masked irr4" "masked imr" "poll masked" "poll once" "masked eoi" "maskeoi irr4" "maskeoi poll" "maskeoi imr" "maskeoi isr" "maskrem both irr" "maskrem imr" "maskrem poll" "maskrem ip2" "maskrem irr after" "both irr" "poll first" "nonspec ip2" "poll once2" "poll second" "isr both" "nonspec lowest" "nonspec twice" "spec both irr" "spec polls" "spec isr both" "spec eoi one" "spec eoi both" "isrother both irr" "isrother poll" "isrother irr4" "isrother isr" "casc irr2" "casc poll" "casc isr2" "casc slave poll" "casc isr8" "casc eoi isr" "casc eoi isr8" "pit irr0" "pit poll" "pit ip2" "pit poll irr0" "gt irr4" "gt write isr" "gt iack" "gt isr" "gt irr4 after" "gtcasc irr2" "gtcasc iack" "gtcasc isr2" "gtcasc isr8" "gtcasc eoi isr" "gtcasc eoi isr8" "gtboth irr" "gtboth iack" "gtboth isr2" "gtboth isr8" "gtmask irr" "gtmask imr" "gtmask iack" "gtmask isr" "gtmask isr8" "rate imr" "rate delivered" "rate poll byte" "rate storm" "stable:quiet" "stable:level" "stable:ack" "stable:ack3" "stable:masked" "stable:maskeoi" "stable:maskrem" "stable:nonspec" "stable:speceoi" "stable:isrother" "stable:casc" "stable:pit" "stable:gt" "stable:gtcasc" "stable:gtboth" "stable:gtmask"; do
+        check "i8259eoi row: $v" "$(count "$I8259LOG" "^  $v  *0x.* ok$")" "1"
+    done
+
+    #  DENOMINATORS, pinned to LITERALS: `rows run' is the probe's own count (RESULT's denominator,
+    #  the pin check_score_claims.py reads; SCORE_CLAIMS_MANIFEST 41 -> 42), `rows green' its
+    #  numerator; `rows emitted' is the row lines the log carries, summed from the ok and FAIL row
+    #  lines so a LOST row and a FAILING row read differently.  A row line carries a `want ' or
+    #  `head ' token; the probe's `  LEG gate VERDICT: FAIL' line carries neither.  (Dry-run on the
+    #  banked legs: the fix leg every row ok and none red; the pre-fix leg the symptom rows red; the
+    #  null medium every row red -- in words on purpose: a fraction here reads as a score claim.)
+    i8res=$(grep -ao '^I8259EOI_RESULT=[0-9]*/[0-9]*' "$I8259LOG" | tail -1); i8res=${i8res#*=}
+    i8ok=$(count "$I8259LOG" '^  .* \(want\|head\) .* ok$')
+    i8bad=$(count "$I8259LOG" '^  .* \(want\|head\) .* FAIL$')
+    check "i8259eoi rows run"     "${i8res#*/}" 123
+    check "i8259eoi rows green"   "${i8res%/*}" 123
+    check "i8259eoi rows emitted" "$((i8ok + i8bad))" "123"
+    check "i8259eoi rows red"     "$i8bad" "0"
+fi
+
 #  ---- sgirandompixel: horrible_getputpixel()'s unimplemented-mode arm.
 #
 #  WHAT THIS PROTECTS.  That arm used to do `*color = random()' with its exit(1) commented out, so a failed

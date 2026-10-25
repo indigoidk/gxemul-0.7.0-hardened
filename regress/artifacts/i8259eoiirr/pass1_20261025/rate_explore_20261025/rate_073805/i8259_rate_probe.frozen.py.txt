@@ -1,0 +1,208 @@
+#!/usr/bin/env python3
+"""i8259_rate_probe.py -- the 8253/8259 INTERRUPT-RATE instrument for ledger row `i8259eoiirr` (#574): a guest on the
+UNMODIFIED `evbmips -e malta` programs 8253 counter 0 (mode 2, count 0 = 65536 -> 18.2 Hz on the emulator's host timer),
+installs an interrupt handler at the MIPS general exception vector (KSEG0 0x80000180, BEV cleared), unmasks ISA line 0
+only, enables Status.IE|IM2, and spins a fixed number of instructions.  The handler is the guests' own acknowledge
+shape -- OCW3 POLL (read the poll byte) then the SPECIFIC EOI 0x60|n -- and counts deliveries in s2.
+
+What it measures: HEAD re-delivers IRQ 0 once per 8253 TICK (every 2^14 instructions: the EOI clears IRR bit 0, the tick
+re-asserts it while the never-decremented pending count is > 0), so the count tracks INSTRUCTIONS executed (~N/16384),
+while a model that retires the event at the acknowledge delivers once per HOST-TIMER fire, so the count tracks WALL
+TIME (~18 per second).  The two are separated by more than an order of magnitude at any plausible host speed, so the
+row is a BAND, not a point: HEAD >= 1000, FIX 1 <= count <= 500 over 60M guest instructions.
+
+Reuses i8259_eoi_probe.py's encoders and pty driver (imported; the probe module's argv parsing is satisfied with
+dummy values).  USAGE: i8259_rate_probe.py <base_bin> <fix_bin | GATE | -> <outdir>
+"""
+import importlib.util, os, sys, time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ARGS = list(sys.argv)
+BASE_BIN = ARGS[1] if len(ARGS) > 1 else "/tmp/gxt19/base/gxemul"
+FIX_ARG = ARGS[2] if len(ARGS) > 2 else "-"
+OUTDIR = ARGS[3] if len(ARGS) > 3 else "/tmp/gxt19/rate"
+GATE = (FIX_ARG == "GATE")
+sys.argv = ["x", BASE_BIN, "-", OUTDIR]
+spec = importlib.util.spec_from_file_location("p", os.path.join(HERE, "i8259_eoi_probe.py"))
+p = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(p)
+
+k0, k1 = 26, 27
+p.NAME[k0], p.NAME[k1] = "k0", "k1"
+HANDLER = 0xffffffff80000180        # the MIPS general exception vector with Status.BEV clear (cpu_mips.c: base 0x80000000 + 0x180)
+PIT_C0, PIT_CTL = 0x40, 0x43
+COP0_STATUS = 12
+STATUS_IE_IM2 = 0x0401              # IE | IM2 (ISA on cpu[N].2 -> Cause.IP2, cpu_mips.c: line = 1 << (STATUS_IM_SHIFT + 2))
+SPIN = int(os.environ.get("RATE_SPIN", "20000000"))   # 3 instructions per iteration: 60M guest instructions
+
+
+def mtc0(rt, rd, sel=0):
+    return 0x40800000 | (rt << 16) | (rd << 11) | sel
+
+
+ERET = 0x42000018
+
+
+def build_handler():
+    """At HANDLER: poll (OCW3 0x0c + read), remember the poll byte in s3, specific EOI 0x60|(byte&7), count in s2, eret."""
+    p.reset_prog()
+    p.emit(p.lui(k0, p.ISA_HI), "lui k0,0x%x" % p.ISA_HI)
+    p.emit(p.ori(k1, p.zero, p.OCW3_POLL), "ori k1,zr,0xc")
+    p.emit(p.sb(k1, p.PIC1_CMD, k0), "sb k1,%d(k0)" % p.PIC1_CMD)
+    p.emit(p.lbu(k1, p.PIC1_CMD, k0), "lbu k1,%d(k0)" % p.PIC1_CMD)
+    p.emit(p.or_(p.s3, k1, p.zero), "or s3,k1,zr")
+    p.emit(p.andi(k1, k1, 0x7), "andi k1,k1,0x7")
+    p.emit(p.ori(k1, k1, 0x60), "ori k1,k1,0x60")
+    p.emit(p.sb(k1, p.PIC1_CMD, k0), "sb k1,%d(k0)" % p.PIC1_CMD)
+    p.emit(p.addiu(p.s2, p.s2, 1), "addiu s2,s2,0x1")
+    p.emit(ERET, "eret")
+    return list(p.prog)
+
+
+def build_main():
+    """Mask all but ISA line 0, program the 8253 (count 0 = 65536, 18.2 Hz), enable IE|IM2 with BEV clear, spin SPIN
+    iterations, disable, read IRR and IMR back."""
+    p.begin()
+    p.e_out(p.PIC1_IMR, 0xfe)
+    p.e_out(p.PIC2_IMR, 0xff)
+    p.e_out(PIT_CTL, 0x34)
+    p.e_out(PIT_C0, 0x00)
+    p.e_out(PIT_C0, 0x00)
+    p.emit(p.ori(p.s2, p.zero, 0), "ori s2,zr,0x0")
+    p.emit(p.ori(p.s3, p.zero, 0), "ori s3,zr,0x0")
+    p.emit(p.ori(k1, p.zero, STATUS_IE_IM2), "ori k1,zr,0x401")
+    p.emit(mtc0(k1, COP0_STATUS), "mtc0 k1,status")
+    p.emit(p.lui(p.t4, (SPIN >> 16) & 0xffff), "lui t4,0x%x" % ((SPIN >> 16) & 0xffff))
+    p.emit(p.ori(p.t4, p.t4, SPIN & 0xffff), "ori t4,t4,0x%x" % (SPIN & 0xffff))
+    p.emit(p.addiu(p.t4, p.t4, -1), "addiu t4,t4,-1")
+    p.emit(p.bne(p.t4, p.zero, -2), "bne t4,zr,0x")
+    p.emit(p.NOP, "nop")
+    p.emit(mtc0(p.zero, COP0_STATUS), "mtc0 zr,status")
+    p.e_ocw3_read(p.a0, p.OCW3_IRR)
+    p.e_in(p.a1, p.PIC1_IMR)
+    prog, halt = p.end()
+    return prog, halt
+
+
+def run_rate(binary, tag, out):
+    """One session with TWO raw binaries (the handler at HANDLER, the main program at BASE); both disassembled and
+    checked word by word (CONTROL 0); park at the halt breakpoint; read s2 (deliveries), s3 (last poll byte), a0, a1, v0."""
+    hprog = build_handler()
+    mprog, halt = build_main()
+    hbin = os.path.join(p.RAWDIR, "%s_handler.bin" % tag)
+    mbin = os.path.join(p.RAWDIR, "%s_main.bin" % tag)
+    for fn, pl in ((hbin, hprog), (mbin, mprog)):
+        with open(fn, "wb") as f:
+            for w, _ in pl:
+                f.write(bytes([w & 0xff, (w >> 8) & 0xff, (w >> 16) & 0xff, (w >> 24) & 0xff]))
+    argv = [binary, "-V"] + p.MACHINE + ["0x%x:%s" % (HANDLER, hbin), "0x%x:%s" % (p.BASE, mbin)]
+    out("    [%s] %s" % (tag, " ".join(argv)))
+    emu = p.Emu(argv)
+    enc_ok = True
+    for name, base, pl in (("handler", HANDLER, hprog), ("main", p.BASE, mprog)):
+        dis = emu.send("unassemble 0x%x 0x%x" % (base, base + len(pl) * 4), wait=max(3.0, len(pl) * 0.03))
+        seen = {}
+        for line in dis.splitlines():
+            m = p.re.match(r"^\s*([0-9a-f]{8,16}):\s+([0-9a-f]{8})\s+(?:<-)?\s*(.*)$", line)
+            if m:
+                seen[int(m.group(1), 16) & 0xffffffff] = (m.group(2), m.group(3).strip())
+        w_ok = m_ok = 0
+        bad = []
+        for i, (w, mn) in enumerate(pl):
+            addr = (base + i * 4) & 0xffffffff
+            hit = seen.get(addr)
+            if hit is None:
+                bad.append("      BAD 0x%08x no disassembly line" % addr)
+                continue
+            if hit[0] == "%08x" % w:
+                w_ok += 1
+            else:
+                bad.append("      BAD 0x%08x word %s vs %08x" % (addr, hit[0], w))
+            if " ".join(hit[1].replace("\t", " ").split()).startswith(" ".join(mn.split())):
+                m_ok += 1
+        enc_ok = enc_ok and (w_ok == len(pl))
+        out("    encodings (%s): %d/%d words agree with the disassembler (CONTROL); %d/%d mnemonics (informational)"
+            % (name, w_ok, len(pl), m_ok, len(pl)))
+        for l in bad[:8]:
+            out(l)
+    emu.send("breakpoint add 0x%x" % halt, wait=0.5)
+    t = time.time()
+    emu.send("continue", wait=1.0)
+    deadline = time.time() + 180
+    hit = False
+    seen_pc = None
+    while time.time() < deadline:
+        emu.drain(0.5)
+        tail = bytes(emu.buf[-4000:]).decode("latin1", "replace")
+        m = p.re.search(r"BREAKPOINT:\s*pc\s*=\s*0x([0-9a-fA-F]+)", tail)
+        if m:
+            seen_pc = int(m.group(1), 16) & 0xffffffff
+            hit = (seen_pc == (halt & 0xffffffff))
+            break
+    wall = time.time() - t
+    out("    parked at 0x%016x: %s   (%.2f s)" % (halt, "yes (pc verified)" if hit else
+        ("*** NO: stopped at 0x%08x ***" % seen_pc if seen_pc is not None else "*** NO ***"), wall))
+    got = {}
+    for logical, mips in (("ram", "v0"), ("count", "s2"), ("lastpoll", "s3"), ("irr_after", "a0"), ("imr", "a1")):
+        v = p.reg(emu, mips)
+        got[logical] = None if v is None else (v & 0xffffffff)
+    emu.close(os.path.join(p.RAWDIR, "%s.txt" % tag))
+    return got, enc_ok, hit, wall
+
+
+def main():
+    os.makedirs(OUTDIR, exist_ok=True)
+    p.RAWDIR = os.path.join(OUTDIR, "raw")
+    os.makedirs(p.RAWDIR, exist_ok=True)
+    lines = []
+
+    def out(s=""):
+        lines.append(s); print(s); sys.stdout.flush()
+    out("=" * 86)
+    out("i8259eoiirr -- IRQ 0 DELIVERY RATE on unmodified `evbmips -e malta` (8253 counter 0 at 18.2 Hz; handler = poll + specific EOI)")
+    out("=" * 86)
+    out("date      %s     spin %d iterations (%d guest instructions)" % (time.strftime("%Y-%m-%d %H:%M:%S"), SPIN, SPIN * 3))
+    legs = [("gate", BASE_BIN, "FIX")] if GATE else [("base", BASE_BIN, "HEAD")] + ([("fix", FIX_ARG, "FIX")] if FIX_ARG != "-" else [])
+    allok = True
+    for leg, binary, column in legs:
+        out("")
+        out("--- leg %s (%s column): %s" % (leg, column, binary))
+        got, enc_ok, hit, wall = run_rate(binary, leg, out)
+        out("  raw: " + "  ".join("%s=%s" % (k, ("0x%x" % v if isinstance(v, int) else "??")) for k, v in got.items()))
+        c = got.get("count")
+        rows = []
+        rows.append(("ram", got.get("ram") == p.RAM_MAGIC, "0x5a", "CONTROL"))
+        rows.append(("encodings", enc_ok, "all words", "CONTROL"))
+        rows.append(("parked", hit, "pc verified", "CONTROL"))
+        rows.append(("imr", got.get("imr") == 0xfe, "0xfe", "CONTROL"))
+        rows.append(("delivered", c is not None and c >= 1, ">= 1", "CONTROL"))
+        rows.append(("poll byte", got.get("lastpoll") == 0x80, "0x80 (line 0)", "CONTROL"))
+        if column == "HEAD":
+            rows.append(("rate storm", c is not None and c >= 1000, ">= 1000 (one per 2^14-instruction tick)", "SYMPTOM"))
+        else:
+            rows.append(("rate band", c is not None and 1 <= c <= 500, "1..500 (one per host-timer fire)", "SYMPTOM"))
+        npass = 0
+        ctrl_ok = True
+        for name, ok, want, kind in rows:
+            out("  %-12s %-8s want %-44s %s %s" % (name, "ok" if ok else "FAIL", want, kind, "" if ok else "<--"))
+            npass += 1 if ok else 0
+            if kind == "CONTROL" and not ok:
+                ctrl_ok = False
+        out("  wall %.2f s   count %s" % (wall, c))
+        if GATE:
+            out("I8259RATE_CONTROL=%s" % ("OK" if ctrl_ok else "FAIL"))
+            out("I8259RATE_RESULT=%d/%d" % (npass, len(rows)))
+        else:
+            out("I8259RATE_CONTROL_%s=%s" % (leg, "OK" if ctrl_ok else "FAIL"))
+            out("I8259RATE_RESULT_%s=%d/%d" % (leg, npass, len(rows)))
+        allok = allok and (npass == len(rows))
+    out("=" * 86)
+    out("VERDICT   %s" % ("every leg passed its own column" if allok else "*** a leg failed -- read the FAIL lines above ***"))
+    out("I8259RATE_PROBE_DONE")
+    with open(os.path.join(OUTDIR, "RESULTS.txt"), "w") as f:
+        f.write("\n".join(lines) + "\n")
+    sys.exit(0 if allok else 1)
+
+
+if __name__ == "__main__":
+    main()

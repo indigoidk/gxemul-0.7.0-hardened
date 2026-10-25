@@ -1,0 +1,76 @@
+I will adjudicate the dispositions against the tree and the artifacts, starting with the product sources, the v2d probe, and the pass-2 record. The ruling adopted my pass-2 position, so I will test that position first.The product diff is only in the packet, so I am checking it against the current sources, the ISA cascade, and the measured scores.VERDICT: RATIFY WITH CHANGES -- ship the unchanged product diff; Astra's three grounds are dead on the measurements; amend D5's reason, and relabel the both-columns value rows as contract before the probe lands.
+WRONG: none
+
+## Q1
+
+F1 UPHOLD. The helper is the only ISR setter in the diff; both EOI arms only clear. A second specific EOI of a bit already cleared takes the legacy consume. That is the single-bit ISR plus no priority inhibition, already filed as `i8259priority`. No product edit. READ `dev_8259.c` EOI arms and the diff.
+
+F2 UPHOLD. Forcing `current_command = 0x0a` is a real approximation of the chip's remembered RR/RIS selection. No documented malta guest observes it (see D2). Disclosure is the right member. READ the diff and `8259A.txt` lines 649-654.
+
+F3 UPHOLD. Linux programs ICW2 `0x00` and `0x08`, masks the GT IACK byte with `0xff`, and dispatches `do_IRQ(MALTA_INT_BASE + irq)` with `MALTA_INT_BASE` 0. The byte is the line. Adding the model's `irq_base` would change a value Linux has been consuming through `last_int`. READ `dev_gt.c:154-157` and `dev_footbridge.c:432-436`; DERIVED the Linux bytes by re-fetch this pass (they are not in the inlined F2 packet 1.8).
+
+F4 UPHOLD. With lines 8 and 9 pending, the master acknowledge clears pic1 bit 2 and deasserts the CPU line; the slave acknowledge of line 8 then asserts pic2's irq, which is ISA line 2. `isa_interrupt_assert` samples `old_isa_assert` while bit 2 is still clear, so `isa_interrupt_common` line 68 does not return early and line 89 raises the CPU line. The line is low only inside that one `lw`. READ `bus_isa.c:50-141`.
+
+F5 UPHOLD. `x & -x` isolates the lowest set bit, and fixed priority ranks that bit highest. READ the non-specific arm in the diff.
+
+F6 UPHOLD. `pic1 == NULL` is the MVME5500 path (`machine_mvmeppc.c` calls `dev_gt_init` and never `bus_isa_init`) and the new guard covers it. `n2 < 0` needs pic1 bit 2 set while pic2's unmasked set is empty; every ISA event refolds bit 2 from that set before it returns, and the helper does not set bit 2. Returning 2 for that unreachable case matches this model. Spurious IR7 is not modelled. READ `machine_mvmeppc.c:98-116` and `bus_isa.c:56-61`. DERIVED the unreachability.
+
+F7 UPHOLD. `dev_prep.c:57` and `dev_footbridge.c:432` still return `last_int` and do not acknowledge. The poll read now acknowledges on every machine that has the PIC. A PReP or footbridge guest that polls enters the ISR branch. That is the fix, on a path those vector reads do not use. READ both readers.
+
+F8 UPHOLD. Cobalt calls `bus_isa_init` and `dev_gt_init` (`machine_cobalt.c:71-100`), so a read of GT IACK on that machine now acknowledges. Whether a Cobalt guest issues that read is NOT CHECKABLE from this tree.
+
+F9 UPHOLD. ICW1 sets `init_state` and does not clear ISR or `current_command`. ICW4 bit 1 is a warning only, while the helper always sets ISR. An AEOI guest would accumulate ISR bits; the output line is computed from `irr & ~ier`, so no line is dropped. Filing `i8259aeoi` and `i8259icwreset` is the right scope. READ `dev_8259.c:72-86` and `195-206`.
+
+F10 UPHOLD. OCW3 `0x68` is an empty arm. The helper always uses `~ier`. NetBSD writes `0x68` at attach and then `0x0a`, which leaves special mask mode set on the chip; this model has never implemented it, and it also has no ISR priority inhibition, so the new ISR bits do not change NetBSD's delivered set. READ `dev_8259.c:131-133` and F2 packet 1.7.
+
+F11 UPHOLD. v2c's second read followed a second poll of an empty IRR. v2d's `build_masked` writes OCW1 `0x10`, issues one OCW3 `0x0c`, reads the poll into `a1`, then reads the command port again into `s1` with no new OCW3. `M_sticky` deletes only `current_command = 0x0a` and scores 83/84, red on `poll once` got `0x00` against the FIX value `0x10`. READ `i8259_eoi_probe.py:367-389`, `M_sticky.diff`, `SCORES.txt`.
+
+F12 UPHOLD. `gt iack` and `gtcasc iack` are both-columns `0x04` and `0x08`, so `last_int` hides a dropped assignment. `build_gtboth` holds the UART and the RTC together and does one `lw` of `0x0c34`. `D_gt_noassign` scores 83/84, red only on `gtboth iack` got `0x04`. READ `i8259_eoi_probe.py:463-481` and `SCORES.txt`.
+
+F13 UPHOLD. The conclusion "no deterministic row, disclose" is right. The obstacle is sharper than the writeup; that sharpening is D5. READ `dev_8253.c:109-128` and `timer.c:283-290`.
+
+F14 UPHOLD. Replacing the helper's closing if/else with a bare `INTERRUPT_DEASSERT` leaves ISR and IRR unchanged, so every register row stays green, and the single-line rate session deasserts in the correct code too. The nonspec session acknowledges IRQ 3 while IRQ 4 is still pending; the correct helper asserts, the bare deassert drops the CPU line. Same owed row as `D_fold`. DERIVED from the diff and `build_nonspec`. Not one of the sixteen mutants.
+
+F15 UPHOLD. `witness_20261025/` is 19/19 under the old protocol (`eoi irr4`, `eoi x8`). `witness_20261025b/` is 69/69 and `witness_20261025c/` is 84/84, each a HEAD-column pin of that revision before its fix measurement. READ the three `RUN_IDENTITY.txt` files.
+
+F16 UPHOLD. The guard in the probe is HEAD `>= 5000` against FIX `1..1000`. The measured pairs are much farther apart (HEAD `0x1d69` = 7529, FIX `0x03` = 3 in `fixlegs_090053`). The docstring states the band, not a two-order guard. READ `i8259_eoi_probe.py:793` and `fixlegs_090053/RESULTS.txt`.
+
+F17 UPHOLD for every figure I opened. `witness_20261025c` `0x2009` = 8201; `fixlegs_090053` HEAD `0x1d69` = 7529 and FIX `0x03` = 3; `legs_090604/L0` `0x1e2e` = 7726; `witness_20261025b` `0x1ce5` = 7397. Each names its artifact. READ those files. `rate_explore` 7415 and `fixlegs_082756` 7992 were not re-opened.
+
+F18 UPHOLD. The pass-1 run directory is `witness_065111`, recorded `2026-10-25 06:52:26`. READ `witness_20261025/RUN_IDENTITY.txt`.
+
+F19 UPHOLD. The guest quotes are in `f2_20261025/F2_PACKET.md` sections 1.7 and 1.8. READ that file. The ICW2 bytes and `do_IRQ` line are not in that quote; see F3.
+
+F20 UPHOLD. The fix binary is stamped `07:56:45`. The v2 HEAD pin is directory `v2_witness_080154`, banked `08:04:33`, result 69/69. The v2d HEAD pin is `v2_witness_085818`, banked `09:00:53`, result 84/84. READ both identity files.
+
+F21 UPHOLD. A programmed count of 0 sets `hz` to 0 (`dev_8253.c:185-186`), and the host timer is then updated to that frequency. "Does not fire within any run" is the accurate sentence; the 1e-8 clamp itself was not re-read. READ `dev_8253.c:180-196`.
+
+D1 UPHOLD. None of Astra's three grounds survives as a block. (1) The one-shot claim was false on v2c and is now a kill: `M_sticky` 83/84, red `poll once` `0x00`. (2) The GT byte is the line for Linux/malta, re-fetched this pass; Cobalt stays the F8 disclosure. (3) The provenance items F18-F21 match the identity files. GLM's "fold re-entrancy unsettled" is the D4 walk. DeepSeek's "line versus vector" is D3. The four SHIP conditions are discharged or already disclosed. No undischarged condition remains. READ `SCORES.txt`.
+
+D2 UPHOLD. Disclosure is the right member. A remembered `last_rr` would be observed by a guest that selected the ISR (`0x0b`), issued poll `0x0c` (RR clear, so the selection is left alone), and read the command port again. NetBSD's last selection is the IRR: it writes `0x0a` at attach, and `0x0c` does not set RR. Linux/malta never writes `0x0c`; `i8259A_irq_real` writes `0x0b`, reads, and writes `0x0a` itself. The datasheet says the chip remembers IRR versus ISR and that this remember "is not true when poll is used": the poll read is not the status read, and the following read is. Forcing `0x0a` matches both documented guests. A remembered byte is not owed as correctness. READ F2 packet 1.7-1.8 and `8259A.txt:649-654`.
+
+D3 UPHOLD. No supported reader of the GT IACK register programs a non-zero ICW2 base, on the sources re-fetched this pass. `init_8259A` writes master ICW2 `0x00` and slave ICW2 `0x08`. With those bases, `irq_base + n` equals the ISA line, so the two readings coincide for Linux/malta. `MALTA_INT_BASE` is 0. HEAD already returned the line in `last_int`. Footbridge is the reader that adds `irq_base`. Returning `irq_base + n` from `dev_gt.c` would be a behavior change for any non-zero master base, and it is not a one-term fix to this diff. Cobalt is F8, still unread. READ `dev_footbridge.c:432-436`. DERIVED the Linux program from the current kernel trees.
+
+D4 UPHOLD. The product walk holds. The line that would break it is `bus_isa.c:68`, and only if pic1 bit 2 is already set when `isa_interrupt_assert` samples `old_isa_assert`. The product helper does not pre-set that bit. `D_fold` does, which is why that mutant strands the CPU line and still scores 84/84. READ `bus_isa.c:98-112` and `D_fold.diff`.
+
+D5 REFINE. The disposition "disclosed, not rowed" stands. There is no deterministic construction, and a band row on the rate precedent is not an acceptable substitute. The packet's alias story (count 1 aliases with the legitimate IRQ0 retirement, so you need count >= 2) assumes the row also acknowledges line 0. Dropping that assumption still fails. `DEVICE_TICK` re-asserts whenever the count is > 0, so one extra decrement is visible only when it crosses that test. `timer.c`'s catch-up loop can call `timer0_tick` (`count++`) many times in one SIGALRM, so the first time IRR0 reads as 1 the count may already be greater than 1. A legacy specific EOI of line 0 clears IRR without retiring, and the next tick then re-asserts for both the correct guard and the mutant. The rate band `1..1000` absorbs a one-count deficit; the measured FIX count is 3. The guest cannot read the count. READ `dev_8253.c:109-128` and `timer.c:253-290`.
+
+## Q2
+
+I overturn none of the twenty-one. The zero is earned on the two dispositions that claimed a measurement: `M_sticky` and `D_gt_noassign` are killed by the rows that were built to kill them, and L0 is 62/84 with exactly those twenty-two symptom rows red and CONTROL=PASS. The ten product accepts match the diff and the callers I opened.
+
+The soft spot is not an overturn. D5's written reason is too narrow, and F13 shares its conclusion, which still stands. The unnumbered hole is the row kinds: the ruling asked whether `gtcasc iack` should stay a control and then did not decide. It should not. That is a probe edit, not a product edit, and it is the change this ratification adds.
+
+## Q3
+
+Yes. An edit can pass all 84 rows and still change what a malta guest sees. `D_fold` is that edit inside the sixteen: it scores 84/84, CONTROL=OK, ESCAPED. Its pre-fold sets pic1 bit 2 before `isa_interrupt_assert` samples the old unmasked set, `bus_isa.c:68` returns early, and the CPU line stays low after the master acknowledge deasserted it, while a second slave request is still pending. No register row reads that line. `D_gt_write` also scores 84/84 and does not change a malta guest: nothing in the documented guests writes the IACK register. READ both diffs and `SCORES.txt`.
+
+A third edit was not in the sixteen. F14's bare deassert passes the same 84 rows and drops the CPU line when another unmasked request remains. "Escapes beyond the two: none" is true of the prescribed list and false of the diff-shaped neighborhood. Both are the owed `i8259cascline` row. DERIVED.
+
+The control/symptom split is not hiding a kill in this table. `D_gt_nocasc` is CONTROL=FAIL because `gtcasc iack` is marked control and got `0x02` against want `0x08`, and it is still KILLED on the symptom rows `gtcasc isr8`, `gtboth iack`, and `gtboth isr8`. The kind is wrong anyway. `poll byte`, `poll3 byte`, `poll first`, `casc poll`, `casc slave poll`, `pit poll`, `gt iack`, `gtcasc iack`, and `rate poll byte` are model outputs pinned both ways. By the probe's own definitions those are contract rows. A mutant that acknowledges correctly and returns a wrong poll byte goes red only on those rows, and a consumer that treats CONTROL=FAIL as a void run, the way L3 `/bin/false` is void, will discard a real kill. Relabel them contract. `quiet poll`, the RAM rows, and `gtboth irr` stay control. READ `i8259_eoi_probe.py:715-799` and `legs_090604/L0/RESULTS.txt`.
+
+What the panel's D5 writeup did not use is the catch-up loop: one SIGALRM can deposit more than one count before the guest ever sees IRR0. That is the fact that makes a count==1 row non-deterministic. READ `timer.c:283-290`.
+
+The D3 warrant in the brief is thinner than the ruling. F2 packet 1.8 does not contain the ICW2 bytes or `do_IRQ`. Re-fetching them this pass confirms the conclusion: master `0x00`, slave `0x08`, `MALTA_INT_BASE` 0, GT byte `& 0xff`. DERIVED today.
+
+The working-tree probe hash was not recomputed here. The frozen v2d copy's md5 `4b3e475d` and 908-line length are READ from `witness_20261025c/RUN_IDENTITY.txt` and `fixlegs_090053/RUN_IDENTITY.txt`. The working-tree text I read is the v2d masked session and the `gtboth` session.

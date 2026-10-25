@@ -1,0 +1,18 @@
+RUN_IDENTITY -- T19 i8259eoiirr EXPLORATORY measurement: IRQ 0 DELIVERY RATE on the UNMODIFIED evbmips -e malta of HEAD
+94b247db (2026-10-25 07:40:16); binary /tmp/gxt19/base/gxemul md5 6d1e627a7b7a5d7b52e117030cdaa880
+instrument     i8259_rate_probe.frozen.py.txt (per run dir; imports i8259_eoi_probe.py's encoders and pty driver): a handler at the
+               MIPS general exception vector (KSEG0 0x80000180, BEV cleared by mtc0 Status = IE|IM2 = 0x401) that POLLS (OCW3 0x0c,
+               reads the byte into s3), writes the SPECIFIC EOI 0x60|(byte&7), counts in s2 and erets; main masks all but ISA
+               line 0 (OCW1 0xfe / 0xff), programs 8253 counter 0 (0x34, then two count bytes), enables, spins, disables, reads IRR/IMR.
+               Every word of both binaries checked against the emulator's disassembler (CONTROL); the park pc-verified.
+rate_073805    count 0x0000 (hardware: 65536): 60M instructions, s2 = 0, IRR bit 0 = 0, no delivery -- dev_8253.c maps a ZERO count
+               to hz 0 (`else d->hz[relative_addr] = 0;`), which timer_add clamps to TIMER_MIN_FREQUENCY (1e-8 Hz): a timer that
+               never fires.  Filed as its own row (pit8253count0); NOT this round's edit.
+rate_073912    count 0xffff (18 Hz): 180M instructions, s2 = 7415 deliveries, last poll byte 0x80 (line 0), IRR bit 0 reads 0 after
+               the final EOI, IMR 0xfe; wall 1.52 s (the harness's fixed wait; the guest ran for a fraction of it).  At 18 Hz the
+               programmed rate implies well under 100 interrupts in that window; 7415 ~ 2/3 of the 10,986 ticks (2^14 instructions
+               each) in 180M instructions -- one delivery per TICK after the first host-timer fire: the EOI clears IRR bit 0 and the
+               tick re-asserts it while the never-decremented pending count is > 0.
+status         EXPLORATORY: the rows' bands (HEAD >= 5000 / FIX 1..1000) are the draft instrument's; they are re-pinned by the F2 ruling
+               before any detector ships.  This is the guest-visible form of the 8253 half of #574, measured at rung 3 with real
+               interrupt delivery (not a register read): the witness for the design's 8253 obligation.

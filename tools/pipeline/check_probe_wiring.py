@@ -3228,6 +3228,15 @@ MANIFEST = {
     #  is CLASS_WITNESS: its as-run base leg asserts the PRE-FIX symptom (HEAD column) and
     #  would go RED on a repaired base, so it is ungated by design.  The detector_20261024/
     #  frozen instrument and the mutant applicator are CLASS_TOOL (kill-table evidence).
+    "i8259_eoi_probe.py":
+        (CLASS_DETECTOR, "#574 i8259eoiirr: the 8259 model's interrupt acknowledge (ISR set, IRR cleared, the 8253's event "
+                         "retired) at the OCW3 poll read and the GT64120 IACK read; the specific EOI resets ISR when the line "
+                         "is in service and keeps the legacy consume otherwise; the non-specific EOI resets the lowest ISR bit.  "
+                         "123 rows in 17 sessions on unmodified evbmips -e malta (no image); the rate row is a band; wired in "
+                         "gate_arm.sh (#574 block: 123 named rows, rows run/green/emitted/red by equality).  Witness: "
+                         "artifacts/i8259eoiirr/witness_20261025/ (pass 1), witness_20261025b/ .. witness_20261025e/ (the re-pins "
+                         "of v2, v2d, v2e and the shipped v2f), each on unmodified HEAD before any fix measurement of its revision; the floor legs under "
+                         "pass2_20261025/legs_133457/; the kill table under killtable_20261025/."),
     "le_csrmask_probe.py":
         (CLASS_DETECTOR, "#573 lecsrmask: the LANCE model's CSR3 store masked to BSWP|ACON|BCON (bits 15:3 "
                          "read as zero on the Am7990 and the Am79C90); CSR1/CSR2 stay stored whole and three "

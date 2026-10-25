@@ -385,7 +385,7 @@ check "readiness: no unrecognised endswith spelling" "$unknown" "$EXPECT_UNKNOWN
 #  and reds THREE rows -- this one, the promptless count and the promptless-names row -- because all three are
 #  grandfathered names that exist only in the working tree (measured on a copy with them removed: 70/73, 40/43,
 #  names gone=the three).  Written by `tools/derive_hygiene_pins.sh --write`, never by hand. ***
-EXPECT_PTY_PROBES=79
+EXPECT_PTY_PROBES=80
 #  *** AND THE SAME PROBE BROKE A SECOND CENSUS IN THIS FILE, WHICH pass 11's OWN
 #  REPAIR DID NOT FIX.  Found by the codex seat reviewing that repair. ***
 #
@@ -423,7 +423,8 @@ crime_width_probe.py
 sgi_mte_decline_probe.py
 vme_default_probe.py
 wdc_lba_probe.py
-le_csrmask_probe.py"
+le_csrmask_probe.py
+i8259_eoi_probe.py"
 #  hygienecensus: tools/derive_hygiene_pins.sh --grandfather appended FIVE blocks to the list above; they are
 #  named here by their FIRST NAME, never by position, because the next --grandfather appends another.
 #  The block beginning `alpha_harness_probe.py` (derived 2026-09-19): 20 PROMPTLESS pty probes committed

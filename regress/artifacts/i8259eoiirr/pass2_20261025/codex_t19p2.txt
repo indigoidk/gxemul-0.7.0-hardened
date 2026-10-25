@@ -1,0 +1,100 @@
+VERDICT: DO NOT SHIP -- the one-shot coverage claim is false, GT consumer compatibility remains unproved, and the provenance record needs correction.
+
+**Q1 — PREMISE AUDIT**
+
+| Claim | Assessment |
+|---|---|
+| **2.1** | **NOT CHECKABLE.** `PASS1_RULINGS.md`, `F-8`, reports the history, but source contents cannot establish commit counts or changelog absence. Settling evidence: a permitted provenance artifact containing the scoped history and recorded pre-round search. |
+| **2.2** | **DERIVED.** `bus_isa_init` snapshots the pointer before creating the 8253; `DEVINIT(8253)` publishes it afterward. `timer0_tick` increments the count, and reprogramming does not reset it. Reading the published machine pointer at acknowledge time avoids the stale snapshot. |
+| **2.3** | **READ as a prior-source report, not independently verified guest code.** `PASS1_RULINGS.md`, `F-4`/`F-5`, contains the summarized guest sequences. The claimed source quotations at `F2_RULINGS 1.7/1.8` do not exist in that file. **NOT CHECKABLE:** their complete compatibility implications; a version-pinned guest-source extract would settle them. |
+| **2.4** | **READ.** The census and synchronous UART deassertion agree with `bus_isa_init`, Malta’s `MACHINE_SETUP`, and `dev_ns16550_access` calls to `dev_ns16550_tick`. |
+| **2.5** | **DERIVED.** All three specified sketch repairs appear in the diff. “Unconverted machines behave as HEAD” needs qualification: the legacy EOI path preserves HEAD when that line has no modeled service bit. A guest that also polls can enter the changed path. |
+| **2.6** | **READ.** The original witness has masked IRQ4 and poll value `0x84`; the revised detector separates the masked symptom from the unmasked control. |
+| **2.7** | **READ.** The re-pin records 69/69 HEAD at **08:01:54**, before the reported FIX measurements. It was **after** the fix binary’s recorded build at **07:56:45**. |
+| **2.8** | **DERIVED, with one false statement.** The 65 Hz base and batching support rejecting the short-wait retirement oracle. However, “never fires” is literally wrong: `timer_clamp_freq` clamps zero to `TIMER_MIN_FREQUENCY`, `1e-8 Hz`. Programming zero also does not erase existing pending events. Anchors: `timer_add`, `timer_update_frequency`, `dev_8253_access`. |
+
+**(i) DERIVED — `d->isr & bit` correctly tests the model’s service bit, but the helper-only-setter argument proves less than claimed.** It records an acknowledge since the last clearing EOI; it does not establish complete guest service history.
+
+Because equal-priority acknowledgements are permitted, a guest can acknowledge IRQ4 twice before completing the first service. One EOI clears the single ISR bit; a subsequent EOI takes the legacy branch even if an outer handler remains active. That is a consequence of the deferred `i8259priority` defect. Conversely, ICW4 AEOI is not retained—the existing arm only prints a warning—while the helper always sets ISR. The datasheet’s `Automatic End of Interrupt` section makes that distinction explicit. Thus the discriminator is appropriate for the contained model, not an unconditional hardware invariant.
+
+**(ii) READ — One-shot polling is supported by the datasheet’s `Poll Command`: the next read acknowledges.** Neither reported Malta sequence requires a second poll byte without another OCW3: NetBSD issues a poll command for each poll; Linux uses GT IACK.
+
+**NOT CHECKABLE — Every supported guest’s expectations.** The settling evidence is its PIC access sequence. Returning specifically IRR afterward remains the approximation explicitly acknowledged in F2’s `Where this record might be fooling itself`; initialization’s IRR default alone does not prove post-poll selection semantics.
+
+**(iii) NOT CHECKABLE — Linux’s complete line/vector contract is missing.** `F-5` identifies `mips_pcibios_iack`, but supplies neither the relevant ICW2 programming nor complete return-value normalization and dispatch. The settling evidence is one version-pinned extract covering `init_8259A`, `mips_pcibios_iack`, and its immediate consumer.
+
+**DERIVED — Preserving the model’s numerical convention is insufficient proof.** `DEVINIT(8259)` supplies default bases 0/8, but `init_state == 1` accepts different ICW2 bases. A flattened line equals the hardware vector only under appropriate programming or normalization. The frozen probe never initializes the PICs, so its values 4 and 8 do not settle the real guest contract.
+
+**Q2 — SMALLEST ESCAPE**
+
+**DERIVED — Yes: even the prescribed `M_sticky` is incorrectly predicted killed.** Delete the poll read’s `current_command = 0x0a`.
+
+The row that should catch it is `poll once`; that row stays green. In the frozen v2c probe’s `build_ack`, the sequence is:
+
+1. Successfully poll IRQ4.
+2. Explicitly select/read ISR, then IRR.
+3. Issue another poll into `s0`, with the request already consumed.
+4. Immediately read `s1`, which supplies `poll once`.
+
+An empty sticky poll returns zero, just as the intended IRR read returns zero. The other poll sites explicitly select their command. `PRETABLE.out`, `CHANNEL`, therefore gives the wrong observable for `M_sticky`. Merely moving the second read immediately after a single-source successful poll would still compare zero with zero.
+
+**DERIVED — There is also an unprescribed GT escape:** remove the final conditional assignment `if (n >= 0) odata = n;`, leaving the initial `last_int` value and both acknowledgements intact.
+
+- **Missing distinguishing row:** GT IACK with IRQ4 and slave IRQ8 pending together. `isa_interrupt_common` uses a flat scan, skipping IRQ2, and selects `last_int = 4`. The new acknowledge selects master cascade 2, then slave 0: IRQ8. Returning 4 identifies a different interrupt from the one acknowledged.
+- **Rows staying green:** `gt iack = 4` and `gtcasc iack = 8`, because each exercises one source. Their ISR/IRR checks also remain green.
+- **Table gap:** `B_gt` removes acknowledgement too, so its ISR failures do not establish coverage of the returned-line assignment.
+
+**NOT CHECKABLE — Measured survival and the completed prescribed-table outcome.** The packet supplies expectations, not completed scores. The settling artifact is the completed `SCORES.txt` with its frozen instrument identity. These are static conclusions, not claimed executions.
+
+**Q3 — OPTION-SET AND DESIGN COMPLETENESS**
+
+**(a) DERIVED — The hybrid is the contained compatibility form.** Its legacy branch already compares old and new **unmasked** request bitmaps. An additional “line was unmasked” condition is redundant. The ISR branch correctly leaves IRR alone under the selected model. Anchor: specific-EOI arm.
+
+**(b) READ — Lowest-numbered is correct for fixed priority.** The datasheet’s `Fully Nested Mode` assigns IRQ0 highest priority; `End of Interrupt (EOI)` clears the highest-priority active service bit. Rotation and special-mask semantics remain outside this implementation.
+
+**(c) DERIVED — The actual fold-free diff handles two pending slave requests correctly.**
+
+Master acknowledge clears IRR2 and lowers the CPU line if no other master request remains. Slave acknowledge consumes one slave request, sees the other, and asserts its `d->irq`, wired to `.isa.2`. `isa_interrupt_assert` snapshots the master bitmap **before** setting bit 2. `isa_interrupt_common` then observes the transition and raises the CPU line.
+
+The deleted manual pre-fold would conceal that transition. The actual diff does not strand the second request in this sequence. Anchors: `bus_isa_init`, `isa_interrupt_assert`, `isa_interrupt_common`.
+
+**(d) READ — MVME5500’s NULL-PIC path is reachable and guarded.** Its setup creates the GT controller without ISA PICs.
+
+**DERIVED — `n2 < 0` is unreachable in the ordinary serialized Malta path under the maintained cascade invariant.** Slave request/mask changes update the fold, and the two helper calls execute synchronously. If the invariant is violated, the fallback returns 2 after setting master ISR2. The supplied code does not establish an actual masking race between those calls.
+
+**(e) DERIVED — Both versions lack service-based priority inhibition, but their observations differ.** Both assert from `irr & ~ier`. FIX additionally consumes the acknowledged request and records ISR, allowing a subsequent poll to advance to another line while the first remains in service. HEAD can repeatedly return its lowest uncleared request. Reassertion between acknowledge and EOI also survives the new ISR-only EOI; HEAD’s consume could discard it. These changes must remain explicit under `i8259priority` and the accepted held-level approximation.
+
+**Q4 — SCOPE, RECORDS AND LANDING**
+
+**(a) DERIVED — Keep the narrowed sibling open.** Preserving HEAD behavior does not repair PReP/footbridge’s missing acknowledgement. Their readers still do not establish ISR service. Anchors: `dev_prep_access`, footbridge’s IACK reader, F2 `A3`.
+
+**(b) DERIVED — The proposed exposure description and MED WRONG-RESULT classification are reasonable.** Distinguish measured UART/PIT behavior from the one-shot-source loss derived from `dev_pckbc_tick`; the supplied detector does not measure every exposure named.
+
+**(c) DERIVED — Retain the listed follow-ups and the cascade CPU-line obligation.** Closing `i8259pollmask` is justified for the converted OCW3 poll path if this lands; the untouched default read remains mask-blind. Add explicit coverage obligations for the defective one-shot row and GT acknowledged-line identity. Newly live ISR initialization/AEOI behavior also needs disposition.
+
+**NOT CHECKABLE — Whether those records are actually filed, and their existing classifications.** Those records are outside the authorized reading scope. A permitted filing-status artifact would settle this.
+
+**(d) READ — The recorded totals agree with the packet:** re-pin 69/69; HEAD/FIX 77/77; L0 59/77 with CONTROL OK; L3 0/77 with CONTROL FAIL.
+
+**DERIVED — Roughly 2.5 minutes per leg is reasonable for a weekly regression test.** That is an engineering judgment, not verification of the repository’s runtime budget.
+
+**NOT CHECKABLE — The landing wiring and manifest increment.** The settling artifact is the reviewed landing diff containing the gate, keys, pins, and claim count. Equality to 77 must accompany successful control/completion checks; row count alone is insufficient. Revise the detector before freezing its landing identity.
+
+**(e) READ — The re-pin is honestly recorded as preceding FIX measurement, with two corrections required.**
+
+- The original witness’s `RESULTS_base.txt`, anchor `date`, says **06:51:11**, not **03:49**. `RUN_IDENTITY`, anchor `run dir`, corroborates `witness_065111`.
+- The re-pin follows the fix build. F2 `A3`’s stronger “before the code moves” wording is not supported by these timestamps.
+
+**DERIVED — Preserve the original observations as historical evidence.** The original unacknowledged-EOI FIX expectations and masked-poll contract were superseded design oracles. They become wrong records if represented as the final contract. Likewise, `eoi x8` demonstrates repeated observations, not eight independently re-established request clears, as F2 `A8` already recognizes.
+
+**Q5 — WHAT WAS MISSED**
+
+**READ / DERIVED — The detector’s prose and actual instruction sequence diverge.** `build_ack` does not test the claimed distinguishing one-shot behavior. Repair it with a second read whose IRR value differs from another poll result—for example, immediately after the masked IRQ4 poll, IRR is `0x10` while another masked poll returns zero.
+
+**READ / DERIVED — Making ISR live creates lifecycle obligations.** The ICW1 branch only sets `init_state`; it does not reset `current_command` or ISR. The datasheet explicitly requires initialization to restore IRR status selection, and ICW4 AEOI is explicitly unsupported by the stored state. No probe session initializes or reinitializes the PICs. The precise ISR-reset hardware requirement is **NOT CHECKABLE** from the text-only figure excerpt; the complete datasheet reset diagram would settle it.
+
+**READ / DERIVED — The shared GT change also reaches Cobalt’s GT64011.** `MACHINE_SETUP(cobalt)` creates ISA PICs and calls `dev_gt_init(..., 11)`; the edited IACK case has no Malta-only guard. Cobalt guest compatibility is **NOT CHECKABLE** from the two Malta sequences; its guest IACK consumer would settle it.
+
+**DERIVED — Two coverage claims need narrower wording.** `build_nonspec` obtains ISR `0x18` by acknowledging IRQ4 while higher-priority IRQ3 remains in service, thereby relying on the deferred priority defect. Separately, `check_words` makes mnemonic matching informational and controls only the displayed hex-word comparison. That establishes instruction loading integrity, not independent correctness of every encoding and operand.
+
+Nothing was built, executed, or modified during this review.

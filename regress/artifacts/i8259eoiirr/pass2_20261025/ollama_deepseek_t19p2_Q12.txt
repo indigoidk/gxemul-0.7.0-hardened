@@ -1,0 +1,28 @@
+VERDICT: SHIP WITH CHANGES — Q1(iii) unverified, Q2 third escape uncovered.
+
+## Q1 — PREMISE AUDIT
+
+**2.1** READ — git history not inlined, but stated as settled; no internal contradiction.  
+**2.2** READ — consistent with diff: helper reads `machine->isa_pic_data.pending_timer_interrupts` at call time; bus_isa.c remains unmodified but its decrement is bypassed.  
+**2.3** READ — stated as fetched; no contradiction, but see Q1(iii) for consumer-contract gap.  
+**2.4** READ — stated as checked; no contradiction.  
+**2.5** READ — diff matches all three repairs: no manual pre-fold, default read arm untouched, specific EOI keeps legacy consume.  
+**2.6** READ — consistent with row table.  
+**2.7** READ — consistent with witness re-pin description.  
+**2.8** READ — consistent with rate band and probe counter values.  
+
+No premise in 2.1–2.8 is self-contradictory or derivable as wrong from the packet. The only unsettled point is Q1(iii), which is a gap in 2.3.
+
+**(i) `d->isr & bit` discriminator** — DERIVED correct. The helper is the only setter of ISR; an ISR bit is set exactly when the line has been acknowledged and is in service. Therefore a guest cannot reach the legacy branch on a line that is in service, nor the ISR branch on one that is not, because ISR bit tracks in-service state precisely.
+
+**(ii) One-shot poll latch** — DERIVED correct. NetBSD’s poll sequence reads once per OCW3; Linux uses the GT IACK read, not the poll byte. No supported guest expects a second poll byte without re-issuing OCW3.
+
+**(iii) GT IACK return value** — NOT CHECKABLE from packet. The fix returns `n` (0–15), while the packet states real PIIX4 returns `irq_base + n` (vector byte). Whether Linux’s `mips_pcibios_iack` expects the line or the vector byte is not in the packet. Single fact that would settle it: the source or quoted return-value convention of `mips_pcibios_iack` in F2_RULINGS 1.7/1.8.
+
+## Q2 — THIRD ESCAPE
+
+**Edit:** In `pic8259_acknowledge`, retire the 8253 pending count on **any** pic1 acknowledge, not only line 0 — i.e. drop the `n == 0` guard from the retirement condition.
+
+**Row that should have caught it:** A row that acknowledges a non-zero pic1 line (e.g. line 4 in the `ack` session) and then checks that `pending_timer_interrupts` is unchanged. No such row exists.
+
+**Row that stays green:** `ack` row (`poll byte 0x84`, `poll isr 0x00/0x10`, etc.) — it exercises line 4 but never reads the timer count, so the mutant passes.

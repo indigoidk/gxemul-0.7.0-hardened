@@ -1,0 +1,526 @@
+#!/usr/bin/env python3
+"""i8259_eoi_probe.py -- rung-3 WITNESS (and later the DETECTOR) for ledger row `i8259eoiirr` (devices/dev_8259.c):
+the 8259 model's SPECIFIC EOI (OCW2 0x60|n) clears the request bit (IRR) of the acknowledged line, although on the
+chip an EOI only resets an in-service (ISR) bit and the request bit is cleared by the acknowledge (edge mode) or
+follows the line (level mode).  In this model the IRR IS the line state (bus_isa.c: isa_interrupt_assert sets the
+bit, isa_interrupt_deassert clears it) and no acknowledge exists, so an EOI drops a request the device still holds
+asserted until the device's next tick re-asserts it (ns16550, wdc) or its next event (one-shot sources).
+
+WITNESS REVISION (2026-10-25): the rows below are the first measurement; the wants in the FIX column are the design
+sketch (EOI leaves IRR alone) and are re-pinned by the design brief's ruling before any detector ships.
+
+SITES (src/devices/dev_8259.c at HEAD 94b247db; grep anchors):
+  * `DEVICE_ACCESS(8259)`, `case 0x00:` write: `idata == 0x20` the non-specific EOI (`d->irr &= ~d->isr; d->isr = 0;`
+    -- inert on IRR today because nothing sets ISR), the specific EOI arm `(idata >= 0x60 && idata <= 0x67)`:
+    `d->irr &= ~(1 << (idata & 7)); d->isr &= ~(1 << (idata & 7));` then the CPU line recomputed from `irr & ~ier`.
+  * `case 0x00:` read: `current_command` 0x0a -> irr, 0x0b -> isr, 0x0c / default -> `0x80 | lowest irr bit` (the poll).
+  * `case 0x01:` OCW1 (the mask, `d->ier`) / the ICW2-4 init bytes.
+  * src/devices/bus_isa.c: `isa_interrupt_assert()` / `isa_interrupt_deassert()` set and clear `pic->irr` bits;
+    `isa_interrupt_common()` folds pic2 into pic1 bit 2 and asserts the CPU line when `irr & ~ier` is non-zero.
+  * src/machines/machine_evbmips.c malta arm: `bus_isa_init(machine, ..., 0x18000000, 0x10000000)` -- ISA I/O at
+    physical 0x18000000 (KSEG1 0xb8000000): PIC1 +0x20/+0x21, PIC2 +0xa0/+0xa1, 8253 +0x40, ns16550 +0x3f8 (IRQ 4).
+
+LEVEL SOURCE: the ISA ns16550 (dev_ns16550.c:74-103) asserts its line on every tick (2^14 instructions) while
+IER_ETXRDY is set, the transmitter is empty (always, IIR_TXRDY) and MCR_IENABLE is set -- a steady level the probe
+turns on with two byte stores and waits out with a counted loop longer than one tick.
+
+TEMPLATE: regress/le_csrmask_probe.py (#573) -- its pty session driver, disassembler self-check (CONTROL 0: every
+emitted WORD checked against the emulator's own disassembly), raw transcript per session, breakpoint park with the
+pc verified, and the row/verdict/sentinel protocol; regress/wdc_lba_probe.py (#572) for the malta machine, the
+KSEG0 load address and the ISA KSEG1 window.
+
+USAGE: i8259_eoi_probe.py <base_bin> <fix_bin | GATE | -> <outdir>   (as the template: WITNESS / two legs / GATE)
+The output ends with the sentinel I8259EOI_PROBE_DONE once; raw transcripts under <outdir>/raw/.
+"""
+import os
+import pty
+import re
+import select
+import sys
+import time
+
+BASE_BIN = sys.argv[1] if len(sys.argv) > 1 else "/tmp/gxt19/base/gxemul"
+FIX_ARG = sys.argv[2] if len(sys.argv) > 2 else "-"
+OUTDIR = sys.argv[3] if len(sys.argv) > 3 else "/tmp/gxt19/run"
+GATE = (FIX_ARG == "GATE")
+RAWDIR = None                      # OUTDIR/raw
+
+MACHINE = ["-E", "evbmips", "-e", "malta"]   # MIPS Malta evaluation board, little-endian, UNMODIFIED
+BASE = 0xffffffff80100000          # KSEG0, physical 0x00100000 (inside malta's RAM; the #572 probe's address)
+ISA_HI = 0xb800                    # KSEG1 0xffffffffb8000000 = physical 0x18000000, the ISA I/O window
+RAM_HI = 0x8020                    # KSEG0 scratch (physical 0x200000) for RAM liveness
+RAM_MAGIC = 0x5a
+PIC1_CMD, PIC1_IMR = 0x20, 0x21
+PIC2_CMD, PIC2_IMR = 0xa0, 0xa1
+UART_IER, UART_MCR = 0x3f9, 0x3fc
+IER_ETXRDY = 0x02                  # dev_ns16550.c: transmitter-empty interrupt enable
+MCR_IENABLE = 0x08                 # the OUT2 gate the model requires before asserting
+OCW3_IRR, OCW3_ISR, OCW3_POLL = 0x0a, 0x0b, 0x0c
+EOI_NONSPEC = 0x20
+EOI_SPEC4 = 0x64                   # specific EOI for line 4 (the UART)
+DELAY_ITER = 12000                 # 3 instructions per iteration: ~36k instructions > two UART ticks (2^14 each)
+
+zero, v0, v1, a0, a1, a2, a3 = 0, 2, 3, 4, 5, 6, 7
+t0, t1, t2, t3, t4, t5, t6, t7 = 8, 9, 10, 11, 12, 13, 14, 15
+s0, s1, s2, s3, s4, s5 = 16, 17, 18, 19, 20, 21
+NAME = {zero: "zr", v0: "v0", v1: "v1", a0: "a0", a1: "a1", a2: "a2", a3: "a3",
+        t0: "t0", t1: "t1", t2: "t2", t3: "t3", t4: "t4", t5: "t5", t6: "t6", t7: "t7",
+        s0: "s0", s1: "s1", s2: "s2", s3: "s3", s4: "s4", s5: "s5"}
+
+
+def I(op, rs, rt, imm):
+    return (op << 26) | (rs << 21) | (rt << 16) | (imm & 0xffff)
+
+
+def R(rs, rt, rd, sa, funct):
+    return (rs << 21) | (rt << 16) | (rd << 11) | (sa << 6) | funct
+
+
+def lui(rt, imm):
+    return I(0x0F, 0, rt, imm)
+
+
+def ori(rt, rs, imm):
+    return I(0x0D, rs, rt, imm)
+
+
+def addiu(rt, rs, imm):
+    return I(0x09, rs, rt, imm)
+
+
+def andi(rt, rs, imm):
+    return I(0x0C, rs, rt, imm)
+
+
+def sb(rt, off, base):
+    return I(0x28, base, rt, off)
+
+
+def lbu(rt, off, base):
+    return I(0x24, base, rt, off)
+
+
+def beq(rs, rt, off):
+    return I(0x04, rs, rt, off)
+
+
+def bne(rs, rt, off):
+    return I(0x05, rs, rt, off)
+
+
+def sll(rd, rt, sa):
+    return R(0, rt, rd, sa, 0x00)
+
+
+def srl(rd, rt, sa):
+    return R(0, rt, rd, sa, 0x02)
+
+
+def or_(rd, rs, rt):
+    return R(rs, rt, rd, 0, 0x25)
+
+
+NOP = 0
+prog = []
+
+
+def reset_prog():
+    del prog[:]
+
+
+def emit(word, mn):
+    """mn is checked against the EMULATOR'S OWN disassembly (CONTROL 0): the word is the authoritative check, the
+    mnemonic a rendering counted separately."""
+    prog.append((word, mn))
+
+
+def e_li(rt, v):
+    emit(ori(rt, zero, v), "ori %s,zr,0x%x" % (NAME[rt], v & 0xffff))
+
+
+def e_out(port, v, tmp=t3):
+    """Byte store of v to ISA port: ori tmp,zr,v; sb tmp,port(t0)."""
+    e_li(tmp, v)
+    emit(sb(tmp, port, t0), "sb %s,%d(t0)" % (NAME[tmp], port))
+
+
+def e_in(rt, port):
+    emit(lbu(rt, port, t0), "lbu %s,%d(t0)" % (NAME[rt], port))
+
+
+def e_ocw3_read(rt, which):
+    """Select an OCW3 read register (irr 0x0a / isr 0x0b / poll 0x0c) on PIC1 and read it into rt."""
+    e_out(PIC1_CMD, which)
+    e_in(rt, PIC1_CMD)
+
+
+def e_uart_level_on():
+    """Turn the ISA ns16550 into a steady level source on IRQ 4: MCR_IENABLE, then IER_ETXRDY."""
+    e_out(UART_MCR, MCR_IENABLE)
+    e_out(UART_IER, IER_ETXRDY)
+
+
+def e_delay():
+    """A counted loop longer than one ns16550 tick: ori t4,zr,N; loop: addiu t4,t4,-1; bne t4,zr,loop; nop."""
+    e_li(t4, DELAY_ITER)
+    emit(addiu(t4, t4, -1), "addiu t4,t4,-1")
+    emit(bne(t4, zero, -2), "bne t4,zr,0x")
+    emit(NOP, "nop")
+
+
+def begin():
+    """Common preamble: t0 = ISA I/O window, t2 = RAM scratch, and the RAM liveness control (the same sb/lbu shapes
+    through plain RAM, so a device row reading 0 can never be blamed on a bad encoding): v0 = RAM round-trip."""
+    reset_prog()
+    emit(lui(t0, ISA_HI), "lui t0,0x%x" % ISA_HI)
+    emit(lui(t2, RAM_HI), "lui t2,0x%x" % RAM_HI)
+    e_li(t3, RAM_MAGIC)
+    emit(sb(t3, 0, t2), "sb t3,0(t2)")
+    emit(lbu(v0, 0, t2), "lbu v0,0(t2)")
+
+
+def end():
+    halt = len(prog)
+    emit(beq(zero, zero, -1), "b 0x")
+    emit(NOP, "nop")
+    return list(prog), BASE + halt * 4
+
+
+def build_quiet():
+    """No source enabled: IRR -> v1 (and again -> a2, the stable control), ISR -> a0, the poll byte -> a1,
+    PIC1's mask register -> a3, PIC2's IRR -> s0."""
+    begin()
+    e_ocw3_read(v1, OCW3_IRR)
+    e_in(a2, PIC1_CMD)
+    e_ocw3_read(a0, OCW3_ISR)
+    e_ocw3_read(a1, OCW3_POLL)
+    e_in(a3, PIC1_IMR)
+    e_out(PIC2_CMD, OCW3_IRR)
+    e_in(s0, PIC2_CMD)
+    p, halt = end()
+    return p, halt, {"ram": "v0", "irr": "v1", "stable": "a2", "isr": "a0", "poll": "a1", "imr": "a3", "irr2": "s0"}
+
+
+def build_level():
+    """The UART level on IRQ 4, then the specific EOI: IRR with the level -> v1 (again -> a2), ISR -> a0, then the
+    specific EOI 0x64 and IRR read two instructions later -> a1; the EOI+read repeated eight more times, bit 4 of
+    each read shifted into a3 (0x00 = cleared every time, 0xff = kept every time); ISR after the EOI -> s0."""
+    begin()
+    e_uart_level_on()
+    e_delay()
+    e_ocw3_read(v1, OCW3_IRR)
+    e_in(a2, PIC1_CMD)
+    e_ocw3_read(a0, OCW3_ISR)
+    e_li(t5, OCW3_IRR)
+    e_li(t6, EOI_SPEC4)
+    emit(sb(t6, PIC1_CMD, t0), "sb t6,%d(t0)" % PIC1_CMD)
+    emit(sb(t5, PIC1_CMD, t0), "sb t5,%d(t0)" % PIC1_CMD)
+    e_in(a1, PIC1_CMD)
+    emit(ori(a3, zero, 0), "ori a3,zr,0x0")
+    for _ in range(8):
+        emit(sb(t6, PIC1_CMD, t0), "sb t6,%d(t0)" % PIC1_CMD)
+        emit(sb(t5, PIC1_CMD, t0), "sb t5,%d(t0)" % PIC1_CMD)
+        e_in(t7, PIC1_CMD)
+        emit(andi(t7, t7, 0x10), "andi t7,t7,0x10")
+        emit(srl(t7, t7, 4), "srl t7,t7,0x4")
+        emit(sll(a3, a3, 1), "sll a3,a3,0x1")
+        emit(or_(a3, a3, t7), "or a3,a3,t7")
+    e_ocw3_read(s0, OCW3_ISR)
+    p, halt = end()
+    return p, halt, {"ram": "v0", "irr": "v1", "stable": "a2", "isr": "a0", "after": "a1", "x8": "a3", "isr2": "s0"}
+
+
+def build_other():
+    """The other arms with the level on: IRR -> v1 (again -> a2); the NON-specific EOI 0x20 then IRR -> a0 (inert
+    today: ISR is empty); OCW1 masking line 4 then IRR -> a1 (the mask must not touch IRR); the poll byte -> a3;
+    the mask register read back -> s0."""
+    begin()
+    e_uart_level_on()
+    e_delay()
+    e_ocw3_read(v1, OCW3_IRR)
+    e_in(a2, PIC1_CMD)
+    e_out(PIC1_CMD, EOI_NONSPEC)
+    e_ocw3_read(a0, OCW3_IRR)
+    e_out(PIC1_IMR, 0x10)
+    e_ocw3_read(a1, OCW3_IRR)
+    e_ocw3_read(a3, OCW3_POLL)
+    e_in(s0, PIC1_IMR)
+    p, halt = end()
+    return p, halt, {"ram": "v0", "irr": "v1", "stable": "a2", "nonspec": "a0", "masked": "a1", "poll": "a3", "imr": "s0"}
+
+
+SESSION_ORDER = [("quiet", build_quiet), ("level", build_level), ("other", build_other)]
+
+
+class Emu(object):
+    def __init__(self, argv, boot_wait=5.0):
+        self.buf = bytearray()
+        self.pid, self.fd = pty.fork()
+        if self.pid == 0:
+            try:
+                os.execvp(argv[0], argv)
+            finally:
+                os._exit(127)
+        self.drain(boot_wait)
+
+    def drain(self, seconds):
+        end_t = time.time() + seconds
+        while time.time() < end_t:
+            r, _, _ = select.select([self.fd], [], [], 0.05)
+            if self.fd in r:
+                try:
+                    d = os.read(self.fd, 65536)
+                except OSError:
+                    return
+                if not d:
+                    return
+                self.buf.extend(d)
+
+    def send(self, cmd, wait=0.4):
+        start = len(self.buf)
+        data = (cmd + "\n").encode()
+        view = memoryview(data)
+        while len(view):
+            try:
+                n = os.write(self.fd, view)
+            except OSError:
+                break
+            view = view[n:]
+            if len(view):
+                self.drain(0.05)
+        self.drain(wait)
+        return bytes(self.buf[start:]).decode("latin1", "replace")
+
+    def close(self, log):
+        try:
+            os.write(self.fd, b"quit\n")
+            self.drain(0.4)
+        except OSError:
+            pass
+        for fn in (lambda: os.close(self.fd),
+                   lambda: os.kill(self.pid, 9),
+                   lambda: os.waitpid(self.pid, 0)):
+            try:
+                fn()
+            except OSError:
+                pass
+        with open(log, "w") as f:
+            f.write(bytes(self.buf).decode("latin1", "replace"))
+
+
+def reg(emu, name):
+    for _ in range(5):
+        out = emu.send("print %s" % name, wait=0.35)
+        m = re.findall(r"0x[0-9a-fA-F]+", out)
+        if m:
+            return int(m[-1], 16)
+        emu.drain(0.25)
+    return None
+
+
+def run_session(binary, prog_list, halt_addr, rawbin, regmap, tag, out):
+    """Run one guest program to its halt breakpoint and read back the capture regs."""
+    with open(rawbin, "wb") as f:
+        for w, _ in prog_list:
+            f.write(bytes([w & 0xff, (w >> 8) & 0xff, (w >> 16) & 0xff, (w >> 24) & 0xff]))
+
+    argv = [binary, "-V"] + MACHINE + ["0x%x:%s" % (BASE, rawbin)]
+    out("    [%s] %s" % (tag, " ".join(argv)))
+    emu = Emu(argv)
+
+    #  CONTROL 0 -- every hand-encoded word checked against the emulator's own disassembler.
+    dwait = max(3.0, len(prog_list) * 0.03)
+    dis = emu.send("unassemble 0x%x 0x%x" % (BASE, BASE + len(prog_list) * 4), wait=dwait)
+    seen = {}
+    for line in dis.splitlines():
+        m = re.match(r"^\s*([0-9a-f]{8,16}):\s+([0-9a-f]{8})\s+(?:<-)?\s*(.*)$", line)
+        if m:
+            seen[int(m.group(1), 16) & 0xffffffff] = (m.group(2), m.group(3).strip())
+    w_ok = m_ok = 0
+    bad = []
+    for i, (w, want_mn) in enumerate(prog_list):
+        addr = (BASE + i * 4) & 0xffffffff
+        hit = seen.get(addr)
+        if hit is None:
+            bad.append("      BAD 0x%08x no disassembly line" % addr)
+            continue
+        gotw, gotmn = hit
+        norm = " ".join(gotmn.replace("\t", " ").split())
+        if gotw == "%08x" % w:
+            w_ok += 1
+        else:
+            bad.append("      BAD 0x%08x word %s vs %08x" % (addr, gotw, w))
+        if norm.startswith(" ".join(want_mn.split())):
+            m_ok += 1
+    enc_ok = (w_ok == len(prog_list))
+    out("    encodings: %d/%d words agree with the disassembler (CONTROL); %d/%d mnemonic renderings match "
+        "(informational)" % (w_ok, len(prog_list), m_ok, len(prog_list)))
+    for l in bad[:8]:
+        out(l)
+
+    emu.send("breakpoint add 0x%x" % halt_addr, wait=0.5)
+    t = time.time()
+    emu.send("continue", wait=1.0)
+    deadline = time.time() + 120
+    hit = False
+    seen_pc = None
+    while time.time() < deadline:
+        emu.drain(0.5)
+        tail = bytes(emu.buf[-4000:]).decode("latin1", "replace")
+        m = re.search(r"BREAKPOINT:\s*pc\s*=\s*0x([0-9a-fA-F]+)", tail)
+        if m:
+            seen_pc = int(m.group(1), 16) & 0xffffffff
+            hit = (seen_pc == (halt_addr & 0xffffffff))
+            break
+    out("    parked at 0x%016x: %s   (%.2f s)"
+        % (halt_addr, "yes (pc verified)" if hit else
+           ("*** NO: stopped at 0x%08x ***" % seen_pc if seen_pc is not None else "*** NO ***"),
+           time.time() - t))
+
+    got = {}
+    for logical, mips in regmap.items():
+        v = reg(emu, mips)
+        got[logical] = None if v is None else (v & 0xffffffff)
+    emu.close(os.path.join(RAWDIR, "%s.txt" % tag))
+    return got, enc_ok, hit
+
+
+def show(v):
+    return "0x%02x" % v if isinstance(v, int) else ("??" if v is None else str(v))
+
+
+def bit4(v):
+    return None if v is None else (v >> 4) & 1
+
+
+def build_rows(sess):
+    """Return rows as (label, kind, got, want_head, want_fix, mode); mode 'eq' only.  WITNESS REVISION: the FIX wants
+    carry the design sketch and are re-pinned by the brief's ruling."""
+    rows = []
+    for name, _ in SESSION_ORDER:
+        g = sess.get(name, {}).get("ram")
+        rows.append(("ram:%s" % name, "control", g, RAM_MAGIC, RAM_MAGIC, "eq"))
+    q = sess.get("quiet", {})
+    rows.append(("quiet irr4", "control", bit4(q.get("irr")), 0, 0, "eq"))
+    rows.append(("quiet isr", "control", q.get("isr"), 0x00, 0x00, "eq"))
+    rows.append(("quiet poll", "control", (None if q.get("poll") is None else q.get("poll") & 0x80), 0x00, 0x00, "eq"))
+    lv = sess.get("level", {})
+    rows.append(("level irr4", "control", bit4(lv.get("irr")), 1, 1, "eq"))
+    rows.append(("level isr", "contract", lv.get("isr"), 0x00, 0x00, "eq"))
+    rows.append(("eoi irr4", "symptom", bit4(lv.get("after")), 0, 1, "eq"))
+    rows.append(("eoi x8", "symptom", lv.get("x8"), 0x00, 0xff, "eq"))
+    rows.append(("eoi isr", "contract", lv.get("isr2"), 0x00, 0x00, "eq"))
+    o = sess.get("other", {})
+    rows.append(("other irr4", "control", bit4(o.get("irr")), 1, 1, "eq"))
+    rows.append(("nonspec irr4", "control", bit4(o.get("nonspec")), 1, 1, "eq"))
+    rows.append(("masked irr4", "contract", bit4(o.get("masked")), 1, 1, "eq"))
+    rows.append(("masked imr", "control", o.get("imr"), 0x10, 0x10, "eq"))
+    rows.append(("poll byte", "contract", o.get("poll"), 0x84, 0x84, "eq"))
+    for name, _ in SESSION_ORDER:
+        s = sess.get(name, {})
+        first = s.get("irr")
+        rows.append(("stable:%s" % name, "control", s.get("stable"), first, first, "eq"))
+    return rows
+
+
+def row_ok(mode, got, want, column="HEAD"):
+    if got is None or want is None:
+        return False
+    return got == want
+
+
+def run_leg(leg, binary, column, out):
+    out("-" * 86)
+    out("LEG %s -- %s build, judged against the %s column" % (leg, leg, column))
+    out("-" * 86)
+    sess = {}
+    enc_all = hit_all = True
+    for name, builder in SESSION_ORDER:
+        prog_list, halt_addr, regmap = builder()
+        got, enc_ok, hit = run_session(binary, prog_list, halt_addr,
+                                       os.path.join(RAWDIR, "%s_%s.bin" % (leg, name)),
+                                       regmap, "%s_%s" % (leg, name), out)
+        sess[name] = got
+        out("      raw: " + "  ".join("%s=%s" % (k, show(v)) for k, v in got.items()))
+        enc_all = enc_all and enc_ok
+        hit_all = hit_all and hit
+    out("")
+    out("  %-14s %-8s %-8s %-8s" % ("row", "got", "head", "fix"))
+    npass = nfail = 0
+    ctrl_ok = True
+    for label, kind, got, wh, wf, mode in build_rows(sess):
+        want = wh if column == "HEAD" else wf
+        ok = row_ok(mode, got, want, column)
+        npass += ok
+        nfail += (not ok)
+        if kind == "control" and not ok:
+            ctrl_ok = False
+        if kind == "symptom":
+            out("  %-14s %-8s head %-6s fix %-6s [%s] %s"
+                % (label, show(got), show(wh), show(wf), column, "ok" if ok else "FAIL"))
+        else:
+            out("  %-14s %-8s want %-8s %s" % (label, show(got), show(want), "ok" if ok else "FAIL"))
+    ntot = npass + nfail
+    leg_ctrl = ctrl_ok and enc_all and hit_all
+    out("")
+    out("  %d/%d passed" % (npass, ntot))
+    out("  CONTROL=%s" % ("PASS" if leg_ctrl else "FAIL"))
+    leg_pass = (nfail == 0 and leg_ctrl)
+    out("  LEG %s VERDICT: %s" % (leg, "PASS" if leg_pass else "FAIL"))
+    out("")
+    return leg_pass, npass, ntot, leg_ctrl
+
+
+def main():
+    global RAWDIR
+    assert row_ok("eq", 1, 0, "FIX") is False and row_ok("eq", None, 0, "FIX") is False
+    os.makedirs(OUTDIR, exist_ok=True)
+    RAWDIR = os.path.join(OUTDIR, "raw")
+    os.makedirs(RAWDIR, exist_ok=True)
+    lines = []
+
+    def out(s=""):
+        lines.append(s)
+        print(s)
+        sys.stdout.flush()
+
+    out("=" * 86)
+    out("i8259eoiirr -- RUNG-3 WITNESS on unmodified `evbmips -e malta` (ISA 8259 pair, specific EOI vs IRR)")
+    out("=" * 86)
+    out("date      %s" % time.strftime("%Y-%m-%d %H:%M:%S"))
+    out("machine   evbmips -e malta   LITTLE endian   (machine desc UNMODIFIED)")
+    out("isa       I/O physical 0x18000000 (KSEG1 0xffffffffb8000000): PIC1 +0x20/+0x21, ns16550 +0x3f8 (IRQ 4)")
+    out("base bin  %s" % BASE_BIN)
+    if GATE:
+        out("mode      GATE -- one leg vs the FIX column")
+    else:
+        out("fix bin   %s" % ("(none -- WITNESS run)" if FIX_ARG == "-" else FIX_ARG))
+    out("")
+    if GATE:
+        legs = [("gate", BASE_BIN, "FIX")]
+    else:
+        legs = [("base", BASE_BIN, "HEAD")]
+        if FIX_ARG != "-":
+            legs.append(("fix", FIX_ARG, "FIX"))
+    results = []
+    for leg, binary, column in legs:
+        leg_pass, npass, ntot, leg_ctrl = run_leg(leg, binary, column, out)
+        results.append(leg_pass)
+        if GATE:
+            out("I8259EOI_CONTROL=%s" % ("OK" if leg_ctrl else "FAIL"))
+            out("I8259EOI_RESULT=%d/%d" % (npass, ntot))
+        else:
+            out("I8259EOI_CONTROL_%s=%s" % (leg, "OK" if leg_ctrl else "FAIL"))
+            out("I8259EOI_RESULT_%s=%d/%d" % (leg, npass, ntot))
+    out("=" * 86)
+    allok = all(results)
+    out("VERDICT   %s" % ("every leg passed its own column" if allok
+                          else "*** a leg failed -- read the FAIL lines above ***"))
+    out("I8259EOI_PROBE_DONE")
+    with open(os.path.join(OUTDIR, "RESULTS.txt"), "w") as f:
+        f.write("\n".join(lines) + "\n")
+    sys.exit(0 if allok else 1)
+
+
+if __name__ == "__main__":
+    main()

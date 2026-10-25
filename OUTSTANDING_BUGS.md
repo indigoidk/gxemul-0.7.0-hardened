@@ -25928,3 +25928,50 @@ phase, while `wdc_new_command_reset()` clears `atapi_phase` at `:917` (Astra, pa
 * **`#572` follow-up `2956c32d`, addendum**: its "got 78 vs pinned 77" counts the peer's untracked `regress/lca_isaphys_probe.py`
   (the census counts the tree the battery runs in); the committed-HEAD defect was the name set (`wdc_lba_probe.py` promptless
   and not grandfathered), not the tracked count.
+
+## 2026-10-25 -- `#574` i8259eoiirr (research batch T19): the 8259 model's acknowledge; the specific EOI no longer clears the request bit of a line in service; the 8253's event retired at the acknowledge
+
+* **FIXED** -- `i8259eoiirr` (MED, WRONG-RESULT): `src/devices/dev_8259.c` gains `pic8259_acknowledge()` (ISR bit set, IRR bit cleared,
+  the 8253's pending event retired on pic1 line 0 through the machine's published pointer, the PIC output recomputed), called by the
+  one-shot OCW3 poll read and by `src/devices/dev_gt.c`'s GT IACK read (master, then the slave through the cascade; the line returned
+  as `last_int` was); the specific EOI resets the ISR bit when the line is in service and otherwise consumes the request as before
+  (the legacy path for PReP/footbridge, whose vector reads acknowledge nothing); the non-specific EOI resets the lowest set ISR bit.
+  Witness (rung 3, unmodified `evbmips -e malta`): `regress/artifacts/i8259eoiirr/witness_20261025/` (06:51 WSL clock, 19 rows, before any
+  edit) and `witness_20261025b/` / `_c/` / `_d/` / `_e/` (the re-pinned probe on unmodified HEAD at each revision -- v2, v2d, v2e, v2f -- each before any fix measurement of that revision); the storm measured with a
+  guest handler counting deliveries (`pass1_20261025/rate_explore_20261025/`: 7,415 IRQ 0 interrupts in 180M instructions at a programmed 18 Hz).
+  Detector `regress/i8259_eoi_probe.py` (123 rows, md5 c1fa683e): pre-fix GATE 91/123 (the 32 symptom rows red), fix 123/123, null medium
+  0/123 CONTROL FAIL (`pass2_20261025/legs_133457/`); kill table 26/29 killed (`killtable_20261025/`).  F2d closed the chain
+  (`pass2_20261025/f2d_20261025/F2D_RULINGS.md`); the retire-guard pair is OWED REPAIR under `pit8253retireguard` (its ">= 2 events"
+  warrant withdrawn; the attempt classifier-stopped, not retried).  State `held` for the Fable
+  question and the roster question (the row's hold question); closes when discharged.
+* **NARROWED** -- `i8259isrnever`: the poll read and the GT read now set ISR; what remains is the PReP (`dev_prep.c`) and footbridge
+  (`dev_footbridge.c`) vector reads, which return `last_int` with no acknowledge (no witness machine here; their guests' EOIs keep the
+  legacy consume).
+* **READ** into `8259cmdhalt`: the specific-EOI arm also captures 0x21-0x27 (non-specific on the chip) and 0xe0-0xe7 (rotate not done);
+  0xa0-0xa7 (rotate on non-specific EOI) and a slave-line EOI byte such as 0x6c reach the `cpu->running = 0` arm.  Reachability now
+  READ at the arm by three seats and the main loop; still HELD with the host-stop class.
+* **Filed**: `pit8253pendingptr` (MED -- `bus_isa.c` and `dev_v3.c` snapshot `isa_pic_data.pending_timer_interrupts` before `DEVINIT
+  (8253)` publishes it; the decrement in `isa_interrupt_deassert()` is dead code on every machine; `dev_8253.c` never deasserts);
+  `pit8253count0` (LOW -- a zero count, 65536 on the chip, maps to hz 0 and a timer clamped to 1e-8 Hz; MEASURED: no delivery in 60M
+  instructions); `i8259ocw2nonspec` (LOW -- 0x21-0x27 treated as specific; rotation unimplemented); `algorisaintclear` (LOW --
+  `dev_algor.c`'s LOCINT/ISAINT reads clear PIC request bits, a read-acknowledge outside the PIC; Algor only); `i8259ltim` (LOW -- ICW1
+  bit 3 prints and is ignored; NetBSD's ELCR writes land nowhere); `i8259priority` (LOW -- ISR does not inhibit equal/lower requests;
+  no nested-priority logic); `i8259cascline` (LOW -- the two-slave-request CPU-line observable that no register row reads: the owed row
+  for the D_fold mutant, an EXPECTED ESCAPE disclosed in PRETABLE.out); `i8259aeoi` (LOW -- ICW4 AEOI is unsupported while the
+  acknowledge always sets ISR, so an AEOI guest accumulates ISR bits; the output never consults ISR, so no line is lost; pass 2);
+  `i8259icwreset` (LOW -- ICW1 resets neither ISR nor `current_command`; pass 2); `i8259ocw3revert` (LOW -- the one-shot poll
+  read reverts `current_command` to the IRR where the chip remembers the last RR/RIS selection; no documented guest observes it;
+  F2b); `i8259smm` (LOW -- OCW3 0x68 special mask mode is an empty TODO arm; NetBSD/malta sets it at attach and never clears
+  it; the acknowledge's `~ier` ignores it as HEAD did; F2b); `pit8253retireguard` (LOW -- the retire guard's `d == p->pic1` and
+  `n == 0` conjuncts: a wrong extra retirement is observable only with a pending count >= 2, which only host time produces; a
+  BAND row is constructible -- mask IRQ 0, wait for two host fires, acknowledge the RTC, unmask, count deliveries -- and was
+  declined this round on cost; the two mutants were MEASURED to escape, as disclosed; F2b).
+* **OWED by `#574`**: the Fable hold's question; the roster question (`rosterexcused`); Argon's answers by the web route (OWED for pass 1, F2, pass 2 and F2b -- the web route's single sender slept on the meter (8.3% at 07:44) until 12:32:15 CDT; the agy transport quota-walled until ~2026-10-30).
+* Pass-1 brief and rulings: `pass1_20261025/packet.md`, `PASS1_RULINGS.md`, `f2_20261025/F2_RULINGS.md`; pass 2: `pass2_20261025/packet.md`,
+  `codex_t19p2.txt`, `grok_t19p2.txt`, `ollama_glm_t19p2_Q12/Q34.txt`, `ollama_deepseek_t19p2_Q12/Q34.txt`; the adjudication under `f2_20261025/`; pass 2 found two instrument defects (the one-shot row vacuous as built -- `M_sticky` ESCAPED the first table,
+  `killtable_20261025/SCORES_v2c.txt`; the GT read's returned line unrowed), both repaired in v2d before the table of record
+  (`PASS2_RULINGS.md` I1-I2; `PRETABLE.out`'s correction block); its adjudication (`pass2_20261025/f2b_20261025/`, six RATIFY
+  WITH CHANGES) raised six more instrument cells, each measured as a mutant first and closed in v2e (`F2B_RULINGS.md`;
+  `PRETABLE.out`'s v2e block); the repair's own pass under `pass2_20261025/f2c_20261025/` found the same class again and v2g
+  closed it as the class closure (`F2C_RULINGS.md`; `PRETABLE.out`'s v2g block = the enumeration of every predicate the fix
+  adds, a row or a disclosure per cell), verified by F2d under `pass2_20261025/f2d_20261025/`.

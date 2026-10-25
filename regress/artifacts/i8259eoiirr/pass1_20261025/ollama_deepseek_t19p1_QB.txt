@@ -1,0 +1,10 @@
+NOT READY — (A) alone fails the stated floor because it makes the never-deasserting 8253 IRQ0 a permanent level; ship (C) or (A)+separate 8253/pulse-line clear, not (A) alone.
+
+Q3 (option-set completeness):  
+READ from §2.8: `dev_jazz.c` already provides the fork’s per-line level-shadow idiom (`isa_int_asserted`), which candidate D names. Candidate C is the pulse/edge member and covers the 8253 if line 0 is marked pulse. I do not see a missing general controller-level option. The only unnamed variant is device-specific: make `dev_8253.c` deassert on EOI/timer expiry; that is not a PIC option and is inferior to C because it hardcodes IRQ0. So the option set is complete at controller level.
+
+Q4 (scope):  
+READ from §2.2/§2.5: ISR is never set; EOI arms clear ISR but no PIC ISR writer exists; poll read returns `0x80 | lowest irr` and does not set ISR.  
+REASONED: (A) leaves the CPU line as `irr & ~ier`, so EOI is a no-op. For level sources that deassert when their condition clears, this is correct; if still asserted after the handler, the CPU re-interrupts immediately. For the 8253, READ from §2.4 says it never calls `isa_interrupt_deassert` and its pending count is never decremented; under (A), after first IRQ0 the IRR0 bit remains set forever and the CPU line stays asserted, so a guest using the PIT cannot make progress. The pre-fix EOI clear masked this by pulsing IRR0 each EOI.  
+NOT CHECKABLE from this packet: whether malta Linux/NetBSD actually programs the 8253. Settling fact: runtime boot with IRR0/8253 `in_use` observed, or read the malta clock-init path.  
+Scope: `i8259isrnever` should not join this round. (B) changes poll/ISR semantics and degrades to (A) on guests that never poll (PReP IACK/Jazz vector), so it is a separate row. Ship (A) only if the 8253 is proven not guest-reachable; otherwise (C) or a 8253-specific deassert is a prerequisite.

@@ -1,0 +1,1128 @@
+#!/usr/bin/env python3
+"""i8259_eoi_probe.py -- the DETECTOR (and the re-pinned rung-3 witness) for ledger row `i8259eoiirr` (#574),
+src/devices/dev_8259.c (+ the GT64120 interrupt-acknowledge read in src/devices/dev_gt.c), on the UNMODIFIED
+`evbmips -e malta` machine.
+
+THE DEFECT, as the pass-1 brief and its adjudication settled it: the 8259 model had NO interrupt acknowledge.  The
+OCW3 poll read returned a (mask-blind) poll byte and set no in-service (ISR) bit; the GT64120 IACK read returned the
+last asserted line and acknowledged nothing; and the SPECIFIC EOI (OCW2 0x60|n) stood in for the missing acknowledge
+by clearing the REQUEST bit (IRR) of the EOI'd line -- although on the chip an EOI resets an ISR bit only, and the
+request bit is cleared by the acknowledge.  Two guest-visible consequences on malta: a request a device still holds
+is dropped by the EOI until the device re-asserts (the one-shot pckbc never does while its queue holds data), and the
+8253 timer -- whose pending-event count was never retired, because the only decrement sat in a bus deassert the 8253
+never issues -- was re-delivered once per 2^14-instruction emulator tick instead of once per programmed period
+(measured: 7,415 IRQ 0 deliveries in 180M guest instructions at a programmed 18 Hz; rate_explore_20261025/).
+
+THE FIX (design (G'), F2 of pass 1): the acknowledge exists -- `pic8259_acknowledge()` moves the highest-priority
+unmasked request to service (ISR bit set, IRR bit cleared, the 8253's event retired on pic1 line 0), called by the
+read after an OCW3 poll (one-shot: later reads return the IRR) and by the GT IACK read; the specific EOI resets the
+ISR bit when the line is in service and otherwise CONSUMES the request as it always did (the legacy path for machines
+whose vector read acknowledges nothing: PReP, footbridge); the non-specific EOI resets the lowest set ISR bit.
+
+ORACLE RE-PIN (the oracle-correction rule): the pass-1 witness (witness_20261025/, 19 rows) pinned `eoi irr4` and
+`eoi x8` as SYMPTOM rows wanting the request bit KEPT after an un-acknowledged EOI.  Under (G') an EOI with no
+preceding acknowledge keeps the legacy consume, so those two rows are RE-PINNED here as the CONTRACT row `eoi noack`
+(both columns 0); the symptom rows are the ACKNOWLEDGE rows below.  Each revision of this probe is run on the
+UNMODIFIED HEAD clone first (HEAD column: witness_20261025b/ for v2, witness_20261025c/ for v2d, witness_20261025d/ for
+v2e) and the pre-fix build
+is measured RED against the FIX column (the L0 leg) before any fix measurement is trusted.  Honest order note: the fix
+clone was built (07:56) before the re-pinned probe first ran on HEAD (08:01); what precedes every fix MEASUREMENT is
+the HEAD run, not the code change.  The pass-1 witness ran at 06:51 (WSL clock; witness_20261025/RESULTS_base.txt).
+
+ROWS (kinds: control = the instrument's own liveness/signature; contract = pinned either way; symptom = HEAD red /
+FIX green; the rate row is a BAND.  v2e relabelled the both-columns DEVICE values -- the poll bytes and the IACK
+values -- from control to contract: a model value pinned either way is a contract about the model, not an
+instrument control, and a mutant that reds one is KILLED, not an instrument failure (F2b, four seats)):
+  quiet    nothing pending: IRR 0, ISR 0, poll byte 0x00, IMR 0; the GT IACK read returns last_int 0 in both columns
+           (`quiet iack`, v2e: a read that handed back the acknowledge's -1 would read 0xffffffff).
+  level    the ISA ns16550 (IRQ 4) level: IRR bit 4 set; ISR 0; `eoi noack` (EOI 0x64 with no acknowledge) leaves
+           IRR bit 4 CLEAR in both columns (the legacy consume, see above); the level re-asserts within a tick.
+  ack      the SYMPTOM core: OCW3 poll + read -> byte 0x84 (both); then ISR reads 0x10 (FIX) / 0x00 (HEAD); IRR bit 4
+           reads 0 (FIX) / 1 (HEAD); a second poll and a read right after (`poll again`) read 0x00 (FIX: nothing
+           pending) where HEAD still answers 0x84 (its request was never consumed); after a tick the level re-asserts
+           (IRR bit 4 = 1 both) WHILE in service, and the specific EOI then leaves the request alone (FIX 1) where HEAD
+           consumes it (0) -- the row that pins the fix's own predicate (the ISR bit) and the (d) variants on it.
+           (`poll again` is NOT the one-shot row: with nothing pending a sticky poll and an IRR read both read 0 --
+           the pass-2 adjudicator's finding; the one-shot row is `poll once` in the masked session.)
+  ack3     the same acknowledge on the SECOND ISA ns16550 (IRQ 3, port 0x2f8): the n != 4 anchor (ISR 0x08; EOI 0x63
+           after re-assert leaves IRR bit 3 set).
+  masked   line 4 masked by OCW1 0x10: the poll byte is 0x00 (FIX; a masked line is not a request) where HEAD returns
+           0x84 (the mask-blind scan, pass-1 F11); the NEXT read of the command port, with the request still pending
+           under the mask, returns the IRR 0x10 (FIX: the poll is one-shot) where a sticky poll would return 0x00 and
+           HEAD returns 0x84 (`poll once`); masking leaves IRR; an un-acknowledged EOI while masked consumes
+           (contract, both 0).
+  ack ip2  v2g (F2c): CP0 Cause bit 10 right after the poll that acknowledges the ONLY pending line: the recompute must drop
+  pit ip2  the CPU line (FIX 0; HEAD 1 -- its poll consumes nothing); `pit ip2` is the same cell with the 8253 as the source
+           (the event retired, nothing remains).  A recompute deleted or made constant-true leaves 1.
+  maskrem  v2g (F2c): both UARTs pending, line 4 MASKED, then the poll: it acknowledges line 3 and the recompute finds only a
+           MASKED request remaining -- Cause.IP2 reads 0 on FIX (`maskrem ip2`; HEAD 1; a recompute that ignores the mask 1);
+           the IRR after it keeps the masked bit (`maskrem irr after` FIX 0x10 / HEAD 0x18).
+  isrother v2g (F2c): line 3 acknowledged, line 4 pending and NOT acknowledged, then EOI 0x64 of line 4: the arm must take the
+           LEGACY branch for a line not in service whatever else is -- IRR bit 4 consumed (`isrother irr4` 0 both; an arm
+           testing "any ISR bit" leaves 1) and ISR keeps bit 3 (`isrother isr` FIX 0x08 / HEAD 0x00).
+  gtmask   v2g (F2c): the GT IACK read with the UART (4) and the RTC (8) pending but the master's cascade line 2 MASKED: the
+           acknowledge takes 4 and leaves the slave alone -- the read returns 4 in both columns (`gtmask iack`; HEAD's last_int
+           is 4) and slave ISR stays 0 (`gtmask isr8`; an arm that acknowledges the slave on every master acknowledge returns
+           8 and sets it); master ISR 0x10 on FIX (`gtmask isr`).
+  maskeoi  v2e (F2b): line 4 ACKNOWLEDGED (poll 0x84), THEN masked (OCW1 0x10), then the specific EOI 0x64 -- Linux's
+           mask-then-EOI order: ISR reads 0x00 in both columns (FIX: the ISR branch clears the bit; HEAD never set it);
+           an EOI that takes the legacy branch for a masked in-service line leaves 0x10 (`maskeoi isr`).
+  speceoi  v2e (F2b): both UARTs acknowledged by two polls (`spec polls`, the two poll bytes: FIX 0x83 then 0x84; HEAD
+           0x83 twice, its first poll having consumed nothing -- a symptom row, the nonspec session's `poll second` fact),
+           ISR 0x18 (`spec isr both`), then the SPECIFIC EOI 0x63: ISR loses exactly bit 3 (`spec eoi one` FIX 0x10 /
+           HEAD 0x00 -- a specific EOI clearing the whole ISR reads 0x00); then 0x64 clears the rest (0x00 both).
+  gtboth  the GT IACK read with the UART (IRQ 4) AND the RTC (IRQ 8) pending: FIX returns 8 (the cascade, line 2,
+           outranks line 4; then the slave's line 0) and sets master ISR bit 2 and slave ISR bit 0; HEAD returns its
+           last_int 4 (bus_isa's flat scan skips line 2) and sets nothing -- the row that pins the returned line.
+  NOTE on `nonspec`: the second poll acknowledges IRQ 4 while IRQ 3 is in service because the model has no priority
+  inhibition (filed i8259priority); the row measures the model as designed.  The word check (CONTROL 0) establishes
+  that the words the emulator loaded are the words emitted, not the operand semantics of each instruction; the RAM
+  round-trip and the device-signature rows carry that.
+  nonspec  both UARTs pending: two polls acknowledge 3 then 4 (HEAD's second poll returns 3 again); ISR 0x18 (FIX);
+           the non-specific EOI 0x20 resets the LOWEST set ISR bit (FIX 0x10; HEAD 0x00 -- never set); a second 0x20
+           resets the other (0x00 both).  Between the two polls (v2e, F2b): a CP0 Cause read -- IP2 still asserted in
+           both columns (`nonspec ip2`: the acknowledge's recompute sees line 4 pending; a bare DEASSERT would drop the
+           CPU line) -- and a command-port read WITHOUT another OCW3 (`poll once2`: FIX returns the IRR 0x10, the latch
+           having reverted after a SUCCESSFUL poll; HEAD returns its unconsumed poll byte 0x83; a latch that reverts
+           only after an unsuccessful poll returns 0x84).
+  casc     the mc146818 periodic interrupt (IRQ 8, on pic2) after a long wait: the master poll returns 0x82 and sets
+           master ISR bit 2 (FIX), the slave poll returns 0x80 and sets slave ISR bit 0 (FIX); the two specific EOIs
+           (0x60 to the slave, 0x62 to the master) clear both.
+  pit      8253 counter 0 at 291 Hz after a long wait: IRR bit 0 = 1; the poll returns 0x80 and (FIX) clears the bit.
+  gt       the GT64120 IACK register (KSEG1 0xbbe00c34) with the UART level on: a WRITE to it first (v2e) acknowledges
+           nothing (`gt write isr` 0x00 in both columns: HEAD's write arm is a no-op, the fix's guard is MEM_READ); the
+           READ returns 4 in both columns; FIX sets ISR bit 4 and clears IRR bit 4 (HEAD: ISR 0, IRR 1).
+  gtcasc   the GT IACK read with the mc146818 periodic interrupt pending on pic2: returns 8 in both columns; FIX
+           acknowledges the master's cascade line (ISR 0x04) and the slave's line 0 (ISR 0x01); the two EOIs clear both.
+  rate     IRQ 0 DELIVERIES counted by a guest handler at the general exception vector (poll + specific EOI) over 180M
+           instructions with counter 0 at 18 Hz: HEAD >= 5000 (one per tick); FIX 1..1000 (one per host-timer fire).
+
+CONTRACT (clause (e)): CATCHES a reinstated IRR clear in the specific-EOI arm in any form (unconditional; conditioned
+on the mask, on n != 4, or on the ISR bit -- `eoi acked`, `eoi acked3`, `masked eoi`), a poll that acknowledges
+nothing or returns a masked line (`poll isr`, `poll irr4`, `poll masked`), a sticky poll latch (`poll once`), a GT
+read that acknowledges nothing (`gt isr`, `gt irr4`) or returns the legacy line instead of the acknowledged one
+(`gtboth iack`), an acknowledge that does not retire the 8253's event (`rate
+storm`/`rate band`), a cascade acknowledge that strands or skips the slave (`casc isr2`, `casc isr8`), a non-specific
+EOI that clears every ISR bit (`nonspec lowest`); and, from the pass-2 adjudication (v2e): a latch that reverts only
+after an UNSUCCESSFUL poll (`poll once2`), a specific EOI that takes the legacy branch for a MASKED in-service line
+(`maskeoi isr`), a specific EOI that clears more than its own ISR bit (`spec eoi one`), an acknowledge whose recompute
+drops the CPU line while another request is pending (`nonspec ip2`), a GT WRITE that acknowledges (`gt write isr`),
+a GT read that returns the acknowledge's -1 with nothing pending (`quiet iack`); and, from the repair's own pass (v2g, the
+CLASS CLOSURE -- every predicate the fix adds, its body-tested partition, one row or one disclosure per cell): the recompute
+`d->irr & ~d->ier` {an unmasked request remains: `nonspec ip2`; nothing remains: `ack ip2`, `pit ip2`; only a masked request
+remains: `maskrem ip2`}, the EOI predicate `d->isr & bit` {in service and unmasked: `eoi acked`; in service and masked:
+`maskeoi isr`; not in service, nothing in service: `eoi noack`; not in service while ANOTHER line is: `isrother irr4`; masked
+and not in service: `masked eoi`}, the one-shot latch {after a successful poll: `poll once2`; after an unsuccessful one:
+`poll once`}, the scan order {two lines on one PIC: `poll first` 0x83, `gtboth iack` 8 -- lowest first}, the GT read
+{write: `gt write isr`; nothing pending: `quiet iack`; cascade with slave work: `gtcasc`, `gtboth`; non-cascade with slave
+work pending: `gtmask iack` / `gtmask isr8`}.  OUTSIDE: the `default` read arm
+(byte-identical to HEAD), priority inhibition by ISR (not modelled; filed i8259priority), level-triggered mode (ICW1
+LTIM; filed i8259ltim), special mask mode (OCW3 0x68, an empty arm; filed i8259smm), the PReP and footbridge vector
+reads (filed isaiackreaders), the OCW2 bytes that stop the emulation (filed i8259cmdhalt), an 8253 count of zero (filed
+pit8253count0), the one-shot latch's revert target (the IRR, not the last RR/RIS selection; filed i8259ocw3revert), the
+two-SLAVE-request CPU-line case (a manual cascade pre-fold strands the second request; owed as i8259cascline -- the
+`nonspec ip2` row sees only the master-side recompute), and the retire guard's two conjuncts (a slave line-0 or a
+non-zero-line acknowledge retiring an 8253 event is observable only with a pending count >= 2, which only host time
+produces; disclosed, the band-row construction filed as pit8253retireguard), a machine without ISA PICs (`pic1 == NULL`,
+MVME5500) or without a slave (`pic2 == NULL`) -- unobservable on a one-machine instrument, no witness machine here -- and the
+spurious cascade (`n2 < 0`: master line 2 pending with no unmasked slave request), unreachable while bus_isa.c re-folds bit 2
+from the slave's unmasked set on every ISA event.  The spurious IACK with nothing pending returns last_int as HEAD did
+(`quiet iack` pins it).
+A held level re-requests after the acknowledge within one tick (the ns16550 and the 8253 -- the sources these rows
+drive -- re-assert on every tick while their condition holds; the pckbc does NOT: it suppresses repeated assertions while
+already asserted, dev_pckbc.c, F2b) -- more generous than edge-mode hardware for those two, never less; disclosed, not rowed.
+
+CONTROLS: every emitted WORD of every guest program is checked against the emulator's own disassembler (CONTROL 0);
+each session parks at its halt breakpoint with the pc verified; a RAM round-trip through the same store/load shapes
+(a device row reading 0 can never be blamed on a bad encoding); the level/pending controls (`* irr4`, `casc irr2`,
+`pit irr0`, `rate delivered`) prove the source is up before a row reads it; `quiet *` is the device signature (a
+PIC answers 0/0/0x00 where RAM would answer 0x5a).  The leg's CONTROL fails on any red control-kind row, bad word,
+or wrong park; a red SYMPTOM or CONTRACT row fails the leg (the model changed) and does not fail CONTROL.
+
+SITES (grep anchors): dev_8259.c `pic8259_acknowledge(`, `DEVICE_ACCESS(8259)` (the `idata == 0x20` arm, the
+`(idata >= 0x21 && idata <= 0x27)` arm, `case 0x0c:` read); dev_gt.c `case GT_PCI0_INTR_ACK:`; devices.h
+`struct pic8259_data`; bus_isa.c `isa_interrupt_assert(` / `isa_interrupt_deassert(` / `isa_interrupt_common(`;
+dev_8253.c `DEVICE_TICK(8253)`; machine_evbmips.c `bus_isa_init(machine, tmpstr, 0, 0x18000000`.
+
+TEMPLATE: regress/le_csrmask_probe.py (#573): pty driver, disassembler self-check, raw transcript per session,
+breakpoint park, row/verdict/sentinel protocol; regress/wdc_lba_probe.py (#572) for the malta machine.
+
+USAGE: i8259_eoi_probe.py <base_bin> <fix_bin | GATE | -> <outdir>
+    <base> -      <outdir>  WITNESS: one leg (HEAD column)
+    <base> <fix>  <outdir>  two legs (HEAD column, FIX column)
+    <bin>  GATE   <outdir>  ONE leg vs the FIX column: I8259EOI_CONTROL=OK|FAIL, I8259EOI_RESULT=p/n
+The output ends with the sentinel I8259EOI_PROBE_DONE once; raw transcripts under <outdir>/raw/.
+"""
+import os
+import pty
+import re
+import select
+import sys
+import time
+
+BASE_BIN = sys.argv[1] if len(sys.argv) > 1 else "/tmp/gxt19/base/gxemul"
+FIX_ARG = sys.argv[2] if len(sys.argv) > 2 else "-"
+OUTDIR = sys.argv[3] if len(sys.argv) > 3 else "/tmp/gxt19/run"
+GATE = (FIX_ARG == "GATE")
+RAWDIR = None                      # OUTDIR/raw
+
+MACHINE = ["-E", "evbmips", "-e", "malta"]   # MIPS Malta evaluation board, little-endian, UNMODIFIED
+BASE = 0xffffffff80100000          # KSEG0, physical 0x00100000 (inside malta's RAM; the #572 probe's address)
+HANDLER = 0xffffffff80000180       # the MIPS general exception vector with Status.BEV clear (cpu_mips.c: base + 0x180)
+ISA_HI = 0xb800                    # KSEG1 0xffffffffb8000000 = physical 0x18000000, the ISA I/O window
+GT_HI = 0xbbe0                     # KSEG1 0xffffffffbbe00000 = the GT64120 (machine_evbmips.c: dev_gt_init at 0x1be00000)
+GT_IACK = 0x0c34                   # gtreg.h: GT_PCI0_INTR_ACK
+RAM_HI = 0x8020                    # KSEG0 scratch (physical 0x200000) for RAM liveness
+RAM_MAGIC = 0x5a
+PIC1_CMD, PIC1_IMR = 0x20, 0x21
+PIC2_CMD, PIC2_IMR = 0xa0, 0xa1
+UART4_IER, UART4_MCR = 0x3f9, 0x3fc        # the first ISA ns16550 (IRQ 4)
+UART3_IER, UART3_MCR = 0x2f9, 0x2fc        # the second ISA ns16550 (IRQ 3, in_use=0 -- it still interrupts)
+IER_ETXRDY = 0x02                  # dev_ns16550.c: transmitter-empty interrupt enable
+MCR_IENABLE = 0x08                 # the OUT2 gate the model requires before asserting
+PIT_C0, PIT_CTL = 0x40, 0x43
+CMOS_IDX, CMOS_DAT = 0x70, 0x71    # the ISA pccmos (mc146818) index/data ports
+OCW3_IRR, OCW3_ISR, OCW3_POLL = 0x0a, 0x0b, 0x0c
+EOI_NONSPEC = 0x20
+COP0_STATUS = 12
+STATUS_IE_IM2 = 0x0401             # IE | IM2 (the ISA bus is on cpu[N].2 -> Cause.IP2; cpu_mips.c line = 1 << (8 + 2))
+DELAY_ITER = 12000                 # 3 instructions per iteration: ~36k instructions > two UART ticks (2^14 each)
+LONG_ITER = 6000000                # ~18M instructions per wait; THREE waits before sampling a host-timer source
+                                   # (the measured-sufficient envelope of timer_explore_20261025)
+RATE_SPIN = 60000000               # 180M instructions of counting in the rate session
+
+zero, v0, v1, a0, a1, a2, a3 = 0, 2, 3, 4, 5, 6, 7
+t0, t1, t2, t3, t4, t5, t6, t7 = 8, 9, 10, 11, 12, 13, 14, 15
+s0, s1, s2, s3, s4, s5 = 16, 17, 18, 19, 20, 21
+k0, k1 = 26, 27
+NAME = {zero: "zr", v0: "v0", v1: "v1", a0: "a0", a1: "a1", a2: "a2", a3: "a3",
+        t0: "t0", t1: "t1", t2: "t2", t3: "t3", t4: "t4", t5: "t5", t6: "t6", t7: "t7",
+        s0: "s0", s1: "s1", s2: "s2", s3: "s3", s4: "s4", s5: "s5", k0: "k0", k1: "k1"}
+
+
+def I(op, rs, rt, imm):
+    return (op << 26) | (rs << 21) | (rt << 16) | (imm & 0xffff)
+
+
+def R(rs, rt, rd, sa, funct):
+    return (rs << 21) | (rt << 16) | (rd << 11) | (sa << 6) | funct
+
+
+def lui(rt, imm):
+    return I(0x0F, 0, rt, imm)
+
+
+def ori(rt, rs, imm):
+    return I(0x0D, rs, rt, imm)
+
+
+def addiu(rt, rs, imm):
+    return I(0x09, rs, rt, imm)
+
+
+def andi(rt, rs, imm):
+    return I(0x0C, rs, rt, imm)
+
+
+def sb(rt, off, base):
+    return I(0x28, base, rt, off)
+
+
+def lbu(rt, off, base):
+    return I(0x24, base, rt, off)
+
+
+def lw(rt, off, base):
+    return I(0x23, base, rt, off)
+
+
+def beq(rs, rt, off):
+    return I(0x04, rs, rt, off)
+
+
+def bne(rs, rt, off):
+    return I(0x05, rs, rt, off)
+
+
+def or_(rd, rs, rt):
+    return R(rs, rt, rd, 0, 0x25)
+
+
+def mtc0(rt, rd):
+    return 0x40800000 | (rt << 16) | (rd << 11)
+
+
+def mfc0(rt, rd):
+    return 0x40000000 | (rt << 16) | (rd << 11)
+
+
+def sw(rt, off, base):
+    return I(0x2b, base, rt, off)
+
+
+COP0_CAUSE = 13
+CAUSE_IP2 = 10                      # Cause bit 10 = IP2: the ISA bus's CPU line (cpu[N].2; cpu_mips.c sets 1 << (8 + 2))
+
+
+ERET = 0x42000018
+NOP = 0
+prog = []
+
+
+def reset_prog():
+    del prog[:]
+
+
+def emit(word, mn):
+    """mn is checked against the EMULATOR'S OWN disassembly (CONTROL 0): the word is the authoritative check, the
+    mnemonic a rendering counted separately."""
+    prog.append((word, mn))
+
+
+def e_li(rt, v):
+    emit(ori(rt, zero, v), "ori %s,zr,0x%x" % (NAME[rt], v & 0xffff))
+
+
+def e_out(port, v, tmp=t3):
+    """Byte store of v to ISA port: ori tmp,zr,v; sb tmp,port(t0)."""
+    e_li(tmp, v)
+    emit(sb(tmp, port, t0), "sb %s,%d(t0)" % (NAME[tmp], port))
+
+
+def e_in(rt, port):
+    emit(lbu(rt, port, t0), "lbu %s,%d(t0)" % (NAME[rt], port))
+
+
+def e_ocw3_read(rt, which, cmd=PIC1_CMD):
+    """Select an OCW3 read register (irr 0x0a / isr 0x0b / poll 0x0c) on a PIC and read it into rt."""
+    e_out(cmd, which)
+    e_in(rt, cmd)
+
+
+def e_eoi(n, cmd=PIC1_CMD):
+    e_out(cmd, 0x60 | n)
+
+
+def e_uart_level_on(ier=UART4_IER, mcr=UART4_MCR):
+    """Turn an ISA ns16550 into a steady level source: MCR_IENABLE, then IER_ETXRDY."""
+    e_out(mcr, MCR_IENABLE)
+    e_out(ier, IER_ETXRDY)
+
+
+def e_delay():
+    """A counted loop longer than one ns16550 tick: ori t4,zr,N; loop: addiu t4,t4,-1; bne t4,zr,loop; nop."""
+    e_li(t4, DELAY_ITER)
+    emit(addiu(t4, t4, -1), "addiu t4,t4,-1")
+    emit(bne(t4, zero, -2), "bne t4,zr,0x")
+    emit(NOP, "nop")
+
+
+def e_long(n=LONG_ITER):
+    emit(lui(t4, (n >> 16) & 0xffff), "lui t4,0x%x" % ((n >> 16) & 0xffff))
+    emit(ori(t4, t4, n & 0xffff), "ori t4,t4,0x%x" % (n & 0xffff))
+    emit(addiu(t4, t4, -1), "addiu t4,t4,-1")
+    emit(bne(t4, zero, -2), "bne t4,zr,0x")
+    emit(NOP, "nop")
+
+
+def e_pit_291hz():
+    """8253 counter 0: control 0x34 (counter 0, LSB+MSB, mode 2), count 0x1000 -> a 291 Hz host timer."""
+    e_out(PIT_CTL, 0x34)
+    e_out(PIT_C0, 0x00)
+    e_out(PIT_C0, 0x10)
+
+
+def begin():
+    """Common preamble: t0 = ISA I/O window, t2 = RAM scratch, and the RAM liveness control (the same sb/lbu shapes
+    through plain RAM, so a device row reading 0 can never be blamed on a bad encoding): v0 = RAM round-trip."""
+    reset_prog()
+    emit(lui(t0, ISA_HI), "lui t0,0x%x" % ISA_HI)
+    emit(lui(t2, RAM_HI), "lui t2,0x%x" % RAM_HI)
+    e_li(t3, RAM_MAGIC)
+    emit(sb(t3, 0, t2), "sb t3,0(t2)")
+    emit(lbu(v0, 0, t2), "lbu v0,0(t2)")
+
+
+def end():
+    halt = len(prog)
+    emit(beq(zero, zero, -1), "b 0x")
+    emit(NOP, "nop")
+    return list(prog), BASE + halt * 4
+
+
+def build_quiet():
+    """Nothing pending: every register reads 0, the poll byte is 0x00, and the GT IACK read with nothing pending returns
+    last_int (0 at reset) in both columns -- a GT read that handed back the acknowledge's -1 would read 0xffffffff."""
+    begin()
+    e_ocw3_read(v1, OCW3_IRR)
+    e_in(a2, PIC1_CMD)
+    e_ocw3_read(a0, OCW3_ISR)
+    e_ocw3_read(a1, OCW3_POLL)
+    e_in(a3, PIC1_IMR)
+    emit(lui(t1, GT_HI), "lui t1,0x%x" % GT_HI)
+    emit(lw(s0, GT_IACK, t1), "lw s0,%d(t1)" % GT_IACK)
+    p, halt = end()
+    return p, halt, {"ram": "v0", "irr": "v1", "stable": "a2", "isr": "a0", "poll": "a1", "imr": "a3", "iack": "s0"}, None
+
+
+def build_level():
+    """The UART level on IRQ 4; the un-acknowledged specific EOI (legacy consume, both columns); the re-assert."""
+    begin()
+    e_uart_level_on()
+    e_delay()
+    e_ocw3_read(v1, OCW3_IRR)
+    e_in(a2, PIC1_CMD)
+    e_ocw3_read(a0, OCW3_ISR)
+    e_li(t5, OCW3_IRR)
+    e_li(t6, 0x64)
+    emit(sb(t6, PIC1_CMD, t0), "sb t6,%d(t0)" % PIC1_CMD)
+    emit(sb(t5, PIC1_CMD, t0), "sb t5,%d(t0)" % PIC1_CMD)
+    e_in(a1, PIC1_CMD)
+    e_delay()
+    e_ocw3_read(a3, OCW3_IRR)
+    e_ocw3_read(s0, OCW3_ISR)
+    p, halt = end()
+    return p, halt, {"ram": "v0", "irr": "v1", "stable": "a2", "isr": "a0", "noack": "a1", "reassert": "a3", "isr2": "s0"}, None
+
+
+def build_ack():
+    """The acknowledge rows on IRQ 4: poll byte, ISR after the poll, IRR after the poll (two instructions), a second
+    command-port read (one-shot), the re-assert while in service, the EOI after the acknowledge, ISR after it."""
+    begin()
+    e_uart_level_on()
+    e_delay()
+    e_ocw3_read(v1, OCW3_IRR)
+    e_in(a2, PIC1_CMD)
+    e_ocw3_read(a0, OCW3_POLL)
+    emit(mfc0(s5, COP0_CAUSE), "mfc0 s5,cause")
+    e_ocw3_read(a1, OCW3_ISR)
+    e_ocw3_read(a3, OCW3_IRR)
+    e_ocw3_read(s0, OCW3_POLL)
+    e_in(s1, PIC1_CMD)
+    e_delay()
+    e_ocw3_read(s2, OCW3_IRR)
+    e_li(t5, OCW3_IRR)
+    e_li(t6, 0x64)
+    emit(sb(t6, PIC1_CMD, t0), "sb t6,%d(t0)" % PIC1_CMD)
+    emit(sb(t5, PIC1_CMD, t0), "sb t5,%d(t0)" % PIC1_CMD)
+    e_in(s3, PIC1_CMD)
+    e_ocw3_read(s4, OCW3_ISR)
+    p, halt = end()
+    return p, halt, {"ram": "v0", "irr": "v1", "stable": "a2", "poll": "a0", "cause": "s5", "isr": "a1", "irr_after": "a3",
+                     "poll2": "s0", "once": "s1", "reassert": "s2", "eoi_acked": "s3", "isr2": "s4"}, None
+
+
+def build_ack3():
+    """The same acknowledge on the second UART (IRQ 3): the n != 4 anchor."""
+    begin()
+    e_uart_level_on(UART3_IER, UART3_MCR)
+    e_delay()
+    e_ocw3_read(v1, OCW3_IRR)
+    e_in(a2, PIC1_CMD)
+    e_ocw3_read(a0, OCW3_POLL)
+    e_ocw3_read(a1, OCW3_ISR)
+    e_delay()
+    e_ocw3_read(a3, OCW3_IRR)
+    e_li(t5, OCW3_IRR)
+    e_li(t6, 0x63)
+    emit(sb(t6, PIC1_CMD, t0), "sb t6,%d(t0)" % PIC1_CMD)
+    emit(sb(t5, PIC1_CMD, t0), "sb t5,%d(t0)" % PIC1_CMD)
+    e_in(s0, PIC1_CMD)
+    p, halt = end()
+    return p, halt, {"ram": "v0", "irr": "v1", "stable": "a2", "poll": "a0", "isr": "a1", "reassert": "a3", "eoi_acked": "s0"}, None
+
+
+def build_masked():
+    """Line 4 masked: the poll byte (mask-blind on HEAD), then -- with the request still pending under the mask -- a
+    SECOND read of the command port without another OCW3: the one-shot poll returns the IRR (0x10) where a sticky poll
+    returns the empty poll byte (0x00) and HEAD returns its mask-blind 0x84; IRR under the mask; the un-acknowledged EOI
+    under the mask."""
+    begin()
+    e_uart_level_on()
+    e_delay()
+    e_ocw3_read(v1, OCW3_IRR)
+    e_in(a2, PIC1_CMD)
+    e_out(PIC1_IMR, 0x10)
+    e_in(a0, PIC1_IMR)
+    e_ocw3_read(a1, OCW3_POLL)
+    e_in(s1, PIC1_CMD)
+    e_ocw3_read(a3, OCW3_IRR)
+    e_li(t5, OCW3_IRR)
+    e_li(t6, 0x64)
+    emit(sb(t6, PIC1_CMD, t0), "sb t6,%d(t0)" % PIC1_CMD)
+    emit(sb(t5, PIC1_CMD, t0), "sb t5,%d(t0)" % PIC1_CMD)
+    e_in(s0, PIC1_CMD)
+    e_out(PIC1_IMR, 0x00)
+    p, halt = end()
+    return p, halt, {"ram": "v0", "irr": "v1", "stable": "a2", "imr": "a0", "poll": "a1", "once": "s1", "masked": "a3", "masked_eoi": "s0"}, None
+
+
+def build_nonspec():
+    """Both UARTs pending: poll (acknowledges 3; line 4 still pending), then -- v2e -- CP0 Cause read right after it
+    (IP2 must still be asserted: the acknowledge's recompute sees line 4) and a command-port read WITHOUT another OCW3
+    (the one-shot latch after a SUCCESSFUL poll: FIX returns the IRR 0x10, a sticky latch 0x84, HEAD its unconsumed poll
+    byte 0x83); then poll again (4), ISR 0x18, the non-specific EOI resets the lowest ISR bit, twice."""
+    begin()
+    e_uart_level_on(UART3_IER, UART3_MCR)
+    e_uart_level_on()
+    e_delay()
+    e_ocw3_read(v1, OCW3_IRR)
+    e_in(a2, PIC1_CMD)
+    e_ocw3_read(a0, OCW3_POLL)
+    emit(mfc0(s3, COP0_CAUSE), "mfc0 s3,cause")
+    e_in(s2, PIC1_CMD)
+    e_ocw3_read(a1, OCW3_POLL)
+    e_ocw3_read(a3, OCW3_ISR)
+    e_out(PIC1_CMD, EOI_NONSPEC)
+    e_ocw3_read(s0, OCW3_ISR)
+    e_out(PIC1_CMD, EOI_NONSPEC)
+    e_ocw3_read(s1, OCW3_ISR)
+    p, halt = end()
+    return p, halt, {"ram": "v0", "irr": "v1", "stable": "a2", "poll_a": "a0", "cause": "s3", "once2": "s2", "poll_b": "a1",
+                     "isr_both": "a3", "isr_one": "s0", "isr_none": "s1"}, None
+
+
+def build_maskrem():
+    """v2g (F2c): both UARTs pending, line 4 MASKED, then the poll -- it acknowledges line 3 and the recompute must find only a
+    MASKED request remaining: Cause.IP2 reads 0 on FIX (the line is dropped), 1 on HEAD (its poll consumes nothing) and 1 under a
+    recompute that ignores the mask; the IRR after it keeps the masked bit 4 (FIX 0x10; HEAD 0x18)."""
+    begin()
+    e_uart_level_on(UART3_IER, UART3_MCR)
+    e_uart_level_on()
+    e_delay()
+    e_ocw3_read(v1, OCW3_IRR)
+    e_in(a2, PIC1_CMD)
+    e_out(PIC1_IMR, 0x10)
+    e_in(a0, PIC1_IMR)
+    e_ocw3_read(a1, OCW3_POLL)
+    emit(mfc0(a3, COP0_CAUSE), "mfc0 a3,cause")
+    e_ocw3_read(s0, OCW3_IRR)
+    e_out(PIC1_IMR, 0x00)
+    p, halt = end()
+    return p, halt, {"ram": "v0", "irr": "v1", "stable": "a2", "imr": "a0", "poll": "a1", "cause": "a3", "irr_after": "s0"}, None
+
+
+def build_isrother():
+    """v2g (F2c): line 3 acknowledged (in service), line 4 pending and NOT acknowledged, then EOI 0x64 of line 4 -- the EOI arm
+    must take the LEGACY branch (line 4 is not in service, whatever else is): IRR bit 4 consumed (0 in both columns; an arm
+    that tests "any ISR bit" leaves it 1) and ISR keeps bit 3 (FIX 0x08; HEAD 0x00)."""
+    begin()
+    e_uart_level_on(UART3_IER, UART3_MCR)
+    e_uart_level_on()
+    e_delay()
+    e_ocw3_read(v1, OCW3_IRR)
+    e_in(a2, PIC1_CMD)
+    e_ocw3_read(a0, OCW3_POLL)
+    e_li(t5, OCW3_IRR)
+    e_li(t6, 0x64)
+    emit(sb(t6, PIC1_CMD, t0), "sb t6,%d(t0)" % PIC1_CMD)
+    emit(sb(t5, PIC1_CMD, t0), "sb t5,%d(t0)" % PIC1_CMD)
+    e_in(a1, PIC1_CMD)
+    e_ocw3_read(a3, OCW3_ISR)
+    p, halt = end()
+    return p, halt, {"ram": "v0", "irr": "v1", "stable": "a2", "poll": "a0", "irr_eoi": "a1", "isr": "a3"}, None
+
+
+def build_speceoi():
+    """v2e (F2b): both UARTs acknowledged (ISR 0x18), then a SPECIFIC EOI of line 3 -- the ISR must lose exactly that bit
+    (FIX 0x10; a specific EOI clearing the whole ISR reads 0x00, as HEAD does, which never sets ISR); the specific EOI
+    of line 4 then clears the rest (0x00 both)."""
+    begin()
+    e_uart_level_on(UART3_IER, UART3_MCR)
+    e_uart_level_on()
+    e_delay()
+    e_ocw3_read(v1, OCW3_IRR)
+    e_in(a2, PIC1_CMD)
+    e_ocw3_read(a0, OCW3_POLL)
+    e_ocw3_read(a1, OCW3_POLL)
+    e_ocw3_read(a3, OCW3_ISR)
+    e_eoi(3)
+    e_ocw3_read(s0, OCW3_ISR)
+    e_eoi(4)
+    e_ocw3_read(s1, OCW3_ISR)
+    p, halt = end()
+    return p, halt, {"ram": "v0", "irr": "v1", "stable": "a2", "poll_a": "a0", "poll_b": "a1", "isr_both": "a3",
+                     "isr_one": "s0", "isr_none": "s1"}, None
+
+
+def build_maskeoi():
+    """v2e (F2b): line 4 acknowledged (in service), THEN masked by OCW1 0x10, then the specific EOI 0x64 -- Linux's
+    mask-then-EOI order.  The EOI must take the ISR branch (ISR reads 0x00 in both columns: FIX clears the bit, HEAD
+    never set it); an EOI that takes the legacy branch for a masked line leaves ISR 0x10."""
+    begin()
+    e_uart_level_on()
+    e_delay()
+    e_ocw3_read(v1, OCW3_IRR)
+    e_in(a2, PIC1_CMD)
+    e_ocw3_read(a0, OCW3_POLL)
+    e_out(PIC1_IMR, 0x10)
+    e_in(a1, PIC1_IMR)
+    e_eoi(4)
+    e_ocw3_read(a3, OCW3_ISR)
+    e_out(PIC1_IMR, 0x00)
+    p, halt = end()
+    return p, halt, {"ram": "v0", "irr": "v1", "stable": "a2", "poll": "a0", "imr": "a1", "isr": "a3"}, None
+
+
+def build_casc():
+    """The mc146818 periodic interrupt (IRQ 8, pic2) at 1024 Hz after a long wait: the cascade acknowledge."""
+    begin()
+    e_out(CMOS_IDX, 0x0a)
+    e_out(CMOS_DAT, 0x26)
+    e_out(CMOS_IDX, 0x0b)
+    e_out(CMOS_DAT, 0x40)
+    e_long(); e_long(); e_long()
+    e_ocw3_read(v1, OCW3_IRR)
+    e_in(a2, PIC1_CMD)
+    e_ocw3_read(a0, OCW3_POLL)
+    e_ocw3_read(a1, OCW3_ISR)
+    e_ocw3_read(a3, OCW3_POLL, PIC2_CMD)
+    e_ocw3_read(s0, OCW3_ISR, PIC2_CMD)
+    e_eoi(0, PIC2_CMD)
+    e_eoi(2)
+    e_ocw3_read(s1, OCW3_ISR)
+    e_ocw3_read(s2, OCW3_ISR, PIC2_CMD)
+    p, halt = end()
+    return p, halt, {"ram": "v0", "irr": "v1", "stable": "a2", "poll": "a0", "isr": "a1", "poll2": "a3",
+                     "isr2": "s0", "isr_eoi": "s1", "isr2_eoi": "s2"}, None
+
+
+def build_pit():
+    """8253 counter 0 at 291 Hz after a long wait: IRR bit 0, the poll byte, IRR bit 0 after the poll."""
+    begin()
+    e_pit_291hz()
+    e_long(); e_long(); e_long()
+    e_ocw3_read(v1, OCW3_IRR)
+    e_in(a2, PIC1_CMD)
+    e_ocw3_read(a0, OCW3_POLL)
+    emit(mfc0(a3, COP0_CAUSE), "mfc0 a3,cause")
+    e_ocw3_read(a1, OCW3_IRR)
+    p, halt = end()
+    return p, halt, {"ram": "v0", "irr": "v1", "stable": "a2", "poll": "a0", "cause": "a3", "irr_after": "a1"}, None
+
+
+def build_gt():
+    """The GT64120 interrupt-acknowledge register with the UART level on: v2e first WRITES it (a write acknowledges
+    nothing -- ISR stays 0x00 in both columns; HEAD's write arm is a no-op and the fix's guard is `writeflag ==
+    MEM_READ`), then the READ: the value, ISR and IRR after it."""
+    begin()
+    e_uart_level_on()
+    e_delay()
+    e_ocw3_read(v1, OCW3_IRR)
+    e_in(a2, PIC1_CMD)
+    emit(lui(t1, GT_HI), "lui t1,0x%x" % GT_HI)
+    emit(sw(zero, GT_IACK, t1), "sw zr,%d(t1)" % GT_IACK)
+    e_ocw3_read(s0, OCW3_ISR)
+    emit(lw(a0, GT_IACK, t1), "lw a0,%d(t1)" % GT_IACK)
+    e_ocw3_read(a1, OCW3_ISR)
+    e_ocw3_read(a3, OCW3_IRR)
+    p, halt = end()
+    return p, halt, {"ram": "v0", "irr": "v1", "stable": "a2", "isr_write": "s0", "iack": "a0", "isr": "a1", "irr_after": "a3"}, None
+
+
+def build_gtboth():
+    """The GT IACK read with BOTH a master line (the UART, IRQ 4) and a slave line (the RTC, IRQ 8) pending: the acknowledge
+    takes the cascade (line 2 outranks line 4) and then the slave, returning 8; HEAD's last_int -- bus_isa's flat scan,
+    which skips line 2 -- reads 4.  Pins the returned line, which the single-source rows cannot."""
+    begin()
+    e_out(CMOS_IDX, 0x0a)
+    e_out(CMOS_DAT, 0x26)
+    e_out(CMOS_IDX, 0x0b)
+    e_out(CMOS_DAT, 0x40)
+    e_uart_level_on()
+    e_long(); e_long(); e_long()
+    e_ocw3_read(v1, OCW3_IRR)
+    e_in(a2, PIC1_CMD)
+    emit(lui(t1, GT_HI), "lui t1,0x%x" % GT_HI)
+    emit(lw(a0, GT_IACK, t1), "lw a0,%d(t1)" % GT_IACK)
+    e_ocw3_read(a1, OCW3_ISR)
+    e_ocw3_read(a3, OCW3_ISR, PIC2_CMD)
+    p, halt = end()
+    return p, halt, {"ram": "v0", "irr": "v1", "stable": "a2", "iack": "a0", "isr": "a1", "isr2": "a3"}, None
+
+
+def build_gtmask():
+    """v2g (F2c): the GT IACK read with the UART (IRQ 4) and the RTC (IRQ 8) pending but the master's CASCADE LINE 2 MASKED:
+    the acknowledge takes line 4 and must leave the slave alone (the cascade conjunct `n == 2`): the read returns 4 in both
+    columns (HEAD's last_int is 4 too) and slave ISR stays 0 (an arm that acknowledges the slave on every master acknowledge
+    returns 8 and sets slave ISR bit 0); master ISR 0x10 on FIX."""
+    begin()
+    e_out(CMOS_IDX, 0x0a)
+    e_out(CMOS_DAT, 0x26)
+    e_out(CMOS_IDX, 0x0b)
+    e_out(CMOS_DAT, 0x40)
+    e_uart_level_on()
+    e_long(); e_long(); e_long()
+    e_ocw3_read(v1, OCW3_IRR)
+    e_in(a2, PIC1_CMD)
+    e_out(PIC1_IMR, 0x04)
+    e_in(s0, PIC1_IMR)
+    emit(lui(t1, GT_HI), "lui t1,0x%x" % GT_HI)
+    emit(lw(a0, GT_IACK, t1), "lw a0,%d(t1)" % GT_IACK)
+    e_ocw3_read(a1, OCW3_ISR)
+    e_ocw3_read(a3, OCW3_ISR, PIC2_CMD)
+    e_out(PIC1_IMR, 0x00)
+    p, halt = end()
+    return p, halt, {"ram": "v0", "irr": "v1", "stable": "a2", "imr": "s0", "iack": "a0", "isr": "a1", "isr2": "a3"}, None
+
+
+def build_gtcasc():
+    """The GT64120 IACK read with the mc146818 periodic interrupt pending on pic2: returns 8 in both columns (HEAD:
+    last_int); FIX acknowledges the master's cascade line and the slave's line 0 (ISR 0x04 / 0x01)."""
+    begin()
+    e_out(CMOS_IDX, 0x0a)
+    e_out(CMOS_DAT, 0x26)
+    e_out(CMOS_IDX, 0x0b)
+    e_out(CMOS_DAT, 0x40)
+    e_long(); e_long(); e_long()
+    e_ocw3_read(v1, OCW3_IRR)
+    e_in(a2, PIC1_CMD)
+    emit(lui(t1, GT_HI), "lui t1,0x%x" % GT_HI)
+    emit(lw(a0, GT_IACK, t1), "lw a0,%d(t1)" % GT_IACK)
+    e_ocw3_read(a1, OCW3_ISR)
+    e_ocw3_read(a3, OCW3_ISR, PIC2_CMD)
+    e_eoi(0, PIC2_CMD)
+    e_eoi(2)
+    e_ocw3_read(s0, OCW3_ISR)
+    e_ocw3_read(s1, OCW3_ISR, PIC2_CMD)
+    p, halt = end()
+    return p, halt, {"ram": "v0", "irr": "v1", "stable": "a2", "iack": "a0", "isr": "a1", "isr2": "a3",
+                     "isr_eoi": "s0", "isr2_eoi": "s1"}, None
+
+
+def build_rate_handler():
+    """At the general exception vector: poll (OCW3 0x0c + read) into k1, remember it in s3, specific EOI 0x60|(k1&7),
+    count in s2, eret."""
+    reset_prog()
+    emit(lui(k0, ISA_HI), "lui k0,0x%x" % ISA_HI)
+    emit(ori(k1, zero, OCW3_POLL), "ori k1,zr,0xc")
+    emit(sb(k1, PIC1_CMD, k0), "sb k1,%d(k0)" % PIC1_CMD)
+    emit(lbu(k1, PIC1_CMD, k0), "lbu k1,%d(k0)" % PIC1_CMD)
+    emit(or_(s3, k1, zero), "or s3,k1,zr")
+    emit(andi(k1, k1, 0x7), "andi k1,k1,0x7")
+    emit(ori(k1, k1, 0x60), "ori k1,k1,0x60")
+    emit(sb(k1, PIC1_CMD, k0), "sb k1,%d(k0)" % PIC1_CMD)
+    emit(addiu(s2, s2, 1), "addiu s2,s2,0x1")
+    emit(ERET, "eret")
+    return list(prog)
+
+
+def build_rate():
+    """Count IRQ 0 deliveries: mask all but line 0, counter 0 = 0xffff (18 Hz), Status IE|IM2 with BEV clear, spin
+    RATE_SPIN iterations, disable, read IRR/IMR back.  The handler is loaded at HANDLER."""
+    handler = build_rate_handler()
+    begin()
+    e_out(PIC1_IMR, 0xfe)
+    e_out(PIC2_IMR, 0xff)
+    e_out(PIT_CTL, 0x34)
+    e_out(PIT_C0, 0xff)
+    e_out(PIT_C0, 0xff)
+    emit(ori(s2, zero, 0), "ori s2,zr,0x0")
+    emit(ori(s3, zero, 0), "ori s3,zr,0x0")
+    emit(ori(k1, zero, STATUS_IE_IM2), "ori k1,zr,0x401")
+    emit(mtc0(k1, COP0_STATUS), "mtc0 k1,status")
+    e_long(RATE_SPIN)
+    emit(mtc0(zero, COP0_STATUS), "mtc0 zr,status")
+    e_ocw3_read(a0, OCW3_IRR)
+    e_in(a1, PIC1_IMR)
+    p, halt = end()
+    return p, halt, {"ram": "v0", "count": "s2", "lastpoll": "s3", "irr_after": "a0", "imr": "a1"}, (HANDLER, handler)
+
+
+SESSION_ORDER = [("quiet", build_quiet), ("level", build_level), ("ack", build_ack), ("ack3", build_ack3),
+                 ("masked", build_masked), ("maskeoi", build_maskeoi), ("maskrem", build_maskrem), ("nonspec", build_nonspec),
+                 ("speceoi", build_speceoi), ("isrother", build_isrother), ("casc", build_casc), ("pit", build_pit),
+                 ("gt", build_gt), ("gtcasc", build_gtcasc), ("gtboth", build_gtboth), ("gtmask", build_gtmask), ("rate", build_rate)]
+
+
+class Emu(object):
+    def __init__(self, argv, boot_wait=5.0):
+        self.buf = bytearray()
+        self.pid, self.fd = pty.fork()
+        if self.pid == 0:
+            try:
+                os.execvp(argv[0], argv)
+            finally:
+                os._exit(127)
+        self.drain(boot_wait)
+
+    def drain(self, seconds):
+        end_t = time.time() + seconds
+        while time.time() < end_t:
+            r, _, _ = select.select([self.fd], [], [], 0.05)
+            if self.fd in r:
+                try:
+                    d = os.read(self.fd, 65536)
+                except OSError:
+                    return
+                if not d:
+                    return
+                self.buf.extend(d)
+
+    def send(self, cmd, wait=0.4):
+        start = len(self.buf)
+        data = (cmd + "\n").encode()
+        view = memoryview(data)
+        while len(view):
+            try:
+                n = os.write(self.fd, view)
+            except OSError:
+                break
+            view = view[n:]
+            if len(view):
+                self.drain(0.05)
+        self.drain(wait)
+        return bytes(self.buf[start:]).decode("latin1", "replace")
+
+    def close(self, log):
+        try:
+            os.write(self.fd, b"quit\n")
+            self.drain(0.4)
+        except OSError:
+            pass
+        for fn in (lambda: os.close(self.fd),
+                   lambda: os.kill(self.pid, 9),
+                   lambda: os.waitpid(self.pid, 0)):
+            try:
+                fn()
+            except OSError:
+                pass
+        with open(log, "w") as f:
+            f.write(bytes(self.buf).decode("latin1", "replace"))
+
+
+def reg(emu, name):
+    for _ in range(5):
+        out = emu.send("print %s" % name, wait=0.35)
+        m = re.findall(r"0x[0-9a-fA-F]+", out)
+        if m:
+            return int(m[-1], 16)
+        emu.drain(0.25)
+    return None
+
+
+def write_bin(path, prog_list):
+    with open(path, "wb") as f:
+        for w, _ in prog_list:
+            f.write(bytes([w & 0xff, (w >> 8) & 0xff, (w >> 16) & 0xff, (w >> 24) & 0xff]))
+
+
+def check_words(emu, base, prog_list, label, out):
+    dis = emu.send("unassemble 0x%x 0x%x" % (base, base + len(prog_list) * 4), wait=max(3.0, len(prog_list) * 0.03))
+    seen = {}
+    for line in dis.splitlines():
+        m = re.match(r"^\s*([0-9a-f]{8,16}):\s+([0-9a-f]{8})\s+(?:<-)?\s*(.*)$", line)
+        if m:
+            seen[int(m.group(1), 16) & 0xffffffff] = (m.group(2), m.group(3).strip())
+    w_ok = m_ok = 0
+    bad = []
+    for i, (w, want_mn) in enumerate(prog_list):
+        addr = (base + i * 4) & 0xffffffff
+        hit = seen.get(addr)
+        if hit is None:
+            bad.append("      BAD 0x%08x no disassembly line" % addr)
+            continue
+        if hit[0] == "%08x" % w:
+            w_ok += 1
+        else:
+            bad.append("      BAD 0x%08x word %s vs %08x" % (addr, hit[0], w))
+        if " ".join(hit[1].replace("\t", " ").split()).startswith(" ".join(want_mn.split())):
+            m_ok += 1
+    out("    encodings (%s): %d/%d words agree with the disassembler (CONTROL); %d/%d mnemonic renderings match "
+        "(informational)" % (label, w_ok, len(prog_list), m_ok, len(prog_list)))
+    for l in bad[:8]:
+        out(l)
+    return w_ok == len(prog_list)
+
+
+def run_session(binary, prog_list, halt_addr, rawbin, regmap, tag, out, extra=None):
+    """Run one guest program (plus an optional second binary at another address) to its halt breakpoint and read back
+    the capture regs."""
+    write_bin(rawbin, prog_list)
+    files = []
+    if extra is not None:
+        eaddr, eprog = extra
+        ebin = rawbin[:-4] + "_handler.bin"
+        write_bin(ebin, eprog)
+        files.append("0x%x:%s" % (eaddr, ebin))
+    files.append("0x%x:%s" % (BASE, rawbin))
+    argv = [binary, "-V"] + MACHINE + files
+    out("    [%s] %s" % (tag, " ".join(argv)))
+    emu = Emu(argv)
+    try:
+        dead = os.waitpid(emu.pid, os.WNOHANG) != (0, 0)
+    except OSError:
+        dead = True
+    if dead:
+        #  The medium is not an emulator (a null-medium leg, or a binary that will not start): every control row
+        #  reads ?? and CONTROL fails, without waiting out the park deadline.
+        out("    [%s] the emulator process exited before the debugger prompt -- no words checked, no park" % tag)
+        emu.close(os.path.join(RAWDIR, "%s.txt" % tag))
+        return dict((k, None) for k in regmap), False, False
+    enc_ok = check_words(emu, BASE, prog_list, "main", out)
+    if extra is not None:
+        enc_ok = check_words(emu, extra[0], extra[1], "handler", out) and enc_ok
+    emu.send("breakpoint add 0x%x" % halt_addr, wait=0.5)
+    t = time.time()
+    emu.send("continue", wait=1.0)
+    deadline = time.time() + 180
+    hit = False
+    seen_pc = None
+    while time.time() < deadline:
+        emu.drain(0.5)
+        tail = bytes(emu.buf[-4000:]).decode("latin1", "replace")
+        m = re.search(r"BREAKPOINT:\s*pc\s*=\s*0x([0-9a-fA-F]+)", tail)
+        if m:
+            seen_pc = int(m.group(1), 16) & 0xffffffff
+            hit = (seen_pc == (halt_addr & 0xffffffff))
+            break
+    out("    parked at 0x%016x: %s   (%.2f s)"
+        % (halt_addr, "yes (pc verified)" if hit else
+           ("*** NO: stopped at 0x%08x ***" % seen_pc if seen_pc is not None else "*** NO ***"),
+           time.time() - t))
+    got = {}
+    for logical, mips in regmap.items():
+        v = reg(emu, mips)
+        got[logical] = None if v is None else (v & 0xffffffff)
+    emu.close(os.path.join(RAWDIR, "%s.txt" % tag))
+    return got, enc_ok, hit
+
+
+def show(v):
+    if isinstance(v, tuple):
+        return "%d..%s" % (v[0], "inf" if v[1] is None else v[1])
+    return "0x%02x" % v if isinstance(v, int) else ("??" if v is None else str(v))
+
+
+def bit(v, n):
+    return None if v is None else (v >> n) & 1
+
+
+def build_rows(sess):
+    """Rows as (label, kind, got, want_head, want_fix, mode); mode 'eq' or 'band' (want = (lo, hi|None))."""
+    rows = []
+    for name, _ in SESSION_ORDER:
+        g = sess.get(name, {}).get("ram")
+        rows.append(("ram:%s" % name, "control", g, RAM_MAGIC, RAM_MAGIC, "eq"))
+    q = sess.get("quiet", {})
+    rows.append(("quiet irr", "control", q.get("irr"), 0x00, 0x00, "eq"))
+    rows.append(("quiet isr", "control", q.get("isr"), 0x00, 0x00, "eq"))
+    rows.append(("quiet poll", "control", q.get("poll"), 0x00, 0x00, "eq"))
+    rows.append(("quiet imr", "control", q.get("imr"), 0x00, 0x00, "eq"))
+    rows.append(("quiet iack", "contract", q.get("iack"), 0x00, 0x00, "eq"))
+    lv = sess.get("level", {})
+    rows.append(("level irr4", "control", bit(lv.get("irr"), 4), 1, 1, "eq"))
+    rows.append(("level isr", "contract", lv.get("isr"), 0x00, 0x00, "eq"))
+    rows.append(("eoi noack", "contract", bit(lv.get("noack"), 4), 0, 0, "eq"))
+    rows.append(("reassert irr4", "control", bit(lv.get("reassert"), 4), 1, 1, "eq"))
+    rows.append(("eoi noack isr", "contract", lv.get("isr2"), 0x00, 0x00, "eq"))
+    a = sess.get("ack", {})
+    rows.append(("ack irr4", "control", bit(a.get("irr"), 4), 1, 1, "eq"))
+    rows.append(("poll byte", "contract", a.get("poll"), 0x84, 0x84, "eq"))
+    rows.append(("ack ip2", "symptom", bit(a.get("cause"), CAUSE_IP2), 1, 0, "eq"))
+    rows.append(("poll isr", "symptom", a.get("isr"), 0x00, 0x10, "eq"))
+    rows.append(("poll irr4", "symptom", bit(a.get("irr_after"), 4), 1, 0, "eq"))
+    rows.append(("poll again", "symptom", a.get("once"), 0x84, 0x00, "eq"))
+    rows.append(("in-service irr4", "control", bit(a.get("reassert"), 4), 1, 1, "eq"))
+    rows.append(("eoi acked", "symptom", bit(a.get("eoi_acked"), 4), 0, 1, "eq"))
+    rows.append(("eoi acked isr", "contract", a.get("isr2"), 0x00, 0x00, "eq"))
+    a3 = sess.get("ack3", {})
+    rows.append(("ack3 irr3", "control", bit(a3.get("irr"), 3), 1, 1, "eq"))
+    rows.append(("poll3 byte", "contract", a3.get("poll"), 0x83, 0x83, "eq"))
+    rows.append(("poll3 isr", "symptom", a3.get("isr"), 0x00, 0x08, "eq"))
+    rows.append(("in-service irr3", "control", bit(a3.get("reassert"), 3), 1, 1, "eq"))
+    rows.append(("eoi acked3", "symptom", bit(a3.get("eoi_acked"), 3), 0, 1, "eq"))
+    mk = sess.get("masked", {})
+    rows.append(("masked irr4", "contract", bit(mk.get("masked"), 4), 1, 1, "eq"))
+    rows.append(("masked imr", "control", mk.get("imr"), 0x10, 0x10, "eq"))
+    rows.append(("poll masked", "symptom", mk.get("poll"), 0x84, 0x00, "eq"))
+    rows.append(("poll once", "symptom", mk.get("once"), 0x84, 0x10, "eq"))
+    rows.append(("masked eoi", "contract", bit(mk.get("masked_eoi"), 4), 0, 0, "eq"))
+    me = sess.get("maskeoi", {})
+    rows.append(("maskeoi irr4", "control", bit(me.get("irr"), 4), 1, 1, "eq"))
+    rows.append(("maskeoi poll", "contract", me.get("poll"), 0x84, 0x84, "eq"))
+    rows.append(("maskeoi imr", "control", me.get("imr"), 0x10, 0x10, "eq"))
+    rows.append(("maskeoi isr", "contract", me.get("isr"), 0x00, 0x00, "eq"))
+    mr = sess.get("maskrem", {})
+    rows.append(("maskrem both irr", "control", (None if mr.get("irr") is None else mr.get("irr") & 0x18), 0x18, 0x18, "eq"))
+    rows.append(("maskrem imr", "control", mr.get("imr"), 0x10, 0x10, "eq"))
+    rows.append(("maskrem poll", "contract", mr.get("poll"), 0x83, 0x83, "eq"))
+    rows.append(("maskrem ip2", "symptom", bit(mr.get("cause"), CAUSE_IP2), 1, 0, "eq"))
+    rows.append(("maskrem irr after", "symptom", (None if mr.get("irr_after") is None else mr.get("irr_after") & 0x18), 0x18, 0x10, "eq"))
+    ns = sess.get("nonspec", {})
+    rows.append(("both irr", "control", (None if ns.get("irr") is None else ns.get("irr") & 0x18), 0x18, 0x18, "eq"))
+    rows.append(("poll first", "contract", ns.get("poll_a"), 0x83, 0x83, "eq"))
+    rows.append(("nonspec ip2", "contract", bit(ns.get("cause"), CAUSE_IP2), 1, 1, "eq"))
+    rows.append(("poll once2", "symptom", ns.get("once2"), 0x83, 0x10, "eq"))
+    rows.append(("poll second", "symptom", ns.get("poll_b"), 0x83, 0x84, "eq"))
+    rows.append(("isr both", "symptom", ns.get("isr_both"), 0x00, 0x18, "eq"))
+    rows.append(("nonspec lowest", "symptom", ns.get("isr_one"), 0x00, 0x10, "eq"))
+    rows.append(("nonspec twice", "contract", ns.get("isr_none"), 0x00, 0x00, "eq"))
+    se = sess.get("speceoi", {})
+    rows.append(("spec both irr", "control", (None if se.get("irr") is None else se.get("irr") & 0x18), 0x18, 0x18, "eq"))
+    rows.append(("spec polls", "symptom", (None if se.get("poll_a") is None or se.get("poll_b") is None else (se.get("poll_a") << 8) | se.get("poll_b")), 0x8383, 0x8384, "eq"))
+    rows.append(("spec isr both", "symptom", se.get("isr_both"), 0x00, 0x18, "eq"))
+    rows.append(("spec eoi one", "symptom", se.get("isr_one"), 0x00, 0x10, "eq"))
+    rows.append(("spec eoi both", "contract", se.get("isr_none"), 0x00, 0x00, "eq"))
+    io_ = sess.get("isrother", {})
+    rows.append(("isrother both irr", "control", (None if io_.get("irr") is None else io_.get("irr") & 0x18), 0x18, 0x18, "eq"))
+    rows.append(("isrother poll", "contract", io_.get("poll"), 0x83, 0x83, "eq"))
+    rows.append(("isrother irr4", "contract", bit(io_.get("irr_eoi"), 4), 0, 0, "eq"))
+    rows.append(("isrother isr", "symptom", io_.get("isr"), 0x00, 0x08, "eq"))
+    c = sess.get("casc", {})
+    rows.append(("casc irr2", "control", bit(c.get("irr"), 2), 1, 1, "eq"))
+    rows.append(("casc poll", "contract", c.get("poll"), 0x82, 0x82, "eq"))
+    rows.append(("casc isr2", "symptom", c.get("isr"), 0x00, 0x04, "eq"))
+    rows.append(("casc slave poll", "contract", c.get("poll2"), 0x80, 0x80, "eq"))
+    rows.append(("casc isr8", "symptom", c.get("isr2"), 0x00, 0x01, "eq"))
+    rows.append(("casc eoi isr", "contract", c.get("isr_eoi"), 0x00, 0x00, "eq"))
+    rows.append(("casc eoi isr8", "contract", c.get("isr2_eoi"), 0x00, 0x00, "eq"))
+    pt = sess.get("pit", {})
+    rows.append(("pit irr0", "control", bit(pt.get("irr"), 0), 1, 1, "eq"))
+    rows.append(("pit poll", "contract", pt.get("poll"), 0x80, 0x80, "eq"))
+    rows.append(("pit ip2", "symptom", bit(pt.get("cause"), CAUSE_IP2), 1, 0, "eq"))
+    rows.append(("pit poll irr0", "symptom", bit(pt.get("irr_after"), 0), 1, 0, "eq"))
+    g = sess.get("gt", {})
+    rows.append(("gt irr4", "control", bit(g.get("irr"), 4), 1, 1, "eq"))
+    rows.append(("gt write isr", "contract", g.get("isr_write"), 0x00, 0x00, "eq"))
+    rows.append(("gt iack", "contract", g.get("iack"), 0x04, 0x04, "eq"))
+    rows.append(("gt isr", "symptom", g.get("isr"), 0x00, 0x10, "eq"))
+    rows.append(("gt irr4 after", "symptom", bit(g.get("irr_after"), 4), 1, 0, "eq"))
+    gc = sess.get("gtcasc", {})
+    rows.append(("gtcasc irr2", "control", bit(gc.get("irr"), 2), 1, 1, "eq"))
+    rows.append(("gtcasc iack", "contract", gc.get("iack"), 0x08, 0x08, "eq"))
+    rows.append(("gtcasc isr2", "symptom", gc.get("isr"), 0x00, 0x04, "eq"))
+    rows.append(("gtcasc isr8", "symptom", gc.get("isr2"), 0x00, 0x01, "eq"))
+    rows.append(("gtcasc eoi isr", "contract", gc.get("isr_eoi"), 0x00, 0x00, "eq"))
+    rows.append(("gtcasc eoi isr8", "contract", gc.get("isr2_eoi"), 0x00, 0x00, "eq"))
+    gb = sess.get("gtboth", {})
+    rows.append(("gtboth irr", "control", (None if gb.get("irr") is None else gb.get("irr") & 0x14), 0x14, 0x14, "eq"))
+    rows.append(("gtboth iack", "symptom", gb.get("iack"), 0x04, 0x08, "eq"))
+    rows.append(("gtboth isr2", "symptom", gb.get("isr"), 0x00, 0x04, "eq"))
+    rows.append(("gtboth isr8", "symptom", gb.get("isr2"), 0x00, 0x01, "eq"))
+    gm = sess.get("gtmask", {})
+    rows.append(("gtmask irr", "control", (None if gm.get("irr") is None else gm.get("irr") & 0x14), 0x14, 0x14, "eq"))
+    rows.append(("gtmask imr", "control", gm.get("imr"), 0x04, 0x04, "eq"))
+    rows.append(("gtmask iack", "contract", gm.get("iack"), 0x04, 0x04, "eq"))
+    rows.append(("gtmask isr", "symptom", gm.get("isr"), 0x00, 0x10, "eq"))
+    rows.append(("gtmask isr8", "contract", gm.get("isr2"), 0x00, 0x00, "eq"))
+    r = sess.get("rate", {})
+    rows.append(("rate imr", "control", r.get("imr"), 0xfe, 0xfe, "eq"))
+    rows.append(("rate delivered", "control", r.get("count"), (1, None), (1, None), "band"))
+    rows.append(("rate poll byte", "contract", r.get("lastpoll"), 0x80, 0x80, "eq"))
+    rows.append(("rate storm", "symptom", r.get("count"), (5000, None), (1, 1000), "band"))
+    for name, _ in SESSION_ORDER:
+        if name == "rate":
+            continue
+        s = sess.get(name, {})
+        first = s.get("irr")
+        rows.append(("stable:%s" % name, "control", s.get("stable"), first, first, "eq"))
+    return rows
+
+
+def row_ok(mode, got, want):
+    if got is None or want is None:
+        return False
+    if mode == "band":
+        lo, hi = want
+        return got >= lo and (hi is None or got <= hi)
+    return got == want
+
+
+def run_leg(leg, binary, column, out):
+    out("-" * 86)
+    out("LEG %s -- %s build, judged against the %s column" % (leg, leg, column))
+    out("-" * 86)
+    sess = {}
+    enc_all = hit_all = True
+    for name, builder in SESSION_ORDER:
+        prog_list, halt_addr, regmap, extra = builder()
+        got, enc_ok, hit = run_session(binary, prog_list, halt_addr,
+                                       os.path.join(RAWDIR, "%s_%s.bin" % (leg, name)),
+                                       regmap, "%s_%s" % (leg, name), out, extra)
+        sess[name] = got
+        out("      raw: " + "  ".join("%s=%s" % (k, show(v)) for k, v in got.items()))
+        enc_all = enc_all and enc_ok
+        hit_all = hit_all and hit
+    out("")
+    out("  %-16s %-8s %-10s %-10s" % ("row", "got", "head", "fix"))
+    npass = nfail = 0
+    ctrl_ok = True
+    for label, kind, got, wh, wf, mode in build_rows(sess):
+        want = wh if column == "HEAD" else wf
+        ok = row_ok(mode, got, want)
+        npass += ok
+        nfail += (not ok)
+        if kind == "control" and not ok:
+            ctrl_ok = False
+        if kind == "symptom":
+            out("  %-16s %-8s head %-8s fix %-8s [%s] %s"
+                % (label, show(got), show(wh), show(wf), column, "ok" if ok else "FAIL"))
+        else:
+            out("  %-16s %-8s want %-10s %s" % (label, show(got), show(want), "ok" if ok else "FAIL"))
+    ntot = npass + nfail
+    leg_ctrl = ctrl_ok and enc_all and hit_all
+    out("")
+    out("  %d/%d passed" % (npass, ntot))
+    out("  CONTROL=%s" % ("PASS" if leg_ctrl else "FAIL"))
+    leg_pass = (nfail == 0 and leg_ctrl)
+    out("  LEG %s VERDICT: %s" % (leg, "PASS" if leg_pass else "FAIL"))
+    out("")
+    return leg_pass, npass, ntot, leg_ctrl
+
+
+def main():
+    global RAWDIR
+    assert row_ok("eq", 1, 0) is False and row_ok("eq", None, 0) is False
+    assert row_ok("band", 7415, (5000, None)) and not row_ok("band", 7415, (1, 1000)) and row_ok("band", 9, (1, 1000))
+    os.makedirs(OUTDIR, exist_ok=True)
+    RAWDIR = os.path.join(OUTDIR, "raw")
+    os.makedirs(RAWDIR, exist_ok=True)
+    lines = []
+
+    def out(s=""):
+        lines.append(s)
+        print(s)
+        sys.stdout.flush()
+
+    out("=" * 86)
+    out("i8259eoiirr -- the 8259 acknowledge on unmodified `evbmips -e malta` (ISA 8259 pair, 8253, GT64120 IACK)")
+    out("=" * 86)
+    out("date      %s" % time.strftime("%Y-%m-%d %H:%M:%S"))
+    out("machine   evbmips -e malta   LITTLE endian   (machine desc UNMODIFIED)")
+    out("isa       I/O physical 0x18000000 (KSEG1 0xffffffffb8000000): PIC1 +0x20/+0x21, PIC2 +0xa0/+0xa1, 8253 +0x40,"
+        " pccmos +0x70, ns16550 +0x3f8 (IRQ 4) / +0x2f8 (IRQ 3); GT64120 at 0xbbe00000, IACK +0xc34")
+    out("base bin  %s" % BASE_BIN)
+    if GATE:
+        out("mode      GATE -- one leg vs the FIX column")
+    else:
+        out("fix bin   %s" % ("(none -- WITNESS run)" if FIX_ARG == "-" else FIX_ARG))
+    out("")
+    if GATE:
+        legs = [("gate", BASE_BIN, "FIX")]
+    else:
+        legs = [("base", BASE_BIN, "HEAD")]
+        if FIX_ARG != "-":
+            legs.append(("fix", FIX_ARG, "FIX"))
+    results = []
+    for leg, binary, column in legs:
+        leg_pass, npass, ntot, leg_ctrl = run_leg(leg, binary, column, out)
+        results.append(leg_pass)
+        if GATE:
+            out("I8259EOI_CONTROL=%s" % ("OK" if leg_ctrl else "FAIL"))
+            out("I8259EOI_RESULT=%d/%d" % (npass, ntot))
+        else:
+            out("I8259EOI_CONTROL_%s=%s" % (leg, "OK" if leg_ctrl else "FAIL"))
+            out("I8259EOI_RESULT_%s=%d/%d" % (leg, npass, ntot))
+    out("=" * 86)
+    allok = all(results)
+    out("VERDICT   %s" % ("every leg passed its own column" if allok
+                          else "*** a leg failed -- read the FAIL lines above ***"))
+    out("I8259EOI_PROBE_DONE")
+    with open(os.path.join(OUTDIR, "RESULTS.txt"), "w") as f:
+        f.write("\n".join(lines) + "\n")
+    sys.exit(0 if allok else 1)
+
+
+if __name__ == "__main__":
+    main()

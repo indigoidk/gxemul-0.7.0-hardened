@@ -73,6 +73,8 @@ struct pic8259_data {
 	uint8_t		isr;		/*  interrupt in-service register  */
 	uint8_t		ier;		/*  interrupt enable register  */
 };
+struct machine;
+int pic8259_acknowledge(struct pic8259_data *d, struct machine *m);	/*  #574  */
 
 /*  dev_dec_ioasic.c:  */
 #define	DEV_DEC_IOASIC_LENGTH		0xc0000

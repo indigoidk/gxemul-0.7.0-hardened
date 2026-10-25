@@ -1,0 +1,67 @@
+VERDICT: RATIFY WITH CHANGES -- the named repairs are valid, but three uncovered predicate cases prevent instrument closure; provisional until the roster completes.
+BREACHES: Three DERIVED coverage holes requiring measurement: whole-ISR EOI guard → missing other-line-in-service row; mask-blind output recompute → missing masked-remainder Cause row; omitted GT `n == 2` conjunct → missing noncascade acknowledgement with slave work pending. These are not measured mutant escapes.
+
+**Q1. The instrument diff**
+
+**READ:** The adjudicated [frozen probe](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/i8259eoiirr/pass2_20261025/fixlegs_114055/i8259_eoi_probe.frozen.py.txt) has MD5 `3f3ad40347fc0c8205ff38395b57fda2`. Its identity records call it **v2f**, incorporating the disclosed `spec polls` correction. This ruling applies to that copy.
+
+**READ / DERIVED:** All six new mutant-detection channels work as claimed. The seventh requested row establishes their prerequisite state.
+
+| Row | Construction and ruling |
+|---|---|
+| `maskeoi isr` | Valid: acknowledge IRQ4, mask it, then EOI it. `D_eoi_maskcond` leaves ISR `0x10`; the correct result is zero. However, terminal zero alone does not prove ISR was previously set. Existing acknowledgement rows supply that protection. |
+| `spec eoi one` | Valid: the captured prerequisite ISR is `0x18`; EOI3 must leave `0x10`. `B_spec_isr0` instead produces zero. This directly repairs the earlier finding. |
+| `spec isr both` | Valid prerequisite and acknowledgement symptom: `0x18` proves both service bits existed. It correctly stays green under `B_spec_isr0`, whose defect occurs afterward; it is not that mutant’s kill channel. |
+| `nonspec ip2` | Valid: immediately after acknowledging IRQ3, pending unmasked IRQ4 must keep Cause.IP2 asserted. `D_deassert` changes the sampled bit from one to zero. |
+| `poll once2` | Valid: after successful acknowledgement of IRQ3, the uncommanded read returns IRR `0x10`; `D_latch_cond` instead acknowledges IRQ4 and returns `0x84`. HEAD returns `0x83`. |
+| `quiet iack` | Valid against `D_gt_always`: zero versus `0xffffffff`. Its coverage is specifically the reset-history fallback; it does not establish preservation of a previously nonzero `last_int`. |
+| `gt write isr` | Valid: ISR is sampled after the write and **before** the intended read. `D_gt_write` produces `0x10` where zero is required. |
+
+These channels agree with the [recorded mutant results](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/i8259eoiirr/killtable_20261025/SCORES.txt). **None is vacuous against its assigned mutant.** A valid channel nevertheless need not cover every incorrect implementation of its predicate.
+
+**READ / DERIVED:** Cause.IP2 is sound with Status.IE clear. The [CPU callbacks](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips.c:1884) update Cause directly without consulting Status; Malta’s ISA connection selects CPU line 2. IE governs interrupt delivery, not whether this pending-bit sample records the line.
+
+The inserted reads preserve the old baseline `nonspec` observations in the banked HEAD/FIX results. On HEAD the extra command read performs the old non-consuming scan; on FIX it reads IRR after latch reversion. Qualify the claim when discussing mutants: under a sticky latch, that read consumes IRQ4 and changes the old `poll second` observation to zero. That is additional detection. The measurements also do not establish invariance under every possible tick phase.
+
+**READ / DERIVED:** Relabelling the nine returned device values as CONTRACT is correct. Their failure signifies changed model behavior. `spec polls` has differing columns and correctly appears as SYMPTOM in the adjudicated copy.
+
+**Q2. The twelve dispositions**
+
+**One substantive disposition is overturned in part: A4’s declaration that the predicate class is closed.** Its three named repairs are accepted. A6, A7 and A12 need the qualifications below.
+
+| Disposition | Ruling |
+|---|---|
+| A1 | **UPHOLD, qualified — READ / NOT CHECKABLE.** Corrected attribution to Grok and the narrower `irq_base` statement are appropriate. His answer reports the re-fetch; it does not supply a version-pinned source extract independently establishing the complete Linux contract. One extract containing initialization, IACK and immediate dispatch would settle that evidence claim. |
+| A2 | **UPHOLD the disclosed debt — READ / DERIVED.** Restoring the band-row proposal and its attribution is correct. Its discrimination remains unmeasured; disclosure does not turn either retirement escape into coverage. |
+| A3 | **UPHOLD — READ.** `nonspec ip2` repairs the unconditional-DEASSERT case. It does not discharge `D_fold` or the masked-remainder case below. |
+| A4 | **PARTIAL OVERTURN — DERIVED.** The three repairs work; “the class is closed” does not follow. Q3 supplies counterexamples. |
+| A5 | **UPHOLD — READ / DERIVED.** Both new GT channels distinguish their named mutations. |
+| A6 | **REFINE — READ.** The classification argument is correct. Its inclusion of `spec polls` among contracts is superseded by the explicit v2f correction. |
+| A7 | **UPHOLD the mechanism rejection; REFINE the timing explanation — READ / DERIVED.** The probe increments `s2` per handler entry, so it counts deliveries, not pending events. But debugger waiting time does not establish the timer-enabled execution interval or explain three deliveries at 18 Hz. That interval, or a callback/entry timing trace, would settle the quantitative explanation. |
+| A8–A9 | **UPHOLD the stated scope/disclosure decisions.** Actual filing is **NOT CHECKABLE** without the excluded records. |
+| A10 | **UPHOLD the correction decisions.** Their application in `CHANGELOG.md` is **NOT CHECKABLE** under the reading restriction. |
+| A11 | **UPHOLD — READ.** The frozen docstring narrows the reassertion claim to the devices identified. |
+| A12 | **REFINE — READ / NOT CHECKABLE.** The original witness records `06:51:11`, supporting that correction. However, the named `rate_explore_20261025/rate_073912` artifact and its parent directory are absent at the supplied local location. “Nothing further owed” cannot certify that older count here; the original rate result, restored or correctly located, would settle it. |
+
+**Q3. Breaches and denominator**
+
+**READ:** The recorded results stand: HEAD/FIX **101/101**, L0 **75/101**, L3 **0/101**, and **20 killed / 3 escaped among 23 prescribed mutants**. “No additional escapes” is accurate for that table.
+
+**DERIVED:** The accepted predicates in the [inlined product diff](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/i8259eoiirr/pass2_20261025/f2b_20261025/F2B_PACKET.md:127), compared with the frozen session builders, leave these three distinguishable cases unobserved:
+
+| Missing case and mutant shape | Row required to distinguish it |
+|---|---|
+| **Another line is in service, but the EOI’s addressed line is not.** Weaken `d->isr & bit` to `d->isr != 0`. Current specific-EOI sessions never distinguish those predicates. | Have IRQ3 in service and IRQ4 pending but unacknowledged; EOI4. IRR4 must clear under the legacy branch: **HEAD/FIX 0; mutant 1**. Also verify that ISR3 remains set on FIX. |
+| **Acknowledgement leaves only masked requests.** Replace the output recompute’s `d->irr & ~d->ier` with raw `d->irr`. Existing `nonspec ip2` observes only an unmasked remainder. | With IRQ3 and IRQ4 pending, mask IRQ4, acknowledge IRQ3, immediately sample Cause.IP2: **HEAD 1; FIX 0; mutant 1**. This must be a SYMPTOM row. |
+| **GT selects a noncascade master line while slave work remains pending.** Remove only `n == 2` from the cascade guard. Existing noncascade GT sessions have an empty slave, so the erroneous extra call returns negative and is invisible. | With UART4 and RTC8 pending, mask **master IRQ2**, then read GT IACK. **HEAD/FIX return 4 and leave slave ISR zero; mutant returns 8 and sets slave ISR bit 0.** |
+
+These are proposed distinguishing observations, **not newly scored results**. They require the packet’s measurement-and-repin cycle before closure can be claimed.
+
+The review denominator was the **seven requested rows, three PIC predicate families, five GT guard expressions, and 23 recorded mutations**. It was not an exhaustive state-space test. Further boundaries must remain explicit:
+
+- `pic1 == NULL` is untested by this Malta-only instrument; PRETABLE already excludes the no-PIC machine path.
+- `pic2 == NULL` is untested.
+- `n2 < 0` is unobserved. The normal Malta cascade-fold invariant explains its exclusion; no contrary reachable fixture was established here.
+- `D_fold` and both retirement-conjunct mutants remain the three disclosed measured escapes.
+
+The repair succeeds at its named channels. **The instrument’s broader closure claim remains open.** The packet was read completely; no builds, test runs or edits were performed.

@@ -1,0 +1,112 @@
+I will audit the premises against `GXEMUL-SEC/src/` before judging the design. First I am checking that this tree is the fork, then I will enumerate every writer of the PIC request and in-service bits.The `src/` writers of `irr` are a short list. I am reading those functions and the 8253 and OCW2 encodings next, so the design is judged from the producers rather than from the brief's summary.**NOT READY.** Do not ship (A) as written. The End-Of-Interrupt (EOI) edit in (A) is the datasheet-correct half, and the witness fix column matches it for an EOI that was not preceded by an acknowledge. Shipping that edit alone removes the only request-consume this model has. NetBSD/malta polls and then specific-EOIs inside one loop, Linux/malta acknowledges through the Galileo GT IACK register (which does not acknowledge), and the 8253 never deasserts. None of (B), (C), (D), or (E) is shippable unchanged. (C) is the closest supplied split, and the clear it depends on executes in `DEVICE_ACCESS(8259)`, not in the ISA layer.
+
+## 1. Premise audit
+
+**2.1 Round not shipped. READ.** `git log -1` for `src/devices/dev_8259.c` and `src/devices/bus_isa.c` is `39748e3c`. `HEAD` is `94b247db`. `CHANGELOG.md` has no `i8259eoiirr` hit. `OUTSTANDING_BUGS.md` has the filing and the sibling `i8259isrnever`.
+
+**2.2 The access function matches the packet. READ.** `DEVICE_ACCESS(8259)` is the text in the packet. `DEV_8259_LENGTH` is 2. `DEVINIT(8259)` memsets the struct, connects `d->irq` to the device string, and sets `irq_base = 8` when `(addr & 0xfff) == 0xa0`.
+
+The specific arm is not "specific EOI" for every value it matches. For a byte store the arm is these 23 values, and `idata & 7` is the bit index:
+
+| values | count | index | datasheet command (`8259A.txt`, OCW2: R SL EOI, L is don't-care when SL is 0) |
+|---|---|---|---|
+| `0x21`–`0x27` | 7 | 1..7, never 0 | non-specific EOI. `0x20` is the only value in that command that hits the other arm |
+| `0x60`–`0x67` | 8 | 0..7 | specific EOI. The witness value `0x64` is in this row |
+| `0xe0`–`0xe7` | 8 | 0..7 | rotate on specific EOI. The ISR-bit clear belongs; the rotate does not happen. `priority_reg` is never written |
+
+`0xa0`–`0xa7` (rotate on non-specific EOI) miss both arms and take the `unimplemented command` path, which sets `cpu->running = 0`.
+
+**2.3 "IRR is the line level" is false as a description of the register, and the writer list has one mis-identified file. READ.**
+
+Mutators of `pic8259_data.irr` in `src/` are only:
+
+- `isa_interrupt_assert` / `isa_interrupt_deassert` / the cascade fold in `isa_interrupt_common` (`pic1->irr |= 0x04` or `&= ~0x04`)
+- the two EOI statements in `DEVICE_ACCESS(8259)`
+- `v3_isa_interrupt_assert` / `v3_isa_interrupt_deassert` / `v3_isa_interrupt_common`
+- `DEVICE_ACCESS(algor)`, `P5064_LOCINT` read (`pic1->irr &= ~0x18`) and `P5064_ISAINT` read (`pic2->irr &= ~0xc0`)
+- `DEVINIT(8259)`'s memset to 0
+
+`dev_v3.c` is the Algor P5064 V3, not the Iyonix. The file comment says Algor. `DEVINIT(v3)` calls `exit(1)` for every machine type other than `MACHINE_ALGOR`. `machine_iyonix.c` calls `bus_isa_init` under the i80321 and never adds `"v3"`. The only `"v3"` add is `machine_algor.c`, and that call happens before `bus_isa_init(..., BUS_ISA_EXTERNAL_PIC | ...)`. `EXTERNAL_PIC` skips `bus_isa`'s handler registration. The handlers that are installed are `v3_isa_interrupt_assert` and `v3_isa_interrupt_deassert`, lines 0..16. So Algor's bus does have ISA interrupt handlers.
+
+Those V3 handlers are not a verbatim copy. Shared with `bus_isa.c`: the cascade fold of bit 2, `mask = 1 << (line & 7)`, and the IRQ-0 pending decrement. Different: line 16 does not modify either IRR (that is the path `8259 irq=....v3.isa.16` uses, so pic1's own `INTERRUPT_ASSERT`/`DEASSERT` does not write a request bit); lines 8..15 go to pic2 with no `pic2 != NULL` test; `v3_isa_interrupt_common` does not write `last_int` and drives `irq_local` / `irq_isa` from `secondary_mask1` (`0x18` on Algor: ISA lines 3 and 4 to MIPS interrupt 4, everything else to MIPS interrupt 2).
+
+The Algor clears are the same class (a read drops request bits the device may still be holding) and a different producer. They belong on their own row. An edit to the OCW2 arms does not touch them.
+
+**The two roads to the MIPS cause bit are one bit, with no count. READ** (`mips_cpu_interrupt_assert` / `mips_cpu_interrupt_deassert` in `src/cpus/cpu_mips.c`, reached because the premise could not be settled from the packet). Both `bus_isa_data.irq` and pic1's `irq` are connected to the same path. On malta that path is `machine[0].cpu[N].2` (`MACHINE_SETUP(evbmips)`). Assert ORs `interrupt->line` into `COP0_CAUSE`. Deassert clears it. The PIC's `INTERRUPT_DEASSERT` clears the cause bit the bus object set.
+
+**2.3 ISR. READ.** In `dev_8259.c` the only stores to `isr` are `d->isr = 0` and `d->isr &= ~(1 << (idata & 7))`, plus the memset. No statement sets an ISR bit. `dev_ne2000.c`'s `isr` and `dev_i80321.c`'s `tisr` and `dev_sgi_ip30.c`'s `isr` are those devices' own registers.
+
+**2.4 Census, corrected. READ.**
+
+| source | what the code does | the table |
+|---|---|---|
+| `DEVICE_TICK(ns16550)` | `INTERRUPT_ASSERT` on every tick while `(IER_ETXRDY && TXRDY) or (IER_ERXRDY && RXRDY)` and `MCR_IENABLE`. Deassert only in the else, if `int_asserted` | level, re-asserted every tick. Right |
+| `DEVICE_TICK(wdc)` | assert every tick while `int_assert`. `INTERRUPT_DEASSERT` on the status read | right |
+| `DEVICE_TICK(8253)` | assert every tick while `pending_interrupts_timer0 > 0` after `in_use` is set. No `INTERRUPT_DEASSERT` in the file | right, and stronger than the packet: see (iv) |
+| `ne2000_update_irq` | unconditional assert while `(isr & imr & 0x7f)`. The comment names `dev_jazz.c` | the shape is right and the wiring is not this PIC. The only `ne2000` add under `src/` is `machine_arc.c`, on `jazz.isa.9` |
+| `pckbc_reassert_interrupts` | called at the end of `DEVICE_TICK(pckbc)`, but assert is gated by `!currently_asserted` | one-shot. Right |
+| `DEVICE_TICK(mc146818)` | `INTERRUPT_ASSERT` on every tick while `PIE` is set and `pending_timer_interrupts > 0`. No transition guard. Deassert and `--pending` on the register-C read; deassert on `PIE` clear | the "one event per period" / one-shot label is wrong. Same shape as the UART: level for as long as the count stays positive |
+
+Missing on the malta rig, which is the witness machine:
+
+- `DEVICE_TICK(gt)` asserts ISA irq 9 while `pending_timer0_interrupts > 0`. The `GT_INTR_CAUSE` read deasserts and decrements. `machine_evbmips.c` passes `...cpu[N].2.isa.9` into `dev_gt_init`.
+- Second `ns16550` on ISA irq 3 (`in_use=0`), `lpt` on irq 7 with no `INTERRUPT_ASSERT` in `dev_lpt.c`, `fdc` only when `BUS_ISA_FDC`: `DEVINIT(fdc)` connects the irq and `DEVICE_ACCESS(fdc)` never asserts it.
+- `piix4_ide` adds a `wdc` on ISA 14/15 only if a disk image exists.
+
+**(iv) Nothing decrements `pending_interrupts_timer0` on malta. READ.** The `++` is `timer0_tick`. The `--` is in `isa_interrupt_deassert` and the V3 copy, behind `ptr_to_pending_timer_interrupts != NULL`. `bus_isa_init` copies `machine->isa_pic_data.pending_timer_interrupts` before `device_add` of the 8253. `machine_new` memsets the machine to 0, so that pointer is NULL. `DEVINIT(8253)` then stores `&pending_interrupts_timer0` into the machine field and does not update the bus copy. `DEVINIT(v3)` takes the same snapshot even earlier. The 8253 never calls `INTERRUPT_DEASSERT`. After the first host timer fire the count only increases.
+
+**(v) Whether a malta guest programs the PIT. Split.** READ: the comment in `DEVICE_TICK(8253)` says Linux/MALTA kernels want the interrupt regardless of the mode bits. READ, NetBSD current `sys/arch/evbmips/malta/malta_intr.c`: `malta_cal_timer` times the CP0 count from the mc146818, and the clock is that count. `pcib_isa_intr_evcnt` panics on irq 0. NOT CHECKABLE: whether any guest image this fork boots was built with Linux `CONFIG_I8253` (`setup_pit_timer` is under that ifdef in `arch/mips/mti-malta/malta-time.c`) or writes counter 0's MSB. `in_use = 1` on any 8253 access is not enough. The timer is created only on the counter-0 MSB write.
+
+**2.5 Witness numbers are the packet's measurements.** I did not open `regress/artifacts/`. The probe body is not in `regress/*.py`. Row stimuli I will use are only the ones the packet attaches to a row: `eoi irr4` is specific EOI `0x64` and a read of bit 4 two instructions later; `eoi x8` is that pair eight times (fix `0xff` is eight samples of bit 4, not eight different lines); `nonspec irr4` is EOI `0x20`; `masked irr4` is OCW1 `0x10` with no EOI stated; `poll byte` is OCW3 `0x0c` returning `0x84`.
+
+**2.6 Datasheet. READ** (`8259A.txt`). At INTA the highest ISR bit is set and the corresponding IRR bit is reset. EOI resets an ISR bit. Specific EOI is `EOI=1, SL=1, R=0`. Poll's next read is an interrupt acknowledge and sets the IS bit. `LTIM=0`: low-to-high, and the pin may stay high without another interrupt. `LTIM=1`: a high level, and the request must be gone before EOI or the interrupt returns. `fatal()` in this tree only prints (`src/core/debugmsg.c`), so ICW1 bit 3 does not stop the guest and does not switch the model into level mode.
+
+**2.7 Guests. READ from current NetBSD and Linux sources, not from the packet.**
+
+NetBSD `sys/arch/evbmips/malta/pci/pcib.c` `pcib_intr`: write `OCW3_SELECT|OCW3_POLL` (`0x0c`) and read; if the index is 2, poll the slave; call the handlers; then specific EOI. The constants in `sys/dev/ic/i8259reg.h` are `OCW2_EOI = 1<<5`, `OCW2_SL = 1<<6`, `OCW2_ILS(n) = n`, so the store is `0x60 | n` to the slave and then to the master (cascade uses index 2). The GT IACK read is in the `#else` and is not compiled. Init writes ICW1 `ICW1_SELECT|ICW1_IC4` (`0x11`, `LTIM` clear) and OCW3 `0x68` (`OCW3_SELECT|OCW3_SSMM|OCW3_SMM`). `0x68` is the empty "Set Special Mask Mode" arm in `DEVICE_ACCESS(8259)`. NetBSD also writes an ELCR, default 0. Nothing in `src/` implements an ELCR.
+
+Linux `arch/mips/mti-malta/malta-int.c` `mips_pcibios_iack` reads `GT_PCI0_IACK` for the GT64120, or the MSC or Bonito equivalent. It does not write OCW3 `0x0c`. One malta revision does `i8259_set_poll(mips_pcibios_iack)`, which replaces the poll function with that read. `GT_PCI0_INTR_ACK` in `dev_gt.c` returns `isa_pic_data.last_int` and has the comment that it does not acknowledge. `mask_and_ack_8259A` in `drivers/irqchip/irq-i8259.c` writes `0x60+(irq&7)` and then `0x60+2` for the cascade. The packet's "malta obtains the vector with OCW3 `0x0c`" is true of NetBSD `pcib_intr` and of the generic `i8259_irq()` poll path. It is false of current Linux malta dispatch.
+
+`DEVICE_ACCESS(prep)` returns `last_int` and has no acknowledge side effect. That part of `i8259isrnever` is real.
+
+**2.8 Jazz precedent. READ.** `dev_jazz.c` keeps `isa_int_asserted` apart from the mask that the register write clears (`&= 0xff` / `&= 0xff00`), and `reassert_isa_interrupts` recomputes the output. That is a level shadow. It is not an 8259 IRR.
+
+## 2. Which supplied (d) variants the rows catch
+
+`ier` is mask polarity despite the "enable" comment in `struct pic8259_data`: the output is `irr & ~ier`, and OCW1 `0x10` is what the packet calls a mask of line 4. `d->ier & bit` is true when the line is masked. The eoi rows are not described as writing OCW1 first, and `DEVINIT` leaves `ier` at 0. `quiet` reports IMR `0x00`.
+
+All three reintroductions of `d->irr &= ~(1 << (idata & 7))` leave the symptom rows green.
+
+- Under `if (d->ier & bit)`: line 4 is unmasked, so the clear does not run. `eoi irr4` stays `0x01`, `eoi x8` stays `0xff`. The masked row writes OCW1 and does not EOI, so it stays green too. The planned 8253 row, if it leaves line 0 unmasked and expects the bit to remain set, also stays green.
+- Under `if (n != 4)`: `0x64` has `n = 4`, so `eoi irr4` and `eoi x8` stay green. IRQ 12 is pic2 bit 4, so a slave EOI of `0x64` stays green too. A planned 8253 row that EOIs line 0 and expects the bit to remain set goes red. That row is not one of the 19. The 8253 is present on malta (`bus_isa_init` always adds it at `portbase+0x40`).
+- Under `if (d->isr & bit)`: `isr` is 0, so the clear never runs. `eoi irr4` stays green. The planned "poll sets isr" / "eoi clears isr" rows read ISR. They stay green if the EOI still clears the ISR bit. No planned row reads IRR after a poll-then-EOI.
+
+The row that stays green for every named variant is `eoi irr4`.
+
+A fourth hole: reinstating only the non-specific statement `d->irr &= ~d->isr` also leaves all 19 rows green. With `isr == 0` that statement is a no-op, and `nonspec irr4` already expects `0x01` on current HEAD. The red rows are only the specific arm.
+
+## 3. Option set
+
+Supplied candidates, against the code:
+
+- **(A)** deletes both IRR clears. The recalc compares `irr & ~ier` with itself and does not touch the cause bit. The device deassert path still does, through `isa_interrupt_deassert`. For the 8253 there is no deassert, so IRR bit 0 and the cause bit stay set after the first timer fire. For NetBSD `pcib_intr`'s `for (;;)` poll, a bit that survives the specific EOI makes the next poll return the same irq again.
+- **(B)** adds `isr |= bit` on the poll read and gates the cause bit with `~isr`. It does not reset the IRR bit at that read. The datasheet's acknowledge does both. Linux malta never issues the poll, so for that guest (B) is (A). Guests that do poll still see the 8253 again after EOI, because IRR bit 0 is still set and the `~isr` term is gone. The poll scan also ignores `ier`, so the bit it would latch can be a masked line. The non-specific arm still does `d->isr = 0` (every bit, not the highest) once any ISR bit exists.
+- **(C)** is the split that keeps a pulse consumed and leaves a level bit alone. The place that would have to know the mode is the OCW2 arm in `dev_8259.c`. `bus_isa.c` does not see the EOI. The same arm serves V3's PICs. "Never deasserts" selects the 8253 and does not select `pckbc`, which deasserts when the queue drains and still will not re-assert while `currently_asserted` stays 1. ICW1 bit 3 is printed and ignored. There is no per-line register in this tree. NetBSD already writes an ELCR that nothing here implements.
+- **(D)** restores the bit after the clear if a shadow says the pin is still high. The 8253 never deasserts, so a shadow defined as "asserted and not yet deasserted" restores bit 0 too. The Jazz `isa_int_asserted` mask is this idiom, on a different bridge.
+- **(E)** does not change the value `eoi irr4` reads two instructions after `0x64`. The UART already re-asserts every tick. The 8253 already does too. (E) is a `pckbc` change.
+
+Missing member, from the ack sites that are actually in `src/`: clear the request at the acknowledge the guest performs, and refill it from a pin shadow only for a level pin. The sites are the poll read (`current_command == 0x0c`, NetBSD malta), `GT_PCI0_INTR_ACK` (Linux malta, today returns `last_int` and does not ack), `DEVICE_ACCESS(prep)` (same, no ack), and the Algor `P5064_LOCINT` / `P5064_ISAINT` reads (already a clear, no refill). (B) covers one site and does not clear IRR there.
+
+## 4. Scope
+
+Leave `i8259isrnever` as its own row. Same file, different event: ISR is never set, and the PReP and GT IACK reads have no acknowledge side effect. (B) does not fix those reads.
+
+With (A) alone on the Linux malta path (GT IACK for the vector, then `mask_and_ack` which masks and writes `0x60+irq`): the mask drops the cause bit, the EOI leaves IRR, and a later unmask asserts again if the bit is still set. For a UART that still has the condition, that is the level behaviour the datasheet describes for `LTIM=1`. Linux programs ICW1 `0x11`, which is `LTIM=0`. For the 8253, if the guest has programmed counter 0 and unmasked irq 0, nothing later clears bit 0, so the unmask asserts again as soon as the handler returns.
+
+## 5. The 8253
+
+Under (A), nothing clears IRR bit 0. The tick's `INTERRUPT_ASSERT` finds the bit already set, `isa_interrupt_common` sees no change, and it returns without a new cause-bit edge. The existing pulse exists because the specific EOI clears the bit and the next tick sets it again. The count is not the rate. It is a sticky "greater than zero". That stuck count is already a defect (the interrupt rate is the `TICK_SHIFT` 14 tick, and the count never returns to 0). (A) makes it guest-visible: the line stops falling between ticks. The 8253 row in the detector, if its expected value is "bit stays 1", records the stick. It does not reject it.
+
+## 6. NetBSD/malta EOI
+
+**READ**, not from the packet. Specific EOI, `0x60 | n`, in `pcib_intr` in `sys/arch/evbmips/malta/pci/pcib.c`, after a poll acknowledge (`0x0c`) and the handlers. Slave first when `irq > 7`, then the master, with the cascade index forced to 2. `malta_intr.c` itself only delegates to `isa_intr_establish(pcib_ic, ...)`.

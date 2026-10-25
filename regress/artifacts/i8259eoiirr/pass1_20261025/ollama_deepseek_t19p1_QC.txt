@@ -1,0 +1,14 @@
+NOT READY — candidate (A) alone leaves 8253 IRR bit 0 permanently asserted (no deassert path, EOI no longer clears IRR); NetBSD EOI form is NOT CHECKABLE from packet.
+
+**Q5. The 8253**
+
+- READ from packet: `dev_8253.c` asserts line 0 when `pending_interrupts_timer0 > 0`, never calls `INTERRUPT_DEASSERT`, and the only decrement of that pending count is inside `isa_interrupt_deassert()`, which the 8253 never calls.
+- REASONED: Under (A), the specific-EOI IRR clear `d->irr &= ~(1 << (idata & 7))` is removed, and non-specific EOI is inert on IRR because ISR is never set. Therefore, once the 8253 is `in_use` and the pending count is > 0, no remaining code path clears `pic1->irr` bit 0. If line 0 is unmasked, the CPU line stays asserted after any EOI.
+- REASONED: The existing 8253 behavior is itself a defect: a one-way interrupt source with a never-decremented pending count. Current specific EOI masks it by momentarily clearing IRR bit 0. Candidate (A) makes that defect guest-visible as a permanent level.
+
+So (A) as written violates the stated floor: it makes a never-deasserting source a permanent level.
+
+**Q6. NetBSD/malta EOI form**
+
+- NOT CHECKABLE from this packet. The brief itself states NetBSD’s EOI form was not established.
+- The single fact that would settle it: whether NetBSD/malta’s ISA interrupt end-of-interrupt path writes non-specific EOI (`0x20`) or specific EOI (`0x60 + irq`) to the master/slave PIC command register, e.g. in `sys/arch/evbmips/malta/pci/` or `sys/dev/isa/`.

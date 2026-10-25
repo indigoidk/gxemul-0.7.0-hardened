@@ -1,0 +1,39 @@
+VERDICT: SHIP WITH CHANGES -- no premise in 2.1-2.8 falls from the packet and the inlined diff is consistent with every stated warrant, but the row table leaves at least one clause of the fix (the one-shot latch) unobserved, so one degenerate row must be re-run before landing.
+
+Labels: READ = stated in the packet; DERIVED = reasoned from packet-stated facts only; NOT CHECKABLE = cannot be settled from the packet. No measurement was performed by this seat; all arithmetic below is on packet-stated numbers.
+
+## Packet-internal checks this seat could actually perform
+
+- **READ/arith:** numstat vs. inlined hunks: `devices.h` 2/0 exact; `dev_gt.c` 18/1 exact (6 comment + 12 code insertions, 1 deleted TODO); `dev_8259.c` hand-counts to ~79/31 vs stated 78/29 — within hand-count noise of a rendered diff; no missing hunk is implied.
+- **READ/arith:** independent count of HEAD/FIX-differing rows in §4 = 18 (ack 4, ack3 2, masked 1, nonspec 3, casc 2, pit 1, gt 2, gtcasc 2, rate 1), matching L0's "exactly the 18 symptom rows red" and 77−18=59.
+- **DERIVED coherence:** 0xbbe00c34 is the kseg1 alias of GT 0x1be00c34 (matches 2.4); 1193182/0xffff≈18 Hz, /0x1000≈291 Hz (matches 2.8's constants); 180M/2^14≈11K matches the HEAD storm counts (7.4K–8.0K).
+
+## Q1
+
+**2.1** READ; NOT CHECKABLE (needs git log). Minor tension: its warrant cites CHANGELOG.md, which this pass's scope forbids reading — a records question for the adjudicator, not a defect.
+**2.2** READ; consistent with the diff: the helper dereferences `m->isa_pic_data.pending_timer_interrupts` at call time under `!= NULL`, `> 0`, `d == p->pic1 && n == 0`. DERIVED, positive: the `d == p->pic1` guard correctly stops the RTC's slave-line-0 acknowledge from retiring an 8253 event. The dead-decrement claim is NOT CHECKABLE (bus_isa.c not inlined; the snapshot line in `bus_isa_init` settles it).
+**2.3** READ (warrant = F2_RULINGS 1.7/1.8 quotes, not inlined); NOT CHECKABLE. Internally consistent: ICW1 0x11 has LTIM=0 (edge); EOI slave-then-master matches the casc rows' 0x60/0x62 ordering.
+**2.4** READ; consistent with the rows. One tension to name: "pckbc (irq 1/12, unconditional)" — if that means *asserts* unconditionally, the quiet session's all-zero IRR/poll requires the probe to clear stray requests (a specific-EOI sweep, which is legacy-branch-safe on both legs); if it means *instantiated* unconditionally, no issue. NOT CHECKABLE — dev_pckbc.c's assert site or the probe's quiet preamble settles it.
+**2.5** READ; DERIVED-verified against the diff: the helper touches only `d->irq`; the `default:` arm appears in no hunk; the EOI's else-branch preserves the consume and the mask-gated recalc.
+**2.6** READ; matches the masked-session rows.
+**2.7** READ, with one coverage caveat (DERIVED): the 08:01 re-pin covers probe v2 (69 rows); the 8 rows added in v2c (77) had their HEAD column first verified at 08:27 alongside the fix measurement (on the base clone — still a HEAD-source pin, but "before any fix measurement" is strictly true only for 69/77). The record is otherwise honest.
+**2.8** READ; one wording defect (DERIVED): the band as gated (HEAD ≥ 5000, FIX ≤ 1000) guarantees only a 5× separation at the boundary — "two orders of magnitude" describes the measured gap (~7992 vs 4), not the guard. Still sufficient for its purpose: D_noretire lands in the 1000–5000 dead zone and fails both bounds.
+
+**(i)** DERIVED — the discriminator is sound *given* the only-setter claim: every other ISR write shown anywhere in the packet is a clear, and the helper's set is idempotent, so no path reaches the legacy branch with the bit set or the ISR branch with it clear. The only-setter claim itself is READ-as-asserted but NOT CHECKABLE (the full read/write switch isn't inlined; `grep 'isr' src/devices/dev_8259.c` plus any external writer settles it).
+**(ii)** READ-as-asserted that neither documented guest re-reads; NOT CHECKABLE (the quotes live in F2_RULINGS 1.7). DERIVED fidelity note: real poll mode persists until OCW3 clears P, so the one-shot is a model deviation whose only observable difference (a re-read with a *second* request pending) no documented guest exercises — and with nothing pending, latch (IRR 0x00) and persistent poll (byte 0x00) are byte-identical. That degeneracy is Q2's escape.
+**(iii)** DERIVED — the fix preserves the `last_int` convention byte-for-byte where it matters: writes, nothing-pending, and pic1==NULL all fall through to `last_int` (READ from the diff), and the success path returns the same value-class (raw line 0–15); row `gt iack 4 (control, both)` shows HEAD/FIX byte-identical. Whether `mips_pcibios_iack` masks an offset off the byte (real PIIX4 returns vector = base+n) is NOT CHECKABLE — the F2_RULINGS 1.8 quote settles it. One residue: the fix never *updates* `last_int` on acknowledge; grep `last_int` across src/ settles whether any consumer needs it.
+
+**Which of 2.1–2.8 is wrong:** none falls from the packet; 2.1/2.3/2.4 are warrant-recorded and NOT CHECKABLE here; 2.7 overstates coverage (69 of 77) and 2.8 overstates the band ("two orders" vs a 5× guard).
+
+## Q2
+
+**Yes — a third escape exists, and it is smaller than either disclosed one.**
+
+**The edit (one line):** delete `d->current_command = 0x0a;` from the 0x0c read arm — keep the acknowledge, drop the one-shot latch. Every other poll row re-arms with a fresh OCW3 (proved by the data: `poll second 0x83/0x84` — under the latch a second read after one OCW3 would return the IRR byte 0x10, not 0x84, and the FIX column passed 77/77, so the probe re-arms). The only row reading the command port twice after one OCW3 is `poll once`, and it is **degenerate**: nothing is pending at that point, so latch (IRR read → 0x00) and no-latch (helper → −1 → 0x00) emit the same byte. **The row that should have caught it:** `poll once` run with a *second* request pending — assert lines 3 and 4, poll once (acknowledges 3), raw second read: latch → IRR byte 0x10; no-latch → poll byte 0x84 *and* ISR bit 4 set. **The row that stays green:** `poll once` as it exists (0x00 both ways), plus every re-armed poll row. No prescribed mutant targets the latch (B_poll/D_scan_raw/M_noack_* all target the acknowledge).
+
+**Further escapes of the same class, each passing all 77 rows and the prescribed list:**
+- **The retire guard `d == p->pic1 && n == 0`** — delete either clause. No session combines a firing PIT with an acknowledge on another line: in every non-PIT session the count is 0 (the `> 0` guard no-ops the spurious decrement), and in pit/rate every acknowledge is on line 0, so retirement is correct regardless. `rate storm` stays green *because* it is single-line. Missing row: PIT armed + a second periodically-acknowledged line (e.g., RTC), banded on line-0 deliveries. (This is the untested face of a guard the diff gets right.)
+- **The helper's re-ASSERT branch** — replace the recompute with unconditional `INTERRUPT_DEASSERT(d->irq)`. Register rows never see the CPU line; rate still passes (each host-timer assert re-raises it); what breaks is the more-pending case (a second slave request stranded with the CPU line low via the pic1-bit-2 fold) — same unrowed CPU-line/fold class as the disclosed D_fold, different clause. The owed cascade CPU-line row, written with two simultaneous slave sources, closes both.
+- **Narrow fourth:** the `n2 < 0` cell in dev_gt.c is unrowed; any edit there passes everything. (That cell is Q3(d)'s reachability question — flagged as an escape only, not adjudicated here.)
+
+**Single facts that would settle the NOT CHECKABLEs:** bus_isa.c's snapshot line (2.2); the F2_RULINGS 1.7/1.8 quotes (2.3, Q1(ii)/(iii)); dev_pckbc.c's assert site and the probe's quiet-session preamble (2.4); the full read/write switch of dev_8259.c (Q1(i)); a `last_int` grep (Q1(iii)).

@@ -152,8 +152,25 @@ DEVICE_ACCESS(gt)
 		break;
 
 	case GT_PCI0_INTR_ACK:
+		/*  #574: a PCI interrupt-acknowledge READ is the acknowledge
+		    (Linux/malta's mips_pcibios_iack reads it in place of an
+		    OCW3 poll): move the request to service in pic1, then in
+		    pic2 through the cascade, and return the LINE (0-15, as
+		    last_int).  Nothing pending, no ISA PICs on this machine
+		    (MVME5500), or a write: last_int, as before.  */
 		odata = cpu->machine->isa_pic_data.last_int;
-		/*  TODO: Actually ack the interrupt?  */
+		if (writeflag == MEM_READ &&
+		    cpu->machine->isa_pic_data.pic1 != NULL) {
+			struct isa_pic_data *p = &cpu->machine->isa_pic_data;
+			int n = pic8259_acknowledge(p->pic1, cpu->machine);
+			if (n == 2 && p->pic2 != NULL) {
+				int n2 = pic8259_acknowledge(p->pic2, cpu->machine);
+				if (n2 >= 0)
+					n = 8 + n2;
+			}
+			if (n >= 0)
+				odata = n;
+		}
 		break;
 
 	case GT_TIMER_CTRL:

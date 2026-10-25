@@ -1,0 +1,139 @@
+VERDICT: NOT READY — candidate A is the preferred PIC correction, but it needs a defined PIT lifetime/accounting resolution; the supplied detector also leaves material gaps.
+
+**1. Premise audit**
+
+**READ:** The explicit PIC IRR writers are the four identified files—`dev_8259.c`, `bus_isa.c`, `dev_v3.c`, and `dev_algor.c`—plus initialization. However, “IRR is the line state” overstates the implementation: IRR combines device assertions, synthesized cascade state, and software-cleared requests. It is not an independent record of what devices still hold asserted.
+
+**READ:** Two significant corrections to section 2.3:
+
+- `dev_algor.c`, `P5064_LOCINT` and `P5064_ISAINT`, clear IRR on **reads**, under the `Read => ack` anchors. Writes change masks. These reads can discard requests without acknowledging the originating UART or disk device.
+- V3 belongs to **Algor**, not Iyonix. `machine_algor.c`, `MACHINE_SETUP(algor)`, creates it; Iyonix uses the generic ISA bus through i80321. V3’s handlers are not verbatim copies: they split local/ISA outputs and support dummy callback line 16.
+
+**DERIVED:** Algor’s request clearing is related held-request loss, but deserves its own row: its trigger is a bridge status read, and changing PIC EOI writes does not repair it.
+
+**READ:** In [dev_8259.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_8259.c), `DEVINIT(8259)` zero-initializes ISR. Its subsequent writes are exclusively `isr = 0` and `isr &= ~bit`. Neither explicit poll nor default reads set it. Thus the non-specific EOI’s `irr &= ~isr` is presently inert. The unrelated `isr`/`tisr` matches do not establish PIC service tracking.
+
+**READ:** The source census needs this correction:
+
+| Source and anchor | Actual behavior |
+|---|---|
+| `dev_ns16550.c`, `DEVICE_TICK(ns16550)` | Reasserts while an enabled TX/RX cause exists and `MCR_IENABLE` permits it. |
+| `dev_wdc.c`, `DEVICE_TICK(wdc)` / `case wd_command` | Reasserts while `int_assert`; primary STATUS read deasserts and clears that condition. |
+| `dev_8253.c`, `DEVICE_TICK(8253)` | Reasserts while `in_use && pending_interrupts_timer0 > 0`; never deasserts. |
+| `dev_ne2000.c`, `ne2000_update_irq` | Reasserts while enabled interrupt status is pending. Its documented workaround concerns Jazz’s separate controller implementation. |
+| `dev_pckbc.c`, `pckbc_reassert_interrupts` | Transition-gated by `currently_asserted`; a held condition does not cause repeated assertions. |
+| `dev_mc146818.c`, `DEVICE_TICK(mc146818)` | **Already reasserts every tick while PIE and pending periodic events are present.** Register-C read deasserts and retires one pending periodic event. It is not the stated one-shot source. |
+
+**READ:** Missing census entries include Malta’s GT timer on ISA9 (`machine_evbmips.c`, GT setup; `dev_gt.c`, `DEVICE_TICK(gt)`), which repeatedly asserts and has its own read acknowledgement. LPT connects ISA7 but has no implemented assertion; the optional floppy is likewise a dummy without assertion calls. VGA initialization supplies no IRQ.
+
+**READ:** `interrupt.h`, `INTERRUPT_ASSERT`, invokes the callback unconditionally. It neither remembers a level nor suppresses repeated assertions. A callback invocation therefore cannot automatically be interpreted as a new electrical edge.
+
+**READ:** The PIT has no normal pending-event retirement or deassertion path within `dev_8253.c`. Moreover, there is an additional accounting defect: `bus_isa_init` captures `machine->isa_pic_data.pending_timer_interrupts` **before** creating the PIT; `DEVINIT(8253)` publishes the pointer afterward. `machine_new` zero-initializes the machine, so ordinary Malta initialization leaves the bus’s captured pointer NULL. Algor/V3 has the same ordering problem. The conditional decrement in each ISA deassert handler therefore does not establish working PIT accounting.
+
+**READ:** Malta constructs the PIT at ISA port `0x40`; it is reachable. `DEVICE_ACCESS(8253)` sets `in_use` on any access, but an access alone does not guarantee a pending timer event.
+
+**NOT CHECKABLE:** Whether the particular Linux or NetBSD boot programs and uses that PIT. The “Linux/MALTA kernels like this” comment is not evidence about a specified kernel boot. The settling fact is that kernel’s PIT initialization/use path or an authorized execution record.
+
+**READ:** The named Intel datasheet supports ISR-only EOI, acknowledgement setting ISR, and acknowledgement clearing the selected IRR request. It also distinguishes edge and level behavior. Several qualifications matter:
+
+- OCW2 `0x21` through `0x27` have `SL=0`: these are **non-specific** EOIs on hardware, although this emulator treats them as specific.
+- `0xe0` through `0xe7` request rotation with specific EOI; this implementation does not perform that rotation.
+- `0x0c` is a poll command, despite the source’s “Buffered mode” comment.
+- Normal nested priority inhibits requests of the same **or lower priority** while service is active; simply excluding matching ISR bits does not implement that rule.
+- The packet’s Linux ICW1 value `0x11` selects edge mode. Using `handle_level_irq` does not itself establish hardware level-trigger configuration.
+
+**READ:** The access function matches the supplied relevant state-changing statements. Registration covers offsets 0 and 1; the handler does not explicitly enforce `len == 1`.
+
+**NOT CHECKABLE:** Commit history, unchanged-file history, changelog counts, gate contents, frozen-probe identity, hashes, disassembly verification, reported measurements, and the cited external fork patches cannot be independently established within this reading scope. The source still contains the defect. The permitted regression filenames show no dedicated `i8259` probe, which does not establish absence of all PIC-related coverage or gate blocks.
+
+**DERIVED:** The packet’s `19/19` report is consistent with the current implementation, but remains supplied measurement evidence, not independently reproduced evidence.
+
+**2. Supplied clause-(d) variants**
+
+**READ:** The command’s line number is local to a PIC: `idata & 7`. ISA delivery uses `line & 7`. Enumerating those domains:
+
+| Local `n` | Master ISA line | Slave ISA line | Bit | Commands entering the current “Specific EOI” arm |
+|---:|---:|---:|---:|---|
+| 0 | 0 | 8 | `01` | `60`, `e0` |
+| 1 | 1 | 9 | `02` | `21`, `61`, `e1` |
+| 2 | 2 | 10 | `04` | `22`, `62`, `e2` |
+| 3 | 3 | 11 | `08` | `23`, `63`, `e3` |
+| 4 | 4 | 12 | `10` | `24`, `64`, `e4` |
+| 5 | 5 | 13 | `20` | `25`, `65`, `e5` |
+| 6 | 6 | 14 | `40` | `26`, `66`, `e6` |
+| 7 | 7 | 15 | `80` | `27`, `67`, `e7` |
+
+**READ:** Generic ISA registers lines `0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15`. V3 additionally registers dummy 16, whose handler does not set a source IRR bit. Master line 2 carries the cascade. Thus **ISA12 tests slave-local line 4**, not a different local line number from UART4.
+
+**DERIVED:** Against A’s proposed preservation contract:
+
+| Supplied condition on the restored clear | Nineteen supplied rows | What the planned rows establish |
+|---|---|---|
+| `d->ier & bit` | Can all remain green. `masked irr4` establishes masking preserves IRR, not EOI while masked. | No guaranteed red: none explicitly specifies EOI with the requested bit masked. |
+| `n != 4` | `eoi irr4` and `eoi x8` remain green. | A PIT0 post-EOI preservation row would red **if preservation is its chosen contract**. Slave ISA12 remains green because its local `n` is also 4. |
+| `d->isr & bit` | Under A, all remain green because ISR cannot become nonzero. This condition is presently dormant. | Under B, `poll sets isr` and `eoi clears isr` can both remain green despite collateral IRR deletion. A post-acknowledgement EOI IRR observation is not specified. |
+
+**DERIVED:** For the ISR condition, placement matters: evaluated after the retained ISR clear, it is false for the selected bit. Evaluated before that clear, it becomes meaningful under B.
+
+**DERIVED:** The proposed cascade observation could distinguish `n != 4` at master-local line 2 only if it includes the relevant master EOI and observes the resulting master request before resynthesis. “PIC2 line 12 via cascade bit 2” does not specify that sequence.
+
+**DERIVED:** Restricting B’s acknowledgement to `current_command == 0x0c` passes the explicitly described poll rows. They do not establish acknowledgement through machine vector registers.
+
+**READ:** `dev_ns16550.c`, `TICK_SHIFT`, is 14, but `machine.c`, `machine_run`, dispatches ticks after execution batches using countdowns. **DERIVED:** The claimed random `~2e-4` interference probability is unsupported; eight repetitions need not have independent phases. Their exact placement relative to scheduling boundaries is not supplied.
+
+**DERIVED:** The listed IRR/ISR observations also do not, by themselves, prove correct CPU-output or vector behavior.
+
+**3. Option-set completeness and candidate effects**
+
+**DERIVED:** None of A–E, as written, satisfies every stated constraint.
+
+| Candidate | Assessment |
+|---|---|
+| **A** | Correctly removes EOI’s destruction of held requests. Both retained output-recalculation guards become false because IRR is unchanged. It exposes the PIT’s missing release/retirement behavior. |
+| **B** | Adds service state, but does not cure the PIT: EOI clears ISR and immediately makes the still-pending request eligible again. Poll-only acknowledgement also leaves other vector paths untreated. |
+| **C** | Can preserve the current distinction between repeatedly delivered timer events and held device requests, but needs an explicit producer/mode contract. Keeping PIT IRR clearing does not itself retire its pending-event count. It is not a complete edge model merely because a device never deasserts. |
+| **D** | Restoring a bit from an independently maintained high level has A’s held-level effect. The PIT would also remain high. Shadow ownership must include V3 and cascade behavior; Jazz’s destructively cleared latch is not an independent physical-level shadow. |
+| **E** | Leaves immediate post-EOI request loss intact. RTC periodic requests already reassert; changing keyboard behavior would shorten lost-request duration without satisfying A’s proposed immediate preservation rows. |
+
+**READ:** There is an omitted existing idiom: **the source owns assertion lifetime and pending-event retirement**. `dev_bt459.c`, `DEVICE_TICK(bt459)`, explicitly deasserts a retrace pulse on a subsequent tick. `dev_rtc.c`, `DEV_RTC_INTERRUPT_ACK`, retires pending work and deasserts. MC146818 and GT have comparable source acknowledgements.
+
+**DERIVED:** That supports **A accompanied by a separately specified PIT lifetime/accounting correction** as a missing design direction. It is not yet a complete construction: event consumption, pulse lifetime, and pointer ownership remain unresolved.
+
+**READ:** Searches for ISR/service terminology do not reveal a reusable 8259 service implementation. Other similarly named registers are not evidence of one.
+
+**DERIVED:** B also requires more than adding `isr |= bit`:
+
+- Existing recalculation guards compare IRR/mask state, so ISR changes need corresponding output recalculation.
+- Generic ISA and V3 cascade/output paths must obey the same eligibility rule.
+- The current poll selects raw IRR without masking and retains `current_command == 0x0c`.
+- Existing non-specific EOI clears every ISR bit, whereas hardware normally clears the highest-priority applicable service bit.
+
+**DERIVED:** The packet’s own descriptions also show that A and B are not equivalent to the complete cited rs6000 commits: those include routing, selection, initialization, and other changes.
+
+**4. Scope of `i8259isrnever`**
+
+**DERIVED:** Keep acknowledgement/service tracking separately specified. Sharing a file and register family does not make the proposed single detector sufficient for it. I would select A for this round’s PIC semantics, but would not ship it alone while the explicit PIT compatibility requirement remains unresolved.
+
+**READ:** `dev_prep.c`, `DEVICE_ACCESS(prep)`, and `dev_gt.c`, `GT_PCI0_INTR_ACK`, return `last_int` without setting ISR. Footbridge’s corresponding vector read likewise does not establish PIC service state. Jazz uses a separate controller, so it should not be described as another consumer of this PIC’s ISR.
+
+**DERIVED:** Accepting the supplied Linux flow, A preserves an asserted request through EOI. It becomes deliverable whenever masking permits—normally at unmask after handling. For a source that remains asserted, renewed delivery is consistent with level behavior. With the current PIT, however, there is no normal completion that removes the pending assertion. B merely suppresses it while ISR remains set and releases it again at EOI.
+
+**NOT CHECKABLE:** The exact Linux driver flow and kernel revision were not independently read within the permitted scope.
+
+**5. The 8253**
+
+**READ:** In [dev_8253.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_8253.c), `timer0_tick` increments the pending count; `DEVICE_TICK(8253)` asserts; counter/mode accesses do not clear that count or deassert. Once a pending event exists, reprogramming does not retire it.
+
+**DERIVED:** With A, a normal PIT guest has **no implemented device-completion path that clears master IRR0**. Masking suppresses delivery but preserves the request. EOI no longer clears it. Under B, completing service likewise exposes that same retained request again.
+
+**READ:** Today’s specific EOI clears PIC IRR directly; it does not call the ISA IRQ0 deassert handler and therefore does not consume a pending PIT event.
+
+**DERIVED:** Yes, repeated assertion from an unretired pending count is already a separate correctness defect. A removes the temporary suppression supplied by specific EOI, potentially exposing continuous eligibility. The qualification matters: non-specific EOI already leaves IRR unchanged today, so the existing behavior is not universally hidden.
+
+**DERIVED:** Both missing PIT retirement and the stale captured counter pointer should be recorded. Neither merely preserving the old PIT-specific IRR clear nor adding ISR establishes correct event accounting.
+
+**6. NetBSD/malta’s EOI form**
+
+**NOT CHECKABLE:** I cannot establish specific versus non-specific EOI, or its exact implementing file, from the permitted emulator sources. The settling fact is the EOI path in the relevant, pinned NetBSD `pcib_ic`/ISA implementation. The packet itself does not supply that body.
+
+No builds, tests, or guest programs were run. Scope disclosure: a delegated search accidentally returned comment snippets from excluded artifact files; those snippets were excluded from this review.

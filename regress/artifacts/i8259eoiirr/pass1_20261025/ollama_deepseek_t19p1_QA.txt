@@ -1,0 +1,40 @@
+VERDICT: READY WITH CHANGES — ship candidate (A) (EOI clears ISR only, no IRR clear), because it matches the datasheet premise that OCW2 EOI resets ISR, not IRR; but do not close until the 8253/PIT never-deassert path is settled, since (A) would make IRR0 permanent if any affected guest programs the PIT.
+
+**Q1 — Premise audit**
+
+(i) **IRR writer list completeness / dev_algor clear**  
+NOT CHECKABLE for completeness. The inlined code shows IRR writes from `isa_interrupt_assert`, `isa_interrupt_deassert`, `isa_interrupt_common` cascade fold, and the two `dev_8259.c` EOI arms. The packet also names `dev_v3.c` and `dev_algor.c`. Completeness cannot be settled from this packet alone.  
+REASONED: `dev_algor.c`’s `pic1->irr &= ~0x18` / `pic2->irr &= ~0xc0` is an EOI-shaped request clear outside the PIC. Whether it belongs to this round’s class depends on whether the cleared lines can still be asserted by the device; that is not established here. If those bits are request bits for still-asserted lines, it is the same class; otherwise it is its own row.
+
+(ii) **“Nothing sets the PIC’s ISR”**  
+READ from the inlined `DEVICE_ACCESS(8259)`: the only ISR writes are `d->isr = 0` and `d->isr &= ~`. There is no `d->isr |=`. So within `dev_8259.c` itself, ISR is never set. The packet’s wider grep claim is not independently checkable, but the file-level claim is confirmed from the inlined code.
+
+(iii) **Device census shapes**  
+REASONED: the inlined table is internally consistent. ns16550, wdc, and ne2000 are level re-asserters; 8253 is one-way; pckbc is transition-gated; mc146818 is event-driven.  
+NOT CHECKABLE: completeness of the ISA source census. Missing sources such as VGA/floppy cannot be confirmed absent from this packet.
+
+(iv) **8253 once `in_use`: any path decrementing `pending_interrupts_timer0` or deasserting line 0?**  
+REASONED from the inlined code: no. `dev_8253.c` has no `INTERRUPT_DEASSERT`. The only decrement shown is in `isa_interrupt_deassert`, which the 8253 never calls. The EOI’s direct `d->irr &= ~(1 << n)` does not go through `isa_interrupt_deassert`, so it also does not decrement the count.  
+NOT CHECKABLE for the whole file: the single fact that would settle it is absence of any `INTERRUPT_DEASSERT` or pending-count decrement in `dev_8253.c`.
+
+(v) **Does the malta Linux/NetBSD boot drive the 8253?**  
+NOT CHECKABLE. The packet cites only a comment in `dev_8253.c` (“Linux/MALTA kernels like this”), not an actual guest register trace or boot source. The single fact that would settle it is a captured guest write to the PIT registers or a boot log showing PIT programming.
+
+**Q2 — Smallest edit that breaks this and still passes**
+
+The three clause-(d) variants are not reliably caught by the stated 19 witness rows plus planned rows, because the conditions are false at the only clear symptom row.
+
+- **`if (d->ier & bit)` re-add of IRR clear**  
+At `eoi irr4`, IER is 0x00 — the masked row occurs later. So the condition is false and the IRR clear is not executed. `eoi x8` also occurs before masking. No planned row issues a specific EOI while the line is masked.  
+Row expected to stay green: `eoi irr4`.  
+This is the smallest edit that breaks the fix while still passing the current/planned rows.
+
+- **`if (n != 4)` re-add of IRR clear**  
+At `eoi irr4`, `n = 4`, so the condition is false; the row stays green. `eoi x8` cannot be relied on from the packet because only line 4 is asserted, and the 0xff expectation is not derivable from the inlined witness description.  
+Row expected to stay green: `eoi irr4`.
+
+- **`if (d->isr & bit)` re-add of IRR clear**  
+With candidate (A) alone, ISR is always 0 from Q1(ii), so the condition is false and no clear occurs. If candidate (B) were ruled and ISR rows added, a row that sets ISR and then checks IRR after EOI could catch this, but that is not in the stated planned rows.  
+Row expected to stay green: `eoi irr4`.
+
+Therefore none of the three named variants reds the existing symptom rows as written; the mask-conditioned variant is the most dangerous because it also escapes the planned rows unless a new “specific EOI while masked” row is added.

@@ -49,6 +49,42 @@
 /*  #define DEV_8259_DEBUG  */
 
 
+/*
+ *  pic8259_acknowledge():
+ *
+ *  #574: The acknowledge this model never had.  The chip moves the highest-priority
+ *  unmasked request to service when the CPU acknowledges it (the INTA cycle, or the
+ *  read that follows an OCW3 poll): the ISR bit is set and, in edge mode -- the only
+ *  mode this tree's guests program (ICW1 0x11) -- the IRR bit is reset.  Called from
+ *  the poll read below and from the GT64120 interrupt-acknowledge read (dev_gt.c).
+ *  Line 0 of pic1 is the 8253, whose pending-event count is retired here: dev_8253.c
+ *  publishes it through machine->isa_pic_data, and bus_isa.c's own decrement runs
+ *  only inside a deassert the 8253 never issues.  Returns the acknowledged line, or
+ *  -1 when no unmasked request is pending (nothing changes).
+ */
+int pic8259_acknowledge(struct pic8259_data *d, struct machine *m)
+{
+	struct isa_pic_data *p = &m->isa_pic_data;
+	int pending = d->irr & ~d->ier, n = 0;
+
+	if (pending == 0)
+		return -1;
+	while (!(pending & (1 << n)))
+		n ++;
+	d->isr |= 1 << n;
+	d->irr &= ~(1 << n);
+	if (d == p->pic1 && n == 0 && p->pending_timer_interrupts != NULL &&
+	    *p->pending_timer_interrupts > 0)
+		(*p->pending_timer_interrupts) --;
+	/*  pic2's irq is the cascade line (bus_isa.c folds it into pic1 bit 2).  */
+	if (d->irr & ~d->ier)
+		INTERRUPT_ASSERT(d->irq);
+	else
+		INTERRUPT_DEASSERT(d->irq);
+	return n;
+}
+
+
 DEVICE_ACCESS(8259)
 {
 	struct pic8259_data *d = (struct pic8259_data *) extra;
@@ -101,32 +137,42 @@ DEVICE_ACCESS(8259)
 				/*  Put Master in Buffered Mode  */
 				d->current_command = 0x0c;
 			} else if (idata == 0x20) {
-				int old_irr = d->irr;
-				/*  End Of Interrupt  */
+				/*  Non-specific End Of Interrupt.  #574: resets
+				    the highest-priority in-service bit (the lowest
+				    set ISR bit, fixed priority) and nothing else;
+				    the request bits belong to the lines and to the
+				    acknowledge (pic8259_acknowledge).  This arm
+				    also did irr &= ~isr; isr = 0 -- a no-op on
+				    irr while nothing set isr.  */
 				/*  TODO: in buffered mode, is this an EOI 0? */
-				d->irr &= ~d->isr;
-				d->isr = 0;
-				/*  Recalculate interrupt assertions,
-				    if necessary:  */
-				if ((old_irr & ~d->ier) != (d->irr & ~d->ier)) {
-					if (d->irr & ~d->ier)
-						INTERRUPT_ASSERT(d->irq);
-					else
-						INTERRUPT_DEASSERT(d->irq);
-				}
+				if (d->isr)
+					d->isr &= ~(d->isr & -d->isr);
 			} else if ((idata >= 0x21 && idata <= 0x27) ||
 			    (idata >= 0x60 && idata <= 0x67) ||
 			    (idata >= 0xe0 && idata <= 0xe7)) {
-				/*  Specific EOI  */
-				int old_irr = d->irr;
-				d->irr &= ~(1 << (idata & 7));
-				d->isr &= ~(1 << (idata & 7));
-				/*  Recalc. int assertions, if necessary:  */
-				if ((old_irr & ~d->ier) != (d->irr & ~d->ier)) {
-					if (d->irr & ~d->ier)
-						INTERRUPT_ASSERT(d->irq);
-					else
-						INTERRUPT_DEASSERT(d->irq);
+				/*  Specific EOI.  #574: when the line is in
+				    service (an acknowledge -- the poll read, or
+				    the GT IACK read -- moved its request to ISR),
+				    the EOI resets that ISR bit and leaves the
+				    request bit alone, as on the chip.  When it is
+				    NOT (a guest whose vector read acknowledges
+				    nothing -- dev_prep.c, dev_footbridge.c -- or
+				    none at all), the EOI still consumes the
+				    request as it always did here: that consume
+				    is the only one those machines have.  */
+				int bit = 1 << (idata & 7);
+				if (d->isr & bit) {
+					d->isr &= ~bit;
+				} else {
+					int old_irr = d->irr;
+					d->irr &= ~bit;
+					if ((old_irr & ~d->ier) !=
+					    (d->irr & ~d->ier)) {
+						if (d->irr & ~d->ier)
+							INTERRUPT_ASSERT(d->irq);
+						else
+							INTERRUPT_DEASSERT(d->irq);
+					}
 				}
 			} else if (idata == 0x68) {
 				/*  Set Special Mask Mode  */
@@ -148,13 +194,16 @@ DEVICE_ACCESS(8259)
 				odata = d->isr;
 				break;
 			case 0x0c:
-				/*  Buffered mode.  */
-				odata = 0x00;
-				for (i=0; i<8; i++)
-					if ((d->irr >> i) & 1) {
-						odata = 0x80 | i;
-						break;
-					}
+				/*  The read after an OCW3 poll.  #574: it is the
+				    interrupt acknowledge (the datasheet's "sets
+				    the appropriate IS bit"), of the highest
+				    unmasked request -- the raw irr scan that stood
+				    here returned masked lines too.  One read per
+				    poll: later reads return the IRR until the next
+				    OCW3.  */
+				i = pic8259_acknowledge(d, cpu->machine);
+				odata = i < 0 ? 0x00 : (0x80 | i);
+				d->current_command = 0x0a;
 				break;
 			default:
 				odata = 0x00;
