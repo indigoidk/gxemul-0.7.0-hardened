@@ -24,6 +24,20 @@ HELD markers are discharged by the seat's dated entries; its state stays `held` 
 Ledger (the `commits` field, two seat entries, the hold question and state note), this block, the `regress/pass2_ledger.tsv`
 receipt line, `matrix.html`, the detector's docstring revision, `SCORES_README.txt` and the revision's re-measure only.
 
+# `#574` Records (follow-up, 2026-10-25): `i8259eoiirr` names its landing commit `c1c74b2b`; the committed-tree proofs; the pass-2 receipt
+
+`git ls-tree c1c74b2b` shows `regress/i8259_eoi_probe.py` at `100644 blob 94d94b9ad433470e72fc4a941cef12fb2a5eaa01` with blob md5 `c1fa683e3a9295eb62491af043189500` -- the banked frozen v2g copy every leg of
+`regress/artifacts/i8259eoiirr/pass2_20261025/fixlegs_132736/` ran (LF, no CR byte); the committed `src/devices/dev_8259.c`, `src/devices/dev_gt.c` and
+`src/include/devices.h` blob md5s are `de16fa14ac321c473d52c9abb1d1d24f`, `4c3bdbb1594013e5fca4dfbe44cb12ec` and `9802103c72d891de4a257acf6e09f732`, the files the fix legs were built from (every RUN_IDENTITY names them);
+the committed `regress/gate_arm.sh` carries the #574 block and its `rows run` pin, `tools/precommit_check.sh` SCORE_CLAIMS_MANIFEST=42,
+`regress/gate_hygiene.sh` EXPECT_PTY_PROBES=80 with `i8259_eoi_probe.py` grandfathered, `tools/pipeline/check_probe_wiring.py` the MANIFEST
+key.  Landing numstat (4275 files): 56 0 regress/gate_arm.sh; 3 2 regress/gate_hygiene.sh; 1128 0 regress/i8259_eoi_probe.py; 78 29 src/devices/dev_8259.c; 18 1 src/devices/dev_gt.c; 2 0 src/include/devices.h; 9 0 tools/pipeline/check_probe_wiring.py; 1 1 tools/precommit_check.sh.  PROPAGATED after the landing: the three product files copied into `est/` (source tree, part 2
+N/A), `build/`, `build-asan/` and `/tmp/gxsec-build`, each build tree rebuilt at once; `regress/artifacts/i8259eoiirr/landing_clearance/CLEARANCE.out`
+records the OUTPUT of both clearance parts (cmp clean against GXEMUL-SEC for every copy; each binary newer than both edited sources).
+The ledger row's `commits` field names `c1c74b2b`; its state stays `held` (the Fable question and the roster question -- `hold_question`).  The
+PASS-2 RECEIPT line is appended to `regress/pass2_ledger.tsv` (precommit section F).  Argon's web-route answers for every pass of this
+round are still QUEUED behind the single sender and are OWED to a later records commit (the late-dissent rule).
+
 # `#574` (2026-10-25) -- `i8259eoiirr`: the 8259 model gains its interrupt acknowledge; the specific EOI stops clearing the request bit of a line in service; the 8253's pending event is retired at the acknowledge  [research batch T19; MED WRONG-RESULT]
 
 **The defect.**  `src/devices/dev_8259.c` had no interrupt acknowledge.  The OCW3 poll read (`case 0x0c:`) returned a poll byte

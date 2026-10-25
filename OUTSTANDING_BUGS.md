@@ -25966,6 +25966,8 @@ phase, while `wdc_new_command_reset()` clears `atapi_phase` at `:917` (Astra, pa
   `n == 0` conjuncts: a wrong extra retirement is observable only with a pending count >= 2, which only host time produces; a
   BAND row is constructible -- mask IRQ 0, wait for two host fires, acknowledge the RTC, unmask, count deliveries -- and was
   declined this round on cost; the two mutants were MEASURED to escape, as disclosed; F2b).
+* **Landed** as `c1c74b2b` (2026-10-25); the pass-2 receipt keyed to it in `regress/pass2_ledger.tsv`; propagated to est/ and the three build trees with
+  rebuilds (`landing_clearance/CLEARANCE.out`); the row stays `held` (see its hold question); Argon's answers for the round still queued.
 * **OWED by `#574`**: the Fable hold's question; the roster question (`rosterexcused`); Argon's answers by the web route (OWED for pass 1, F2, pass 2 and F2b -- the web route's single sender slept on the meter (8.3% at 07:44) until 12:32:15 CDT; the agy transport quota-walled until ~2026-10-30).
 * Pass-1 brief and rulings: `pass1_20261025/packet.md`, `PASS1_RULINGS.md`, `f2_20261025/F2_RULINGS.md`; pass 2: `pass2_20261025/packet.md`,
   `codex_t19p2.txt`, `grok_t19p2.txt`, `ollama_glm_t19p2_Q12/Q34.txt`, `ollama_deepseek_t19p2_Q12/Q34.txt`; the adjudication under `f2_20261025/`; pass 2 found two instrument defects (the one-shot row vacuous as built -- `M_sticky` ESCAPED the first table,
