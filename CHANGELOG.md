@@ -1,3 +1,29 @@
+# Records, 2026-10-24: `wdclbaaddr` names its landing commit 0901b388, and 0901b388's committed-tree proofs and pass-2 receipt
+
+`#572` landed as `0901b388f1041af65c1fabc4457d62c59d3847b3`.  Committed-tree proofs: `git ls-tree 0901b388 regress/wdc_lba_probe.py` -> `100644 blob 5549f15ce6a7c81eb35f207185dc19deda015423` (the detector,
+mode 100644 -- a `.py` probe run by `gate_sh_rounding.sh`; its committed blob md5 is `96e5fbc5817ab26e19edd4f5335a184f`, the shipped revision, LF -- the
+kill-table instrument `fc878c42...` and the pass-2 bytes' AST equivalence are under
+`regress/artifacts/wdclbaaddr/detector_20261024/` as `wdc_lba_probe.frozen.py`, `rev_equivalence.txt` and
+`final_96e5fbc5/ast_equivalence.txt`); the four hunked harness files' committed blob md5s -- `regress/gate_sh_rounding.sh` 3f932e0fffa82b7f64142d24c7296fa1, `regress/diff_wdc_identify.c` 1d782f70611b901c4427bb9aecdfdeeb, `regress/gate_offline.sh` 0da4698e78a4745e065bc5bd1d413778, `tools/pipeline/check_probe_wiring.py` 3684ebb4fef83b78f36ae249486f9a19 -- each equal the round's
+preserved staged copy under `detector_20261024/staged/` (HEAD + this round's hunk only; the working tree's peer lines were not
+committed; CR counts unchanged against the parent, since a `git apply` run outside the repo had once produced a CRLF copy and
+the landing script refuses that); `git diff --numstat 0901b388^ 0901b388` on the product and harness files = `18 14 regress/diff_wdc_identify.c; 1 1 regress/gate_offline.sh; 52 0 regress/gate_sh_rounding.sh; 840 0 regress/wdc_lba_probe.py; 29 25 src/devices/dev_wdc.c; 33 0 tools/pipeline/check_probe_wiring.py; 3 1 tools/precommit_check.sh`.  Pass-2
+receipt: `pass2_20261024/` (Astra, Grok, Argon via agy, GLM 5.3 x2, DeepSeek x2 -- six LAND WITH CHANGES and one READY TO LAND,
+no product-code defect; `PASS2_RULINGS.md` K1-K14 applied before the landing; the F2 adjudication `codex_t4adj2.txt` CONFIRM WITH CHANGES and
+`grok_t4adj2.txt` CONFIRM WITH CHANGES; gate 10 run end to end with the block in place before the landing, `GATE10_RUN.txt`).  **The Fable
+5.1 seat answered through a one-time Claude Code CLOUD routine at the owner's direction** (`pass2_20261024/fable5_cloud_t4.txt`:
+runs `cse_017j9CRG5zM3oCgYAPe6FXB1` and `cse_014XYrcbHTV7gYUbP9AdjgTR`, model `claude-fable-5-1`, PACKET-FED -- the self-contained
+packet, no repository; not file-reading, not measuring): `FABLE VERDICT: RATIFY WITH CHANGES`, `WRONG: none`, seven record/contract-only
+changes, every one applied in this commit as a docstring-only revision of the detector -- `6314a0fed5e72177a2d82b043946fe1c` (AST-identical to the landed
+`96e5fbc5817ab26e19edd4f5335a184f` with the module docstring excluded, `final_6314a0fe/ast_vs_landed.txt`; re-measured GATE 33/33 CONTROL=OK and two legs
+33/33 + 33/33, `final_6314a0fe/RESULTS_*.txt`) -- plus `detector_20261024/SCORES_README.txt`, which defines the score files'
+`control` column from the probe's own computation.  The condensed run log the collector reads truncates each message, so the seat's
+Q2 and Q3 are readable only at the session links; the banked text says so.  The row's `commits` field now names `0901b388`; its two
+HELD markers are discharged by the seat's dated entries; its state stays `held` until the closure step grades the seat outcomes.
+
+Ledger (the `commits` field, two seat entries, the hold question and state note), this block, the `regress/pass2_ledger.tsv`
+receipt line, `matrix.html`, the detector's docstring revision, `SCORES_README.txt` and the revision's re-measure only.
+
 # `#572` (wdclbaaddr): the IDE model decoded the select byte's LBA flag from bit 5 and left the LBA28 address arms compiled out, so every LBA-mode request was served from the cylinder/head/sector reading of the same taskfile bytes -- bit 6 now selects LBA, both arms compute the LBA28 offset in 64-bit arithmetic, the select byte reads back byte-exact, and IDENTIFY word 49 stays 0
 
 **The defect** (`wdclbaaddr`, HIGH; filed 2026-10-22 from the external-fixes research, T4 of its batch; class

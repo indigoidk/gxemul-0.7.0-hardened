@@ -96,7 +96,9 @@ SCORES.txt (table 1) and SCORES2.txt (table 2): GATE mode, FIX column, 33 rows, 
 per scratch build.
 CATCHES
   * the decode moved off bit 6, onto bit 7, or qualified with bit 5 -- V1 and V2 17/33 (the
-    CHS rows, the CHS-select read-backs, sel 40, sdh rb2/rb3), V3 31/33 (sel 40, sdh rb3);
+    four CHS rows, chs wr2, sdh rb2/rb3, sel 40, lba h1 ctl, and the seven write-session rows
+    lba wr, lba wr2, lba wr h1, lba wr h1s5, lba wr256, lba wr256b, lba wr cylhi), V3 31/33
+    (sel 40, sdh rb3);
   * the LBA arm disabled, unconditional, or qualified on head, cyl or sector -- NOTE the
     applicator's V14 suffixes: V14w is the READ arm disabled and V14r the WRITE arm disabled
     (mutants572.py), the reverse of the V4r/V4w convention; the scores below follow the
@@ -107,7 +109,8 @@ CATCHES
   * the head term dropped, or `sector - 1`, in the LBA arm at either site -- V8 32/33
     (lba h1), V8w 32/33 (lba wr h1s5), V11 29/33 (lba 70, lba 256, sel 40, lba 0), V11w
     30/33 (lba wr, lba wr2, lba wr256); a READ-site head shift that still lands inside the
-    file, k <= 11 -- V9r8 32/33 (lba h1);
+    file -- V9r8 32/33 (lba h1); only k = 8 was BUILT, and "k <= 11" is DERIVED from it
+    (2^k + 5 < 4096 keeps the shifted destination inside the file), not measured;
   * the cyl_lo << 8-only cylinder term at either site -- V10r 32/33 (lba cylhi), V10w 32/33
     (lba wr cylhi);
   * the write-site arm placed below the write_offset capture -- V20 28/33;
@@ -118,10 +121,19 @@ CATCHES
   * word 49 advertised nonzero -- id w49 reads word 49 directly.  The one CATCHES line with
     no kill in these tables: no word-49 mutant was built here; the offline differential's
     row_no_lba_claim (regress/diff_wdc_identify.c) pins the same two bytes.
+  Clauses (b) and (d) COINCIDE at every fixed site: the arms' verbatim reinstatement (V14w,
+  V14r) is also the repair nulled with the guard kept, and so is the decode's (V1); (d) rests on
+  those scores, not on a separately built mutant.
 MEASURED, NOT PROMISED: the unwidened 32-bit LBA product (V15) is undefined behaviour; on
   THIS build (cc -O3) it wrapped to sector 5 and scored 32/33 (lba h1).  That score does
   not generalise: a compiler that widens the product serves zeros, exactly like the fix.
 BLIND / DISCLOSED
+  * THE RULE, stated once: an edit is seen only if it moves a rowed destination INTO the file
+    or ACROSS the 4096-sector boundary; an edit that keeps a past-end destination past the end
+    (a head shift k >= 12, the cyl_hi-conditioned arm V7, the cyl_hi narrowing below) is blind.
+  * cyl_hi narrowed to its low bit (`cyl & 0x1ff` in either arm, LBA bits 17-23 dropped): the
+    rows drive cyl_hi 0 or 1 only and cyl_hi = 1 already lands past the end, so it is unseen --
+    the head-mask argument again (the Fable 5.1 seat, through the cloud route, 2026-10-25).
   * cyl_hi >= 1 DESTINATIONS: both the CHS and the LBA reading fall past a 4096-sector
     image, so lba cylhi / lba wr cylhi see only the cyl_lo-only variant at each site; V7,
     the cyl_hi-conditioned arm, stays blind here (measured: 33/33 with both sites
@@ -146,7 +158,9 @@ BLIND / DISCLOSED
 ANCHOR: every LBA moved by one sector at both sites -- T_m1 26/33 (lba 70, lba 256, sel 40,
   lba 0, lba wr, lba wr2, lba wr256) and T_p1 26/33 (lba 70, lba 256, sel 40, lba 0,
   lba wr, lba wr256, lba wr cylhi).  The tags name WHICH sector was served through image
-  content the decode does not produce, so position is pinned absolutely.
+  content the decode does not produce, so position is pinned absolutely -- a claim about the
+  row SET: the two translations differ in exactly one row (lba wr2 red only under -1, lba wr
+  cylhi only under +1), as measured.
 HARNESS SELF-CHECK (not scored): main() asserts that the comparator fails a mismatch and
   treats a missing value as a failure.  It replaces the old scored `neg appar` row, whose
   got/want were constants and which therefore passed on every run.

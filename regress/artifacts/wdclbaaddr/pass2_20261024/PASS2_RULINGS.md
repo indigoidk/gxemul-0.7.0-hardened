@@ -122,3 +122,23 @@ cylinder 0, sector 5 -- the fix reads zeros past EOF, the narrowed mask serves t
 kill-table re-run; K9 adequate with the gate's FAIL 1 of 405 kept in every record.
 BOTH: CONFIRM WITH CHANGES, all changes applied before the landing; the chain closes on this pass with zero floor breaches
 raised over the fix diff, the detector revision and the four hunks (the denominator: K1-K14 and D1-D2 as enumerated above).
+
+## The Fable 5.1 seat -- through the Claude Code CLOUD route (owner 2026-10-25 01:5x), after the landing attempt had started
+
+The owner directed the held Fable question to Claude Code Cloud.  A one-time routine (`trig_014XvGa3NKGgDLHrMKevtWoF`, model
+`claude-fable-5-1`, no repository -- the local-only repo cannot be cloned there) ran the self-contained packet
+`t4/fable_cloud/FABLE_PACKET_572.md` twice (`cse_017j9CRG5zM3oCgYAPe6FXB1` 07:01Z, `cse_014XYrcbHTV7gYUbP9AdjgTR` 07:10Z); the
+answers are banked in `fable5_cloud_t4.txt`.  **PACKET-FED, not file-reading, not measuring** -- recorded by transport, as the
+carrier requires.  `FABLE VERDICT: RATIFY WITH CHANGES`, `WRONG: none`; Q1: the scope right as designed (the readback partitions
+the byte; the int64_t cast right; word 49 at 0 with `wdclbaadvertise` filed the correct split).  Seven record/contract-only changes
+(no product change, no new row, no kill-table re-run): (1) BLIND: cyl_hi narrowed to its low bit is unseen (rows drive cyl_hi 0 or
+1; cyl_hi = 1 already lands past the end); (2) BLIND: state the seen/blind rule once -- an edit is seen only if it moves a rowed
+destination into the file or across the 4096 boundary; (3) the CATCHES decode bullet omitted the eight write/control rows red under
+V1/V2 (verified against raw_mut/V1.out: lba h1 ctl, lba wr, lba wr2, lba wr h1, lba wr h1s5, lba wr256, lba wr256b, lba wr cylhi,
+plus chs wr2); (4) "k <= 11" is DERIVED from the one built k = 8, say so; (5) clauses (b) and (d) coincide at every fixed site, so (d)
+rests on those scores; (6) define `control` beside the score files; (7) "pinned absolutely" holds for the row SET (the two
+translations differ in exactly one row).  ALL APPLIED after the landing as a docstring-only revision of the detector
+(`final_<md5>/ast_vs_landed.txt`: AST-identical to the landed 96e5fbc5 with the module docstring excluded; re-measured GATE and two
+legs) plus `detector_20261024/SCORES_README.txt`, committed by the follow-up records commit.  Apparatus note: the collector reads a
+CONDENSED run log that truncates each message at about 2,000 characters; run 2 was asked for short PART messages and put all nine
+parts in one message, so Q2 and Q3 are readable only at the session links -- the banked text says so rather than paraphrasing them.

@@ -25871,3 +25871,9 @@ phase, while `wdc_new_command_reset()` clears `atapi_phase` at `:917` (Astra, pa
 * **`wdclbaimage` (LOW, open; harness)** -- new.  regress/wdc_lba_probe.py's medium (4096 sectors, 16-bit tag) cannot
   observe cylinder-high destinations or sector 65,536 (the tag aliases); the cylinder-high-conditioned arm is blind on it.
   A larger image with a 32-bit tag is a separate instrument, owed if that cell is ever rowed.
+
+### 2026-10-25 -- `wdclbaaddr`'s Fable 5.1 seat answered through the Claude Code cloud route; `rosterexcused` filed
+
+`#572`'s held Fable question was sent, at the owner's direction, to a one-time Claude Code cloud routine (packet-fed; `regress/artifacts/wdclbaaddr/pass2_20261024/fable5_cloud_t4.txt`): `FABLE VERDICT: RATIFY WITH CHANGES`, `WRONG: none`, seven record/contract-only changes, applied as a docstring-only revision of `regress/wdc_lba_probe.py` (6314a0fe, re-measured 33/33) plus `detector_20261024/SCORES_README.txt`.  The row's `commits` field names 0901b388.  Its two panel stages stay HELD for kimi, minimax and the Opus review seat -- deliberately not fired under the owner's 2026-10-23/24 roster -- because the stage-panel checker has no token for a roster-excused seat; the owner ruled 2026-10-25 to adopt one.
+
+* **`rosterexcused` (LOW, open; harness)** -- new.  tools/pipeline/stage_tokens.py + check_stage_panels.py have no stage token for a seat the OWNER'S ROSTER excluded, so a stage whose remaining seats were deliberately not fired passes section H only as HELD or at 9/9; once a hold is discharged (the Fable cloud answer on `#572`) the stage reads INCOMPLETE and refuses the commit.  Proposed `[SEAT EXCLUDED BY OWNER ROSTER: <seats> -- <date>]`, is_answer no, counted toward completeness, with negative controls both ways (design: scratchpad rx/DESIGN.md until its round opens).  Owner ruling 2026-10-25: adopt it.
