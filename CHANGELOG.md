@@ -186,6 +186,17 @@ now names `cb21331c`; its state stays `held` for Fable 5.1 with its question.
 
 Ledger (one field), this block, the `regress/pass2_ledger.tsv` receipt line and `matrix.html` only.
 
+**Follow-up correction, 2026-10-25 (gate 6 -- L4, a wrong record in the harness).**  The landing commit `0901b388` added
+`regress/wdc_lba_probe.py`, a pty-forking probe with no prompt predicate (it drains on timeouts and watches for the breakpoint
+banner), and moved neither `regress/gate_hygiene.sh`'s `EXPECT_PTY_PROBES` pin (77) nor its `GRANDFATHERED_PROMPTLESS` list --
+so gate 6 was RED at HEAD from `0901b388` on, latent because no battery ran in between (the weekly battery is due 2026-10-25
+18:00).  Found by running `tools/derive_hygiene_pins.sh` read-only while drafting the next round's brief: `EXPECT_PTY_PROBES got
+78 pinned 77`, `promptless vs GRANDFATHERED 46 45`, `NEW PROMPTLESS: wdc_lba_probe.py`.  Corrected with the tool itself --
+`--grandfather wdc_lba_probe.py`, then `--write --ruling "2026-10-25: #572 follow-up ..."` -- and re-derived afterwards: every
+census reads got == pinned (pty probes 78/78, promptless 46/46, converted 26/26 on all three counts, whole-full 3/3).  The
+gate's own comments record this class (a probe landing in the same commit as its wiring with the pin unmoved) and prescribe the
+remedy; the tool was simply not run at landing.  The next landing's checklist runs it before the commit.
+
 # `#571` (ppcdsformxo): the PowerPC decoder folded the DS-form XO bits into the displacement, so `ldu` and `lwa` ran as `ld` at EA+1 / EA+2 and `stdu` ran as `std` at EA+1 with no base update -- opcodes 58 and 62 now decode their five forms, reserved encodings and the RA = 0 update forms stop the cpu, and a 39-row rung-3 detector gates it in gate 13
 
 **The defect** (`ppcdsformxo`, HIGH; filed 2026-10-22 from the external-fixes research, T2 of its batch; class
