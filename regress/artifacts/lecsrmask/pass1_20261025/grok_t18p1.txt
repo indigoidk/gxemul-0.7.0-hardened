@@ -1,0 +1,102 @@
+This is a read-only design review. I will re-derive the premises from the tree and the datasheets, starting with the LANCE register path and the CSR1 bit-0 claim.HEAD is `0b09e7b6` and `dev_le.c` matches the cited lines. Next I will separate the datasheet columns and enumerate every reader of `reg[1..3]`.VERDICT: NOT READY -- ship a CSR3-only store mask (`x & 0x0007`); CSR1 `0xfffe` and CSR2 `0x00ff` are not established for the Am7990 the 3100 carries, and the detector's FIX column would freeze them.
+Q1: CSR3 bits 15:3 read as zero on every source opened; CSR1 bit 0 is "must be zero," and the Am7990 manual's CSR2[15:8] line says only "Reserved."
+Q2: The ALL-row claim holds for a constant mask, and V19's red set omits N12; N9/N11/N12 FIX wants follow the unsettled masks.
+Q3: `probe:` after L2 on the git-archive binary, home `gate_arm.sh`; S14 does not match the hygiene file now on disk.
+Q4: Both STOP comments invert the datasheet; leave `(reg[2] & 0xff)`; the mnemonic fraction is informational.
+
+## Q1 — the repair
+
+**(a) Premises.** S1–S13, S15, S16 hold on the files opened at `0b09e7b6` (`dev_le.c` 79, 99, 179–182, 839–888, 976–1022, 1077, 1108–1109; `if_lereg.h` 344–368; `dec_kn01.h` 136–138; `machine_pmax.c` 129–131; `gate_arm.sh` 1070–1073; witness `RUN_IDENTITY.txt`; `det18_HEAD/RESULTS_base.txt` 18/18). **S14 is false of the file in the worktree** (READ `regress/gate_hygiene.sh` 388 and 414–425): the pin is `EXPECT_PTY_PROBES=78` and `wdc_lba_probe.py` is already on `GRANDFATHERED_PROMPTLESS`. The narrative comment still ends at the 76→77 bump and never names `wdc_lba`. `git show HEAD:` was not available (shell denied), so whether those bytes are committed is NOT CHECKABLE. The brief's dirty list does not include this file. The `est/` twin was NOT CHECKABLE.
+
+**P1 — CSR1 bit 0 is not established as a read-back of zero.** READ Am79C90 `am79c90_bitsavers.txt` 1138–1142: bits 15:01 are IADR, bit 00 is "Must be zero," and the figure draws `` `0' ``. That sentence is a constraint on the writer. The same page says "Read as zeroes. Write as zeroes." for other fields and does not say it here. READ Am7990 `TM1986.txt` 1745–1749: the same "Must be zero." READ PMAD-AA functional spec (a caller of `dev_le_init`, `dev_turbochannel.c` 227) section 6.1.2.4: the field is "bits 15:0" and "bit 0 must be zero" because the block is word-aligned; the "Ignored on write; read as zeros" sentence is used for RAP and for CSR3, and is absent for CSR1 bit 0. rpajarola `e108b54` does `x & 0xfffe` with the comment "the init block address is word aligned," and the commit message says 3MIN `3/ni/regs` checks implemented bits. That PROM run is on his fork, bundled with the IOASIC work, and is not a measurement on this 3100. MAME `am79c90.cpp` `regs_w` case 1 stores `m_csr[1] = data` with no mask, citing an Am7990 datasheet silence and a MIPS RS2030 diagnostic that requires the bit to remain writable. Masking bit 0 here is a choice. `csr1 all` / `csr1 odd` FIX wants `0xfffe` / `0x1234` (P11, N11, N12) are the wrong wants for that choice.
+
+**P2 — the brief's "no read-as-zeroes sentence" claim is false, and C-LANCE text does not bind every Am7990 bit.** READ `TM1986.txt` 1539 (RAP 15:02 "Reserved and read as zeroes"), 1734 (CSR3 15:03 "Reserved and read as "O""), 1695 (CSR2 15:08 "Reserved." and nothing further; the STRT column occupies the rest of the line), 1749 (CSR1 "Must be zero."). READ Am79C90 lines 21–23 ("Completely software- and hardware-compatible" with the Am7990) and Appendix B, which lists real differences, including item 12: on the Am7990, CSR1 and CSR2 are not preserved when STOP is set; the C-LANCE preserves them. Compatibility is not bit-for-bit CSR read-back. The KN01 is an Am7990 (Linux `kn01.h`: "LANCE (Am7990)"; Wikipedia's 3100 page names the AMD 7990). `am7990_ds.txt` was not opened.
+
+**P3 — CSR2 mask `0x00ff` is not settled for this model.** C-LANCE 1160–1167, once the columns are split, does say bits 15:08 are reserved and read and write as zero, bits 07:00 IADR. The Am7990 manual's CSR2 line does not. PMAD-AA 6.1.2.5 says CSR2 `<15:8>` "Reserved. Write with zeros." and does not say read as zeros. MAME case 2 stores the full word on `AM7990` and `data & 0x00ff` only on `AM79C90`, again citing the RS2030 diagnostic. DEPCA EK-DEPCA-PR-001, seen only as a search extract, says CSR2 15:8 "RESERVED (Always 0)" and CSR1 bit 0 "Always 0"; that extract was not opened as a page, so it stays a dissent, not a settlement.
+
+**P4 — true.** CSR3 bits 15:3 read as zero. Am7990 TM 1734; C-LANCE 1222–1223; PMAD-AA 6.1.2.6 "Ignored on write; read as zeros"; MAME `CSR3_MASK = 0x0007`. Mask `0x0007` is the one mask to ship. Bits kept, enumerated: 0 BCON, 1 ACON, 2 BSWP. Bits dropped, enumerated: 3,4,5,6,7,8,9,10,11,12,13,14,15.
+
+**P5 — true. Readers of `reg[1..3]` in `src/devices/dev_le.c`, enumerated:** (1) line 179 reads `reg[1]` into `init_block_addr`; (2) the same line reads `reg[2]` through `& 0xff`; (3) lines 180–182 test `init_block_addr & 1`, which is `reg[1]` bit 0; (4) line 981 reads `reg[reg_select]` back to the guest, for whichever of 0..3 is selected. There is no `reg[3]` token. Every other `reg[` site in the file is `reg[0]` or the `case 0:` arm. The struct is file-local. No other `src/` caller of `le_register_write` exists (the only call is line 1002).
+
+**P6 — true for every path that exists.** RAP stores `idata & (N_REGISTERS - 1)` with `N_REGISTERS` 4, so the stored select is exactly {0,1,2,3}. `case 0:` takes 0. After explicit `case 1:` and `case 2:`, `default:` is 3. The function itself does not clamp `r`; nothing in this tree calls it with any other value.
+
+**P9 — deleting the warning is out of this round.** The warning observes `reg[1]` bit 0. Leaving that bit stored keeps the warning reachable, so (ii) stands. (i) becomes an L4 deletion only if bit 0 is forced off. (iii) is a new announce and has no measured delta (R10).
+
+**P10 — severity stays MED / WRONG-RESULT for CSR3, and does not rise.** NetBSD `lance_nb.c` 295–303 and Linux `linux_declance.c` 313–318 write an address and `sc_conf3` / `busmaster_regval`; they do not read the reserved bits back. No KN01 PROM listing opened here shows a CSR read-back of unimplemented bits. The 3MIN `3/ni/regs` claim and the RS2030 claim point at opposite read-backs, on machines other than the witnessed 3100.
+
+**(b) Partition, as inputs.** Reachable `r` is {0,1,2,3} (P6). For a CSR3-only mask the store changes exactly when `r = 3` and the written bit is in {3,4,5,6,7,8,9,10,11,12,13,14,15}. It leaves `r = 0` (the CSR0 arm), `r = 1` (all sixteen bits), `r = 2` (all sixteen bits), and `r = 3` bits {0,1,2}. The proposed three-mask partition in 7.1 describes those masks; it describes the chip only for the CSR3 half. Nothing outside this arm reads `reg[3]`. `reg[1]` bit 0 and `reg[2]` bits 15:8 stay as they are today: bit 0 still reaches the warning, and `reg[2]` bits 15:8 still die at the `& 0xff` in `le_chip_init`.
+
+**(c) Consumer.** Keep the three lines at 180–182 (ii). The comment on the CSR3 store has to cite the read-as-zero lines (TM 1734, C-LANCE 1222, PMAD-AA 6.1.2.6) and say CSR1 bit 0 is still stored, so the alignment warning remains the place a guest-visible odd IADR is reported. (i) and (iii) wait on a settled P1.
+
+**(d) Form and member.** Explicit `case 3:` (or `default:` once `case 1:`/`case 2:` are not introduced). A four-entry table whose `[0]` is dead, and whose `[1]` and `[2]` would publish the unsettled masks, is the wrong shape. **M1** for CSR3: `d->reg[r] = x & 0x0007`. **M2** is equivalent in every state for CSR3 alone, because the only reader is the RDP read (P5). M1 matches the in-tree idiom READ at `dev_wdc.c` 2014–2016, `#572`, `d->sdh_resv = idata & 0xa0` (store, at the write, the bits the read-back returns). M3 adds nothing once M1 and M2 match. M4 has no driver that sets the bits (D3) and no R10 warrant. M5 leaves the CSR3 read-back wrong. Unnamed member, dismissed for this round: a per-chip mask (MAME's Am7990 vs Am79C90 split). This tree has one `le_register_write` and no C-LANCE flag; the witnessed machine is the Am7990.
+
+**(e) Out of this round.** The CSR0 arm (842–882), the RAP mask (1015), the RDP read (981) under M1, the SRAM window, and every machine's behavior except CSR3 read-back. Also out: CSR1, CSR2, the alignment warning, STOP gating, and CSR3-cleared-on-STOP (D4). D4 is a different defect from this store. Row 9 is CSR0 STOP/STRT behavior (`le_register_fix` 802–812 clears only IDON). It does not carry D4. One round, narrowed.
+
+**(f) What the change carries.** A `#573` comment that states the CSR3 citation and the decision to leave CSR1 and CSR2 unmasked, with the MAME RS2030 dissent and the "must be zero" wording named. The same bytes in `est/` if that twin is still a shared file (NOT CHECKABLE here) and a rebuilt binary in the build trees that ship. The comments at 986–991 and 996–1001 are filed, not edited: this round does not touch those lines.
+
+## Q2 — the detector
+
+**(a) Cells, under the narrowed diff.** C5 (CSR3 dropped bits 3..15) and C6 (CSR3 kept bits 0..2) are FLOOR cells (R1, R4, R5): they are the labels of the edited arm crossed with the bits the mask keeps or drops. C1–C4 are NOT A CELL of this diff (R3, R6): the edited lines do not touch CSR1 or CSR2. Keep N9, N11, N12, N13, N14 as identity rows so a later port of `0xfffe`/`0x00ff` goes red. STOP (P7) and access width (P8) are outside the DEPENDS-ON closure: `le_register_write`'s CSR3 arm reads `r` and `x` and does not read `reg[0]` or `len` (R3). Clause (e), disclosed.
+
+**Rule D2 for a mask.** There is no compare against a constant B. One write of `0xffff` is enough for every bit of a constant mask at once. Enumerated for CSR3: `0xffff & M' = M'`, and `M' != 0x0007` fails N7 for a difference in any of bits 0..15, dropped or kept. A dropped-bit-alone row is not owed once N7 exists. The kept row is owed for a different mutant: a store that ignores `x` (V10) makes N7 pass (`0x0007 == 0x0007`) and fails N8. N8's stimulus `0x0005` has bits 0 and 2 set; bit 1 is visible in N7 because `0x0007` contains it. That discharges 7.3's claim for a constant mask.
+
+**(b) V1–V20, judged against the three-mask proposal the probe currently encodes.** The arithmetic of V1–V18 and V20 matches the brief, on the probe's inputs. V19 does not.
+
+| # | class against the three-mask M1 | red rows | note |
+|---|---|---|---|
+| V1 | DETECTED, floor (a)/(b) | N7 N9 N11 N12 | right |
+| V2 | DETECTED | N11 N12 | right; this is the behavior P1 leaves in place |
+| V3 | DETECTED | N11 N13 (`0x1236 & 0xfffc = 0x1234`) | N12 stays `0x1234`; right |
+| V4 | DETECTED | N11 N14 (`0x8000 & 0x7ffe = 0`) | right |
+| V5 | DETECTED | N9 | right |
+| V6 | DETECTED | N9 N10 (`0x00a5 & 0x007f = 0x0025`) | right |
+| V7 | DETECTED | N7 | right |
+| V8 | DETECTED | N7 N8 (`0x0005 & 0x0003 = 0x0001`) | right |
+| V9 | DETECTED | N7 N8 (`0x0005 & 0x0006 = 0x0004`) | right |
+| V10 | DETECTED | N8 N10 N12 N13 N14 | ALL rows pass; right |
+| V11 | DETECTED | N7 N9 N10 | N8 passes; right |
+| V12 | EQUIVALENT on this probe's inputs only | none | CSR1 bit 0 still reaches the warning if the mask is applied at the read. For a CSR3-only fix, M1 and M2 match in every state (P5) |
+| V13 | OUT OF CONTRACT | none | STOP stays set (S12, probe never writes STRT or INIT — READ, no such literal in the frozen probe) |
+| V14 | OUT OF CONTRACT | none | every device write is `sh` (S13) |
+| V15 | EQUIVALENT in every state | none | `x & ~1` and `x & 0xfffe` store the same `uint16_t` |
+| V16 | EQUIVALENT in every state if the table sits only in `default:` | none | index 0 is then dead. The words "CSR0 also masked" are false for that placement. A table applied to `case 0:` is a different variant, and `csr0 reset` does not write CSR0, so the probe would miss it |
+| V17 | EQUIVALENT on this probe | none | no INIT, so the warning cannot fire |
+| V18 | DETECTED | N7 N9 | right |
+| V19 | DETECTED, red set incomplete | N7 N9 N10 N11 **N12** N13 N14 | `0x1235 & 0x00ff = 0x0035`, want `0x1234`. The brief's list omits N12 |
+| V20 | floor (c) | all 18, CONTROL=FAIL, exit 1 | matches the probe code; see (d) |
+
+No variant was found that keeps all three constants, applies them as `x & M`, and still mis-reads on an input this probe writes. R15's one ask, named so it can be classified and not built unless disputed: OR-accumulate, `d->reg[r] = (d->reg[r] & ~M) | (x & M)` is equivalent on these sequences (the registers start at 0 and the ALL write clears the dropped bits); `d->reg[r] |= (x & M)` without the clear is DETECTED by N8, N10, and N12. Against the narrowed fix, V2/V5 become identity (EQUIVALENT to the shipped masks) and V1 reds only N7. Pre-fix GATE (floor (a)) becomes **17/18**, with N7 the only red row.
+
+**(c) Rows.** HEAD wants match `det18_HEAD/RESULTS_base.txt` (READ): the four symptom reads are `0xffff`, `0xffff`, `0xffff`, `0x1235`, and `csr1 even` is `0x1236`. FIX wants `0x0007` for N7 is right. FIX wants `0x00ff`, `0xfffe`, `0x1234` for N9, N11, N12 are right only for the three-mask proposal rejected in Q1; retarget those three to identity (`0xffff`, `0xffff`, `0x1235`) so they guard against over-masking. N14 earns its place against V10 and is redundant with N11 for a constant-mask change; keep it. `stable:*` compares to the first RDP read (READ `build_rows`, and the remeasure: `stable:csr1` is `0xffff`, the ALL value, while the last accept write was `0x8000`). The frozen docstring line 59 says "the last RDP value," which is the wrong description of that code. Count them in the 18; CONTROL already has encodings and the breakpoint, and the fraction in this tree counts controls. Each named channel can vary under its variant (R9), except N14 under a pure constant-mask mutant, where N11 already moves.
+
+**(d) Null medium.** `/bin/false` is the right absent-emulator medium (R2). From the frozen probe: `exec` of a binary that produces no debugger yields no `unassemble` lines (`enc_ok` false), no breakpoint, and `reg()` returns `None`; `row_ok` fails a `None`; GATE prints `LE_CSRMASK_RESULT=0/18`, `LE_CSRMASK_CONTROL=FAIL`, and `sys.exit(1)`. That is by construction. The record says `(c): measured at <artifact>` only after L3 has run. Until then it is `(c): by construction via N1–N18 all `None`, leg L3 not run`.
+
+**(e) Contract and anchor.** CATCHES, after the retarget: any change to the CSR3 mask constant (N7); a CSR3 store that ignores `x` (N8); a CSR1 or CSR2 mask introduced anyway (N9, N11, N12, and the kept rows); the revert of the CSR3 store. OUTSIDE: STOP-conditioned masking, width-conditioned masking, the CSR0 arm, INIT and `init_block_addr`, the big-endian SRAM path, and CSR1 bit 0 / CSR2[15:8] left stored on purpose. A one-halfword shift of the window does not alias RDP onto RAP: the ports are 4 bytes apart (`case 0:` and `case 4:`). A shift of **one word** (4 bytes) makes the guest's RDP address hit RAP, so `csr0 reset` reads `reg_select` (0) instead of `0x0004`, and `rap mask` misses `case 4:` and fails `0x0003`. Both signature rows red. The RAM rows stay green. That is the anchor (R7).
+
+## Q3 — shape, home, witness, records
+
+**(a)** `probe:` is available once L2 is green on the same script that produced the witness, and the record shows the order already measured: witness 03:47–03:49, detector remeasure 04:05, `dev_le.c` still the pre-edit store (R12, R13, `RUN_IDENTITY.txt`). The git-archive export of `0b09e7b6` is the committed build. `detector:` is the term if L2 is not that same script.
+
+**(b)** Home is `regress/gate_arm.sh`, beside the `sgi_re_*` block. S15's reason applies: the probe is an image-free `pmax -e 3100` guest, and a new gate script moves `GATE_MANIFEST` (pinned 16). `gate_mips.sh` boots a rig image this probe does not use. Checks, in order: sentinel `LECSRMASK_PROBE_DONE` first; `^LE_CSRMASK_CONTROL=OK$` exactly once; one `check` per row name; denominators by equality. With the retarget, the green count is still 18/18/0 on the fix, and the pre-fix FIX-column leg is 17/18.
+
+**(c)** Re-derive at landing. The worktree file already shows pin 78 and `wdc_lba_probe.py` grandfathered, which is the opposite of S14's "77, NEW PROMPTLESS." If `git show HEAD:` still says 77, the #572 pin move is its own commit, not an edit under `#573`, and it lands before this round so the battery is not red for a closed round. Folding it into the `#573` commit is the amendment the late-dissent rule refuses. If HEAD is already 78, this round only grandfathers `le_csrmask_probe.py` and writes the pin in the same commit as its wiring (R21).
+
+**(d)** The CHANGELOG block claims: rung-3 witness on unmodified `pmax -e 3100`; CSR3 `&= 0x0007` with the three citations above; CSR1 and CSR2 left unmasked, and why (P1, P3, the RS2030 dissent); the alignment warning left in place; read-back of CSR3 is the guest-visible change (P5); STOP gating and CSR3-cleared-on-STOP not implemented (D4). It does not claim that a shipped driver observes the defect (D3). It does not say the Am7990 manual says CSR1 bit 0 reads as zero.
+
+**(e) Filings, separate from this fix.**
+- CSR1–3 accessible only while STOP is set (write ignored and read undefined otherwise). One row. Row 9 does not carry it.
+- CSR3 cleared by RESET or by setting STOP, and Appendix B's Am7990 note that CSR1/CSR2 are not preserved across STOP (the C-LANCE preserves them; `TM1986.txt` 2853–2856 says they are "normally not affected" and still recommends reloading them). One row next to the first, or a second row. Row 9 is the CSR0 STOP/STRT Ultrix variant, not this.
+- Comments at 986–991 and 996–1001. Both invert the datasheet. The first says a read is undefined when STOP is set; the manual says the read is undefined when STOP is clear. The second says a write with STOP set is ignored; the manual says the write is ignored when STOP is clear. One records row.
+- The carrier's primary-source list, which is built from `ls _scratchpad/*.pdf` and misses `_scratchpad/lance/` (9.4).
+- CSR1 bit 0 and CSR2[15:8] read-back, filed as open with both measurements (3MIN `3/ni/regs` vs RS2030), so a later round cannot treat `e108b54`'s three masks as one settled fact.
+
+## Q4 — standing licence
+
+1. READ 1015–1020. A write of `0x13` selects 3 and warns, because `idata >= 4` is tested on the unmasked value. RAP bits 15:2 are reserved (PMAD-AA: ignored on write, read as zero). The warning is `debugmsg` on every such write. There is no once-latch. That matches a guest error worth announcing. Nothing to change.
+2. `le_register_write`'s `x` is `uint32_t` and the caller passes `uint64_t idata` (1002). The 16-bit `sh` path yields a 16-bit `idata` (S13). The `uint16_t` store drops bits above 15. No records note.
+3. Covered in Q3e. Both comments, not only 986–991.
+4. Leave `(d->reg[2] & 0xff)` at line 179. It is the consumer's own mask and stays load-bearing while CSR2 is stored whole.
+5. The word check is the control (`15/15`, `17/17`, `23/23` on the 18-row remeasure). The mnemonic fraction (`14/15`, `15/17`, `22/23`) is the disassembler's rendering of `b` and of `ori` versus `li`. Print it as informational, or drop it. A reader can take "14/15" as a failed row.
+6. The grandfather list's last entry is `wdc_lba_probe.py`, and the comment above it does not record a third name. A full re-derive was not run (read-only, and the shell was denied). Nothing in that list, other than the S14 contradiction itself, shows a third recent gap.
+
+The tree was not modified.

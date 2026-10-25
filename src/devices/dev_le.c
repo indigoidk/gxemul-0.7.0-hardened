@@ -881,8 +881,25 @@ void le_register_write(struct le_data *d, int r, uint32_t x)
 		d->reg[r] |= (x & LE_INEA);
 		break;
 
+	case 3:
+		/*
+		 *  #573: CSR3 is BSWP|ACON|BCON; bits 15:3 are "Reserved and read
+		 *  as 0" (Am7990 Technical Manual, 1986, p. 1-22; the Am79C90
+		 *  datasheet says the same).
+		 */
+		d->reg[r] = x & 0x0007;
+		break;
+
 	default:
-		/*  CSR1, CSR2, and CSR3:  */
+		/*
+		 *  This model stores CSR1 and CSR2 whole.  The Am7990 manual leaves
+		 *  their read-back unspecified (CSR1 bit 0 "Must be zero", CSR2 bits
+		 *  15:8 "Reserved" -- constraints on the host's writes); the later
+		 *  Am79C90 (C-LANCE) reads CSR2's reserved bits as zero and says only
+		 *  "Must be zero" for CSR1 bit 0; another emulator keeps both writable
+		 *  on the Am7990 for a board diagnostic's sake.  An interpreted
+		 *  reading, recorded as one: see the #573 record.
+		 */
 		d->reg[r] = x;
 	}
 }
@@ -984,20 +1001,23 @@ DEVICE_ACCESS(le)
 			    "%02x", d->reg_select, (int)odata);
 
 			/*
-			 *  A read from csr1..3 should return "undefined"
-			 *  result if the stop bit is set.  However, Ultrix
-			 *  seems to do just that, so let's _not_ print
-			 *  a warning here.
+			 *  #573: CSR1..3 are accessible only while the STOP bit
+			 *  is SET (a read with STOP clear is "undefined" on the
+			 *  chip).  The old comment reported that Ultrix seems to
+			 *  read them with STOP set -- the in-spec case.  The model
+			 *  answers in either state; gating on STOP is filed, not
+			 *  implemented, and nothing is announced either way.
 			 */
 		} else {
 			debugmsg(d->subsys, "register", VERBOSITY_DEBUG,
 			    "WRITE to register 0x%02x: 0x%02x",
 			    d->reg_select, (int)idata);
 			/*
-			 *  A write to from csr1..3 when the stop bit is
-			 *  set should be ignored. However, Ultrix writes
-			 *  even if the stop bit is set, so let's _not_
-			 *  print a warning about it.
+			 *  #573: a write to CSR1..3 with STOP CLEAR is the one
+			 *  the chip ignores; writes with STOP set are the normal
+			 *  case (the old comment reported Ultrix writing them with
+			 *  STOP set).  The model accepts both -- gating on STOP is
+			 *  filed, not implemented.
 			 */
 			le_register_write(d, d->reg_select, idata);
 		}

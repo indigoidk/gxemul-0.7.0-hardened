@@ -1,0 +1,60 @@
+PRETABLE.out -- lecsrmask (#573), written 2026-10-25 05:2x by the main loop BEFORE any variant table (the table itself is
+OWED, see README.txt beside this file).  The mandatory pre-table check (carrier: SIBLING PARITY, CLAIM -> ROW, GUARD FIELD vs
+BODY FIELD, CHANNEL), run on the final 20-row detector revision (regress/le_csrmask_probe.py at landing; the frozen copy's md5
+is in the landing record) against the form-A fix in le_register_write()'s switch.
+
+SIBLING PARITY -- the edited arm is `case 3:` (CSR3); its siblings in the same switch are `case 0:` (CSR0, bit-by-bit, not
+  this round's) and the `default:` arm that now serves CSR1 and CSR2 (stored whole).  Observable channels of the edited arm:
+  the RDP read-back of reg[3] (the ONLY reader of reg[3]).  Observable channels of the siblings: the RDP read-back of reg[1]
+  and reg[2], PLUS reg[1]/reg[2] feeding init_block_addr at le_chip_init (an INIT-time consumer this probe does not drive:
+  no row writes CSR0.INIT).  Asymmetry: CSR1/CSR2 carry a consumer channel CSR3 lacks -- disclosed in the contract (OUTSIDE:
+  INIT and init_block_addr), not rowed, because no edit touches those stores.  Each label has an ALL row (0xffff) and a
+  kept-bits row; CSR3 additionally has the two dropped-bit rows (hi, mix) its mask makes meaningful; CSR1 has odd/even/top
+  (its bit-0 contract and the kept boundary bit); CSR2 has lo.  Parity holds on the channel each label actually has.
+
+CLAIM -> ROW -- every sentence the change adds that asserts an observable consequence:
+  "CSR3 ... bits 15:3 are 'Reserved and read as 0'"            -> csr3 all (0xffff -> 0x0007), csr3 hi (0x0008 -> 0), csr3 mix
+                                                                   (0x0015 -> 0x0005)
+  "CSR1 and CSR2 are stored whole"                            -> csr1 all / csr1 odd / csr2 all (identity CONTRACT rows)
+  "CSR1..3 are accessible only while STOP is set ... the       -> NO ROW (comment-only correction; the model's acceptance of
+   model accepts both"                                            STOP-clear writes is filed as `lestopgate`, disclosed OUTSIDE)
+  (probe docstring) "a red CONTRACT row fails the leg but        -> by construction: row_ok counts it in nfail; CONTROL tests only
+   leaves CONTROL OK"                                              kind == "control" -- readable in run_leg()
+  (probe docstring) "the park control checks the pc"            -> by construction: run_session parses `BREAKPOINT: pc = 0x..`
+                                                                   and compares with halt_addr & 0xffffffff
+
+GUARD FIELD vs BODY FIELD -- the edited arm has no predicate of its own; the dominating predicate is `switch (r)`, whose
+  operand `r` is d->reg_select, written ONLY at the RAP arm as `idata & (N_REGISTERS - 1)` (so r in 0..3 by construction).
+  The body reads `x` (the written value) and writes reg[r].  Partition the body induces on x: a constant AND -- the kept
+  bits (2:0) and the dropped bits (15:3); no compare, no bit test.  State the rows hold on x for CSR3: EXHAUSTED on the
+  body-tested partition (kept-only 0x0005, dropped-only 0x0008, both 0x0015 and 0xffff); on r: the CSR1, CSR2 and CSR3 write arms are exercised (write/read); CSR0 gets its reset-value
+  read and the RAP masking only -- no row writes through case 0, so that arm's own coverage is NOT claimed here.  Disagreeing-state row: none owed -- the guard
+  operand (r) and the body operand (x) are independent inputs both driven.
+
+CHANNEL -- per row, the variant it reds on and the observable that differs (all read-backs through RDP unless stated):
+  ram:<s>       a dead or mis-encoded session (null medium: every capture None)              -- liveness, not a mask channel
+  csr0 reset    a window translation / dead run (reset value 0x0004 vs 0 or None)            -- signature / anchor
+  rap mask      a window translation / dead run (0x0003 vs other)                             -- signature / anchor
+  csr3 all      ANY change to the CSR3 mask constant in its low 16 bits (0xffff & M' = M')    -- read-back 0x0007
+  csr3 bits     a store that ignores x (reads 0x0007); a mask narrowed at bit 0 or 2          -- read-back 0x0005
+  csr3 hi       the revert (0x0008); store-ignores-x (0x0007); a mask conditioned on bit 0/1/2/4..15 of x; a mask widened
+                at bit 3; an OR-accumulating store (0x0007, given the session order)         -- read-back 0x0000
+  csr3 mix      a saturating clamp (0x0007); a mask conditioned on bit 3 of x (0x0015);
+                an OR-accumulating store (0x0007); the revert (0x0015)                       -- read-back 0x0005
+  csr2 all      a CSR2 mask introduced (0x00ff); the CSR3 mask moved to the CSR2 arm (0x0007) -- read-back 0xffff
+  csr2 lo       the CSR3 mask moved to the CSR2 arm (0x0005); store-ignores-x                  -- read-back 0x00a5
+  csr1 all      a CSR1 mask introduced (0xfffe / 0x00ff ...)                                   -- read-back 0xffff
+  csr1 odd      a CSR1 bit-0 mask introduced (0x1234)                                          -- read-back 0x1235
+  csr1 even     a narrowed CSR1 mask (0x1234 under 0xfffc); store-ignores-x                    -- read-back 0x1236
+  csr1 top      a mask dropping bit 15; a store narrowed to a signed byte (0 or sign-extended) -- read-back 0x8000 (insurance)
+  stable:<s>    a device answering differently on two consecutive reads; a dead run           -- repeatability
+
+  VACUOUS-BY-CONSTRUCTION check: no row's named channel is one that cannot vary under its named variant -- every CSR row
+  reads back a 16-bit register value that the named edit changes; the liveness/signature rows vary under the null medium and
+  a window translation.  No survive-only row exists in this probe.
+
+THE CHANNEL LINE'S OWN TEST (the carrier asks the first mandated application to CHECK it): the channel of every row WAS
+  knowable at writing time -- the seats enumerated the red sets from the stimuli and wants alone (packet 4.3, re-derived by
+  three seats), and the two measured legs so far (pre-fix GATE 17/20 with csr3 all / hi / mix red; fix GATE 20/20) matched the
+  written channels exactly.  The caveat that bit the pass-1 brief: a channel named from the FIX's intent (the three-mask
+  rows) was right about the rows and wrong about the design -- the premise, not the channel, failed.

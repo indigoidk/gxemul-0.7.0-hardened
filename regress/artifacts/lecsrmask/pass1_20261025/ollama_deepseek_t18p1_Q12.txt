@@ -1,0 +1,91 @@
+VERDICT: NOT READY -- P1 (CSR1 bit 0 read-back) not checkable from packet; V19 red-row set incomplete (N8 and N12 omitted)
+Q1: repair masks/form/member mostly sound, but CSR1 mask depends on P1 which the packet cannot settle; delete unreachable warning; use explicit cases and M1.
+Q2: detector floor/cells valid; V19 prediction misses N8 and N12; N14 is redundant; anchor rows are N5/N6.
+
+---
+
+## Q1 — the repair: right masks, right form, right member?
+
+### (a) Premises
+- **S1–S16**: No false settled premise found in the inlined text. I cannot verify S7, S10, S14 from the packet alone, but they are not contradicted by anything inlined.
+- **P1** — **NOT CHECKABLE from this packet.** The inlined datasheet says CSR1 bit 0 “Must be zero” and draws it as `'0'`, but does **not** say “Read as zeroes” for that bit. That is a write constraint, not a read-back guarantee. If the chip actually preserves a written 1 in bit 0, then the proposed mask `0xfffe` is wrong, and rows `csr1 all` / `csr1 odd` have wrong FIX wants.  
+  Single fact that would settle it: an Am79C90 or Am7990 statement that CSR1 bit 0 reads back as zero, or a hardware measurement.
+- **P2** — **NOT CHECKABLE from this packet.** The inlined Am7990 Technical Manual shows the same register layout but carries no “read as zeroes” sentence for CSR2 15:8 or CSR3 15:3. The Am79C90 text may not bind the Am7990.  
+  Single fact: Am7990 datasheet explicit reserved-bit read behaviour.
+- **P3** — READ from inlined datasheet (CSR2 bits 15:8 “Read as zeroes. Write as zeroes.”) → mask `0x00ff` is right.
+- **P4** — READ from inlined datasheet (CSR3 bits 15:3 “Read as zeroes. Write as zeroes.”) → mask `0x0007` is right.
+- **P5** — READ from S6/inlined source: `reg[3]` has no reader; `reg[2]` is already masked by `le_chip_init`; `reg[1]` bit 0 feeds only the odd-address warning. The read-back is the only guest-visible consequence.
+- **P6** — READ: `r` is always in {0,1,2,3} because RAP masks with `N_REGISTERS - 1`; explicit `case 1:`/`case 2:` makes `default:` exactly CSR3.
+- **P9** — The unreachable parity warning should be deleted in this change; relocating it as a latched announce would be an addition without a warrant under R10.
+- **P10** — **NOT CHECKABLE from this packet.** D3 shows shipped drivers do not set the bits, but whether DECstation firmware or self-test reads back unimplemented CSR bits is not established.
+
+### (b) Partition
+The repair changes the stored value for exactly:
+- `r=1, b=0`
+- `r=2, b=8..15`
+- `r=3, b=3..15`
+
+Readers of `reg[1..3]`:
+- `le_chip_init` reads `reg[1] & 0xffff` and `reg[2] & 0xff` to build `init_block_addr`.
+- No code reads `reg[3]`.
+- The RDP read path returns `reg[reg_select]`.
+
+So the only non-read-back change is that `init_block_addr` can no longer be odd, making the warning unreachable.
+
+### (c) Consumer
+Delete the warning in this change — option (i). That is consistent with R10 and R14: the deletion is part of the repair chain, not an addition.  
+The comment at the store must say that CSR1 bit 0 is masked to zero, so the odd-address warning is unreachable and was removed.
+
+### (d) Form and member
+Explicit `case 1:` / `case 2:` / `default:` is better than table (B). The table would have an unused index-0 entry for CSR0, which is confusing.  
+Use **M1 mask at the store**, not M2 read-back. M1 makes `reg[]` hold the chip-visible value, all readers see it, and it matches the existing idiom cited for `#572` (store implemented bits at write). M2 would be observationally equivalent for this probe but leaves internal state divergent. M4/M5 are not needed.
+
+### (e) What must NOT change
+The list is complete. D4’s STOP gating and CSR3-cleared-on-STOP are separate behaviours and should be filed, not fixed in this round. Adding them would expand scope beyond the read-back defect.
+
+### (f) What else the repair carries
+- `/* #573: */` tags: yes.
+- `est/` twin must receive the same bytes.
+- The comment defect at 986–991 is records-only and can be fixed in the same change as a comment correction, not as product behaviour.
+
+---
+
+## Q2 — the detector: complete, bounded, valid?
+
+### (a) Floor and cells
+- **C1–C6 are all FLOOR cells.** They partition each label’s dropped/kept bits. No clause-(e) debt exists for STOP or access width: those are outside the DEPENDS-ON closure because the edited body tests neither `d->reg[0]` nor `len`.
+- **R5 analogue for a mask:** write-all-ones row. If the mask changes in any bit, the ALL row’s read-back differs from the expected mask. Therefore N7, N9, N11 discharge **every bit** of each mask at once — both dropped and kept sides.
+- No cell is missing.
+
+### (b) Variants V1–V20
+- V1: correct, DETECTED.
+- V2–V9: correct red rows and classes.
+- V10: correct, DETECTED.
+- V11: correct, DETECTED.
+- V12: EQUIVALENT for this probe, not in every state — differs only in the INIT consumer parity warning.
+- V13: OUT OF CONTRACT.
+- V14: OUT OF CONTRACT.
+- V15: EQUIVALENT.
+- V16: EQUIVALENT for this probe; noted against form (B).
+- V17: EQUIVALENT.
+- V18: correct, DETECTED.
+- **V19: predicted red-row set is incomplete.**  
+  It misses **N8** and **N12**:
+  - N8: CSR3 write `0x0005`, mask `0xfffe` → `0x0004`, FIX wants `0x0005` → red.
+  - N12: CSR1 write `0x1235`, mask `0x00ff` → `0x0035`, FIX wants `0x1234` → red.
+- V20: correct.
+
+A variant missing from the list: a missing `break` causing fall-through between `case 1:` and `case 2:` would also red several rows, but it is not listed. It would be caught, so the closure is not fatally incomplete.
+
+### (c) Rows N1–N18
+- Wants are correct **conditional on P1**. If P1 is false, `csr1 all` and `csr1 odd` FIX wants are wrong.
+- Each row’s channel can vary under its named variant (R9).
+- `csr1 top` (N14) is **subsumed by N11** for mask correctness, because N11 writes all ones and would red if bit 15 were dropped. It is harmless but not necessary.
+- Stable rows should count as CONTROL rows, not symptom rows; they already do.
+
+### (d) Clause (c)
+`/bin/false` is the right null medium. Predicted 0/18, `CONTROL=FAIL`, exit 1 is correct. Record form `(c): measured at <artifact>` is correct.
+
+### (e) Contract and anchor
+The CATCHES/OUTSIDE text is accurate.  
+If the register window moved by one halfword, the anchor rows **N5 (`csr0 reset`)** and **N6 (`rap mask`)** would red, because they pin the RDP and RAP ports by reset value and masking.

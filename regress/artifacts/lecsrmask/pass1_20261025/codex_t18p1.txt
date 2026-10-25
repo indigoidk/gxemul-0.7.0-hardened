@@ -1,0 +1,158 @@
+VERDICT: NOT READY — correct the false INIT-effect premise, qualify the hardware warrant, and repair the detector contract and evidence plan before approving this design.
+Q1: M1 is defensible, but S6/P5 and “read-back only” are false; CSR1’s physical read-back premise remains incompletely established.
+Q2: Existing rows provide useful coverage; V19, equivalence claims, floor accounting, and the missing header contract require corrections.
+Q3: Preserve witness ordering, use the existing device-probe gate, and correct committed-HEAD hygiene accounting.
+Q4: Both STOP comments are reversed; additional diagnostic and source-record corrections are identified below.
+
+READ denotes inspected source or preserved artifacts; DERIVED denotes static conclusions and review recommendations; NOT CHECKABLE denotes evidence not established here. I read the complete packet. No builds, tests, probes, or repository programs were run.
+
+**Q1 — repair, premises, and scope**
+
+**READ — S6/P5 are false.** The complete direct-reader enumeration for CSR1–3 is:
+
+- `le_chip_init()`: CSR1 and CSR2 form `init_block_addr`.
+- `DEVICE_ACCESS(le)`: the indexed RDP read returns the selected register.
+- No other internal direct reader of CSR1–3 was found. “CSR3 is read nowhere” needs “except through indexed RDP read-back.”
+
+The consequential omission is what happens after address formation. Initialization reads SRAM at offsets **0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 18, 20, 22, 22**, producing mode, MAC address, multicast filter, and receive/transmit ring metadata. `le_read_16bit()` masks addresses with `0x1ffff`, which **preserves bit 0**. Thus clearing CSR1 bit 0 changes the SRAM byte pairs consumed, not merely the warning. See [dev_le.c](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_le.c:136), `le_read_16bit()` and `le_chip_init()`, at `0b09e7b6`.
+
+**DERIVED — affected inputs, Q1b.** The changed stored positions are exactly:
+
+| Register | Dropped positions |
+|---|---|
+| CSR1 | 0 |
+| CSR2 | 8, 9, 10, 11, 12, 13, 14, 15 |
+| CSR3 | 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 |
+
+A particular write changes only where one of those positions contains a one. CSR1 preserves positions 1–15; CSR2 preserves 0–7; CSR3 preserves 0–2. Both old and proposed stores discard positions above 15.
+
+For an odd initialization address, M1 moves the address down one byte. That affects initialization on every machine sharing this model. Correct §3.2, S6, P5, Q1e, V12, the detector header, and Q3d accordingly.
+
+**READ / NOT CHECKABLE — P1–P4, D1–D2.**
+
+- **P1:** The CSR1 diagram and “Must be zero” wording support the proposed normalization, but do not explicitly specify the read result after writing a forbidden one. I established neither physical preservation nor guaranteed read-zero behavior under that write. Do not present the latter as measured silicon behavior.
+- **P2:** Blanket transfer of C-LANCE semantics is too strong. AMD’s comparison explicitly describes differences, including CSR1/CSR2 preservation across STOP. [AMD Am79C90 datasheet, Appendix B](https://stuff.mit.edu/afs/sipb/contrib/doc/specs/ic/network/am79c90.pdf).
+- **P3:** The C-LANCE source explicitly supports `0x00ff`. The inspected Am7990 manual’s CSR2 entry says “Reserved,” without the same explicit read-zero sentence.
+- **P4:** `0x0007` has direct Am7990 support omitted from the brief: [TM1986.txt](/C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/lance/TM1986.txt:1734) says CSR3 reserved positions read as zero. Its CSR1 description appears at 1745–1749. The brief’s search for the exact phrase “read as zeroes” missed this equivalent wording.
+
+**DERIVED — mask disposition.** The proposed masks are a defensible model policy using the layout, C-LANCE specification, and upstream precedent. The record must distinguish that warrant from a proven answer to P1. P11’s CSR1 FIX wants are correct for the proposed policy, conditional on accepting it.
+
+**READ — other settled premises.** S1–S5, S7–S8 and S12–S13 are supported by the inspected source. For P6, zero initialization and the sole RAP assignment produce exactly selectors **0, 1, 2, 3**; the proposed default therefore denotes CSR3. S9’s quoted fields are supported, but their transfer remains P2. S10’s twin identity remains packet evidence; S11’s preserved records report the stated runs. S14 and S15 need the corrections under Q3; S16’s substance holds, with a citation-provenance correction there.
+
+**DERIVED — P9, form, and member.** Prefer M1 with explicit CSR1/CSR2 arms and the existing default for CSR3. Table B is also correct over reachable selectors. Delete the now-unreachable warning, option **(i)**, as an in-round consequence of the changed invariant under R14. Explain that CSR1 normalization guarantees an even initialization address. A new store-time warning needs a separate R10 warrant.
+
+**READ — R11 precedent.** A suitable example is [dev_footbridge.c](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:659), at `0b09e7b6`: TimerNLoad’s upper byte is documented read-zero, and writes are masked before storage. The cited WDC example does the opposite: it **preserves** reserved select bits for exact read-back. M1–M5 cover the material choices here; another placement before the common store would be a form of M1.
+
+**DERIVED — Q1e–f.** Keep CSR0’s implementation, RAP decoding, RDP read logic under M1, SRAM mapping, and STOP policy unchanged. The “other machines except read-back” restriction is impossible as stated because of the INIT effect. D4 remains separate work under R14. Use the final assigned round number in tags and synchronize the shared twins/build sources as the landing requires; those are pending obligations, not verification performed here.
+
+**READ / DERIVED — comments.** Both comments at 987–990 **and 997–1000** reverse STOP’s condition. Correct both as L4 records work. Their historical Ultrix assertions are not independently established by this review.
+
+**READ / NOT CHECKABLE — P10, D3.** The supplied Linux path initializes `leptr` and its bus-master value to zero. The supplied NetBSD path writes the named registers and subsequently reads CSR0. These do not establish a universal “no shipped driver ever observes this” claim. Firmware/PROM behavior is NOT CHECKABLE here. Retain WRONG-RESULT/MED provisionally without inventing broader reach.
+
+**Q2 — floor, rows, variants, contract**
+
+**DERIVED — C1–C6, R3–R5.** Under the quoted rules literally, grade all six as **clause-(e) mask-contract obligations**, already exercised. They are not six control-flow floor cells: the dominating predicate is the selector switch, and R5 specifies relational comparisons. The three register labels are the floor siblings. Promoting kept/dropped positions into mandatory mask-boundary cells would be an explicit extension of R5.
+
+For a constant AND mask, an ALL row exposes every **effective low-16-bit** mask position simultaneously. It therefore covers every dropped-position widening and kept-position narrowing. Changes only above position 15 are equivalent after storage conversion. Non-ALL kept rows additionally reject a constant-mask answer. Separate one-hot boundary rows are not mandated by the quoted rules.
+
+P7’s STOP axis and P8’s width axis are outside R3’s enclosing-function closure. Disclose them without pinning the model’s nonconforming STOP-clear acceptance.
+
+**DERIVED — R1(b) evidence gap.** V1’s combined restoration does not independently establish sensitivity at every fixed register. V2 supplies CSR1’s original behavior; the future table also owes separate original-behavior restorations for CSR2 and CSR3. Existing N9 and N7 respectively predict detection, each **17/18 with CONTROL=OK**. V5/V7 are partial widenings, not verbatim restorations. This requires additional evidence, not additional detector rows.
+
+**DERIVED — complete V1–V20 classification.** Red sets below use the FIX column and the actual detector’s dynamic stability comparisons.
+
+| Variant | Correct red rows | Classification |
+|---|---|---|
+| V1 | N7 N9 N11 N12 | DETECTED; combined restoration |
+| V2 | N11 N12 | DETECTED |
+| V3 | N11 N13 | DETECTED |
+| V4 | N11 N14 | DETECTED |
+| V5 | N9 | DETECTED |
+| V6 | N9 N10 | DETECTED |
+| V7 | N7 | DETECTED |
+| V8 | N7 N8 | DETECTED |
+| V9 | N7 N8 | DETECTED |
+| V10 | N8 N10 N12 N13 N14 | DETECTED |
+| V11 | N7 N9 N10 | DETECTED |
+| V12 | None | Equivalent on this probe only |
+| V13 | None | OUTSIDE the STOP-state contract |
+| V14 | None | OUTSIDE the width contract |
+| V15 | None | EQUIVALENT after destination conversion |
+| V16 | None | EQUIVALENT in every reachable state |
+| V17 | None | EQUIVALENT in reachable M1 states |
+| V18 | N7 N9 | DETECTED |
+| V19 | **N7 N8 N9 N10 N11 N12 N13 N14** | DETECTED; **10/18** |
+| V20 | N1–N18 | Null-medium floor; predicted **0/18** |
+
+**DERIVED — corrections.** V19 omits N8=`0x0004` and N12=`0x0035`. V12 differs in initialized device data as well as diagnostics. V16 never uses table slot zero; its parenthetical “CSR0 also masked” is false. V17’s equivalence assumes reachable states under M1.
+
+A missing bounded R3 classification is **confusing the selector operand with the written-value operand during dispatch**, while retaining all three masks. The driven values `ffff, 0005, 00a5, 1235, 1236, 8000` all fall outside the explicit 0/1/2 labels under that confusion. Existing N9–N14 detect it: **12/18, CONTROL=FAIL**. No new row is needed.
+
+**READ / DERIVED — N1–N18 and P11.** All fixed wants match the proposed masks, subject to P1’s hardware qualification. The channels can vary under their named variants; the V19 channel lists need the additions above.
+
+N14 is subsumed by N11 for constant-mask changes, including V4, but remains a valid diagnostic control. Keeping it is reasonable.
+
+N15–N18 compare the second observation against the **first observed value**. They are repeatability controls, not additional mask-correctness evidence. Keep the current scoring and denominator if desired; folding them solely into CONTROL would require consistent denominator changes everywhere.
+
+The [frozen detector](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/lecsrmask/pass1_20261025/le_csrmask_probe.frozen.py.txt:361) also needs these textual corrections:
+
+- “Every want is a literal” excludes the four stability expectations.
+- “Last RDP value” should describe the first observation, immediately repeated.
+- N12 is not a dropped-bit-only input: `0x1235` sets positions **0, 2, 4, 5, 9, 12**.
+
+**READ / DERIVED — P12 and R2.** `/bin/false` is an appropriate null medium. The predicted **0/18, CONTROL=FAIL, exit 1** follows from the missing captures and the explicit rejection of `None`, including two missing stability observations. This was not measured here. Until an artifact exists, use **“by construction … leg not run”**, not “measured.” The current dead-child path also waits through four breakpoint deadlines, approximately eight minutes.
+
+**READ / DERIVED — R6 contract.** Section 7.6’s claimed CATCHES/OUTSIDE header is absent from the frozen detector. Add it, specifying:
+
+- CATCHES: effective constant-mask changes, constant-mask answers, the named label/mask errors, reinstatements, and the bounded dispatch-operand confusion.
+- OUTSIDE: STOP-clear accesses, other widths, CSR0 behavior, INIT consumption, and other emulated byte orders.
+- M2 is equivalent only for these observations; the probe does not establish store normalization or correct initialization-address behavior.
+
+**DERIVED — R7 anchor.** A halfword shift is two bytes; the ports are four bytes apart. For window shifts of +2 and −2, the original port accesses correspond respectively to offsets **−2/2** and **2/6**. They do not exchange RDP and RAP. N6 reaches an unimplemented offset and loses its expected three; N5 loses the reset signature or capture. The anchors are useful, but §7.6’s explanation is wrong.
+
+**Q3 — witness, wiring, records, filings**
+
+**READ / DERIVED — Q3a, R12–R13.** The preserved artifacts report a 17-row original witness and an 18-row revision, both before the product edit. A build from a git-archive export of committed source qualifies as a committed-source build. Its actual provenance is reported evidence, not something reconstructed here.
+
+Preserve both instrument identities and timestamps. The final record must identify the same shipping script’s base/fix results and show that the witness preceded the edit. HEAD-column green is not FIX-column red. L0/L1/L2 and the final `probe:` entitlement remain pending.
+
+**READ / DERIVED — Q3b, S15–S16.** Use the existing `gate_arm.sh` device-probe home. S15’s cited paragraph explains an ARM/cats footbridge probe, not pmax. The relevant discussion is [gate_arm.sh](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh:1289), at `0b09e7b6`: it describes the accumulated device probes, the rig-boot role of `gate_mips.sh`, and the already-owed gate split.
+
+Require sentinel first; exactly one anchored successful CONTROL record; all 18 named rows exactly once; emitted/green/red equality **18/18/0**. Classify the shipped detector and frozen witness appropriately. Every additional artifact renamed to `.py` also needs its own manifest treatment.
+
+S16’s quoted entry exists, but its stated line number belongs to the modified working tree. Use the unique `"wdc_lba_probe.py":` anchor under R17.
+
+**READ — S14’s denominator is wrong for HEAD.** Static enumeration found:
+
+| Population | Pty probes | Pin |
+|---|---:|---:|
+| Committed HEAD | 77 | 77 |
+| Working tree | 78 | 77 |
+
+The extra working-tree member is untracked `lca_isaphys_probe.py`. Committed HEAD nevertheless has a **name-set mismatch**: `wdc_lba_probe.py` is missing from the grandfather list, while that list includes `lca_isaphys_probe.py`, absent from HEAD. See [gate_hygiene.sh](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_hygiene.sh:450), at `0b09e7b6`.
+
+**DERIVED — Q3c, R21.** Repair the pre-existing hygiene obligation in a separate follow-up before this landing, identifying its provenance and intended committed population. Then include this round’s pin changes with its wiring. Grandfathering only the new LANCE probe leaves the existing omission unresolved. The stated battery schedule is NOT CHECKABLE in the permitted sources.
+
+**DERIVED — Q3d records.** Include the proposed witness/mask/disposition details, but replace “read-back only” with the actual CSR1 initialization-address effect. Also record:
+
+- Hardware evidence versus modeling inference, especially P1/P2.
+- Original and revised detector identities.
+- Measured versus predicted results and the null-medium evidence form.
+- Actual contract exclusions, including D4 and INIT coverage.
+- Correct hygiene population and final round number.
+- R19’s pretable, per-site R1 evidence, and remaining R15/R16/R20 review and restoration obligations.
+
+Do not claim driver or firmware impact without evidence.
+
+**READ / DERIVED — Q3e filings.** Track STOP access gating and CSR3 clearing on STOP separately. Research row 9 concerns CSR0 STOP/STRT behavior and does **not** already state the CSR3 obligation. Correct both STOP comments in-round as L4 work. File the source-inventory omission from §9.4; the carrier itself was outside scope. Zero initialization of registers whose reset values are undefined is not, by itself, another defect.
+
+**Q4 — additional findings and dispositions**
+
+1. **READ / DERIVED — RAP:** The C-LANCE source requires reserved RAP positions to be written zero, so `0x13` violates that guidance while still decoding to CSR3. The warning is unlatched. File any warning-policy or wording change separately; it does not belong in this mask repair.
+2. **READ / DERIVED — narrowing:** `uint64_t` → `uint32_t` → `uint16_t` preserves the relevant low positions. No independent functional repair or type-change obligation follows from P8.
+3. **READ — STOP comments:** Both comments are inverted, as detailed under Q1.
+4. **DERIVED — consumer mask:** Leave the redundant CSR2 mask in place; its removal is unnecessary to this repair.
+5. **READ / DERIVED — mnemonic counts:** Exact word comparison controls `enc_ok`; mnemonic rendering does not. Label the rendering count informational or omit it from the revised detector. Preserve the historical witness artifact.
+6. **READ / NOT CHECKABLE — further hygiene omissions:** The preceding #570 and #571 detectors use `subprocess.run`, not `pty.fork`; no additional current pty omission was found there. A current NEW-name list cannot prove the absence of historical omissions.
+7. **READ — additional filing:** The RAP warning passes `uint64_t idata` to `%i`, a variadic-format mismatch at `dev_le.c:1019–1020`. File it separately.
+8. **READ — terminology:** `is_bigendian` follows the **emulated CPU’s** byte order. Replace “big-endian host” with “big-endian emulated machine” in the brief and contract.

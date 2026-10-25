@@ -1,0 +1,538 @@
+#!/usr/bin/env python3
+"""le_csrmask_probe.py -- rung-3 WITNESS and DETECTOR for ledger row `lecsrmask` (devices/dev_le.c):
+the LANCE model (the Am7990, as used in DECstations) stores all sixteen bits a guest writes to CSR3,
+where the chip implements only BSWP|ACON|BCON and reads bits 15:3 as zero; CSR1 and CSR2 are stored
+whole BY DESIGN (see THE EVIDENCE) and this probe pins that too.
+
+SITES (src/devices/dev_le.c at HEAD; grep anchors):
+  * `le_register_write():` -- `case 0:` handles CSR0 bit by bit; `default:` (`/*  CSR1, CSR2, and
+    CSR3:  */`) stores the whole value: `d->reg[r] = x;` (uint16_t reg[N_REGISTERS], N_REGISTERS 4).
+  * `DEVICE_ACCESS(le)` -- `case 0:` RDP (read: d->reg[d->reg_select]; write: le_register_write),
+    `case 4:` RAP (read: reg_select; write: `idata & (N_REGISTERS - 1)`, so RAP masks to 0..3).
+  * `dev_le_init():` registers the register window at `baseaddr + 0x100000` with DM_DEFAULT (the
+    debugger's `dump`/`put` do NOT reach it, so this probe drives it with GUEST instructions) and
+    sets `d->reg[0] = LE_STOP` (0x0004) at reset.
+  * src/machines/machine_pmax.c, the MACHINE_DEC_PMAX_3100 arm: `dev_le_init(machine, mem,
+    KN01_SYS_LANCE, ...)`, KN01_SYS_LANCE = 0x18000000 (src/include/thirdparty/dec_kn01.h), so on the
+    UNMODIFIED `-E pmax -e 3100` machine RDP is KSEG1 0xb8100000 and RAP is 0xb8100004, 16-bit.
+
+THE EVIDENCE (the design rests on it; sources on disk under C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/lance/):
+  * CSR3: the Am7990 Technical Manual (AMD 1986), TM1986.txt line 1734, bits 15:03 "Reserved and
+    read as 0", bits 2:0 BSWP/ACON/BCON; the Am79C90 (C-LANCE) datasheet, am79c90_bitsavers.txt
+    1222-1226, "Reserved. Read as zeroes. Write as zeroes."  Mask 0x0007 -- SETTLED by both manuals.
+  * CSR1 bit 0 and CSR2 bits 15:8: the Am7990 manual says only "Must be zero" (1749) and "Reserved."
+    (1695) -- constraints on the host's WRITES, no read-back statement.  The C-LANCE datasheet reads
+    CSR2's reserved bits as zero (1161-1163) but says only "Must be zero" for CSR1 bit 0 too
+    (1138-1142): CSR1 bit 0's read-back is unspecified on BOTH chips, CSR2's only on the Am7990.
+    MAME's am79c90.cpp stores CSR1 whole on both chips and CSR2 whole on the Am7990 (masked only on
+    the Am79C90), its comment citing a MIPS RS2030 diagnostic that needs the bits writable and
+    "assuming this is older device behaviour".  Upstream rpajarola e108b54 masks all three for a 3MIN
+    port this fork does not carry, with no chip named.  So this model stores CSR1 and CSR2 whole --
+    an interpreted reading, recorded as one -- and the rows below PIN that as a contract; a later
+    per-chip model variant re-pins them under the oracle-correction order (research row
+    regress/artifacts/research_20261022/A_github_forks.md row 26; the F2 adjudication of 2026-10-25).
+  * (The witness revision of this docstring said "no LANCE datasheet is on disk" and the pass-1
+    revision claimed CSR1 & 0xfffe / CSR2 & 0x00ff; both are corrected here.)
+
+TEMPLATE: regress/wdc_lba_probe.py (#572) -- its pty session driver, prompt handling, MIPS encoders,
+disassembler self-check (CONTROL 0: every emitted WORD checked against the emulator's own disassembly;
+the mnemonic-rendering count printed beside it is informational), raw transcript per session and the
+row/verdict/sentinel protocol are copied; its guest-code idioms are reduced to lui/ori/sh/lhu/beq.
+Each session: write RAP, write RDP, read RDP (and RAP) back into capture registers, halt at a
+breakpoint, read the registers with `print`.
+
+ROWS (one fresh emulator per session; every CSR want is a literal; the stable rows want the value the
+same session read first):
+  row          session  stimulus                                  HEAD want     FIX want
+  ram:<s>      every    sh/lhu round-trip of 0x5a5a via KSEG0 RAM  0x5a5a        0x5a5a
+  csr0 reset   csr0     RAP = 0, read RDP                         0x0004        0x0004  (STOP at reset:
+                                                                   a DEVICE SIGNATURE, RAM reads 0)
+  rap mask     csr0     write 0x13 to RAP, read RAP               0x0003        0x0003  (masks to 0..3)
+  csr3 all     csr3     RAP = 3, write 0xffff, read               0xffff        0x0007  SYMPTOM
+  csr3 bits    csr3     RAP = 3, write 0x0005, read               0x0005        0x0005  (kept bits, bit 0 set)
+  csr3 hi      csr3     RAP = 3, write 0x0008, read               0x0008        0x0000  SYMPTOM (the dropped
+                                                                   boundary bit alone, bit 0 CLEAR)
+  csr3 mix     csr3     RAP = 3, write 0x0015, read               0x0015        0x0005  SYMPTOM (kept bits 0,2 with
+                                                                   a dropped bit 4: a saturating clamp and a mask
+                                                                   conditioned on bit 3 both read it wrong)
+  csr2 all     csr2     RAP = 2, write 0xffff, read               0xffff        0xffff  CONTRACT (stored whole)
+  csr2 lo      csr2     RAP = 2, write 0x00a5, read               0x00a5        0x00a5
+  csr1 all     csr1     RAP = 1, write 0xffff, read               0xffff        0xffff  CONTRACT (stored whole)
+  csr1 odd     csr1     RAP = 1, write 0x1235, read               0x1235        0x1235  CONTRACT (bit 0 stored)
+  csr1 even    csr1     RAP = 1, write 0x1236, read               0x1236        0x1236
+  csr1 top     csr1     RAP = 1, write 0x8000, read               0x8000        0x8000  (top-edge insurance)
+  stable:<s>   every    the first RDP value of the session read   == first      == first
+                        again at once
+The three SYMPTOM rows are red on the committed build against the FIX column; every other row has the
+same want in both columns.  CONTROL = every control row + every session's word encodings + every halt
+breakpoint (pc verified), as in the template; a red CONTRACT row fails the leg (the model changed) but
+leaves CONTROL OK, which is reserved for the apparatus.  SESSION ORDER IS LOAD-BEARING: each csrN session
+writes 0xffff first and the other values after it in one emulator, so a store that accumulates with OR
+instead of assigning is caught by the later rows (csr3 bits / hi / mix read 0x0007 under it); in a fresh
+session starting from the reset value 0 it would not be.
+
+CONTRACT (what this detector catches, by construction and by its variant table):
+  CATCHES: any change to the CSR3 mask constant in its low 16 bits (csr3 all); a CSR3 store that ignores the written
+    value (csr3 bits, csr3 hi, csr3 mix); a CSR3 mask conditioned on any single bit of the written
+    value (csr3 hi and csr3 mix together: no one bit is set in every CSR3 stimulus and clear in none);
+    a saturating clamp in place of the mask (csr3 mix); the CSR3 mask moved to another register's arm
+    (csr3 all/hi/mix, csr2 all/lo); a CSR1 or CSR2 mask introduced (csr1 all/odd, csr2 all); the CSR3
+    store reverted to the whole value.
+  OUTSIDE: the mask applied at the RDP read instead of the store (reg[3] has no reader but the RDP
+    read, so no observable differs); a mask conditioned on STOP (every row runs with STOP set -- the
+    probe never writes STRT or INIT); a mask conditioned on access width (every write is a 16-bit
+    `sh`); the CSR0 arm; INIT and init_block_addr; the big-endian emulated machines (the model's SRAM
+    byte order); a mask conditioned on two or more bits of the written value at once; retention of
+    one register across a write to another (each register has its own fresh session) and retention
+    over time (the stable rows show immediate repeatability only).
+  ANCHOR: csr0 reset and rap mask pin the two ports by the reset value and the RAP masking -- a
+    one-word shift of the register window lands one port's access on the other port and the other
+    on an unimplemented offset, a one-halfword shift lands both on unimplemented offsets; either way
+    both signature rows red.  The park control checks the breakpoint banner's pc against the halt
+    address, not merely that a breakpoint fired.
+
+USAGE: le_csrmask_probe.py <base_bin> <fix_bin | GATE | -> <outdir>
+    <base> -   <outdir>   WITNESS: base leg only, judged against the HEAD column.
+    <base> <fix> <outdir> two legs: base vs HEAD, fix vs FIX; LE_CSRMASK_RESULT_base= / _fix=,
+                          LE_CSRMASK_CONTROL_base= / _fix=.
+    <bin>  GATE <outdir>  ONE leg vs the FIX column: LE_CSRMASK_CONTROL=OK|FAIL, LE_CSRMASK_RESULT=p/n,
+                          then the sentinel.  Exit 0 iff p == n and control OK.
+The output ends with the sentinel LECSRMASK_PROBE_DONE once; raw transcripts under <outdir>/raw/.
+"""
+import os
+import pty
+import re
+import select
+import sys
+import time
+
+BASE_BIN = sys.argv[1] if len(sys.argv) > 1 else "/tmp/gxt17/base/gxemul"
+FIX_ARG = sys.argv[2] if len(sys.argv) > 2 else "-"
+OUTDIR = sys.argv[3] if len(sys.argv) > 3 else "/tmp/gxt17/run"
+GATE = (FIX_ARG == "GATE")
+RAWDIR = None                      # OUTDIR/raw
+
+MACHINE = ["-E", "pmax", "-e", "3100"]   # DECstation 3100 (KN01), little-endian, UNMODIFIED
+BASE = 0xffffffff80100000          # KSEG0, physical 0x00100000 (24 MB of RAM on the 3100)
+LE_HI, LE_LO = 0xb810, 0x0000      # LANCE register window: KSEG1 0xffffffffb8100000 (KN01_SYS_LANCE + 0x100000)
+RAM_HI = 0x8020                    # KSEG0 scratch (physical 0x200000) for RAM liveness
+R_RDP, R_RAP = 0, 4                # register data port / register address port (16-bit accesses)
+RAM_MAGIC = 0x5a5a
+
+#  MIPS register numbers
+zero, v0, v1, a0, a1, a2, a3 = 0, 2, 3, 4, 5, 6, 7
+t0, t1, t2, t3 = 8, 9, 10, 11
+NAME = {zero: "zr", v0: "v0", v1: "v1", a0: "a0", a1: "a1", a2: "a2", a3: "a3",
+        t0: "t0", t1: "t1", t2: "t2", t3: "t3"}
+
+
+def I(op, rs, rt, imm):
+    return (op << 26) | (rs << 21) | (rt << 16) | (imm & 0xffff)
+
+
+def lui(rt, imm):
+    return I(0x0F, 0, rt, imm)
+
+
+def ori(rt, rs, imm):
+    return I(0x0D, rs, rt, imm)
+
+
+def sh(rt, off, base):
+    return I(0x29, base, rt, off)
+
+
+def lhu(rt, off, base):
+    return I(0x25, base, rt, off)
+
+
+def beq(rs, rt, off):
+    return I(0x04, rs, rt, off)
+
+
+NOP = 0
+prog = []
+
+
+def reset_prog():
+    del prog[:]
+
+
+def emit(word, mn):
+    """mn is checked against the EMULATOR'S OWN disassembly (the template's CONTROL 0): the word is
+    the authoritative check, the mnemonic a rendering counted separately."""
+    prog.append((word, mn))
+
+
+def e_li16(rt, v):
+    """Zero-extended 16-bit literal: ori rt,zr,v (the values here are 16-bit register images)."""
+    emit(ori(rt, zero, v), "ori %s,zr,0x%x" % (NAME[rt], v & 0xffff))
+
+
+def e_sh(rt, off, base):
+    emit(sh(rt, off, base), "sh %s,%d(%s)" % (NAME[rt], off, NAME[base]))
+
+
+def e_lhu(rt, off, base):
+    emit(lhu(rt, off, base), "lhu %s,%d(%s)" % (NAME[rt], off, NAME[base]))
+
+
+def e_rap(n):
+    """Select CSR n: ori t3,zr,n; sh t3,4(t0)."""
+    e_li16(t3, n)
+    e_sh(t3, R_RAP, t0)
+
+
+def e_rdp_write(v):
+    """Write v to the selected CSR through RDP."""
+    e_li16(t3, v)
+    e_sh(t3, R_RDP, t0)
+
+
+def begin():
+    """Common preamble: t0 = LANCE register window, t2 = RAM scratch, and the RAM liveness control
+    (the same sh/lhu shapes through plain RAM, so a device row reading 0 can never be blamed on
+    a bad encoding): v0 = RAM round-trip of 0x5a5a."""
+    reset_prog()
+    emit(lui(t0, LE_HI), "lui t0,0x%x" % LE_HI)
+    emit(ori(t0, t0, LE_LO), "ori t0,t0,0x%x" % LE_LO)
+    emit(lui(t2, RAM_HI), "lui t2,0x%x" % RAM_HI)
+    e_li16(t3, RAM_MAGIC)
+    e_sh(t3, 0, t2)
+    e_lhu(v0, 0, t2)
+
+
+def end():
+    halt = len(prog)
+    emit(beq(zero, zero, -1), "b 0x")
+    emit(NOP, "nop")
+    return list(prog), BASE + halt * 4
+
+
+def build_csr0():
+    """CSR0 after reset (RAP = 0) -> v1; then RAP := 0x13 and RAP read back -> a0; RDP again -> a2."""
+    begin()
+    e_rap(0)
+    e_lhu(v1, R_RDP, t0)
+    e_lhu(a2, R_RDP, t0)
+    e_li16(t3, 0x13)
+    e_sh(t3, R_RAP, t0)
+    e_lhu(a0, R_RAP, t0)
+    p, halt = end()
+    return p, halt, {"ram": "v0", "reset": "v1", "stable": "a2", "rapmask": "a0"}
+
+
+def build_csr(n, all_val, acc_vals):
+    """RAP = n; write all_val, read -> v1 (and again -> a2 for the stable control); then each accept
+    value in turn, read -> a0, a1, a3."""
+    begin()
+    e_rap(n)
+    e_rdp_write(all_val)
+    e_lhu(v1, R_RDP, t0)
+    e_lhu(a2, R_RDP, t0)
+    regmap = {"ram": "v0", "all": "v1", "stable": "a2"}
+    dst = [a0, a1, a3]
+    for i, v in enumerate(acc_vals):
+        e_rdp_write(v)
+        e_lhu(dst[i], R_RDP, t0)
+        regmap["acc%d" % i] = NAME[dst[i]]
+    p, halt = end()
+    return p, halt, regmap
+
+
+def build_csr3():
+    return build_csr(3, 0xffff, [0x0005, 0x0008, 0x0015])
+
+
+def build_csr2():
+    return build_csr(2, 0xffff, [0x00a5])
+
+
+def build_csr1():
+    return build_csr(1, 0xffff, [0x1235, 0x1236, 0x8000])
+
+
+SESSION_ORDER = [("csr0", build_csr0), ("csr3", build_csr3),
+                 ("csr2", build_csr2), ("csr1", build_csr1)]
+
+
+class Emu(object):
+    def __init__(self, argv, boot_wait=5.0):
+        self.buf = bytearray()
+        self.pid, self.fd = pty.fork()
+        if self.pid == 0:
+            try:
+                os.execvp(argv[0], argv)
+            finally:
+                os._exit(127)
+        self.drain(boot_wait)
+
+    def drain(self, seconds):
+        end_t = time.time() + seconds
+        while time.time() < end_t:
+            r, _, _ = select.select([self.fd], [], [], 0.05)
+            if self.fd in r:
+                try:
+                    d = os.read(self.fd, 65536)
+                except OSError:
+                    return
+                if not d:
+                    return
+                self.buf.extend(d)
+
+    def send(self, cmd, wait=0.4):
+        start = len(self.buf)
+        data = (cmd + "\n").encode()
+        view = memoryview(data)
+        while len(view):
+            try:
+                n = os.write(self.fd, view)
+            except OSError:
+                break
+            view = view[n:]
+            if len(view):
+                self.drain(0.05)
+        self.drain(wait)
+        return bytes(self.buf[start:]).decode("latin1", "replace")
+
+    def close(self, log):
+        try:
+            os.write(self.fd, b"quit\n")
+            self.drain(0.4)
+        except OSError:
+            pass
+        for fn in (lambda: os.close(self.fd),
+                   lambda: os.kill(self.pid, 9),
+                   lambda: os.waitpid(self.pid, 0)):
+            try:
+                fn()
+            except OSError:
+                pass
+        with open(log, "w") as f:
+            f.write(bytes(self.buf).decode("latin1", "replace"))
+
+
+def reg(emu, name):
+    for _ in range(5):
+        out = emu.send("print %s" % name, wait=0.35)
+        m = re.findall(r"0x[0-9a-fA-F]+", out)
+        if m:
+            return int(m[-1], 16)
+        emu.drain(0.25)
+    return None
+
+
+def run_session(binary, prog_list, halt_addr, rawbin, regmap, tag, out):
+    """Run one guest program to its halt breakpoint and read back the capture regs."""
+    with open(rawbin, "wb") as f:
+        for w, _ in prog_list:
+            f.write(bytes([w & 0xff, (w >> 8) & 0xff, (w >> 16) & 0xff, (w >> 24) & 0xff]))
+
+    argv = [binary, "-V"] + MACHINE + ["0x%x:%s" % (BASE, rawbin)]
+    out("    [%s] %s" % (tag, " ".join(argv)))
+    emu = Emu(argv)
+
+    #  CONTROL 0 -- every hand-encoded word checked against the emulator's own disassembler.
+    dwait = max(3.0, len(prog_list) * 0.03)
+    dis = emu.send("unassemble 0x%x 0x%x" % (BASE, BASE + len(prog_list) * 4), wait=dwait)
+    seen = {}
+    for line in dis.splitlines():
+        m = re.match(r"^\s*([0-9a-f]{8,16}):\s+([0-9a-f]{8})\s+(?:<-)?\s*(.*)$", line)
+        if m:
+            seen[int(m.group(1), 16) & 0xffffffff] = (m.group(2), m.group(3).strip())
+    w_ok = m_ok = 0
+    bad = []
+    for i, (w, want_mn) in enumerate(prog_list):
+        addr = (BASE + i * 4) & 0xffffffff
+        hit = seen.get(addr)
+        if hit is None:
+            bad.append("      BAD 0x%08x no disassembly line" % addr)
+            continue
+        gotw, gotmn = hit
+        norm = " ".join(gotmn.replace("\t", " ").split())
+        if gotw == "%08x" % w:
+            w_ok += 1
+        else:
+            bad.append("      BAD 0x%08x word %s vs %08x" % (addr, gotw, w))
+        if norm.startswith(" ".join(want_mn.split())):
+            m_ok += 1
+    enc_ok = (w_ok == len(prog_list))
+    out("    encodings: %d/%d words agree with the disassembler (CONTROL); %d/%d mnemonic renderings match "
+        "(informational: `b` and `ori`-vs-`li` render differently)" % (w_ok, len(prog_list), m_ok, len(prog_list)))
+    for l in bad[:8]:
+        out(l)
+
+    emu.send("breakpoint add 0x%x" % halt_addr, wait=0.5)
+    t = time.time()
+    emu.send("continue", wait=1.0)
+    deadline = time.time() + 120
+    hit = False
+    seen_pc = None
+    while time.time() < deadline:
+        emu.drain(0.5)
+        tail = bytes(emu.buf[-4000:]).decode("latin1", "replace")
+        #  the banner is `BREAKPOINT: pc = 0x80100034` (the low 32 bits of the KSEG0 address); the
+        #  control is the ADDRESS, not the word BREAKPOINT -- a stop anywhere else is not a park
+        m = re.search(r"BREAKPOINT:\s*pc\s*=\s*0x([0-9a-fA-F]+)", tail)
+        if m:
+            seen_pc = int(m.group(1), 16) & 0xffffffff
+            hit = (seen_pc == (halt_addr & 0xffffffff))
+            break
+    out("    parked at 0x%016x: %s   (%.2f s)"
+        % (halt_addr, "yes (pc verified)" if hit else
+           ("*** NO: stopped at 0x%08x ***" % seen_pc if seen_pc is not None else "*** NO ***"),
+           time.time() - t))
+
+    got = {}
+    for logical, mips in regmap.items():
+        v = reg(emu, mips)
+        got[logical] = None if v is None else (v & 0xffffffff)
+    emu.close(os.path.join(RAWDIR, "%s.txt" % tag))
+    return got, enc_ok, hit
+
+
+def show(v):
+    return "0x%04x" % v if isinstance(v, int) else ("??" if v is None else str(v))
+
+
+def build_rows(sess):
+    """Return rows as (label, kind, got, want_head, want_fix, mode); mode 'eq' only."""
+    rows = []
+    for name, _ in SESSION_ORDER:
+        g = sess.get(name, {}).get("ram")
+        rows.append(("ram:%s" % name, "control", g, RAM_MAGIC, RAM_MAGIC, "eq"))
+    c0 = sess.get("csr0", {})
+    rows.append(("csr0 reset", "control", c0.get("reset"), 0x0004, 0x0004, "eq"))
+    rows.append(("rap mask", "control", c0.get("rapmask"), 0x0003, 0x0003, "eq"))
+    c3 = sess.get("csr3", {})
+    rows.append(("csr3 all", "symptom", c3.get("all"), 0xffff, 0x0007, "eq"))
+    rows.append(("csr3 bits", "control", c3.get("acc0"), 0x0005, 0x0005, "eq"))
+    rows.append(("csr3 hi", "symptom", c3.get("acc1"), 0x0008, 0x0000, "eq"))
+    rows.append(("csr3 mix", "symptom", c3.get("acc2"), 0x0015, 0x0005, "eq"))
+    c2 = sess.get("csr2", {})
+    rows.append(("csr2 all", "contract", c2.get("all"), 0xffff, 0xffff, "eq"))
+    rows.append(("csr2 lo", "control", c2.get("acc0"), 0x00a5, 0x00a5, "eq"))
+    c1 = sess.get("csr1", {})
+    rows.append(("csr1 all", "contract", c1.get("all"), 0xffff, 0xffff, "eq"))
+    rows.append(("csr1 odd", "contract", c1.get("acc0"), 0x1235, 0x1235, "eq"))
+    rows.append(("csr1 even", "control", c1.get("acc1"), 0x1236, 0x1236, "eq"))
+    rows.append(("csr1 top", "control", c1.get("acc2"), 0x8000, 0x8000, "eq"))
+    #  the last RDP value read a second time must equal the first read (a device that answers
+    #  differently on two consecutive reads is not the stable register this probe assumes)
+    for name, _ in SESSION_ORDER:
+        s = sess.get(name, {})
+        first = s.get("reset") if name == "csr0" else s.get("all")
+        rows.append(("stable:%s" % name, "control", s.get("stable"), first, first, "eq"))
+    return rows
+
+
+def row_ok(mode, got, want, column="HEAD"):
+    if got is None or want is None:
+        return False
+    return got == want
+
+
+def run_leg(leg, binary, column, out):
+    out("-" * 86)
+    out("LEG %s -- %s build, judged against the %s column" % (leg, leg, column))
+    out("-" * 86)
+    sess = {}
+    enc_all = hit_all = True
+    for name, builder in SESSION_ORDER:
+        prog_list, halt_addr, regmap = builder()
+        got, enc_ok, hit = run_session(binary, prog_list, halt_addr,
+                                       os.path.join(RAWDIR, "%s_%s.bin" % (leg, name)),
+                                       regmap, "%s_%s" % (leg, name), out)
+        sess[name] = got
+        enc_all = enc_all and enc_ok
+        hit_all = hit_all and hit
+    out("")
+    out("  %-12s %-10s %-10s %-10s" % ("row", "got", "head", "fix"))
+    npass = nfail = 0
+    ctrl_ok = True
+    for label, kind, got, wh, wf, mode in build_rows(sess):
+        want = wh if column == "HEAD" else wf
+        ok = row_ok(mode, got, want, column)
+        npass += ok
+        nfail += (not ok)
+        #  a red CONTRACT row fails the LEG (the model changed) but not CONTROL, which is reserved for
+        #  the apparatus (controls, encodings, breakpoints) -- grok F2 F14
+        if kind == "control" and not ok:
+            ctrl_ok = False
+        if kind == "symptom":
+            out("  %-12s %-10s head %-8s fix %-8s [%s] %s"
+                % (label, show(got), show(wh), show(wf), column, "ok" if ok else "FAIL"))
+        else:
+            out("  %-12s %-10s want %-10s %s" % (label, show(got), show(want), "ok" if ok else "FAIL"))
+    ntot = npass + nfail
+    leg_ctrl = ctrl_ok and enc_all and hit_all
+    out("")
+    out("  %d/%d passed" % (npass, ntot))
+    out("  CONTROL=%s" % ("PASS" if leg_ctrl else "FAIL"))
+    leg_pass = (nfail == 0 and leg_ctrl)
+    out("  LEG %s VERDICT: %s" % (leg, "PASS" if leg_pass else "FAIL"))
+    out("")
+    return leg_pass, npass, ntot, leg_ctrl
+
+
+def main():
+    global RAWDIR
+    #  Harness hygiene (not a scored row): the comparator fails a mismatch and a missing value.
+    assert row_ok("eq", 1, 0, "FIX") is False and row_ok("eq", None, 0, "FIX") is False
+
+    os.makedirs(OUTDIR, exist_ok=True)
+    RAWDIR = os.path.join(OUTDIR, "raw")
+    os.makedirs(RAWDIR, exist_ok=True)
+
+    lines = []
+
+    def out(s=""):
+        lines.append(s)
+        print(s)
+        sys.stdout.flush()
+
+    out("=" * 86)
+    out("lecsrmask -- RUNG-3 WITNESS + DETECTOR on unmodified `pmax -e 3100` (KN01 LANCE CSR1-3)")
+    out("=" * 86)
+    out("date      %s" % time.strftime("%Y-%m-%d %H:%M:%S"))
+    out("machine   pmax -e 3100 (DECstation 3100, KN01)   LITTLE endian   (machine desc UNMODIFIED)")
+    out("lance     registers physical 0x18100000; RDP KSEG1 0xffffffffb8100000, RAP +4")
+    out("base bin  %s" % BASE_BIN)
+    if GATE:
+        out("mode      GATE -- one leg vs the FIX column")
+    else:
+        out("fix bin   %s" % ("(none -- WITNESS run)" if FIX_ARG == "-" else FIX_ARG))
+    out("")
+
+    if GATE:
+        legs = [("gate", BASE_BIN, "FIX")]
+    else:
+        legs = [("base", BASE_BIN, "HEAD")]
+        if FIX_ARG != "-":
+            legs.append(("fix", FIX_ARG, "FIX"))
+
+    results = []
+    for leg, binary, column in legs:
+        leg_pass, npass, ntot, leg_ctrl = run_leg(leg, binary, column, out)
+        results.append(leg_pass)
+        if GATE:
+            out("LE_CSRMASK_CONTROL=%s" % ("OK" if leg_ctrl else "FAIL"))
+            out("LE_CSRMASK_RESULT=%d/%d" % (npass, ntot))
+        else:
+            out("LE_CSRMASK_CONTROL_%s=%s" % (leg, "OK" if leg_ctrl else "FAIL"))
+            out("LE_CSRMASK_RESULT_%s=%d/%d" % (leg, npass, ntot))
+
+    out("=" * 86)
+    allok = all(results)
+    out("VERDICT   %s" % ("every leg passed its own column" if allok
+                          else "*** a leg failed -- read the FAIL lines above ***"))
+    out("LECSRMASK_PROBE_DONE")
+
+    with open(os.path.join(OUTDIR, "RESULTS.txt"), "w") as f:
+        f.write("\n".join(lines) + "\n")
+
+    sys.exit(0 if allok else 1)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,72 @@
+I will check the diff, the detector evidence, and the landing plan against the tree and the manuals, starting from the ruled design and the files the packet names.The rulings and the current `dev_le.c` are in hand. Next I will check the patched copy, the detector, the manuals, and the measurement files against those claims.VERDICT: SHIP WITH CHANGES -- H1, H2, and the five legs match the ruled CSR3-only design; correct the probe docstring and three landing records before the commit.
+Q1: H1 is form A (CSR3 `& 0x0007`, `default:` stores r=1 and r=2 whole, the comment is this model's reading); H2 matches both manuals' STOP rule and leaves the read path and the odd-address warning unchanged.
+Q2: L0+L1+L2+L3 discharge ladder (i) and floor (a)(b)(c); (b) via the pre-fix binary is sound for this one site; (d) owed is an honest prediction and is not a bar to landing.
+Q3: Close NARROWED once no live hold remains; raise `SCORE_CLAIMS_MANIFEST` 40 to 41; do not call Appendix B's non-preservation cell a C-LANCE fact.
+Q4: `py_code()` excludes `artifacts/`; `csr3 mix` 0x0015 is measured on the pre-fix build; no gate check counts the RAP WARNING.
+
+## Q1 -- the diff
+
+**(a) H1 is the ruled design.** READ. Working-tree `src/devices/dev_le.c` still has the unmasked `default:` (`d->reg[r] = x` under `/* CSR1, CSR2, and CSR3: */`). The scratch copy `final_045716/dev_le.c.fix.txt` matches the packet's two hunks and the verbatim function. `le_register_write` has one caller, `DEVICE_ACCESS(le)`'s RDP write. `r` is `d->reg_select`, and that is set only as `idata & (N_REGISTERS - 1)` with `N_REGISTERS` 4, so the reachable values are 0, 1, 2, and 3. `case 0:` is CSR0, unchanged. `case 3:` stores `x & 0x0007` and breaks. `default:` is exactly 1 and 2, and still assigns `x`.
+
+The `case 3:` comment quotes the manuals' read-as-zero sentence. READ: TM1986 line 1734, on the page whose footer is `1-22`, says CSR3 bits 15:3 are reserved and read as zero; the Am79C90 text at 1222-1223 says the same and adds "Write as zeroes," which this comment does not promote into a store rule (F22). The `default:` comment says this model stores CSR1 and CSR2 whole, that the Am7990 manual leaves the read-back unspecified (1749 "Must be zero"; 1695 bare "Reserved."), that the C-LANCE reads CSR2's reserved bits as zero (1162-1163) and says only "Must be zero" for CSR1 bit 0 (1142), and that the choice is an interpreted reading. It does not say the Am7990 silicon stores them whole.
+
+**(b) H2 is right.** READ. TM1986 1572-1582 and the Am79C90 text 915-924: CSR1-3 are accessible only while STOP is set; a read with STOP clear returns undefined data; a write is ignored. The read comment states that condition and keeps the old Ultrix observation as the in-spec STOP-set read. The write comment states the ignore rule, keeps the Ultrix STOP-set write, and says the model accepts both and that STOP gating is filed. The read comment's "nothing is announced either way" is the warning policy; the return itself is the unchanged `odata = d->reg[d->reg_select]`.
+
+**(c) The diff carries the tags it should.** READ. `#573` is on the `case 3:` comment and on both H2 comments; the `default:` comment points at the `#573` record. `le_chip_init` 179-182 is unchanged in the scratch copy, and it stays reachable because CSR1 is not masked (`init_block_addr` uses `reg[1] & 0xffff`, and `SRAM_SIZE` is 128*1024, so bit 0 survives the SRAM mask). No read-path code changed.
+
+NOT CHECKABLE: that working-tree `dev_le.c` is byte-identical to commit `2956c32d`, and that it matches `0b09e7b6`. The shell was denied, so those hashes were not recomputed. The file I read is the unfixed source the diff starts from.
+
+## Q2 -- the detector and the legs
+
+The frozen probe is `final_045716/le_csrmask_probe.frozen.py.txt` (the identity file names md5 `6259ce546ddb88fbd1c27be5d091348d`; that hash was not recomputed). READ: 20 rows, kinds as ruled. Symptom rows are `csr3 all`, `csr3 hi`, `csr3 mix`. Contract rows are `csr2 all`, `csr1 all`, `csr1 odd`. A red contract row increments the leg failure and does not clear CONTROL. CONTROL fails on a red `kind == "control"` row, a bad encoding, or a breakpoint pc that is not the halt address (the pc compare is in `run_session`). Session order writes 0xffff before the later values in the csr1, csr2, and csr3 sessions. The csr0 session does not write 0xffff; the OR-accumulation claim does not depend on it.
+
+**(a) The five legs discharge (i) and (a)(b)(c).** READ from the result files, same script, unmodified `pmax -e 3100`:
+
+| leg | log | score |
+|---|---|---|
+| HEAD column | `RESULTS_head_column.txt` 04:57:16, base binary | `CONTROL_base=OK` `RESULT_base=20/20` |
+| L0 (a) | `RESULTS_L0_prefix_gate.txt` 04:58:04, `/tmp/gxt17/base/gxemul` | `CONTROL=OK` `RESULT=17/20`, only `csr3 all` / `hi` / `mix` red |
+| L1 | `RESULTS_L1_fix_gate.txt` 05:06:51, `/tmp/gxt18/fix/gxemul` | `CONTROL=OK` `RESULT=20/20`, `csr3 all` got 0x0007, `hi` 0x0000, `mix` 0x0005 |
+| L2 | `RESULTS_L2_twoleg.txt` 05:07:39 | base 20/20 and fix 20/20, both CONTROL OK |
+| L3 (c) | `RESULTS_L3_nullmedium.txt` 04:58:51, `/bin/false` | `CONTROL=FAIL` `RESULT=0/20`, captures `??`, park deadline 120s |
+
+DERIVED: exit status follows the probe (`sys.exit(0)` only when every leg passes). L0 and L3 are failures; L1 and L2 are passes. The `(c): measured at ...RESULTS_L3_nullmedium.txt` sentence is in `RUN_IDENTITY.txt`. Clause (b) is sound for this one site. H2 is comments. The only behavioral delta is the CSR3 store. Reinstating `d->reg[r] = x` there is the pre-fix binary, which L0 already ran (F6, C13). There is no second revert object file; the record already says the pre-fix build is that reinstatement.
+
+**(b) The contract header matches the rows, with two wording fixes.** READ. CATCHES is limited to a low-16 mask constant (`csr3 all`), and OUTSIDE correctly says a mask on the RDP read is invisible: `d->reg[3]` has no reader except `odata = d->reg[d->reg_select]` (the other `d->reg` uses are CSR0, plus `reg[1]` and `reg[2] & 0xff` in `le_chip_init`). The anchor sentence matches the decode: RDP is `case 0:`, RAP is `case 4:`. The session-order sentence and the contract-versus-CONTROL split match `run_leg`.
+
+Two sentences should change before `regress/le_csrmask_probe.py` is copied from this text. The SITES paragraph still describes HEAD as the pre-fix `default:` comment and `d->reg[r] = x` for CSR3, and the opening says the model stores all sixteen CSR3 bits. H1 deletes that comment and that store, so both sentences will be false in the commit that adds them. "by its variant table" treats the clause-(d) table as evidence; `killtable_20261025/README.txt` and `PRETABLE.out` say that table was not run. Say the catches are by construction and the table is owed. Also, "CONTROL is reserved for the apparatus" is wider than the code: `csr3 bits`, `csr2 lo`, `csr1 even`, `csr1 top`, and the four `stable:` rows are `kind == "control"` and do fail CONTROL. The three contract rows do not, which is the F14 rule, and that part is implemented.
+
+**(c) Recording (d) as owed is honest, and the carrier does not forbid the landing.** READ. Pass-1 packet R1: a detector is vacuous unless it fails (a), (b), and (c); that breach is L2. R3 is the separate null-repair / DEPENDS-ON clause. This probe fails (a), (b), and (c) on the final script. The README says the seat classifications are predictions until the table runs, and it names the classifier stop and the #567 precedent. I did not re-read the #567 artifacts. I do not read the carrier as forbidding a landing with (d) owed. The docstring must not say the table already established the catches.
+
+## Q3 -- landing and records
+
+**(a) The `probe:` sentence is the right shape, and the order evidence is sufficient.** READ. The 17-row witness (`witness_20261025/RUN_IDENTITY.txt`, 03:49:18, md5 `df5ab574`, 17/17, "before any product edit") is an earlier script than the final instrument (md5 named `6259ce54`). Floor at 04:30:55 is the 18-row script, 14/18 and 0/18. The same-script symptom-then-green pair is L0 (04:58) and L1 (05:06), with L2 at 05:07. All of those name base binary md5 `6c27af7b`. That is the F18 split: the witness proves order; only the final instrument's base/fix legs earn the green half of `probe:`. NOT CHECKABLE: `/tmp` clone timestamps and "binary newer than source."
+
+**(b) Close NARROWED. Do not hold this row open for `lecsr12readback`.** DERIVED. The CSR3 half is the fix; the CSR1/CSR2 read-back is a different filed row. Section W (`check_row_states.py`) flags an `open` row whose witness names a committed probe, unless a `state_note` says why. Section H forbids `closed` while a live `[HELD AWAITING SEAT: ...]` remains (`CLOSED-WHILE-HELD`), and a short post-cutoff stage with no live hold is a hard failure. A held stage also needs `hold_question` (`HOLDQ_CUTOFF` 2026-08-26). Sequence it: `in work` is invisible to W and can carry a live hold; close NARROWED only after that hold is discharged. Argon's owed answers and a still-live Fable hold are that constraint. They are not a reason to keep the CSR3 question open.
+
+**(c) What the CHANGELOG must and must not say.** READ unless marked.
+
+Must say: the CSR3 store is masked to `BSWP|ACON|BCON` (`0x0007`); both manuals read bits 15:3 as zero. CSR1 and CSR2 stay stored whole as this model's interpreted reading. Read-back-only is true of the CSR3 store and false of a CSR1 mask (`le_chip_init` uses all 16 bits of `reg[1]`, and the SRAM mask keeps bit 0). The STOP comments were corrected; the model still accepts either state (`lestopgate`). Quote both Am7990 preservation sentences: TM1986 1513 (reload CSR1 and CSR2 when STOP is set) and 2853-2857 (normally not affected; reload is recommended). The #572 census sentence must match the working tree I read: `EXPECT_PTY_PROBES=78`, and `GRANDFATHERED_PROMPTLESS` already contains `wdc_lba_probe.py` and `lca_isaphys_probe.py`. The comment above that list still narrates the 76 to 77 bump and says `lca_isaphys_probe.py` is untracked. NOT CHECKABLE: the committed-HEAD name-set defect in C4, because `git` was denied.
+
+Must not say: that stored-whole is what the Am7990 does; that the C-LANCE reads CSR1 bit 0 as zero; that "read-back only" covers a CSR1 mask; that one STOP-preservation reading was implemented; that Appendix B's non-preservation cell is the C-LANCE. READ: Table B-1's left column is the Am79C90 and its item 12 says CSR1 and CSR2 are preserved; the right column is the Am7990 and says they are not. The C-LANCE register text agrees with the left column (1125-1126, 1148-1149). Copying the rulings' shorthand "C-LANCE Appendix B non-preservation" would reverse that cell. Also must not say the variant table was measured, or that CSR2 bits 15:8 feed `init_block_addr` (`reg[2]` is masked `& 0xff` at the only consumer).
+
+**(d) What section 4 misses.** READ.
+
+- **U.** `SCORE_CLAIMS_MANIFEST` is 40, last raised for `wdc_lba`. The pin regex is `check "<stem> rows run"` with an unquoted integer (`check_score_claims.py`). The planned `check "le_csrmask rows run" ... 20` makes the count 41 and fails the commit until the manifest is raised in that same commit. The probe docstring has no `N/M` fraction, so it will not stale-fail. A gate comment that names the stem and cites `14/18` or `17/17` will fail unless that line contains `18-row` or `17-row`.
+- **H.** Covered in (b). A short review stage does not pass by being described as owed in prose.
+- **W.** Covered in (b). If the row closes, `OUTSTANDING_BUGS.md` must not keep a `lecsrmask -- open` heading; W checks that direction too.
+- **R.** The plan's MANIFEST line plus the `gate_arm.sh` block is what R runs. Editing `check_probe_wiring.py` fires its selftest, whose mutant count is pinned at 22. `gatedevicesplit` is already OWED: the #497 criterion fired at #498. The new block's reason line has to cite that, which the plan already says. It does not re-file the row.
+- **P.** Each new open ledger filing (`lecsr12readback`, `lestopgate`, `lecsr3stopclear`, `lediagfmt`, `lecsr3inert`, the carrier source-list item) has to be findable in `OUTSTANDING_BUGS.md`. The plan names both files. That is enough only if every open row is actually written to both.
+- **L.** The same commit has to leave the ledger naming the src commit. The plan includes the ledger update.
+- **F.** At precommit time F looks at the previous `src/**` commit, not the commit being made. This round's `pass2_ledger.tsv` line is what the next src commit needs, unless this commit's subject matches `pass 2`. NOT CHECKABLE: whether the previous src commit already has a receipt.
+- **O.** Not implicated. Nothing in this landing stamps one note across seats.
+
+Section A (the `est/` twin) and section K (`probe:` shape, not truth) are in the plan and match those checks.
+
+## Q4 -- found while checking
+
+**(1)** READ. `py_code()`, `probe_code()`, and `pty_driving()` all use `! -path "$HERE/artifacts/*"`. The hygiene header records that this exclusion is what keeps a frozen probe under `artifacts/` out of the census. `le_csrmask_probe.frozen.py` under `witness_20261025/` does not move the pty pins. It is still a `*.py` for `check_probe_wiring.py`, so the planned CLASS_WITNESS MANIFEST line has to name that path. Copies left as `.py.txt` are outside both.
+
+**(2)** READ. `csr3 mix` on the pre-fix GATE leg got `0x0015` against head `0x0015` and fix `0x0005` (`RESULTS_L0_prefix_gate.txt`). The final fix leg got `0x0005`. It is a measurement, not a prediction. `0x0015` is bits 0, 2, and 4; `& 0x0007` is `0x0005`.
+
+**(3)** READ. The raw csr0 transcripts contain `[ le register select: WARNING! register 19 (max is 3) ]`. 19 is `%i` of the RAP write `0x13` (`dev_le.c` 1017-1020, the `lediagfmt` filing). That line is not in `RESULTS_*.txt`. No `regress/gate_*.sh` check counts WARNING lines. The scored `rap mask` row is `0x0003`, ok, and the warning does not affect CONTROL.

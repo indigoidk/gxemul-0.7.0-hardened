@@ -3228,6 +3228,18 @@ MANIFEST = {
     #  is CLASS_WITNESS: its as-run base leg asserts the PRE-FIX symptom (HEAD column) and
     #  would go RED on a repaired base, so it is ungated by design.  The detector_20261024/
     #  frozen instrument and the mutant applicator are CLASS_TOOL (kill-table evidence).
+    "le_csrmask_probe.py":
+        (CLASS_DETECTOR, "#573 lecsrmask: the LANCE model's CSR3 store masked to BSWP|ACON|BCON (bits 15:3 "
+                         "read as zero on the Am7990 and the Am79C90); CSR1/CSR2 stay stored whole and three "
+                         "CONTRACT rows pin that.  20 rows on unmodified pmax -e 3100 (no image); wired in "
+                         "gate_arm.sh in the same commit, pinned at 20; floor legs (a) (c) and the fix legs under "
+                         "artifacts/lecsrmask/pass1_20261025/final_*/, the clause-(d) table OWED "
+                         "(artifacts/lecsrmask/killtable_20261025/README.txt)."),
+    "artifacts/lecsrmask/witness_20261025/le_csrmask_probe.frozen.py":
+        (CLASS_WITNESS, "#573 lecsrmask: the as-run rung-3 pre-fix WITNESS (md5 df5ab574, 17 rows, the three-mask "
+                        "wants of the research row) -- base leg 17/17 vs the HEAD column before any edit "
+                        "(witness_20261025/RESULTS_base.txt), its HEAD column showing the stored bits; the shipped "
+                        "20-row detector supersedes its FIX wants for CSR1/CSR2 (the round narrowed to CSR3)."),
     "wdc_lba_probe.py":
         (CLASS_DETECTOR, "#572 wdclbaaddr: wdc LBA-mode address decode -- SDH decodes the LBA "
                          "flag from bit 6 (was bit 5) and the 64-bit LBA28 arm is enabled at both "

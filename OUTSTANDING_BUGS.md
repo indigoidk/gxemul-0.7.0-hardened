@@ -25877,3 +25877,49 @@ phase, while `wdc_new_command_reset()` clears `atapi_phase` at `:917` (Astra, pa
 `#572`'s held Fable question was sent, at the owner's direction, to a one-time Claude Code cloud routine (packet-fed; `regress/artifacts/wdclbaaddr/pass2_20261024/fable5_cloud_t4.txt`): `FABLE VERDICT: RATIFY WITH CHANGES`, `WRONG: none`, seven record/contract-only changes, applied as a docstring-only revision of `regress/wdc_lba_probe.py` (6314a0fe, re-measured 33/33) plus `detector_20261024/SCORES_README.txt`.  The row's `commits` field names 0901b388.  Its two panel stages stay HELD for kimi, minimax and the Opus review seat -- deliberately not fired under the owner's 2026-10-23/24 roster -- because the stage-panel checker has no token for a roster-excused seat; the owner ruled 2026-10-25 to adopt one.
 
 * **`rosterexcused` (LOW, open; harness)** -- new.  tools/pipeline/stage_tokens.py + check_stage_panels.py have no stage token for a seat the OWNER'S ROSTER excluded, so a stage whose remaining seats were deliberately not fired passes section H only as HELD or at 9/9; once a hold is discharged (the Fable cloud answer on `#572`) the stage reads INCOMPLETE and refuses the commit.  Proposed `[SEAT EXCLUDED BY OWNER ROSTER: <seats> -- <date>]`, is_answer no, counted toward completeness, with negative controls both ways (design: scratchpad rx/DESIGN.md until its round opens).  Owner ruling 2026-10-25: adopt it.
+
+### 2026-10-25 -- `#573` lecsrmask: the LANCE model's CSR3 store masked to its three implemented bits; the round NARROWED
+
+* **`lecsrmask` (MED, WRONG-RESULT) -- NARROWED by `#573`; the ledger row stays `held` (the Fable question and the owner's roster
+  question) and closes NARROWED when they are discharged.**  The research row proposed rpajarola `e108b54`'s three masks.
+  Only the CSR3 mask (`& 0x0007`) is established for the Am7990 the model names: its manual (TM1986 1734) says bits 15:3 "read as
+  0" for CSR3 and for RAP (1539) and NOT for CSR1 bit 0 ("Must be zero", 1749) or CSR2 15:8 (bare "Reserved.", 1695); MAME keeps
+  CSR1/CSR2 writable on the Am7990 for a MIPS RS2030 diagnostic's sake; the C-LANCE text reads CSR2's reserved bits as zero and says
+  only "Must be zero" for CSR1 bit 0.  So CSR1 and CSR2 retain the model's existing behaviour (stored whole), pinned by three
+  contract rows, and their read-back question is the new row below.  Witness: rung 3 on the unmodified `pmax -e 3100`
+  (`regress/artifacts/lecsrmask/witness_20261025/`); detector `regress/le_csrmask_probe.py` (20 rows, `gate_arm.sh`); floor legs
+  measured in `pass1_20261025/final_055141/` -- (a) the pre-fix build L0 17/20, (b) the BUILT reinstatement L4 17/20, (c) the null
+  medium L3 0/20 -- and the fix legs L1 20/20, L2 20/20 + 20/20; the clause-(d) variant table OWED (below).
+* **`lecsr12readback` (LOW, documented) -- new.**  CSR1 bit 0 and CSR2 bits 15:8 read-back: unspecified by the Am7990 manual;
+  C-LANCE: CSR2 read-as-zero (1161-1163), CSR1 bit 0 "Must be zero" only (1138-1142); MAME `am79c90.cpp` stores CSR1 whole on
+  both chips and CSR2 whole on the Am7990 ("MIPS RS2030 diagnostic requires these bits to be writable"); rpajarola `e108b54`
+  masks all three for a 3MIN port this fork lacks ("which 3/ni/regs checks"), naming no chip.  A per-chip model flag (MAME's
+  `type()`) is the port if a C-LANCE instance is ever added; the chip of the KN230, PMAD-AA and luna88k instances is unverified
+  (the KN01 is the Am7990).  Not a defect of the Am7990 model as it stands.
+* **`lestopgate` (LOW) -- new.**  Both manuals: CSR1-3 "Accessible only when the STOP bit of CSR0 is a ONE" (TM1986 1733; C-LANCE
+  1123-1124, 1146-1147, 1197-1198); the model accepts reads and writes in either state (its comments, corrected by `#573`, keep the old
+  comment's report that Ultrix accesses them with STOP set -- the in-spec case; with STOP clear both manuals say a read returns
+  undefined data and a write is ignored: TM1986 1572-1582, C-LANCE 915-924).  Gating is a behaviour change owing its own witness.
+* **`lecsr3stopclear` (LOW) -- new.**  "CSR3 is cleared by RESET or by setting the STOP bit in CSR0" (C-LANCE 1199-1200; TM1986
+  2854); the model clears CSR3 only at init.  And no preservation guarantee for CSR1/CSR2 across STOP: TM1986 1513 requires a reload,
+  2853-2857 says "normally not affected ... recommended to reload", the Am79C90 datasheet's Table B-1 (3411, right column; 3686-3687) characterises the Am7990
+  as NOT preserving them -- the sources differ; all three readings recorded, no replacement value asserted.  The model leaves
+  CSR1-3 untouched by a STOP write (CSR3 never cleared, CSR1/CSR2 trivially kept); `#573` adds no STOP behaviour.  Research row 9 (CSR0 STOP/STRT) does not carry this.
+* **`lediagfmt` (LOW, records/robustness) -- new.**  `dev_le.c` passes `uint64_t` values to narrower conversions: `idata` to `%i`
+  (1019-1020), `relative_addr`/`odata` to `%x` (1039-1040), the SRAM offset to `%05x` (911, 921) -- a variadic-format mismatch
+  (undefined under C99 7.19.6.1p9; prints the low bits on this ABI).  Not this round's edit.
+* **`lecsr3inert` (LOW, documented) -- new.**  The three implemented CSR3 bits (BSWP, ACON, BCON -- DMA byte lanes and bus
+  signalling) are stored and never consulted by the model; `#573` pins their read-back only.
+* **`srclistsubdir` (LOW, carrier) -- new.**  The carrier's primary-source inventory is derived by `ls _scratchpad/*.pdf`, which does
+  not descend into `_scratchpad/lance/` (two Am7990/Am79C90 manuals and four reference drivers, present since 2026-07-25); this
+  round's first draft said "no LANCE datasheet is on disk" on the strength of it.  Derive with `find _scratchpad -name '*.pdf'`.
+* **OWED by `#573`**: the clause-(d) variant table (`killtable_20261025/README.txt`, `PRETABLE.out` written) -- a floor clause
+  recorded UNMEASURED; the landing with that debt filed is the owner's decision for this round (the row's hold question, item 4;
+  the adjudication pass found no earlier ruling that licenses it); the Argon seat's F2,
+  pass-2 and F2b answers (agy quota-walled ~5 days from 04:15; the web meter read 0 of 2400 from 04:45 until its reset at 07:30:45
+  CDT -- re-fired after the reset, one sender, and filed in the records commit);
+  the Fable 5.1 answer to the narrowed question (`pass1_20261025/FABLE_HOLD_QUESTION.md`; the cloud route was not retried after
+  the main loop's classifier stop).
+* **`#572` follow-up `2956c32d`, addendum**: its "got 78 vs pinned 77" counts the peer's untracked `regress/lca_isaphys_probe.py`
+  (the census counts the tree the battery runs in); the committed-HEAD defect was the name set (`wdc_lba_probe.py` promptless
+  and not grandfathered), not the tracked count.

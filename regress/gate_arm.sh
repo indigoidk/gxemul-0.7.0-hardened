@@ -1622,6 +1622,66 @@ else
     check "sgi_re unmapped rows red"   "$(count "$UNMLOG" " FAIL$")" "0"
 fi
 
+#  ---- lecsrmask: the LANCE model's CSR3 store mask (#573).
+#
+#  WHAT THIS PROTECTS.  `le_register_write()` stored every bit a guest wrote to CSR3; the Am7990
+#  implements BSWP|ACON|BCON there and reads bits 15:3 as zero (Am7990 Technical Manual 1-22;
+#  the Am79C90 datasheet says the same), so a read-back returned bits the chip never holds.  The
+#  fix masks the CSR3 store with 0x0007.  CSR1 and CSR2 stay stored whole ON PURPOSE (their
+#  reserved-bit read-back is unspecified by the Am7990 manual and another emulator keeps them
+#  writable for a board diagnostic's sake), and three CONTRACT rows pin that so a later per-chip
+#  change must re-pin them with the oracle-correction order.
+#
+#  The probe is BOTH the rung-3 WITNESS (artifacts/lecsrmask/witness_20261025/, 17 rows, the
+#  committed build before any edit, with the HEAD column showing the stored bits) and the DETECTOR
+#  (20 rows; its own pre-fix legs under artifacts/lecsrmask/floor_20261025/ and the 20-row
+#  re-measure under pass1_20261025/).  It drives the UNMODIFIED `pmax -e 3100` with guest sh/lhu
+#  through the real address decode -- no rig image, no disk -- which is why it lives here: this
+#  gate has become the tree's general DEVICE-probe gate by accretion (see the #497 block above:
+#  "it has become the tree's general DEVICE-probe gate"), it already runs image-free `"$PMAX" gate`
+#  probes for a foreign CPU family, and `gate_mips.sh` is a rig-boot gate with no probe
+#  infrastructure; a new gate script would move GATE_MANIFEST, a bigger claim than one probe.
+#  The #497 block's own criterion -- "the NEXT device probe wired into this gate converts
+#  `gatedevicesplit` from filed to OWED" -- fired at #498 and that row is OWED; this is one
+#  more device probe on this gate, recorded here rather than compounded silently (the split
+#  stays a harness round owing its own controls).
+#
+#  The `rap mask` signature row writes 0x13 to RAP on purpose and the device WARNS about it on
+#  every run; THIS BLOCK's checks score the sentinel, the control line and the named rows only, so
+#  that WARNING line is never counted as red here (other gates do count their own diagnostics).
+LELOG=$LOGDIR/le_csrmask.log
+python3 le_csrmask_probe.py "$PMAX" GATE > "$LELOG" 2>&1 || true
+
+#  SENTINEL FIRST.  A preserved log is verified by its completion sentinel, never by its
+#  existence: a killed run loses every row and looks exactly like a run that produced none.
+if ! grep -q "LECSRMASK_PROBE_DONE" "$LELOG"; then
+    check "le_csrmask probe completed" "no" "yes"
+else
+    check "le_csrmask probe completed" "yes" "yes"
+    check "le_csrmask controls" "$(count "$LELOG" '^LE_CSRMASK_CONTROL=OK$')" "1"
+    #  `count' is grep -ac, a BASIC regex: `  *' is the one-or-more-spaces form (a `+' there is a
+    #  literal plus and matched NOTHING in the dry run against the measured fix leg).
+    for v in "ram:csr0" "ram:csr3" "ram:csr2" "ram:csr1" "csr0 reset" "rap mask" "csr3 all" "csr3 bits" "csr3 hi" "csr3 mix" "csr2 all" "csr2 lo" "csr1 all" "csr1 odd" "csr1 even" "csr1 top" "stable:csr0" "stable:csr3" "stable:csr2" "stable:csr1"; do
+        check "le_csrmask row: $v" "$(count "$LELOG" "^  $v  *0x.* ok$")" "1"
+    done
+
+    #  DENOMINATORS, pinned to LITERALS: `rows run' is the probe's own count (RESULT's denominator,
+    #  the pin check_score_claims.py reads; SCORE_CLAIMS_MANIFEST 40 -> 41), `rows green' its
+    #  numerator; `rows emitted' is the row lines the log carries, summed ARITHMETICALLY from the
+    #  ok and FAIL row lines so a LOST row and a FAILING row read differently.  A row line carries a
+    #  `want ' or `head ' token (a dead run prints `want ??'); the probe's `  LEG gate VERDICT: FAIL'
+    #  line carries neither, which keeps it out of these two counts (dry-run on the banked legs: the
+    #  fix leg twenty ok and none red, the pre-fix leg seventeen and three, the null medium none and
+    #  twenty -- written in words on purpose: a fraction here would read as a score claim).
+    leres=$(grep -ao '^LE_CSRMASK_RESULT=[0-9]*/[0-9]*' "$LELOG" | tail -1); leres=${leres#*=}
+    leok=$(count "$LELOG" '^  .* \(want\|head\) .* ok$')
+    lebad=$(count "$LELOG" '^  .* \(want\|head\) .* FAIL$')
+    check "le_csrmask rows run"     "${leres#*/}" 20
+    check "le_csrmask rows green"   "${leres%/*}" 20
+    check "le_csrmask rows emitted" "$((leok + lebad))" "20"
+    check "le_csrmask rows red"     "$lebad" "0"
+fi
+
 #  ---- sgirandompixel: horrible_getputpixel()'s unimplemented-mode arm.
 #
 #  WHAT THIS PROTECTS.  That arm used to do `*color = random()' with its exit(1) commented out, so a failed
