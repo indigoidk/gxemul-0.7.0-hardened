@@ -25914,11 +25914,15 @@ phase, while `wdc_new_command_reset()` clears `atapi_phase` at `:917` (Astra, pa
   not descend into `_scratchpad/lance/` (two Am7990/Am79C90 manuals and four reference drivers, present since 2026-07-25); this
   round's first draft said "no LANCE datasheet is on disk" on the strength of it.  Derive with `find _scratchpad -name '*.pdf'`.
 * **Landed** as `9ac43a17` (2026-10-25); the pass-2 receipt keyed to it in `regress/pass2_ledger.tsv`; the row stays `held` (see its hold question).
+* **Argon's late answers filed** (2026-10-25, second records commit): pass-2 Q12/Q34 SHIP (nothing BROKEN), F2b A RATIFY WITH CHANGES
+  (four BROKEN: two moot, two real -- the tense of the re-fire sentences, corrected in place; the probe USAGE/gate outdir mismatch,
+  filed `lecsrgateoutdir`), F2b B RATIFY.  Pass-1 F2 A/B still owed (meter).
 * **OWED by `#573`**: the clause-(d) variant table (`killtable_20261025/README.txt`, `PRETABLE.out` written) -- a floor clause
   recorded UNMEASURED; the landing with that debt filed is the owner's decision for this round (the row's hold question, item 4;
   the adjudication pass found no earlier ruling that licenses it); the Argon seat's F2,
   pass-2 and F2b answers (agy quota-walled ~5 days from 04:15; the web meter read 0 of 2400 from 04:45 until its reset at 07:30:45
-  CDT -- re-fired after the reset, one sender, and filed in the records commit);
+  CDT -- re-fired after the reset, one sender, and filed in the records commit -- *corrected in place 2026-10-25: the pass-2 and
+  F2b answers were re-fired 07:35-07:44 and are filed in the SECOND records commit; the pass-1 F2 pair is still owed*);
   the Fable 5.1 answer to the narrowed question (`pass1_20261025/FABLE_HOLD_QUESTION.md`; the cloud route was not retried after
   the main loop's classifier stop).
 * **`#572` follow-up `2956c32d`, addendum**: its "got 78 vs pinned 77" counts the peer's untracked `regress/lca_isaphys_probe.py`

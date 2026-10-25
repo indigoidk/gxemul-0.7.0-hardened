@@ -141,7 +141,9 @@ leg (DeepSeek's pass-2 objection to reading the pre-fix build as (b) was right a
 landing state.  The probe's docstring and one code comment were corrected on pass 2 and F2b (eight record changes; the code
 AST-identical to the pass-2 revision 6259ce54), the fix clone rebuilt from the comment-corrected patch, and all six legs
 re-measured on one frozen copy before landing.  Argon: a seat failure on pass 2 and F2b (meter 0 of 2400 until 07:30:45 CDT),
-re-fired after the reset; Fable 5.1 HELD with its question; kimi, minimax and the Opus review seat not fired by roster.
+re-fired after the reset -- *corrected in place 2026-10-25: that clause was written at 06:25 in the past tense while the
+re-fire had not yet run; it ran 07:35-07:44 and the four answers are filed in the second records commit, with the
+pass-1 F2 pair still owed (the sender slept at 8.3% of the meter until 12:32:15 CDT)*; Fable 5.1 HELD with its question; kimi, minimax and the Opus review seat not fired by roster.
 
 **Records and filings.**  `OUTSTANDING_BUGS.md` 2026-10-25: `lecsrmask` NARROWED (the CSR3 half fixed; the CSR1/CSR2 half
 withdrawn and filed; the ledger row lands `held` for the Fable question and the owner's roster question and closes NARROWED when
@@ -152,7 +154,8 @@ Am7990 as NOT preserving them (3411 right column; 3686-3687): the sources differ
 leaves CSR1-3 untouched by a STOP write -- CSR3 never cleared, CSR1/CSR2 trivially kept -- and `#573` adds no STOP behaviour), `lediagfmt` (`uint64_t` values passed
 to `%i` at 1019-1020, `%x` at 1039-1040, `%05x` at 911/921), `lecsr3inert`, and the carrier's source-list item; OWED: the variant
 table; Argon's F2, pass-2 and F2b answers (the web meter read 0 of 2400 from the pass-1 firing until its 07:30:45 CDT reset,
-after which they are re-fired and filed in the records commit).  **A follow-up to `#572`'s follow-up `2956c32d`**: its census population -- the 78 counts the
+after which they are re-fired and filed in the records commit -- *corrected in place 2026-10-25: the FIRST records commit,
+94b247db, predates the re-fire; the pass-2 and F2b answers are filed in the SECOND; the pass-1 F2 pair is still owed*).  **A follow-up to `#572`'s follow-up `2956c32d`**: its census population -- the 78 counts the
 peer's untracked `regress/lca_isaphys_probe.py`, which the gate counts because the battery runs in this tree; the committed-HEAD
 defect was the NAME SET (`wdc_lba_probe.py` promptless and not grandfathered), not the tracked count (77 = the old pin).
 

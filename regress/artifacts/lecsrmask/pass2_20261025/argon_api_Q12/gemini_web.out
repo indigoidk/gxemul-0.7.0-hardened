@@ -1,0 +1,55 @@
+```
+VERDICT: SHIP -- H1/H2 diff and L0-L3 measurements hold on all inlined evidence; checks requiring non-inlined files are marked UNSETTLED.
+Q1: H1/H2 implement the ruled Form A CSR3 mask and STOP comment fixes cleanly (READ/DERIVED); non-inlined dev_le.c context is UNSETTLED.   Q2: L0-L3 discharge clause (i) and vacuity floor (a)(b)(c) (READ/DERIVED); non-inlined probe docstring and killtable README are UNSETTLED.   Q3: N/A (separate firing)   Q4: N/A (separate firing)
+```
+
+### Q1 — The Diff (`H1`, `H2`)
+
+* **Attack 1 — `H1` Form A structure and CSR3 mask (`HOLDS`, READ / DERIVED):**
+  * **Claim tested:** `H1` (`DIFF:7-34`, `AFTER:881-905`, `LE_REGISTER_WRITE:44-68`) implements Form A by adding an explicit `case 3:` arm that masks writes with `0x0007` and leaving `default:` to store `d->reg[r] = x;` whole, with no other code changes in `le_register_write()`.
+  * **Defense check:** In `LE_REGISTER_WRITE:4-44` (`AFTER:840-882`), `case 0:` (CSR0 bit handling for `LE_BABL`, `LE_CERR`, `LE_MISS`, `LE_MERR`, `LE_RINT`, `LE_TINT`, `LE_IDON`, `LE_TDMD`, `LE_STRT`, `LE_INIT`, `LE_STOP`, `LE_INEA`) is unchanged. `AFTER:884-891` (`LE_REGISTER_WRITE:46-53`) adds `case 3: d->reg[r] = x & 0x0007; break;`. `AFTER:893-904` (`LE_REGISTER_WRITE:55-67`) retains `default: d->reg[r] = x;`. Every state previously saved in `d->reg[0]`, `d->reg[1]`, `d->reg[2]`, and bits `2:0` of `d->reg[3]` (`BSWP|ACON|BCON`) is preserved (`DERIVED` from `LE_REGISTER_WRITE:1-69`, verified by rows `N5` `csr0 reset`, `N8` `csr3 bits`, `N11`-`N16` `csr2`/`csr1` in `L0_TABLE:7-18`).
+
+* **Attack 2 — Enumeration of reachable `r` in `le_register_write()` (`UNSETTLED`, DERIVED / NOT CHECKABLE):**
+  * **Claim tested:** Section 2 (`PACKET:75-77`) claims `r` reaches `switch (r)` (`LE_REGISTER_WRITE:3`) only as `d->reg_select = idata & (N_REGISTERS - 1)` from the RAP arm at `DEVICE_ACCESS(le)` line 1015 with `N_REGISTERS` equal to 4, so `default:` serves only `r = 1` and `r = 2`.
+  * **Refutation attempt:** In `DIFF:62` (`AFTER:1019`), `le_register_write(d, d->reg_select, idata);` is the call site in the RDP write branch, and `le_register_write` has non-static linkage (`LE_REGISTER_WRITE:1`). Within `switch (r)`, `case 0:` handles `0` and `case 3:` handles `3`; if `r` is restricted to `{0, 1, 2, 3}`, `default:` serves exclusively `1` and `2` (`DERIVED`). Row `N6` (`rap mask 0x0003 want 0x0003 ok`, `L0_TABLE:8`) confirms runtime RAP masking to `{0, 1, 2, 3}`. However, because lines 1-836, 906-1000, and 1021-end of `dev_le.c` (including `N_REGISTERS`, line 1015, struct initialization of `d->reg_select`, and proof that no other caller passes an unmasked `r`) are not inlined in this message, full source verification is `NOT CHECKABLE` here.
+  * **File that settles it:** `GXEMUL-SEC/src/devices/dev_le.c` (and `GXEMUL-SEC/regress/artifacts/lecsrmask/pass1_20261025/final_045716/dev_le.c.fix.txt`).
+
+* **Attack 3 — `H1` comment honesty and `#573` tagging (`HOLDS`, READ):**
+  * **Claim tested:** Does `H1`'s `default:` comment assert stored-whole as Am7990 silicon behavior rather than retained model behavior and an interpreted reading, and are `#573` tags present?
+  * **Defense check:** `AFTER:894-902` (`LE_REGISTER_WRITE:56-65`) states: `"CSR1 and CSR2 are stored whole. The Am7990 manual leaves their read-back unspecified (CSR1 bit 0 "Must be zero", CSR2 bits 15:8 "Reserved" -- constraints on the host's writes); the later Am79C90 (C-LANCE) reads CSR2's reserved bits as zero and says no more about CSR1 bit 0; another emulator keeps both writable on the Am7990 for a board diagnostic's sake. An interpreted reading, recorded as one: see the #573 record."` It explicitly distinguishes the model's behavior and the interpreted reading from silicon specification (`READ`). Both `case 3:` (`AFTER:886`) and `default:` (`AFTER:901`) reference `#573` (`READ`).
+
+* **Attack 4 — `H2` STOP comments in `DEVICE_ACCESS(le)` (`HOLDS`, READ):**
+  * **Claim tested:** Do the two comment replacements in `H2` (`DIFF:35-64`, `AFTER:1001-1020`) invert the erroneous old claims (`BEFORE:987-990`, `BEFORE:997-1000`), state the manual's rule that CSR1..3 are accessible only while STOP is SET, preserve the Ultrix observation, state that the model still accepts both states, and leave the executable code untouched?
+  * **Defense check:**
+    * Read branch (`AFTER:1003-1008`): carries `#573`, states `"CSR1..3 are accessible only while the STOP bit is SET (a read with STOP clear is "undefined" on the chip). Ultrix reads them with STOP set, which is the in-spec case; nothing is announced either way."` (`READ`).
+    * Write branch (`AFTER:1013-1018`): carries `#573`, states `"a write to CSR1..3 with STOP CLEAR is the one the chip ignores; writes with STOP set are the normal case (Ultrix does exactly that). The model accepts both -- gating on STOP is filed, not implemented."` (`READ`).
+    * Executable statements in `H2` (`AFTER:1001-1002`, `AFTER:1009-1012`, `AFTER:1019-1020`) have zero +/- diff markers (`READ`).
+
+* **Attack 5 — Preservation of `le_chip_init` odd-address warning and RDP read path (`UNSETTLED`, READ / NOT CHECKABLE):**
+  * **Claim tested:** Does the diff leave the odd-address warning at `le_chip_init` lines 180-182 (`PACKET:45`) and the RDP read assignment untouched?
+  * **Refutation attempt:** The diff header (`DIFF:1-6`) shows only 2 hunks (`@@ -881,8 +881,25 @@` and `@@ -984,20 +1001,20 @@`), and row `N14` (`csr1 odd 0x1235 want 0x1235 ok`, `L0_TABLE:16`) confirms CSR1 bit 0 remains writable so the odd-address check stays reachable (`DERIVED`). However, lines 180-182 (`le_chip_init`) and the RDP read assignment above line 984 are outside the inlined hunks (`NOT CHECKABLE` from this message alone).
+  * **File that settles it:** `GXEMUL-SEC/src/devices/dev_le.c` (and `GXEMUL-SEC/regress/artifacts/lecsrmask/pass1_20261025/final_045716/dev_le.c.fix.txt`).
+
+---
+
+### Q2 — The Detector and Its Evidence (`L0`-`L3`, `N1`-`N20`)
+
+* **Attack 6 — Discharge of ladder clause (i) and floor clauses (a), (b), (c) (`HOLDS`, READ / DERIVED):**
+  * **Claim tested:** Do the five measured legs in Section 3 (`PACKET:165-173`) and `L0_TABLE:1-24` discharge ladder clause (i) and floor clauses (a), (b), and (c), including discharging (b) via `L0`?
+  * **Defense check:**
+    * **Clause (i) and floor (a):** Using the same frozen detector (`md5 6259ce546ddb88fbd1c27be5d091348d`, `PACKET:159`), `L0` runs pre-fix `base` (`md5 6c27af7b`) against the `FIX` column and exits `rc=1` with `LE_CSRMASK_CONTROL=OK` and `LE_CSRMASK_RESULT=17/20` (`PACKET:169`), failing exclusively the three CSR3 symptom rows: `N7` (`csr3 all`: got `0xffff`, head `0xffff`, fix `0x0007`, `L0_TABLE:9`), `N9` (`csr3 hi`: got `0x0008`, head `0x0008`, fix `0x0000`, `L0_TABLE:11`), and `N10` (`csr3 mix`: got `0x0015`, head `0x0015`, fix `0x0005`, `L0_TABLE:12`). `L1` runs `fix` (`md5 a82cd71f`) against the `FIX` column and exits `rc=0` with `LE_CSRMASK_CONTROL=OK` and `LE_CSRMASK_RESULT=20/20` (`PACKET:171`). `L2` runs both `base` vs `HEAD` (`20/20`) and `fix` vs `FIX` (`20/20`, `rc=0`, `PACKET:172`).
+    * **Floor (b) via `L0`:** Because `H2` changes only comments (`DIFF:35-64`) and `H1` modifies only a single semantic site (`case 3: d->reg[r] = x & 0x0007;` vs. `default: d->reg[r] = x;`, `DIFF:12-33`), reinstating `d->reg[r] = x;` at that site yields a C translation unit semantically identical to `base` (`DERIVED`). Therefore, `L0` directly measures the single-site reversion required by clause (b).
+    * **Floor (c):** `L3` runs `/bin/false` in GATE mode and produces `LE_CSRMASK_CONTROL=FAIL LE_CSRMASK_RESULT=0/20` with `rc=1` (`PACKET:170`), proving the harness fails `CONTROL` when the target medium does not run.
+
+* **Attack 7 — Consistency of the frozen probe's contract header (docstring) with rows `N1`-`N20` (`UNSETTLED`, NOT CHECKABLE):**
+  * **Claim tested:** Is the contract header (`CATCHES`, `OUTSIDE`, `ANCHOR`, session-order sentence, and `CONTROL`/contract distinction) in `regress/le_csrmask_probe.py` consistent with the 20 rows (`N1`-`N20`)?
+  * **Refutation attempt:** In `L0_TABLE:1-24`, the 20 rows match Section 1's tally (`PACKET:49-53`): four liveness rows (`N1`-`N4` `ram:csr0..1`), two signature rows (`N5` `csr0 reset`, `N6` `rap mask`), three symptom rows (`N7` `csr3 all`, `N9` `csr3 hi`, `N10` `csr3 mix`), one kept CSR3 row (`N8` `csr3 bits`), six CSR1/CSR2 contract/insurance rows (`N11` `csr2 all`, `N12` `csr2 lo`, `N13` `csr1 all`, `N14` `csr1 odd`, `N15` `csr1 even`, `N16` `csr1 top`), and four stable rows (`N17`-`N20` `stable:csr0..1`). Notably, `N18` (`stable:csr3`, `L0_TABLE:21`) has `got 0x0004/0xffff` -> `0xffff want 0xffff ok` on `L0` and also passes on `L1` (`20/20`), indicating `stable:*` checks guest-side/RAM state rather than re-reading masked `CSR3`. However, neither the docstring (`CATCHES`, `OUTSIDE`, `ANCHOR`, session-order sentence) nor the Python body of `le_csrmask_probe.py` is inlined in this message (`NOT CHECKABLE`).
+  * **File that settles it:** `GXEMUL-SEC/regress/le_csrmask_probe.py` (or the frozen copy in `GXEMUL-SEC/regress/artifacts/lecsrmask/pass1_20261025/final_045716/`).
+
+* **Attack 8 — Recording clause (d) as OWED vs. carrier vacuity floor and 2026-08-23 null-repair rule (`UNSETTLED`, DERIVED / NOT CHECKABLE):**
+  * **Claim tested:** Is recording clause (d) as `OWED` (with the seats' F2 4.3 variant classifications recorded as predictions) honest, and does the carrier allow landing with (d) owed when (a), (b), and (c) are measured?
+  * **Refutation attempt:** From the premises in `PACKET:53-54` and `PACKET:206-210`, clauses (a), (b), and (c) establish the vacuity floor (which the detector passes by measurement in `L0`, `L1`, `L3`), whereas clause (d) is the null-repair kill-table clause ruled 2026-08-23. Recording (d) explicitly as `OWED` with seat classifications labeled as unbuilt predictions—rather than claiming a measured variant kill-table—is completely honest (`DERIVED`). On the packet's stated distinction between the vacuity floor `(a)(b)(c)` and `(d)`, the detector's claim does not overstep the vacuity floor (`DERIVED`); however, verifying the justification in `killtable_20261025/README.txt` and confirming that the carrier's 2026-08-23 rule text permits landing with `(d)` in `OWED` status requires reading those external files (`NOT CHECKABLE` from this message alone).
+  * **Files that settle it:** `GXEMUL-SEC/regress/artifacts/lecsrmask/killtable_20261025/README.txt` and `GXEMUL-SEC/regress/artifacts/lecsrmask/pass1_20261025/f2_20261025/F2_PACKET.md`.
+
+P-T18P2_Q12-d474
+T18P2_Q12: 8 ATTACKS 0 BROKEN 4 HOLDS 4 UNSETTLED DRAFTABLE:YES
