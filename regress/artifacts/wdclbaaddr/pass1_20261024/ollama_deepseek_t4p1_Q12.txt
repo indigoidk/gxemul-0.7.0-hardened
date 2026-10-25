@@ -1,0 +1,108 @@
+VERDICT: NOT READY -- 7.1 row “LBA past file end” is not a changed output on the witness image; dead-run score is not robust to an immediate exit; CATCHES misses V20 and fails to disclose V19.
+
+Q1: S1-S24 stand as inlined; P1-P4 answered; 7.1 is almost right but one row is false; outside-site changes depend on readback mechanism.  
+Q2: Floor grading and variant classification largely correct; contract must add V20 and disclose V19; dead-run score needs an OSError-safe sentinel and `None` wants must fail.
+
+---
+
+### Q1 — the repair
+
+**(a) Premises and partition**  
+DERIVED from packet: none of S1-S24 is false on the inlined source.  
+P1: no decision depends on whether bits 7/5 are “reserved” or “always 1” — the only consumer is the byte-exact readback.  
+P2: the exact meaning of `sectorsize` is not needed for byte-exact readback, so the readback design does not depend on it.  
+P3: “latent” changes timing/severity records, not whether to fix — the wrong-sector defect is real for a guest that ignores word 49.  
+P4: after the fix, the model honours LBA while word 49 bit 9 is clear and words 60-61 are nonzero. That is an interim ATA-2 noncompliance, but less harmful than serving the wrong sector.
+
+7.1 partition: mostly correct, but the row  
+`bit 6 SET, LBA at or past the file's end (4,096 here)`  
+is marked “changed? yes”. On the witness image every LBA >= 4096 gives HEAD CHS offset >= 16127, past advertised capacity 5040, so HEAD also returns zeros / refuses writes. FIX returns zeros / refuses writes as well. There is no observable change for that row on this image. It should be `no` or explicitly “both zero/refused”.
+
+Outside the four fixed sites:  
+- if readback mechanism (ii) is used, no product-code change outside the four sites is required;  
+- if mechanism (i) is used, `struct wdc_data` gains a raw SDH field, and that is outside the four sites.
+
+**(b) Decode and readback**  
+DERIVED: recommend mechanism (ii):  
+`d->sectorsize = idata & 0xa0;`  
+`d->lba = (idata >> 6) & 1;`  
+and compose readback as  
+`odata = d->sectorsize | (d->lba << 6) | (d->drive << 4) | d->head;`  
+This keeps the SDH readback byte-exact without adding a field.
+
+For the variants:  
+- V16, V17, V18 all fail under this mechanism as predicted.  
+- The debug lines must stop calling `sectorsize` a size field, or print the raw SDH byte instead.
+
+An added field is an ADDITION under R13. V17’s predicted `sdh rb2` 0x93 is not a measured delta and cannot licence the addition by itself; it must be measured on the fixed build. If `sectorsize` loses its last reader under mechanism (i), removing it is not in scope for this round — file it.
+
+**(c) Arithmetic and two sites**  
+DERIVED: use a 64-bit product at both sites, e.g.  
+`offset = 512ULL * (uint64_t)(((d->head & 0xf) << 24) + (cyl << 8) + d->sector);`  
+or a shared helper returning `uint64_t`. The existing `printf` calls must be deleted, not converted to unconditional `printf`; a `debug` replacement is acceptable only if quiet_mode is respected.
+
+Control flow check:  
+- `wdc__read()` sets `offset` before the chunk loop; the loop increments `offset += 512 * to_read`; the `break` path still reaches `d->int_assert = 1;`.  
+- `wdc__write()` sets `write_offset` after the LBA block, so V20 is a real ordering risk; the three assignments must remain after the LBA arm.
+
+**(d) Option set**  
+DERIVED: the repair is R12 member 7 IMPLEMENT. FAULT is available through ABRT as the no-disk arm does. Refusing LBA while word 49 = 0 would be more ATA-2-coherent, but the chosen repair honours LBA without advertising. No unnamed member is required.
+
+**(e) Must-not-change list**  
+Complete for the chosen mechanism. This is one round under R23.
+
+**(f) Other repair baggage**  
+Each edited site needs a `/* #NNN: */` tag; `dev_wdc.c` must be identical in `est/` and build trees. No inlined `dev_wdc.c` comment becomes false once `d->lba` reaches an offset computation, but CHANGELOG #405’s “never reaches an offset computation” claim does become false and must not be repeated.
+
+---
+
+### Q2 — the detector
+
+**(a) Floor grading**  
+DERIVED:
+
+FLOOR: C1, C2, C3, C4, C5, C7, C8, C9, C10, C12, C13, C14, C15, C16, C17, C18.  
+- C5/C10 are floor because V4r/V4w qualify the guard on `head`, which the LBA body reads.  
+- C7 is floor because V13w/V1 write must be caught.
+
+Clause-(e) debt / IMAGE, not floor: C6, C11, C19, C20.  
+No missing cell.
+
+**(b) Variant classification**  
+DERIVED: V1-V14, V16-V20 are classified correctly.  
+- V12 is EQUIVALENT in every reachable state.  
+- V7, V9, V10 are only “none” on a 4,096-sector image.  
+- V15: expect 32-bit wrap at `-O3` without `-fwrapv`, giving N1 red, but this is UB and must be measured; the source must be widened regardless.  
+- V19 is outside R4 because `drive` is not read by the LBA body; it is clause-(e) disclosure, not a DEPENDS-ON variant.  
+- The listed dominating predicates are complete; no missing variant in the R4 closure, but V19 should be disclosed.
+
+**(c) Rows N1-N9**  
+DERIVED: wants for N1-N9 are correct as proposed.  
+P10: yes, use valid triples as in N7.  
+P11: yes, make `lba 0` HEAD want literal zeros.  
+P13: yes, N4 is owed.  
+P14: yes, N3 is owed.  
+P16: disclose the blind spot now; enlarging the image and widening the tag is a follow-up, not this round.
+
+Zero rows will not pass when session reads fail because their wants are non-`None`; `row_ok` returns false on `got == None`.
+
+**(d) Clause (c) and dead run**  
+Null medium: a non-emulator executable, because gate 10 `need_exec` skips an absent binary.  
+Record form: `(c): by construction via <row/pin>, leg not run` if gate pin exists; otherwise `(c): measured at <artifact>`.
+
+The predicted 3/19 HEAD, 2/19 FIX score is correct only if the driver survives and H/S are `None`. If the medium exits at once, `Emu.send()` can raise uncaught `OSError` and no sentinel is written. The probe must catch `OSError` and emit a dead-run sentinel.
+
+A `None` want should fail its row.  
+`neg appar` is built from constants and cannot fail; replace it with a real parser self-test or remove it from the score.
+
+**(e) Contract and anchor**  
+CATCHES must add:  
+- V20 `write_offset` captured before the LBA arm runs.  
+- V19 must be disclosed as outside R4, not silently omitted.
+
+BLIND must add:  
+- V19 drive qualification, disclosed under clause (e).
+
+Anchor:  
+- If every LBA moved by one sector, all five `lba` rows red.  
+- If every WRITE moved by one sector, `lba wr`, `lba wr2`, N5, N2, and N6 red.

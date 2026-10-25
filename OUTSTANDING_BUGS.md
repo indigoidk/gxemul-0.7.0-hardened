@@ -41,8 +41,9 @@
 > 9. `vr41xx1kpage` (HIGH, new) -- VR41xx 1 KB-page TLB writes exit the host at two sites.  T11; design owed.
 > 10. `pvrrenderexit` (HIGH) -- the zwrite exit only.  T5.
 >
-> Tail, in order: (1) `fbsdrampair`, T12, DECLINE, narrow; (2) `wdclbaaddr`, T4, latent here -- the word-49 decision
-> first; (3) `exitunowned76`'s dev_clmpcc.c exits, T8, after item 8 with the same disposition; (4) one dev_osiop.c site
+> Tail, in order: (1) `fbsdrampair`, T12, DECLINE, narrow; (2) `wdclbaaddr`, T4 -- FIXED by `#572` on 2026-10-24 (held for
+> the Fable review; word 49 kept at 0, the advertisement filed as `wdclbaadvertise`; the dated section below);
+> (3) `exitunowned76`'s dev_clmpcc.c exits, T8, after item 8 with the same disposition; (4) one dev_osiop.c site
 > of `exitunowned76`, T10, not the 2^24-byte MEMORY MOVE; (5) `x11cursorclip`, T13; (6) `ppc64xlateexit`, N3, a large
 > design.  T9 is not re-filed: `b120` carries it.
 >
@@ -25830,3 +25831,43 @@ positive-word `lwa`, translation on, the indexed forms, the disassembler's text.
   against the checker's own line (`:55-57`: a WITNESS asserts the pre-fix symptom and is RED once the defect is gone).  `#571`
   classes its frozen copy CLASS_RESEARCH; the earlier entries owe a re-classification in a records round.  No gate obligation
   rides on either class.
+
+### 2026-10-24 -- `wdclbaaddr` fixed by `#572` (held for Fable); `wdclbaadvertise`, `wdcmediastatus` and `wdclbaimage` filed
+
+`#572` makes `src/devices/dev_wdc.c` decode the select byte's LBA flag from bit 6 (`WDSD_LBA`; it was bit 5, which the
+classic CHS select byte 0xa0 also sets), keeps bits 7 and 5 in the field renamed `sdh_resv` so the readback stays
+byte-exact for all 256 values, and enables the LBA28 address arm in both `wdc__read()` and `wdc__write()` with the product
+in 64-bit arithmetic (`512 * (int64_t)(((head & 0xf) << 24) + (cyl << 8) + sector)` -- the compiled-out `int` form
+overflows for any nonzero head nibble); the two `printf`s in the old `#if 0` blocks are deleted.  Before it every LBA-mode
+READ/WRITE SECTORS was served from the CHS reading of the same taskfile bytes (LBA 70 -> CHS sector 70 = index 69; LBA 256
+-> index H*S-1; LBA 0 -> a negative offset, zeros).  IDENTIFY word 49 stays 0: LBA28 is honoured, not advertised -- the
+advertisement is a guest-visible change on every word-49-honouring guest and has no measured warrant yet (the boot
+battery cannot supply one: only landisk's optional all-zero disk reaches this model; the "five rigs" sentence in the
+round's first design text was false and is retracted).  It ships `regress/wdc_lba_probe.py`, a 33-row
+rung-3 detector on the unmodified `evbmips -e malta` (seven debugger-driven guest sessions on a tagged
+4096-sector image: IDENTIFY, CHS reads, select-byte readbacks, LBA reads including head 1 and cylinder-high 1, and one write
+session reading back both candidate destinations through valid CHS triples; every word from the probe's encoders, checked
+against the disassembler; a `GATE` single-leg mode), gated in gate 10 beside `wdc_altdigin_probe.py` with the denominator
+pinned by equality.  Measured in `regress/artifacts/wdclbaaddr/` (the rung-3 witness at 17:03 before any edit: 19/19 against
+the HEAD column, the five LBA rows red against the FIX wants; the revised detector's two legs base 33/33 vs HEAD and fix 33/33 vs FIX; the frozen witness's fixed leg 19/19; GATE 33/33 CONTROL=OK; the dead run 0/33 CONTROL=FAIL; kill tables 18/18 and 9/9 killed plus the clause-(b) readback mutant 30/33, the two disclosed survivors V12 (equivalent) and V7 (blind on this image); gate 10 run end to end with the block in place; clearance clean and fresh on the trees touched).  Panel: Astra, Grok, Argon (through agy),
+GLM 5.3 and DeepSeek on pass 1 (six READY WITH CHANGES, DeepSeek Q1-2 NOT READY on detector-spec points, all adopted;
+Argon's confabulated wiring/trace sections not credited), adjudicated by Astra (CONFIRM WITH CHANGES) and Grok (CONFIRM
+WITH CHANGES, one disposition corrected); pass 2 on the diff by the same five seats (seven answers, six LAND WITH CHANGES and one READY TO LAND; no product-code defect; fourteen record/contract findings applied, the clause-(b) readback mutant built and killed, the gate-10 block run end to end before landing -- the five wdc_lba checks OK, 33/33 CONTROL=OK, sentinel once; the gate's own verdict FAIL 1 of 405 on the peer session's uncommitted 62-row gdrom_default probe against HEAD's 60-row pin, not this round's file; PMAX = the fix clone, provenance measured in CLONE_PROVENANCE.txt; GATE10_RUN.txt), F2 adjudicated by Astra (CONFIRM WITH CHANGES) and Grok (CONFIRM WITH CHANGES); Fable HELD with its question.  `row_no_lba_claim()` in
+`regress/diff_wdc_identify.c` and gate 2's comment re-authored in the same change (the assertion and the pin unchanged).
+Not claimed: that any guest now uses LBA; ATA-2 conformance of the interim; coverage of cylinder-high destinations, head
+shifts that miss the file, drive 1, MULTI counts, the 48-bit commands; a generalisable detection of the unwidened product.
+Noted for the next round that touches the ATAPI path, not edited here: the comment at `dev_wdc.c:1662` says nothing resets the
+phase, while `wdc_new_command_reset()` clears `atapi_phase` at `:917` (Astra, pass 2).
+
+* **`wdclbaadvertise` (MED, open)** -- new.  devices/dev_wdc.c IDENTIFY word 49 bit 9 clear while LBA28 is honoured and
+  words 60-61 carry the capacity.  Advertising switches every word-49-honouring guest from CHS to LBA addressing; its gate
+  is a measured guest on a content-bearing image with a checked sector plus truthful capacity words and DMA bit 8 clear --
+  not the boot battery, which cannot see it.  `wdccylwrap` is revisited in that round.
+* **`wdcmediastatus` (LOW, open)** -- new.  devices/dev_wdc.c:531-533 and :1868-1870 discard `diskimage_access()`'s
+  failure return and complete the command with no error bit: a refused access (a write past the backed extent, a read past
+  the logical capacity) completes as success, CHS and LBA alike.  Pre-existing; `#572` only makes the LBA path reach it.
+  The LBA 4096-5039 band of a rounded-up image is NOT a specimen (a short zero-filled read returning success is `#416`'s
+  design).
+* **`wdclbaimage` (LOW, open; harness)** -- new.  regress/wdc_lba_probe.py's medium (4096 sectors, 16-bit tag) cannot
+  observe cylinder-high destinations or sector 65,536 (the tag aliases); the cylinder-high-conditioned arm is blind on it.
+  A larger image with a 32-bit tag is a separate instrument, owed if that cell is ever rowed.

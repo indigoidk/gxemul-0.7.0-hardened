@@ -1,0 +1,262 @@
+VERDICT: READY WITH CHANGES -- The repair is sound; correct the coverage classifications, image-blindness claims, and evidence wording before proceeding.
+Q1: Decode bit 6, preserve SDH readback, and widen both LBA products; distinguish changed addresses from changed observable results.
+Q2: Keep the anchored detector, correct V10 and the translation claim, reject missing observations, and bound the coverage contract precisely.
+Q3: Keep word 49 zero for this round; ship a single-leg gate and preserve qualified, ordered witness evidence.
+Q4: Several record corrections are warranted; the proposed word-53 invalidity finding is false.
+
+I read the entire packet. **READ:** HEAD is `cc1f69cc`; `dev_wdc.c` has no working-tree difference and its MD5 matches the packet. The frozen probe’s MD5 also matches. No builds, probes, tests, or variants were executed, and no files were changed.
+
+## Q1 — Repair
+
+**(a) READ / DERIVED — Premises and partition.** S1–S7 support the core diagnosis: the live decode uses bit 5, both LBA formulas are disabled, and the taskfile producers constrain the address fields as stated. S3 should acknowledge initialization by zeroing the structure; that does not enlarge its reachable domain.
+
+**DERIVED — S20’s arithmetic is correct; its concluding behavioral claim is too strong.** Equality of the two starting sector indices would require:
+
+`752 × cylinder = 16,777,153 × head + 1`.
+
+Enumerating the sixteen produced head values, the right-hand remainders modulo 752 are:
+
+`1, 34, 67, 100, 133, 166, 199, 232, 265, 298, 331, 364, 397, 430, 463, 496`.
+
+None is zero. Thus the computed starting addresses differ throughout the stated domain. It does **not** follow that every request returns different bytes or causes a different write: both interpretations can produce zeros or refused writes. Nor do absent-drive commands reach these sites.
+
+**DERIVED — Replace 7.1 with this partition, conditioned on ordinary register access and command dispatch:**
+
+| Inputs | Effect of the repair |
+|---|---|
+| I/O disabled, or selected disk absent | Existing refusal/dispatch behavior remains. |
+| Bit 6 clear; one of the four implemented media opcodes | CHS addressing remains unchanged. |
+| Bit 6 set; READ/READMULTI or WRITE/WRITEMULTI reaches its media site | Starting address becomes the taskfile’s LBA28 address. On 16/63 geometry it differs from the previous computed address. |
+| Other opcodes | No change from this taskfile-address repair. ATAPI may compute media addresses through its own command path; “no address computed” is too broad. |
+| Either computed address outside the backed extent | Observable results depend on S8; a changed address need not change returned bytes or write effects. |
+| SDH reads | The complete previously written byte remains unchanged. |
+
+The four sites suffice for the functional correction, with associated storage, debug-label, and record changes. New disk-error handling or capability advertisement is not required.
+
+**READ / DERIVED — P1–P4, D4/D9.**
+
+- **P1:** ATA-2 calls bits 7 and 5 reserved; that does not establish B’s universal “always written as 1.” Preserve their existing readback behavior without using them to select LBA.
+- **P2:** The historical WD1003 interpretation is **NOT CHECKABLE** from the supplied sources and is unnecessary to this design.
+- **P3:** “Latent” qualifies which capability-following guests encounter the defect. It does not invalidate the measured wrong-address behavior or the case for correcting it. FreeBSD 10+ behavior remains an attributed, unverified report here.
+- **P4:** Honoring LBA while retaining word 49 zero is an explicit interim compatibility policy, not a claim of complete ATA conformance. Document that policy and its advertisement follow-up.
+
+**(b) DERIVED — SDH storage, D5/P2/R13.** Prefer reusing existing storage rather than adding a field.
+
+| Choice | Assessment |
+|---|---|
+| (i) Raw SDH byte | Sound. Reuse/rename `sectorsize` storage, return the raw byte, and derive the operational fields consistently. |
+| (ii) Preserve bits 7 and 5 separately from the decoded fields | Sound and minimal. Rename the storage so its name and debug output describe preserved bits rather than a sector-size interpretation. |
+| (iii) New one-bit field | Can preserve bit 5, but is unnecessary given reusable storage. It also needs consistent handling of the duplicated bit-6 information. |
+| (iv) Another encoding | Acceptable only if it preserves all eight readback bits and leaves drive/head extraction unchanged; no additional mechanism is needed. |
+
+**DERIVED:** V16 and V18 remain useful behavioral checks under either recommended representation. V17’s specific `0xb3 → 0x93` and `0x4c → 0x6c` predictions assume that `sectorsize` retains its **old** encoding. They cannot be transferred unchanged to a repurposed field. Re-evaluate the reinstatement against the chosen representation.
+
+**DERIVED:** Both debug descriptions at 2010–2012 and 2018–2020 must match the new storage meaning. Removing `sectorsize` after its last use disappears is directly in scope.
+
+**DERIVED / NOT CHECKABLE:** A predicted V17 failure is not a measured delta under R13. Either measure the claimed delta later or explicitly identify a transferred warrant for preserving existing byte-exact behavior. No such new measurement was made in this review.
+
+**(c) READ / DERIVED — Arithmetic and control flow, D2/D3/P8/R11.** Widening belongs in this repair. Assigning an overflowing `int` expression to a 64-bit destination is insufficient; the multiplication itself must occur in 64-bit arithmetic. The largest LBA28 starting byte offset is 137,438,952,960.
+
+Two local widened calculations are the smallest change. A shared offset helper is also correct if it merely computes the offset and preserves the surrounding behavior; it is not necessary.
+
+Preserve:
+
+- The read-side chunk loop, occupancy-guard `break`, offset progression, and unconditional `d->int_assert = 1` tail.
+- The write-side ordering: determine the final offset before recording `write_in_progress`, `write_count`, and `write_offset`.
+- The drain’s use of that captured offset and its existing transfer/completion behavior.
+
+Remove the disabled `printf` calls rather than activating unconditional output. Converting them to debug output is possible, but the repair does not require a new diagnostic.
+
+**(d) READ / DERIVED — Option set, P18/R12.** This is **7 IMPLEMENT**. Compiled-out arithmetic does not already compute a runtime value, so **4 ACCEPT** is the wrong description.
+
+The fork already has an available ATA command-error idiom: `WDCE_ABRT` plus completion interrupt at `dev_wdc.c:947–954` and `1155–1156`. This is an architectural command refusal, distinct from R12’s literal unmapped-bus **FAULT**.
+
+Refusing unsupported-mode commands would fit word 49 zero more consistently. However, the cited draft prohibits the host request without prescribing its particular device response. Correctly honoring the request is a defensible, documented staging decision. Continuing to reinterpret it as CHS is not a repair. Silent decline, bounded announcement, deletion, and backed acceptance offer no better disk-command semantics here.
+
+**(e) DERIVED — Invariants and scope, R23.** Preserve the listed CHS formula, drive/head extraction, ATAPI behavior, Device Control handling, alternate-register mapping, and SDH readback. Also preserve sector-count interpretation, transfer progression, ring handling, and completion/interrupt behavior.
+
+This is one round: the read and write defects are witnessed, belong to the same device and address-decoding class, and use the same anchored media oracle.
+
+**(f) READ / DERIVED — Associated changes.** Carry the required issue tag at each edited site and synchronize the shared source copies as the packet requires. Those other trees were not independently inspected here.
+
+There is **no current `dev_wdc.c` comment saying that `d->lba` never reaches an address computation**. That stale explanation is in the offline detector and records. The capability-bit definitions at 374–375 remain true; augment them with the deliberate nonadvertisement policy. Update the SDH/debug terminology if its storage meaning changes. The separate specification-availability comments are addressed under Q4.
+
+## Q2 — Detector
+
+**(a) DERIVED — Floor grading, R1–R10.** Distinguish the bounded, generated floor from promises voluntarily included in CATCHES. A clause-(e) case becomes an R7 contract obligation if the detector promises to catch it.
+
+| Cells | Grade and reason |
+|---|---|
+| C1, C2 | **FLOOR:** decode sides and read-site reinstatement. |
+| C3 | **FLOOR** for the direct `sector=0` disagreement; nonzero `cyl_lo` is its chosen representative. |
+| C4 | **NOT A DISTINCT CELL** generated by an all-zero joint partition. Keep this useful existing row; R5 does not independently require that combination. |
+| C5, C10 | **Clause-(e) debt intrinsically.** The body does not test head zero/nonzero as a case. Retaining V4/V8 in CATCHES makes N1/N2 contractual obligations under R7. |
+| C6, C11 | **Clause-(e) debt:** high-cylinder values feed the untested derived `cyl`; R6 does not require an enlarged image merely through dataflow. |
+| C7 | **FLOOR for the proposed contract:** the promised detection of an unconditional write-site LBA formula needs N6. R14 is not its warrant. |
+| C8 | **FLOOR:** write-site reinstatement and anchored destination. |
+| C9 | **FLOOR:** the write site lacks the direct sector-zero disagreement required by R10. N5 supplies it. |
+| C12, C13 | **FLOOR representatives**, overlapping the existing mode-side rows rather than creating separate exhaustive byte partitions. |
+| C14 | **FLOOR for the declared bit-6-only contract**, discharged by N3. |
+| C15, C16 | **FLOOR:** preserve readback and detect the applicable reinstatement. |
+| C17 | **FLOOR for the promised readback contract**, discharged by N4; not proof of all 256 readback values. |
+| C18 | **NOT AN ADDRESS-PARTITION CELL**, but an owed policy/claim pin for unchanged word 49. |
+| C19, C20 | **Clause-(e) disclosure axes**, not additional floor cells within the address functions. |
+
+**DERIVED:** Shared SDH writes do not correlate head and LBA bits. Nevertheless, independence alone does not override R5/R6 and create every arithmetic operand’s zero/nonzero partition. Existing `L=1, head=0` rows already distinguish a simple guard-operand substitution.
+
+**DERIVED:** Section 7.2(d) over-expands R4 by paraphrasing its bounded operand swaps as unrestricted added conjuncts. Apply the quoted rule, not that paraphrase.
+
+The dominating predicates listed for the decode assignment are substantially correct: I/O enable, SDH dispatch, and the write branch. The readback edit also has its read branch. The missing audit is the decode body’s direct **`idata` versus write-direction disagreement**: every supplied SDH write is nonzero. Zero-valued SDH writes need explicit consideration; a cold default-zero observation alone would not establish that a write took effect. Qualification by bit 7 is also distinct from V2’s bit substitution, although N3 can detect it.
+
+**DERIVED:** Record the sibling, claim-to-row, guard/body, and channel checks as actual pre-table output before the later table runs, per R9. This review is not that output. R14 and R21 are correctly inapplicable.
+
+**(b) DERIVED — Variant classification.** These are source predictions, not measured scores.
+
+| Variant | Assessment |
+|---|---|
+| V1 | Named CHS failures and N6 detection are correct. Clause-(b) decode reinstatement. |
+| V2 | Existing CHS rows and N3 detect the wrong-bit substitution. |
+| V3 | Existing witness misses it; N3 detects it. Required by the proposed bit-6-only contract. |
+| V4r/V4w | N1/N2 distinguish them. Clause-(e) cases unless retained as R7 coverage promises. |
+| V5r/V5w | `lba 256` detects the read form; N5 detects the write form. The arbitrary derived-`cyl` qualification is not itself a new mandatory partition under R6. |
+| V6r/V6w | Listed read rows and N5 detect them; the direct sector disagreement has R10 support. |
+| V7 | Indistinguishable on the stated small image/geometry, not globally equivalent. Both address interpretations lie beyond its capacity. |
+| V8 | N1/N2 predictions are correct: omitting the head term brings the address into the low image. |
+| V9 | The supplied `<<20` is image-indistinguishable. “Any k≥12” is too broad: sufficiently large signed shifts are undefined, and k≥32 exceeds the width. Among defined shifts, k=24 is the original expression. |
+| V10 | **The IMAGE classification is false.** Dropping `cyl_hi` can bring an otherwise out-of-range request into a tagged low sector. Existing rows simply never exercise that input slice. |
+| V11 | Named detections are correct. A combined row can detect it without every collateral subcheck failing. |
+| V12 | Equivalent in every reachable initialized/register-produced product state, by S3. Not necessarily equivalent for an arbitrarily forged structure. |
+| V13r/V13w | Read predictions are correct; N6 supplies the missing write-side detection. |
+| V14 | Both site-reinstatement predictions are correct. Clause-(b) floor. |
+| V15 | Undefined signed overflow. No guaranteed optimized result follows from `-O3` without `-fwrapv`; see below. |
+| V16 | N4 detects forced bits; its predicted `0xec` is correct. |
+| V17 | The stated `0x93`/`0x6c` values are correct only with the old `sectorsize` representation. Reassess after choosing storage. |
+| V18 | The stated `0xe5 → 0xa5` detection is correct. |
+| V19 | Configuration-relative non-observability, not global equivalence. Outside the LBA body’s operand-swap bound; disclose under (e). |
+| V20 | Existing write rows detect capturing the CHS offset before LBA selection. |
+
+**NOT CHECKABLE — V15:** The actual optimized outcome cannot be determined from the supplied compiler flags. Ordinary wrapping-style lowering would make N1 observe sector 5; an optimizer is not obliged to preserve that outcome. Widen the source regardless. Do not label V15 either reliably detected or inherently invisible.
+
+**(c) DERIVED — Proposed rows, P10/P11/P13/P14/P16.**
+
+- **N1–N6:** The supplied arithmetic and wants are correct, subject to the V17 representation caveat for N4’s variant result.
+- **N7:** Correct. The replacement CHS triples name the same sectors while staying within the reported geometry.
+- **N8:** Correct. Require literal zero for the HEAD observation rather than anything unequal to tag 0.
+- **N9:** Its prerequisites and coverage explanation need correction. On the **existing** image, its supplied input produces zeros under HEAD and FIX, while V10 produces `TAG(0)`. Enlarging is therefore unnecessary to distinguish V10. Enlargement is relevant to V7 and to positively observing the intended high-cylinder destination.
+
+**DERIVED:** N9’s proposed enlarged-image HEAD want is not valid for every size above 65,536 sectors. Its CHS index is 258,047; zero is justified while that sector is unbacked, not after it becomes a tagged backed sector. The actual tag producer masks the sector number to sixteen bits, so identifying sector 65,536 uniquely requires widening the tag and its reader. Enlarging far enough can also invalidate N1/N2’s present out-of-range assumptions.
+
+**DERIVED:** Retaining the small image is acceptable with honest disclosure of V7, head-shift precision, and other unrowed slices. V10 must be described as **unexercised**, not impossible to observe.
+
+**READ / DERIVED — Channel validity.** N1 needs its promised same-session nonzero media-tag control; RAM liveness alone cannot validate a zero disk result. N2’s nonzero readback tags provide useful media observations, while the positive write rows remain necessary to reject a globally ineffective write path. Missing observations must not become zeros or compare successfully to missing wants.
+
+N3 and N4 are justified by the declared decode/readback behavior; identifying a driver that emits those bytes is unnecessary.
+
+**(d) READ / DERIVED — Null medium and dead score, R2/R22/P12.** In the frozen probe, assuming every parsed observation is `None` and the driver survives:
+
+- `chs h1` passes both columns through `None == None`.
+- `lba 256` additionally passes HEAD through `None == None`.
+- `neg appar` passes both columns from constants.
+
+Thus **3/19 HEAD, 2/19 FIX, CONTROL=FAIL, exit 1** is the correct conditional prediction. An immediate-exit executable may instead trigger the uncaught `OSError` in `send()`, leaving no score or sentinel. Its actual outcome is **NOT CHECKABLE** here.
+
+**DERIVED:** Reject missing `got` or `want` values explicitly. Remove `neg appar` from the product score, or make it a genuine test of the parser being relied upon. Recalculate and pin the resulting denominator; do not preserve 19 by convention.
+
+**READ / DERIVED:** An absent binary makes this gate SKIP through `need_exec`; it does not establish a red gate. The appropriate runtime null medium is an executable non-emulator, or another permitted medium carrying none of the tested device behavior.
+
+Today’s unwired probe cannot claim clause (c) by construction. After wiring exists and is inspected, the appropriate form can be:
+
+`(c): by construction via the named control, completion and exact-count gate checks, leg not run`
+
+Alternatively use the measured-artifact form after a real measurement. Neither form may presently imply a null leg was run.
+
+**(e) DERIVED — Contract and anchor, R7/R8.** Narrow CATCHES to the named defects actually distinguished by the finalized rows: the specified wrong-bit decodes/qualifications, site reinstatements, selected head/cylinder/sector qualifications, omitted head term, sector-minus-one error, unconditional addressing, sampled readback defects, stale write-offset capture, and the word-49 policy pin.
+
+BLIND/disclosure should separately identify:
+
+- V7 and the unpinned head-shift amount.
+- V10 until its high-cylinder input is rowed.
+- V15’s undefined behavior and lack of a guaranteed dynamic discriminator.
+- MULTI/count coverage, big-endian guests, drive 1, unsupported EXT commands, and debug text.
+- Other readback mappings: the supplied bytes never separate bit 7 from bit 5.
+
+**DERIVED:** The anchor is valid, but “all five `lba` rows” is false for a **+1-sector** displacement. The three read rows and target `lba wr` fail; collateral `lba wr2` can still see the correctly untouched sector 69 and pass. A WRITE-only displacement still makes `lba wr` fail. Position is pinned despite that overstatement.
+
+## Q3 — Advertisement, gate, witness, and records
+
+**(a) DERIVED — Keep word 49 zero, D4/P3–P6.** Retain the narrow correction and file advertisement/IDENTIFY coherence separately. Preserve both capability bytes’ pin, reworded as a deliberate policy.
+
+**READ / DERIVED:** S18 disproves the “five rigs switch” rationale. Only the optional disked landisk rig reaches this model. Its existing all-zero medium and boot-success checks do not validate address-specific media results. However, “no rig can observe it” is also too strong: the capability response and selected addressing mode are guest-visible.
+
+Advertisement needs an explicit R13 warrant and a gate checking truthful capability/capacity information, actual mode selection by a capability-consuming IDE guest, and correct media results. A green five-rig battery alone does not supply that evidence.
+
+**READ / DERIVED:** Words 60–61 are already populated. If advertising were chosen, they would need validation for truthful LBA28 capacity, including addressability and the backed-versus-advertised extent; simply setting bit 9 is insufficient. DMA bit 8 must remain clear.
+
+**(b) DERIVED — Shape and home, P7/S16/S23.** Ship a single FIX-column leg in gate 10 beside `wdc_altdigin_probe.py`. Retain the two-column mode for witness/table evidence. Do not create another dated two-leg exemption.
+
+Use dedicated lines such as:
+
+- `WDC_LBA_RESULT=p/n`
+- `WDC_LBA_CONTROL=OK`
+- The existing `WDCLBA_PROBE_DONE` completion sentinel.
+
+The gate must reject missing or malformed results, failed/missing controls, missing completion, unsuccessful process status, a denominator differing from the finalized literal inventory, and a numerator differing from that denominator. Derive the inventory and record its basis under R20.
+
+**READ / DERIVED:** Register the shipping file as `CLASS_DETECTOR`. Register the frozen copy by its full artifact path as preserved nonshipping evidence; `CLASS_RESEARCH` fits the checker’s explicit definition. It must not acquire a duplicate detector-gating obligation.
+
+**(c) READ / DERIVED — Witness, P15/R17/R18.** The current permitted [WITNESS.md](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/wdclbaaddr/witness_20261024/WITNESS.md) already differs from the packet’s quotation:
+
+- It corrects the SDH/signature explanation.
+- It cites witness-ladder clause (i), not the oracle-correction rule.
+- It discloses that the binary came from a working-tree clone before #571, with listed off-path differences.
+
+Those corrections are no longer outstanding in that file.
+
+**DERIVED:** Retain the prospective term:
+
+`probe:regress/wdc_lba_probe.py -- rung 3, unmodified evbmips -e malta, regress/artifacts/wdclbaaddr/witness_20261024/`
+
+Its completion remains conditional on same-instrument fixed evidence and adequate provenance. Documentation corrections do not justify downgrading a real access witness to `detector:`.
+
+**READ / NOT CHECKABLE:** The artifact supports the recorded symptom and matching device source. It does not establish that the entire remote binary was an exact HEAD build; indeed, the updated document says otherwise. Describe the scoped equivalence honestly.
+
+**DERIVED:** Preserve the ordering: dated pre-edit symptoms and frozen instrument identity first, fixed evidence afterward. The existing 19/19 result is success against HEAD wants; the five FIX mismatches are visible in the recorded observations, not a separate recorded FIX-scored invocation. Keep the original frozen witness distinct from the revised shipping detector.
+
+**(d) READ / DERIVED — Same-change obligations, S17/P17/R16.**
+
+- Re-author `row_no_lba_claim()` and its explanations, failure text, and success label while retaining the deliberate-zero assertion.
+- Update `gate_offline.sh`’s corresponding name pin and obsolete implementation comment together.
+- Explain the nonadvertisement policy beside IDENTIFY word 49.
+- Correct current-tense `&& !d->lba` descriptions with explicit before/after semantics: previously bit 5, afterward bit 6. Do not reinterpret historical scores using the new meaning.
+- Correct the shipping probe’s explanation; preserve the frozen as-run artifact and attach any necessary erratum to its record.
+
+**READ / DERIVED:** The directly assigned `d.lba = 1` offline fixture inspected here performs control/security operations, not media addressing. It does not establish a need to change its expected result. Existing alt-control detector debts remain separate.
+
+**DERIVED:** Preserve peer work by selecting only this round’s hunks and reviewing the staged delta. Do not replace the four shared files wholesale from HEAD.
+
+**(e) DERIVED — Closure record.** State the actual witness, bit-6 correction, both widened address sites, unchanged CHS behavior and word 49, preserved SDH readback, and the four implemented media opcodes covered by the correction. State that EXT commands remain unsupported and retain their existing ABRT behavior.
+
+Do not claim:
+
+- Standard capability-following guests now use LBA.
+- Full ATA conformance or exhaustive input coverage.
+- Every changed address produces changed bytes.
+- Detection of unrowed V7/V9/V10, or a measured large-address result for V15.
+
+File the advertisement/capacity follow-up and the ignored media-access-failure/status sibling separately. Record remaining detector limits explicitly, and retain R15’s one-ask-again bound.
+
+## Q4 — Other findings
+
+1. **READ / DERIVED — Manual availability.** The broader “none is available” and “cannot be established” claims are stale: `dev_wdc.c` itself cites the accessible ATA-2 draft. The additional statement at 418–420 has the same problem. However, an external `_scratchpad` document does not literally disprove “not in `GXEMUL-SEC`.” Correct that distinction and identify it as a working draft. The carrier’s manual-list omission is **NOT CHECKABLE** within the permitted reading scope.
+
+2. **READ — Reject the proposed word-53 finding as written.** The [ATA-2 draft](/C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ata2_x3t10_948d.txt:2902) says that with bit 0 clear, words 54–58 **may be valid**. “Not valid” applies to the separate bit-1/words-64–70 case. Nonzero words 57–58 therefore do not establish the alleged contradiction.
+
+   **READ / DERIVED:** A different coherence question exists: the model leaves words 54–56 zero while populating 57–58, and the draft describes current capacity as their product. Record that qualified field-set issue separately; do not promote it automatically to a demonstrated guest failure.
+
+3. **READ / DERIVED — Ignored media failures.** Yes: the read path and write drain discard disk-access failure returns and can complete without reporting the failure. This is a separate CHS/LBA completion-status issue. Legitimate zero-filled padding reads must be distinguished from refused or failed accesses; “past the file” alone is not a sufficient defect predicate.
+
+4. **READ — Adjudication wording.** `ADJ_RULINGS.md` says neither seat built or ran anything, then calls the source argument “the measurement” and “the measured one.” Replace those descriptions with source-based conclusions. The terminology error does not itself refute the reach analysis.
+
+5. **READ / DERIVED — Frozen docstring.** Exact byte `0xe0` yielding head zero is true under both decodes and does not explain the defect. Conventional CHS `0xa0` setting the erroneous bit-5 `lba` field is the relevant fact. Correct the shipping explanation, preserve the frozen artifact, and avoid treating ATA-2 reserved bits as universally mandated ones.
+
+6. **DERIVED — `wdccylwrap`.** Repaired LBA address calculation does not use IDENTIFY word 1, but guest capacity discovery may still use geometry. Capability-following guests remain on CHS while word 49 stays zero. There is no basis here for automatically changing that row’s severity or closing it; qualify its reach statement and assess it in its own round.

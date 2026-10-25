@@ -5604,19 +5604,22 @@ static void row_wide_geometry(void)
 }
 
 /*
- *  #407: WORD 49 MUST STAY ZERO, and this row is worth one character of mutant.
- *  Setting the LOW byte of word 49 (`identify_struct[2 * 49 + 1]`, dev_wdc.c:236 at
- *  085766a) to 2 gives word 0x0002 -- a reserved bit, NOT LBA (LBA is 0x0200, the
- *  high byte); that mutant passed all ten original rows, and this row pins both
- *  bytes so either mutant reds.  (This comment said "advertises LBA" until the
- *  2026-09-05 retrospective review.)
- *  It is not cosmetic: the LBA offset arms in wdc__read/wdc__write are `#if 0`
- *  (:315-321, :361-367), the live offsets at :311-313/:358-360 are pure CHS, and
- *  d->lba is parsed at :970 and never reaches an offset computation. A guest
- *  told LBA is supported would have its LBA addresses read as C/H/S.
+ *  #407 / #572: WORD 49 STAYS ZERO -- a POLICY row, worth one character of mutant.
+ *  Setting the LOW byte of word 49 (`identify_struct[2 * 49 + 1]`) to 2 gives word
+ *  0x0002 -- a reserved bit, NOT LBA (LBA is 0x0200, the high byte); that mutant
+ *  passed all ten original rows, and this row pins both bytes so either mutant reds.
+ *  (This comment said "advertises LBA" until the 2026-09-05 retrospective review.)
  *
- *  This asserts the CURRENT, DELIBERATE state. If LBA is ever implemented, this
- *  row must be re-authored in the SAME change -- that is the point of pinning it.
+ *  #572 IMPLEMENTS LBA28 (the LBA bit of the select byte now reaches the LBA28
+ *  offset arms in wdc__read/wdc__write) but DELIBERATELY DOES NOT ADVERTISE LBA
+ *  here: advertising word 49 is a separate, measured decision (the wdclbaadvertise
+ *  row), and words 60-61 already carry the capacity.  So this row no longer pins
+ *  "LBA unimplemented"; it pins the ADVERTISEMENT POLICY -- implemented, not
+ *  advertised.  A guest that does not read word 49 drives LBA commands today and
+ *  they are honoured; one that honours word 49 keeps using C/H/S, as before.
+ *
+ *  If the advertisement is ever turned on, this row must be re-authored in the SAME
+ *  change -- that is the point of pinning it.
  */
 static void row_no_lba_claim(void)
 {
@@ -5627,7 +5630,8 @@ static void row_no_lba_claim(void)
 	if (d.identify_struct[2 * 49 + 0] != 0 ||
 	    d.identify_struct[2 * 49 + 1] != 0) {
 		printf("  FAIL word 49 claims a capability: %02x %02x"
-		    " (0x200 = LBA, 0x100 = DMA -- neither is implemented)\n",
+		    " (0x200 = LBA -- implemented by #572, deliberately not"
+		    " advertised; 0x100 = DMA -- not implemented)\n",
 		    d.identify_struct[2 * 49 + 0], d.identify_struct[2 * 49 + 1]);
 		failures ++;
 	} else {

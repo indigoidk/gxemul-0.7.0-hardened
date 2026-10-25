@@ -3221,6 +3221,39 @@ MANIFEST = {
                         "(witness_20261023/WITNESS_headbin.out), 24/24 on the fixed build (table1_20261023/fixed_witness24.out)"),
     "ppc_dsform_probe.py": (CLASS_DETECTOR, "#571 ppcdsformxo: the 64-bit DS-form loads and stores (opcodes 58 and 62: ld, ldu, lwa, std, stdu, the reserved XO encodings, and ldu/stdu with RA = 0) -- 39 rows on unmodified -E bareppc -M 64; gated in gate_ppc.sh (gate 13) under the stem ppc_dsform, pinned at 39; kill table artifacts/ppcdsformxo/table1_20261024/ (SCORES.txt)"),
     "artifacts/ppcdsformxo/witness_20261024/ppc_dsform_probe.py": (CLASS_RESEARCH, "#571 ppcdsformxo: the frozen rung-3 pre-fix instrument of the LOADS (8 rows, md5 5e96b69d), preserved as evidence -- 5/8 on HEAD (witness_20261024/WITNESS_headbin.out), 8/8 post-fix (table1_20261024/fixed_witness8.out): it asserts the REPAIRED property and is green once the defect is gone, so by the WITNESS/DETECTOR line above it is RESEARCH, not WITNESS; the stores' pre-fix artifact is table1_20261024/prefix_BASE.out"),
+    # -- #572 wdclbaaddr -------------------------------------------------------------------
+    #  The wdc SDH LBA-flag decode (bit 5 -> bit 6) and the 64-bit LBA28 offset arms.  The
+    #  SHIPPING detector is CLASS_DETECTOR and gated in gate_sh_rounding.sh (gate 10) in the
+    #  same commit; its wiring is DERIVED below, not asserted here.  The frozen witness copy
+    #  is CLASS_WITNESS: its as-run base leg asserts the PRE-FIX symptom (HEAD column) and
+    #  would go RED on a repaired base, so it is ungated by design.  The detector_20261024/
+    #  frozen instrument and the mutant applicator are CLASS_TOOL (kill-table evidence).
+    "wdc_lba_probe.py":
+        (CLASS_DETECTOR, "#572 wdclbaaddr: wdc LBA-mode address decode -- SDH decodes the LBA "
+                         "flag from bit 6 (was bit 5) and the 64-bit LBA28 arm is enabled at both "
+                         "read and write sites.  33 rows on unmodified evbmips -e malta; wired in "
+                         "gate_sh_rounding.sh (gate 10) in the same commit, pinned at 33; kill tables "
+                         "artifacts/wdclbaaddr/detector_20261024/."),
+    "artifacts/wdclbaaddr/witness_20261024/wdc_lba_probe.frozen.py":
+        (CLASS_WITNESS, "#572 wdclbaaddr: the as-run rung-3 pre-fix WITNESS (md5 8f3632ff) -- base "
+                        "leg 19/19 vs the HEAD column (witness_20261024/RESULTS_base.txt, before any "
+                        "edit); asserts the pre-fix symptom, RED on a repaired base, ungated by design; "
+                        "its fix leg (RESULTS_fix.txt) is the same script green afterwards."),
+    "artifacts/wdclbaaddr/detector_20261024/wdc_lba_probe.frozen.py":
+        (CLASS_TOOL, "#572 wdclbaaddr: the frozen instrument (md5 fc878c42) the two kill tables and the "
+                     "V12/V7 and V17v single builds ran against; the shipped regress/wdc_lba_probe.py "
+                     "differs from it in ONE row predicate (`id geo` requires S >= 10 instead of "
+                     "S != 0; 8 executable lines) and in its docstring -- rev_equivalence.txt (a) lists "
+                     "the lines and (b) shows every preserved reading was (16, 63) except the dead run's "
+                     "(None, None), which both predicates reject, so the table scores transfer row for "
+                     "row; the shipped bytes carry their own GATE and two-leg runs."),
+    "artifacts/wdclbaaddr/detector_20261024/mutants572.py":
+        (CLASS_TOOL, "#572 wdclbaaddr: kill-table mutant applicator -- table 1 (SCORES.txt, 18 variants; "
+                     "revision preserved as mutants572_table1.py.txt), table 2 (SCORES2.txt, 9 "
+                     "contract-claim variants; mutants572_table2.py.txt), the V12/V7 single builds "
+                     "(SCORES_V12_V7.txt); V17v (SCORES_V17v.txt) was applied by the separate one-edit "
+                     "script preserved beside it as run_v17v.sh.txt, not by this applicator; one text "
+                     "edit to dev_wdc.c per mutant, applied in a cp -a clone with a .MUTANT sentinel."),
 }
 
 #  DATED, NAMED DEBT -- not a count and not a silent allowlist.  gate_offline.sh MEASURED that

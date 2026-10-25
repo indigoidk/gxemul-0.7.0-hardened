@@ -1,0 +1,153 @@
+wdclbaaddr (#572) -- PRE-TABLE CHECK for regress/wdc_lba_probe.py
+written BEFORE the first kill-table run; its mtime proves the order.
+detector: 33 scored rows, 10 of them symptom rows (HEAD want != FIX want).  The fix
+edits src/devices/dev_wdc.c at four sites: the SDH decode (write) and its read-back
+composition (grep `case wd_sdh:`), the LBA28 arm in `wdc__read` (grep `void wdc__read`)
+and in `wdc__write` (grep `void wdc__write`); word 49 is unchanged (grep `49: capabilities`).
+
+================================================================================
+SCOPE.  This block binds because the round ships/extends a kill-table-backed detector.
+
+FLOOR BOOKKEEPING (vacuity floor a-f):
+ (a) pre-fix RED: the five+ symptom rows show the CHS reading on the committed build
+     (witness_20261024/RESULTS_base.txt, 19/19 vs HEAD; the lba* rows are RED vs FIX).
+ (b) verbatim reinstatement at EVERY fixed site -> V1 (decode back on bit 5), V14
+     (one site left #if 0, two halves), V17 (read-back recomposed with the old formula).
+ (c) null medium: a NON-EMULATOR executable -- the dead run on /bin/false, recorded
+     here as `(c): measured at detector_20261024/dead_run.out`.  gate 10's need_exec
+     turns an ABSENT binary into a whole-gate SKIP, so an executable-that-is-not-the-
+     emulator is the medium that exercises the probe.
+ (d) DEPENDS-ON: at wdc__read / wdc__write the only dominating predicate the fix adds is
+     `if (d->lba)`; at the decode line the io_enabled test, `case wd_sdh:` and the
+     read/write split are unchanged.  The guarded BODY reads d->head, d->cyl_lo,
+     d->cyl_hi (via cyl) and d->sector; the body TESTS none of them (no if over them),
+     so the body-induced partition of each is EMPTY and there are NO joint cells.  The
+     single-axis conditioned-arm mutants V4/V5/V6 (head/cyl/sector) are enumerated and
+     rowed or disclosed per cell below -- adjudicated as the floor by the pass-1 panel.
+ (e) the contract: the probe docstring's CATCHES / clause (e) DISCLOSURES / MEASURED-
+     NOT-PROMISED (V15) / ANCHOR paragraph.
+ (f) ANCHOR: each tag names WHICH sector was served, through image content the decode
+     does not produce.  "If every LBA moved by one sector, which row reds?" -> the five
+     `lba` read rows (lba 70, lba 256, sel 40, lba 0, lba h1) and, on the write side,
+     lba wr / lba wr256.  A +1 shift reds four read rows and lba wr; a -1 shift also reds
+     lba wr2.
+ R21 compare edges: N/A (a bit test and a flag test; the disk-layer bounds are #416's).
+ R14: N/A (no `exit(` deleted by this fix).
+
+================================================================================
+SIBLING PARITY (read site vs write site).
+ Read site rows (L=1): lba 70, lba 256, sel 40, lba 0, lba h1, lba cylhi.  CHS rows:
+   chs s1/s2/h1/c1, lba h1 ctl.
+ Write site rows (L=1): lba wr, lba wr h1, lba wr256, lba wr cylhi (via refusal).  CHS
+   write rows: chs wr, chs wr2.
+ ASYMMETRY and how it is covered: the write site has fewer L=1 observation points than
+ the read site because a write is observed only by reading the target back.  Each write
+ cell has a dedicated read-back row through a VALID CHS triple (head 1 sector 8/7/5/9,
+ head 4 sector 5, head 15 sector 63, head 0 sector 6/10/11) -- the valid-triple choice
+ is the witness note's correction (sectors 71/70 outside 1..S were only served because
+ the model does not validate CHS).  No de-fatalised arm, so no completion-event sibling
+ row is owed.
+
+CLAIM -> ROW (each added comment asserting an observable consequence owes a row):
+ "LBA served at the LBA, not the CHS reading"  -> lba 70, sel 40, lba wr, lba wr256.
+ "read-back byte-exact through sdh_resv"       -> sdh rb, sdh rb2, sdh rb3, sdh rb0.
+ "word 49 stays 0 (LBA implemented, not advertised)" -> id w49.
+ "the 64-bit product honours head != 0"        -> lba h1 (FIX zeros; past the file).
+ No comment claims a channel that no row observes.
+
+GUARD FIELD vs BODY FIELD (R10), with the body-induced partition per lvalue:
+ guard reads  d->lba              (written in the SDH write arm, bit 6).
+ body reads   d->head   -- written same SDH arm, independent bits 3..0; partition EMPTY
+                           (the LBA body does not test head); SAMPLED {0, 1}.
+              d->sector -- written wd_sector; partition EMPTY; SAMPLED {0, 5, 70}.
+              d->cyl_lo -- written wd_cyl_lo; partition EMPTY; SAMPLED {0, 1}.
+              d->cyl_hi -- written wd_cyl_hi; partition EMPTY; SAMPLED {0, 1}.
+ Disagreeing states (lba=1 with head!=0 / cyl_lo!=0 / cyl_hi!=0 / sector==0) are reachable
+ by ordinary register writes and are rowed (lba h1, lba 256, lba cylhi, lba 0) or
+ disclosed (cyl_hi destinations past a 4096-sector image: C6/C11, clause (e)).
+
+================================================================================
+CHANNEL per scored row -- the mutant it kills and the observable that differs.
+A row whose named channel cannot vary under its named mutant would be vacuous by
+construction; none below is.
+
+ ram:*           apparatus liveness (0x5a5a RAM round-trip)   -- a bad encoding/boot
+ id w49          word 49 advertised nonzero (C18)             -- the 16-bit IDENTIFY word
+ id geo          H,S read back zero                           -- geometry words 3/6
+ chs s1/s2/h1    decode on bit 7 (V2) / unconditional LBA (V13) -- CHS tag at index 0/1/S
+ chs c1          cyl_lo dropped on the CHS path               -- tag at index heads*S (N8)
+ sdh rb          read-back drops bit 6 (V18)                  -- 0xe5 byte
+ sdh rb2         read-back recomposed old formula (V17)       -- 0xb3 (reads 0x93 if lba<<5)
+ sdh rb3         read-back forces bits 7/5 to 1 (V16)         -- 0x4c (bits 7,5 CLEAR)
+ sdh rb0         a stuck reserved/field bit                   -- 0x00 after 0xe5 then 0x00
+ lba 70          decode off bit 6 / LBA arm disabled (V1-V3,V13) -- tag 69(HEAD) vs 70(FIX)
+ lba 256         LBA arm conditioned on cyl/sector (V5r/V6r)  -- tag 1007(HEAD) vs 256(FIX)
+ sel 40          decode qualified by bits 7/5 (V2,V3)         -- 0x40: tag 69 vs 70 (N3)
+ lba cylhi       cyl_lo<<8-only cylinder term (V10 variant)   -- zeros both; reds a cyl_lo-
+                                                                 only mutant that serves 70
+ lba 0           LBA arm disabled / sector-1 offset (V11)     -- zeros(HEAD) vs tag 0(FIX)
+ lba h1          head term dropped / 32-bit product (V8,V15)  -- tag 67(HEAD) vs zeros(FIX)
+ lba h1 ctl      (anchor: a tagged sector reachable in-session) -- tag 2 both legs
+ lba wr          write-site LBA disabled / offset captured early (V14w,V20) -- tag70 vs payload
+ lba wr2         write-site decode (V1w/V13w)                 -- payload(HEAD) vs tag69(FIX)
+ lba wr h1       write-site head term (V8w)                   -- payload(HEAD) vs tag67(FIX)
+ lba wr h1s5     (control: index 5 untouched)                 -- tag 5 both legs
+ lba wr256       write-site cyl/sector condition (V5w/V6w/V11w) -- tag256(HEAD) vs payload
+ lba wr256b      write-site landing (V11w)                    -- payload(HEAD) vs tag1007(FIX)
+ chs wr          CHS write stays CHS (V13w on a CHS select)   -- payload both legs
+ chs wr2         (control: index 10 untouched)                -- tag 10 both legs
+ lba wr cylhi    write-arm cyl_lo<<8-only variant (V10w)      -- tag71 both (refused); a
+                                                                 cyl_lo-only write lands 71
+
+================================================================================
+KILL TABLE to run (BUILD_SPEC D3): V1, V2, V3, V4r/V4w, V5w, V6w, V8, V11, V13r/V13w,
+V14 (both halves), V15 [measured, recorded non-generalising], V16, V17, V18, V20.
+One mutant per build in a scratch clone of /tmp/gxt2/fix, .MUTANT sentinel dropped
+first, cmp vs GXEMUL-SEC after restore.  The dead run on /bin/false is clause (c).
+
+================================================================================
+CORRECTIONS, appended 2026-10-24 21:5x after pass 2.  The block above is the record WRITTEN
+BEFORE the tables ran; it is kept verbatim and corrected here, never rewritten.  Each item
+quotes the prediction and gives the MEASURED killers (the FAIL rows of raw_mut/<mutant>.out).
+ * "lba 70 -- decode off bit 6 / LBA arm disabled (V1-V3,V13)": WRONG for V1, V2, V3 and V13r.
+   The row is GREEN under all four: select 0xe0 has bits 7, 6 and 5 set, so the bit-5 and the
+   bit-7 decodes and the bit-6-and-5 conjunction still take the LBA arm, and the unconditional
+   read arm serves LBA 70 correctly.  Measured killers of `lba 70`: V11, V14w, T_m1, T_p1.
+   V1/V2 are killed by the CHS rows, sdh rb2/rb3, sel 40, lba h1 and the write rows (17/33);
+   V3 by sdh rb3 and sel 40 (31/33); V13r by the CHS rows and the write rows (19/33).
+ * "lba wr -- (V14w,V20)" and "lba wr2 -- write-site decode (V1w/V13w)": the applicator's V14
+   suffixes are INVERTED relative to this block -- mutants572.py defines V14w as the READ arm
+   disabled and V14r as the WRITE arm disabled, and the shipped contract uses the applicator's
+   labels.  Measured: V14r reds lba wr, lba wr2, lba wr h1, lba wr256, lba wr256b (the five
+   write-side symptom rows); V14w reds lba 70, lba 256, sel 40, lba 0, lba h1 (the five
+   read-side symptom rows).  There is no V1w; `lba wr2` is GREEN under V13w (its reds are chs wr
+   and chs wr2).
+ * "lba wr h1 -- write-site head term (V8w)": WRONG.  Under V8w `lba wr h1` is GREEN and
+   `lba wr h1s5` is RED: dropping the head term lands the LBA write at index 5, and the CHS twin
+   at index 67 stays untouched.  `lba wr h1` is the row that kills V4w (the head-conditioned
+   write arm falls back to CHS and writes index 67).
+ * "lba wr256b -- write-site landing (V11w)": WRONG.  Under V11w (`sector - 1` at the write
+   site) the write lands at LBA 255 and index 1007 stays untouched; `lba wr256b` is GREEN.
+   V11w's measured reds: lba wr, lba wr2, lba wr256.  `lba wr256b` is RED under V5w, V6w, V14r
+   and V20 (the CHS fallback writes index 1007).
+ * "lba h1 -- head term dropped / 32-bit product (V8,V15) -- tag 67(HEAD) vs zeros(FIX)": the
+   HEAD and FIX wants are right; the MUTANT outcome is tag 5, not tag 67 -- V8 and V15 serve
+   index 5 (V15: 512 * 16,777,221 wraps to 2,560 on this build; V8: the head term gone gives
+   LBA 5).  Measured: raw_mut/V8.out and raw_mut/V15.out, `lba h1` got 0xfffa0005.
+ * "sdh rb2 -- read-back recomposed old formula (V17)": V17 as built DROPS RESERVED BIT 5 only
+   (`(d->sdh_resv & 0x80)`); it is not the verbatim pre-#572 composition.  The verbatim
+   reinstatement of site 4 is the single build V17v (SCORES_V17v.txt), measured after pass 2.
+ * "chs c1 -- cyl_lo dropped on the CHS path": that mutant was never built (the CHS formula is a
+   must-not-change site, not a fix predicate).  The row's MEASURED killers are V1, V2 and V13r.
+ * Clause (f) ANCHOR: "+1 reds four read rows and lba wr" undercounts.  T_p1 reds SEVEN: lba 70,
+   lba 256, sel 40, lba 0, lba wr, lba wr256 and lba wr cylhi (the +1-shifted LBA-70 write lands
+   on index 71, which lba wr cylhi reads back).  `lba h1` is GREEN under both translations (LBA
+   0x1000005 +- 1 is past the file either way).  T_m1 reds seven as predicted.
+ * The dead run: 0/33, CONTROL=FAIL, result line present (dead_run.out) -- the None guard closed
+   the vacuity the witness revision had (where two None wants passed).
+
+  CORRECTION TO THE CORRECTIONS (2026-10-25 01:4x, found by Grok 4.7 adjudicating F2, verified against the logs before this edit):
+  * the line above reading "V1/V2 are killed by the CHS rows, sdh rb2/rb3, sel 40, lba h1 and the write rows (17/33)" names
+    `lba h1` as a V1/V2 killer.  WRONG: `lba h1` is ok under V1 and V2 (raw_mut/V1.out, V2.out); the red head-1 row is
+    `lba h1 ctl` (the poisoned-register control).  V1/V2 are killed by the CHS rows, sdh rb2/rb3, sel 40, `lba h1 ctl` and
+    the write rows (17/33).

@@ -363,7 +363,9 @@ elif out=$(python "$SCORECHK" 2>&1); then
 	#  docstring is checked -- its score-shaped strings were reworded in its documentation revision 2c).
 	#  RAISED 38 -> 39 ON 2026-10-24, DELIBERATELY.  One newly gated probe: ppc_dsform_probe.py
 	#  (#571, pinned UNQUOTED in gate_ppc.sh at 39 rows under the stem ppc_dsform; its docstring is checked).
-	SCORE_CLAIMS_MANIFEST=39
+	#  RAISED 39 -> 40 ON 2026-10-24, DELIBERATELY.  One newly gated probe: wdc_lba_probe.py
+	#  (#572, pinned UNQUOTED in gate_sh_rounding.sh at 33 rows under the stem wdc_lba; its docstring is checked).
+	SCORE_CLAIMS_MANIFEST=40
 	_spinned=$(printf '%s\n' "$out" | sed -n 's/^SCORE_CLAIMS_PINNED=//p')
 	if [ -z "$_spinned" ]; then
 		bad "check_score_claims printed no SCORE_CLAIMS_PINNED line -- the count cannot be pinned"

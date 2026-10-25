@@ -1,0 +1,40 @@
+#!/bin/bash
+# T4 / #572 -- clause (b) at site 4: the VERBATIM old readback composition reinstated over the new decode
+# (V17v: `(d->sdh_resv << 6) + (d->lba << 5) + (d->drive << 4) + d->head` in place of the OR of disjoint fields).
+# Measured with the kill-table instrument (detector_20261024/wdc_lba_probe.frozen.py, md5 fc878c42) in GATE mode vs the FIX
+# column, baseline /tmp/gxt2/fix, in a cp -a clone with a .MUTANT sentinel; the clone is removed after a cmp-verified restore.
+set -u
+SEC=/mnt/c/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC
+D=$SEC/regress/artifacts/wdclbaaddr/detector_20261024
+INS=$D/wdc_lba_probe.frozen.py
+F=/tmp/gxt2/fix; M=/tmp/gxt2/mut_V17v
+W=/tmp/gxt2/work/t4/v17v_$(date +%H%M%S); mkdir -p "$W"
+echo "=== $(date '+%F %T') V17v: verbatim old readback composition at site 4"
+echo "instrument md5 $(md5sum "$INS" | cut -c1-8)"
+cmp -s "$F/src/devices/dev_wdc.c" "$SEC/src/devices/dev_wdc.c" && echo "baseline fix dev_wdc.c cmp CLEAN vs SEC" || { echo "baseline DIVERGENT -- STOP"; exit 9; }
+rm -rf "$M"; cp -a "$F" "$M" || exit 9
+echo "V17v: dev_wdc.c readback line replaced by the pre-#572 composition" > "$M/.MUTANT"
+OLD='			odata = d->sdh_resv | (d->lba << 6) | (d->drive << 4) |'
+grep -qF "$OLD" "$M/src/devices/dev_wdc.c" || { echo "readback line not found verbatim -- STOP"; cat "$M/.MUTANT"; exit 8; }
+python3 - "$M/src/devices/dev_wdc.c" <<'PY'
+import io, sys
+p = sys.argv[1]; t = io.open(p, encoding="utf-8", newline="").read()
+old = "\t\t\todata = d->sdh_resv | (d->lba << 6) | (d->drive << 4) |\n\t\t\t    d->head;\n"
+assert t.count(old) == 1, t.count(old)
+new = "\t\t\todata = (d->sdh_resv << 6) + (d->lba << 5) + (d->drive << 4) +\n\t\t\t    d->head;\n"
+io.open(p, "w", encoding="utf-8", newline="").write(t.replace(old, new))
+print("mutant applied")
+PY
+diff "$F/src/devices/dev_wdc.c" "$M/src/devices/dev_wdc.c" | head -8
+rm -f "$M/src/devices/dev_wdc.o"
+( cd "$M" && make -j4 > "$W/make.log" 2>&1 ); echo "make rc=$? ($(grep -ciE ' error' "$W/make.log") error lines)"
+[ "$M/gxemul" -nt "$M/src/devices/dev_wdc.c" ] && echo "mutant binary newer than source" || { echo "mutant binary OLDER -- STOP"; exit 7; }
+python3 -u "$INS" "$M/gxemul" GATE "$W" > "$W/V17v.out" 2> "$W/V17v.err"; RC=$?
+echo "probe rc=$RC; $(grep -E 'WDC_LBA_RESULT|WDC_LBA_CONTROL' "$W/V17v.out" | tr '\n' ' ')"
+grep -E ' FAIL$' "$W/V17v.out" | cut -c1-80
+mkdir -p "$D/raw_mut"; cp "$W/V17v.out" "$D/raw_mut/V17v.out"
+R=$(grep -o 'WDC_LBA_RESULT=[0-9]*/[0-9]*' "$W/V17v.out" | cut -d= -f2); C=$(grep -o 'WDC_LBA_CONTROL=[A-Z]*' "$W/V17v.out" | cut -d= -f2)
+printf 'wdclbaaddr (#572) V17v SINGLE BUILD (clause (b) at site 4: the verbatim pre-#572 readback composition over the new decode)   %s\ninstrument: wdc_lba_probe.frozen.py (GATE mode, FIX column), md5 %s\nV17v          score=%s control=%s  -> %s   reds: %s\nfinal: mutant clone removed after cmp-verified restore\nKILLTABLE_DONE\n' "$(date '+%F %T')" "$(md5sum "$INS" | cut -c1-8)" "$R" "$C" "$( [ "$R" = "33/33" ] && [ "$C" = "OK" ] && echo ESCAPE || echo KILLED )" "$(grep -E ' FAIL$' "$W/V17v.out" | awk '{print $1"-"$2}' | tr '\n' ',')" > "$D/SCORES_V17v.txt"
+cat "$D/SCORES_V17v.txt"
+rm -rf "$M"; echo "mutant clone removed; fix tree: $(cmp -s "$F/src/devices/dev_wdc.c" "$SEC/src/devices/dev_wdc.c" && echo 'cmp CLEAN vs SEC' || echo DIVERGENT)"
+echo "T4_V17V_DONE"

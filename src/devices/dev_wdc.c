@@ -129,7 +129,7 @@ struct wdc_data {
 	int		sector;
 	int		cyl_lo;
 	int		cyl_hi;
-	int		sectorsize;
+	int		sdh_resv;
 	int		lba;
 	int		drive;
 	int		head;
@@ -371,8 +371,11 @@ static void wdc_initialize_identify_struct(struct cpu *cpu, struct wdc_data *d)
 	d->identify_struct[2 * 47 + 0] = 0x80;
 	d->identify_struct[2 * 47 + 1] = 128;
 
-	/*  49: capabilities:  */
-	/*  (0x200 = LBA, 0x100 = DMA support.)  */
+	/*  49: capabilities: (0x200 = LBA, 0x100 = DMA support.)  #572
+	    honours LBA28 commands (the LBA bit of the select byte) but does
+	    NOT advertise LBA here: the advertisement is a separate, measured
+	    decision (see the wdclbaadvertise row); words 60-61 already carry
+	    the capacity.  */
 	d->identify_struct[2 * 49 + 0] = 0;
 	d->identify_struct[2 * 49 + 1] = 0;
 
@@ -467,13 +470,11 @@ void wdc__read(struct cpu *cpu, struct wdc_data *d)
 	    + (int64_t)d->head * d->sectors_per_track[d->drive] +
 	    (int64_t)d->heads[d->drive] * d->sectors_per_track[d->drive] * cyl);
 
-#if 0
-	/*  LBA:  */
+	/*  #572: LBA28 -- head[3:0] is LBA[27:24]; the product is 64-bit
+	    (it overflows int for any head != 0).  */
 	if (d->lba)
-		offset = 512 * (((d->head & 0xf) << 24) + (cyl << 8)
-		    + d->sector);
-	printf("WDC read from offset %lli\n", (long long)offset);
-#endif
+		offset = 512 * (int64_t)(((d->head & 0xf) << 24) +
+		    (cyl << 8) + d->sector);
 
 	while (count > 0) {
 		int to_read = count > max_sectors_per_chunk?
@@ -559,13 +560,11 @@ void wdc__write(struct cpu *cpu, struct wdc_data *d)
 	uint64_t offset = 512 * (d->sector - 1
 	    + (int64_t)d->head * d->sectors_per_track[d->drive] +
 	    (int64_t)d->heads[d->drive] * d->sectors_per_track[d->drive] * cyl);
-#if 0
-	/*  LBA:  */
+	/*  #572: LBA28 -- head[3:0] is LBA[27:24]; the product is 64-bit
+	    (it overflows int for any head != 0).  */
 	if (d->lba)
-		offset = 512 * (((d->head & 0xf) << 24) +
+		offset = 512 * (int64_t)(((d->head & 0xf) << 24) +
 		    (cyl << 8) + d->sector);
-	printf("WDC write to offset %lli\n", (long long)offset);
-#endif
 
 	d->write_in_progress = d->cur_command;
 	d->write_count = count;
@@ -2003,21 +2002,26 @@ DEVICE_ACCESS(wdc)
 		}
 		break;
 
-	case wd_sdh:	/*  6: sectorsize/drive/head  */
+	case wd_sdh:	/*  6: SDH -- bit 6 = LBA, bit 4 = drive,
+			    bits 3..0 = head / LBA[27:24]  */
 		if (writeflag==MEM_READ) {
-			odata = (d->sectorsize << 6) + (d->lba << 5) +
-			    (d->drive << 4) + (d->head);
-			debug("[ wdc: read from SDH: 0x%02x (sectorsize %i,"
-			    " lba=%i, drive %i, head %i) ]\n", (int)odata,
-			    d->sectorsize, d->lba, d->drive, d->head);
+			odata = d->sdh_resv | (d->lba << 6) | (d->drive << 4) |
+			    d->head;
+			debug("[ wdc: read from SDH: sdh=0x%02x lba=%i drive=%i"
+			    " head=%i ]\n", (int)odata, d->lba, d->drive,
+			    d->head);
 		} else {
-			d->sectorsize = (idata >> 6) & 3;
-			d->lba   = (idata >> 5) & 1;
+			/*  #572: bits 7 and 5 of the select byte (reserved in
+			    ATA), kept for a byte-exact readback.  */
+			d->sdh_resv = idata & 0xa0;
+			/*  #572: ATA puts the LBA flag in bit 6 (WDSD_LBA); it
+			    was decoded from bit 5.  */
+			d->lba   = (idata >> 6) & 1;
 			d->drive = (idata >> 4) & 1;
 			d->head  = idata & 0xf;
-			debug("[ wdc: write to SDH: 0x%02x (sectorsize %i,"
-			    " lba=%i, drive %i, head %i) ]\n", (int)idata,
-			    d->sectorsize, d->lba, d->drive, d->head);
+			debug("[ wdc: write to SDH: sdh=0x%02x lba=%i drive=%i"
+			    " head=%i ]\n", (int)idata, d->lba, d->drive,
+			    d->head);
 		}
 		break;
 

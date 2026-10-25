@@ -1524,6 +1524,58 @@ else
     fi
 fi
 
+# ---------------------------------------------------------------------------
+# #572 (wdclbaaddr): the wdc SDH taskfile decoded the ATA LBA flag from BIT 5
+# (0x20) instead of BIT 6 (0x40 = WDSD_LBA), and the LBA28 offset formula was
+# `#if 0'd out at both wdc__read and wdc__write, so an LBA-mode request was served
+# from the CHS reading of the same taskfile bytes.  The fix decodes lba from bit 6,
+# keeps the SDH read-back byte-exact through the renamed reserved field sdh_resv,
+# and enables the 64-bit LBA28 arm at BOTH sites.  WIRED IN THE SAME COMMIT AS THE
+# PROBE, so it cannot ship unwired and let its pin drift red between commits.
+#
+# rung 3 on UNMODIFIED `evbmips -e malta`: real MIPS PIO through the committed
+# piix4_ide path, device-signature tags (word0,word1) = (n, ~n) that no RAM cell
+# holds.  Pre-fix witness: regress/artifacts/wdclbaaddr/witness_20261024/ (base leg
+# 19/19 vs HEAD, the five lba* rows RED vs the FIX column).  Kill table and the
+# two-leg / GATE / dead-run measurements: regress/artifacts/wdclbaaddr/detector_20261024/.
+LBALOG=$LOGDIR/gate_wdc_lba.log
+LBADIR=$LOGDIR/wdclba
+python3 -u wdc_lba_probe.py "$PMAX" GATE "$LBADIR" > "$LBALOG" 2>&1 || true
+
+if ! grep -q "WDC_LBA_RESULT=" "$LBALOG"; then
+    note "wdc_lba probe produced no result line; last lines follow"
+    tail -5 "$LBALOG" | sed 's/^/       /'
+    check "wdc_lba probe completed" "no" "yes"
+else
+    grep -E ' (ok|FAIL)$' "$LBALOG" | sed 's/^/       /'
+    #  PARSE BEFORE SCORE: a result line that EXISTS but is MALFORMED still satisfies
+    #  the outer grep; lbares is then empty and `check "" ""` passes on nothing (the
+    #  wdcflood / wdc_altdigin lesson).
+    lbares=$(grep -o "WDC_LBA_RESULT=[0-9]*/[0-9]*" "$LBALOG" | tail -1 | cut -d= -f2)
+    if [ -z "$lbares" ]; then
+        note "wdc_lba result line present but unparseable; last lines follow"
+        tail -3 "$LBALOG" | sed 's/^/       /'
+        check "wdc_lba result parses" "no" "yes"
+    else
+        check "wdc_lba result parses" "yes" "yes"
+        lbactl=$(grep -o "WDC_LBA_CONTROL=[A-Z]*" "$LBALOG" | tail -1 | cut -d= -f2)
+        #  CONTROL=OK requires every IDENTITY row (the rows whose HEAD and FIX wants agree:
+        #  ram liveness, IDENTIFY, the CHS reads, the SDH read-backs, the untouched-sector
+        #  and refused-write controls) AND every session's encodings and halt breakpoint.
+        check "wdc_lba control: identity rows, encodings, breakpoints" "${lbactl:-missing}" "OK"
+        #  DENOMINATOR PINNED TO A LITERAL (the wdc_altdigin idiom).  The literal is the
+        #  revised probe's scored-row count: 7 ram + 2 identify + 4 chs + 4 sdh + 4 lba
+        #  + 1 lba0 + 2 lbah1 + 9 lbawr = 33.  A pin that follows the probe's own
+        #  denominator cannot tell a probe that LOST rows from one that never had them,
+        #  so the literal moves BY HAND and says why.
+        check "wdc_lba rows run"     "${lbares#*/}" 33
+        check "wdc_lba rows correct" "${lbares%/*}" "${lbares#*/}"
+    fi
+    #  The probe must reach its own completion sentinel, not merely emit a result line.
+    check "wdc_lba probe reached its sentinel" \
+          "$(grep -cx 'WDCLBA_PROBE_DONE' "$LBALOG")" "1"
+fi
+
 #  *** A SOURCE GREP, BECAUSE A STEP-BASED PROBE CANNOT SEE CHANNEL SEMANTICS. ***
 #  `fatal(` -> `debug(` at any of the six sites scores a CLEAN SWEEP against every row
 #  above: they all single-step, and debug() always prints under stepping (its early-out

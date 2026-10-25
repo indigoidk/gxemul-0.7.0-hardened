@@ -1,0 +1,56 @@
+I'll check the product diff and the recorded premises against the tree, starting with the unsettled part of the packet and the `dev_wdc.c` sites it names.LAND WITH CHANGES
+
+The C repair matches the adjudication and the witness arithmetic. Two records that this landing would commit are false as they stand: the frozen-detector blurb in the wiring hunk, and the `wdclbaadvertise` citation, which names a row that is not in the tree. Fix both in the same commit as the CHANGELOG claims in Q3.
+
+## Q1 — the diff
+
+The five sites in `src/devices/dev_wdc.c` match the packet. No defect in the address formula.
+
+* The rename is complete. The product file has `sdh_resv` and no `sectorsize`. Its only readers are the SDH readback and that arm's debug line. The struct is zeroed at init (`dev_wdc.c:2083-2084`). READ.
+* Decode is bit 6, drive is bit 4, head is `idata & 0xf`, and bits 7 and 5 are `idata & 0xa0`. READ.
+* Readback is byte-exact for every select byte. Those four fields partition bits 7 and 5, bit 6, bit 4, and bits 3–0, and the readback ORs them back together. DERIVED. `0x00`, `0x40`, `0x4c`, `0xa0`, `0xb3`, `0xe0`, `0xe5`, and `0xff` all round-trip.
+* Both arms are `512 * (int64_t)(((d->head & 0xf) << 24) + (cyl << 8) + d->sector)`. On the write side that assignment sits above `write_in_progress`, `write_count`, and `write_offset` (`:569-571`). Both `printf`s are gone. READ.
+* The cast widens the multiply, which is the overflow. The sum is still done in `int`. For every LBA28 taskfile byte it fits: the maximum is `0x0FFFFFFF` (268435455), below 2³¹−1. `512 * LBA` is what overflows a 32-bit `int`. V15, the unwidened product, served sector 5 on `lba h1` (`0xfffa0005` in `raw_mut/V15.out`). DERIVED; that log line is READ. The comment's "any head != 0" is the case the table measured. A head-0 LBA at or above 2²² overflows a 32-bit product as well, and this cast covers that range too.
+* `cyl = cyl_hi * 256 + cyl_lo` (`:467`, `:558`), so `(cyl << 8) + sector + (head_nibble << 24)` is LBA28, with the sector register not decremented. Tag checks: 70 → `0xffb90046`, 69 → `0xffba0045`, 256 → `0xfeff0100`, 1007 → `0xfc1003ef`, 0 → `0xffff0000`. DERIVED. The witness files show those values. READ.
+* Word 49's two bytes are still 0. Words 60–61 are filled from `total_size / 512` (`:441-445`). The capacity sentence is true. READ.
+* `d->lba` has one writer (`:2019`) and two address readers (`:475`, `:565`). READ. The CHS formula and its casts are unchanged around the new arms. READ. A whole-file `git diff HEAD` was not re-run here, so "no other hunk in this file" past those anchors is NOT CHECKABLE.
+* Geometry 16/63 with cylinders rounded up is `diskimage.c:270-271` and `:295-297`. 4096 sectors → 5 cylinders → 5040. DERIVED from that code. READ.
+* The `est/` twin is NOT CHECKABLE. This tree has no `est/`. `dev_wdc.c` is not on the SEC-only list in `tools/est_divergence.txt`, so check A requires the same five hunks in the twin.
+
+## Q2 — the detector
+
+The built variants die on the rows the logs name. One pre-table label is swapped, and the V1 gloss over-includes one row. The score `17/33` is still right.
+
+* Clause (c) is measured. `dead_run.out` has `WDC_LBA_RESULT=0/33`, `WDC_LBA_CONTROL=FAIL`, and `WDCLBA_PROBE_DONE`. READ.
+* The denominator is the constructor. `SESSION_ORDER` has 7 sessions (`:475-478`), then 2 IDENTIFY + 4 CHS + 4 SDH + 4 LBA + 1 LBA-0 + 2 head-1 + 9 write-session rows = 33. The gate hunk pins the literal 33, requires the numerator to equal it, requires `WDC_LBA_CONTROL=OK`, and requires the sentinel once. READ.
+* `CONTROL` is the identity rows plus encodings and breakpoints (`run_leg`, kind `"control"`). A symptom-only miss stays `CONTROL=OK` and is still a kill because `p < n`. V15 is that shape. READ.
+* Raw fails match the contract's parentheses where I opened them. READ: V3 `sdh rb3` and `sel 40`; V6r `lba 256` and `lba 0`; V11 `lba 70`, `lba 256`, `sel 40`, `lba 0`; V11w `lba wr`, `lba wr2`, `lba wr256`; V8w `lba wr h1s5` got `0x66669999`; V9r8 `lba h1` got tag 261 (`0xfefa0105` = `(1 << 8) + 5`); V10r `lba cylhi` got tag 70; V13w `chs wr` and `chs wr2`; V14w the five read symptom rows; V14r the five write symptom rows; T_m1 and T_p1 the seven rows each named in the contract; V15 `lba h1` = tag 5.
+* V14's suffixes are inverted relative to V4r/V4w. In `mutants572.py`, V14w is `if (0)` on the read arm and V14r is `if (0)` on the write arm. The logs and the shipped contract follow that. `PRETABLE.out` assigns V14w to the write site. That file is the mis-prediction. It does not ship.
+* V1's gloss is loose. `V1.out` has 16 failing rows, so `17/33` is exact, and `chs wr` is not among them. With the flag back on bit 5, select `0xa0` is LBA, so that write and its readback both hit sector 10 and still show the payload the row wants. V13w is the mutant that reds `chs wr`. READ.
+* Witness premise S1 holds in `RESULTS_base.txt`: LBA 70 → tag 69, LBA 256 → tag 1007, LBA 0 → zeros, the write read back at index 69 as payload `0x88887777`, `19/19`, disk path `witness_20261024_170332`. READ. S2's fix leg holds in `RESULTS_fix.txt` (`lba 70` → `0xffb90046`, `lba wr` → `0x88887777`, `19/19`). The date line in that file is `19:02:13`. The premise's "19:04" does not match it. READ.
+* `rev_equivalence.txt`: 8 executable lines, `id geo` from `S != 0` to `S >= 10`; every preserved reading is `(16, 63)` or `(None, None)`; scores transfer. READ.
+* One further single-edit variant no row sees: `if (d->lba && d->seccnt != 0)` on either arm. Every `e_cmd` in the probe passes seccnt 1, so the guard is true on every scored command. Sector-count 0 is the ATA encoding of 256 sectors. The blind line "MULTI / seccnt > 1" does not name that cell. The transfer would take the CHS formula.
+
+## Q3 — records
+
+The gate-10 block, the identify re-authoring, and the `gate_offline.sh` comment bullet are the right edits. The wiring blurb is not.
+
+* Gate 10 sits after the `wdc_altdigin` block and before the source-grep (`gate_sh_rounding.sh:1535-1537` in the working tree). `$PMAX` is the gxemul binary (`:33`). READ. The shell block has not been run inside `gate_sh_rounding.sh`. The GATE-mode lines it greps are the lines the probe runs already print.
+* `row_no_lba_claim` keeps its name, the both-bytes `!= 0` test, and the ok string `no unimplemented capability claimed`. That string is what `gate_offline.sh:1947-1948` counts. The comment and the FAIL text are the re-authoring, and the FAIL text matches the policy (LBA implemented by #572, not advertised; DMA not implemented). READ against `:5699-5729` and the hunk. The ok string's word "unimplemented" is behind the new policy. Keeping it is the C3 grep anchor.
+* The `gate_offline.sh` hunk replaces the bullet that still says the arm is `#if 0` (`:1942` in the working tree). READ.
+* Wiring classes for the shipping probe (`CLASS_DETECTOR`), the witness copy (`CLASS_WITNESS`), and `mutants572.py` (`CLASS_TOOL`) match the adjudication. The frozen-detector sentence does not. It says the shipped probe "differs only in its module docstring" and cites `rev_equivalence.txt`, whose part (a) is 8 executable lines. Replace that sentence with the predicate change and the part (b) transfer.
+
+Same-commit claims:
+
+* `CHANGELOG.md:31191-31196` is now false. The #572 block has to say so: the LBA28 arms run, and `d->lba` is bit 6 and reaches the offset. Word 49 stays 0 because the advertisement was not measured. Do not revive the five-rigs warrant, do not claim a Linux guest was measured, and do not claim V15 is caught on every compiler. Quote this build's wrap to sector 5, and that a compiler which widens the product serves zeros, like the fix.
+* Give the `#482` `&& !d->lba` sentences (`OUTSTANDING_BUGS.md:13001`, `CHANGELOG.md:17817`) an explicit before and after. Before, `d->lba` was bit 5, set in both `0xa0` and `0xe0`. After, it is bit 6, set in `0xe0` and clear in `0xa0`. Leave the measured #482 score as a historical score.
+* File `wdclbaadvertise`, `wdclbaimage`, and `wdcmediastatus` under those slugs. The comments and the probe contract already cite them. None of the three strings is in `OUTSTANDING_BUGS.md`. READ. Until `wdclbaadvertise` exists, "see the wdclbaadvertise row" in `dev_wdc.c:377` and in the identify comment is a dangling citation.
+* Do not claim the gate-10 shell block was executed as part of `gate_sh_rounding.sh`.
+
+## Q4
+
+Ordinary `0xe0` commands whose CHS reading used to land in the file, including head-nibble 1, now take the existing out-of-range read in `diskimage.c:1595-1599`: the buffer is zeroed and `wdc__read` discards the return. That is the media-status gap, on the LBA path as well as the CHS path. No status logic was added. It stays the `wdcmediastatus` filing.
+
+`PRETABLE.out`'s V14 polarity is stale against the logs. It is an artifact, not a shipped record.
+
+Nothing else in the sites opened.

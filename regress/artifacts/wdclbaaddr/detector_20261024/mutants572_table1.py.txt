@@ -1,0 +1,140 @@
+#  #572 wdclbaaddr -- kill-table mutant applicator.  CLASS_TOOL.
+#
+#  Each mutant is ONE textual edit to the FIXED src/devices/dev_wdc.c (clause-(b)
+#  reinstatements of the removed defect and clause-(d) conditioned-arm variants).  The
+#  old text must occur EXACTLY ONCE, so a find-text that no longer matches is a loud
+#  failure, and a mutant additionally pins the presence of the text it edits.
+#
+#  Usage:  python3 mutants572.py --list
+#          python3 mutants572.py <name> <path-to-dev_wdc.c>   (edits in place)
+#
+#  The READ-site and WRITE-site LBA arms are textually identical, so each is captured
+#  with its DISTINCT following statement (`while (count` for read, `d->write_in_progress`
+#  for write) to disambiguate.
+import io
+import sys
+
+#  --- the four fixed-source blocks the mutants edit --------------------------------
+DECODE = "\t\t\td->lba   = (idata >> 6) & 1;"
+RB = ("\t\t\todata = d->sdh_resv | (d->lba << 6) | (d->drive << 4) |\n"
+      "\t\t\t    d->head;")
+READ_ARM = ("\tif (d->lba)\n"
+            "\t\toffset = 512 * (int64_t)(((d->head & 0xf) << 24) +\n"
+            "\t\t    (cyl << 8) + d->sector);\n"
+            "\n"
+            "\twhile (count > 0) {")
+WRITE_ARM = ("\tif (d->lba)\n"
+             "\t\toffset = 512 * (int64_t)(((d->head & 0xf) << 24) +\n"
+             "\t\t    (cyl << 8) + d->sector);\n"
+             "\n"
+             "\td->write_in_progress = d->cur_command;")
+
+
+def read_new(expr):
+    return READ_ARM.replace("\tif (d->lba)\n\t\toffset", expr + "\n\t\toffset", 1)
+
+
+def read_formula(newformula):
+    return READ_ARM.replace("((d->head & 0xf) << 24) +\n\t\t    (cyl << 8) + d->sector",
+                            newformula, 1)
+
+
+MUTANTS = {
+    #  decode (site 1)
+    "V1":  (DECODE, "\t\t\td->lba   = (idata >> 5) & 1;"),              # (b) back on bit 5
+    "V2":  (DECODE, "\t\t\td->lba   = (idata >> 7) & 1;"),             # decode on bit 7
+    "V3":  (DECODE, "\t\t\td->lba   = ((idata >> 6) & (idata >> 5)) & 1;"),  # bit 6 AND bit 5
+
+    #  read-site arm
+    "V4r": (READ_ARM, read_new("\tif (d->lba && d->head == 0)")),     # (d) head-conditioned
+    "V8":  (READ_ARM, read_formula("(cyl << 8) + d->sector")),        # formula without head term
+    "V11": (READ_ARM, READ_ARM.replace("(cyl << 8) + d->sector);",
+                                       "(cyl << 8) + d->sector - 1);", 1)),  # sector offset wrong
+    "V13r": (READ_ARM, read_new("\tif (1)")),                         # unconditional LBA (read)
+    "V14w": (READ_ARM, read_new("\tif (0)")),                         # read arm left disabled
+    "V15": (READ_ARM, READ_ARM.replace("512 * (int64_t)(((d->head",
+                                       "512 * (((d->head", 1)),       # unwidened 32-bit product
+
+    #  write-site arm
+    "V4w": (WRITE_ARM, WRITE_ARM.replace("\tif (d->lba)\n\t\toffset",
+                                         "\tif (d->lba && d->head == 0)\n\t\toffset", 1)),
+    "V5w": (WRITE_ARM, WRITE_ARM.replace("\tif (d->lba)\n\t\toffset",
+                                         "\tif (d->lba && cyl == 0)\n\t\toffset", 1)),
+    "V6w": (WRITE_ARM, WRITE_ARM.replace("\tif (d->lba)\n\t\toffset",
+                                         "\tif (d->lba && d->sector != 0)\n\t\toffset", 1)),
+    "V13w": (WRITE_ARM, WRITE_ARM.replace("\tif (d->lba)\n\t\toffset",
+                                          "\tif (1)\n\t\toffset", 1)),
+    "V14r": (WRITE_ARM, WRITE_ARM.replace("\tif (d->lba)\n\t\toffset",
+                                          "\tif (0)\n\t\toffset", 1)),  # write arm left disabled
+    "V20": (WRITE_ARM,                                                # offset captured before arm
+            ("\td->write_in_progress = d->cur_command;\n"
+             "\td->write_count = count;\n"
+             "\td->write_offset = offset;\n"
+             "\tif (d->lba)\n"
+             "\t\toffset = 512 * (int64_t)(((d->head & 0xf) << 24) +\n"
+             "\t\t    (cyl << 8) + d->sector);\n"
+             "\n"
+             "\td->write_in_progress = d->cur_command;")),
+
+    #  read-back composition (site 4)
+    "V16": (RB, RB.replace("d->sdh_resv |", "(d->sdh_resv | 0xa0) |", 1)),   # force bits 7,5 to 1
+    "V17": (RB, RB.replace("d->sdh_resv |", "(d->sdh_resv & 0x80) |", 1)),   # drop reserved bit 5
+    "V18": (RB, RB.replace("(d->lba << 6)", "(0)", 1)),                      # drop bit 6 reflection
+}
+
+#  V20 rewrites the write tail, so it must also consume the original three assignment
+#  lines.  Rebuild its old/new to span them.
+MUTANTS["V20"] = (
+    ("\tif (d->lba)\n"
+     "\t\toffset = 512 * (int64_t)(((d->head & 0xf) << 24) +\n"
+     "\t\t    (cyl << 8) + d->sector);\n"
+     "\n"
+     "\td->write_in_progress = d->cur_command;\n"
+     "\td->write_count = count;\n"
+     "\td->write_offset = offset;"),
+    ("\td->write_in_progress = d->cur_command;\n"
+     "\td->write_count = count;\n"
+     "\td->write_offset = offset;\n"
+     "\tif (d->lba)\n"
+     "\t\toffset = 512 * (int64_t)(((d->head & 0xf) << 24) +\n"
+     "\t\t    (cyl << 8) + d->sector);"),
+)
+
+
+def apply(name, path):
+    old, new = MUTANTS[name]
+    s = io.open(path, "r", newline="").read()
+    n = s.count(old)
+    if n != 1:
+        sys.stderr.write("MUTANT %s: old text occurs %d times (want 1)\n" % (name, n))
+        sys.exit(3)
+    if new == old:
+        sys.stderr.write("MUTANT %s: new text equals old\n" % name)
+        sys.exit(4)
+    io.open(path, "w", newline="").write(s.replace(old, new, 1))
+    print("MUTANT %s applied to %s" % (name, path))
+
+
+def main():
+    if len(sys.argv) == 2 and sys.argv[1] == "--list":
+        for k in MUTANTS:
+            print(k)
+        return
+    if len(sys.argv) == 3 and sys.argv[1] == "--check":
+        #  verify every mutant's old text occurs exactly once in the given file
+        s = io.open(sys.argv[2], "r", newline="").read()
+        bad = 0
+        for k, (old, new) in MUTANTS.items():
+            c = s.count(old)
+            ok = (c == 1 and new != old)
+            print("%-5s occ=%d new!=old=%s %s" % (k, c, new != old, "OK" if ok else "*** BAD"))
+            bad += (not ok)
+        sys.exit(1 if bad else 0)
+    if len(sys.argv) != 3:
+        sys.stderr.write(__doc__ or "usage: mutants572.py <name|--list|--check> <path>\n")
+        sys.exit(2)
+    apply(sys.argv[1], sys.argv[2])
+
+
+if __name__ == "__main__":
+    main()

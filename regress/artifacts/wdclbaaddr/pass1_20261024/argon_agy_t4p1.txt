@@ -1,0 +1,331 @@
+VERDICT: READY WITH CHANGES -- Ship the bit-6 `wd_sdh` decode and 64-bit-widened LBA28 offset calculation at both media sites with byte-exact SDH read-back (keeping IDENTIFY word 49 = 0), add floor rows `N1–N8` (fixing `N2`'s `HEAD`/`V4w` observability and `0x00bc0043` typo) plus single-binary Gate-10 CLI support in `wdc_lba_probe.py`, and wire `check_probe_wiring.py` and `gate_offline.sh` while updating stale `#if 0` comments.
+Q1: READY WITH CHANGES -- Enable LBA28 at both `wdc__read` and `wdc__write` with mandatory `(int64_t)512 * ...` widening, decode `d->lba = (idata >> 6) & 1`, preserve bits 7 and 5 on `wd_sdh` read-back without adding a struct field (`d->sectorsize = idata & 0xa0`), drop the `#if 0` `printf`s, and keep IDENTIFY word 49 = 0.   Q2: READY WITH CHANGES -- Grade `C1–C5, C7–C10, C12–C18` as floor cells and `C6, C11, C19, C20` as clause-(e) debt (unless the test disk is enlarged for `C6/C11`), add `N1–N8` with a two-target read-back on `N2` (so `V4w` and `HEAD` do not collapse onto `FIX`), pre-poison `N1`'s target registers, and add single-binary Gate-10 mode.   Q3: READY WITH CHANGES -- Keep `row_no_lba_claim()` with an updated comment and add a rung-1 LBA row in `diff_wdc_identify.c`, register `wdc_lba_probe.py` in `check_probe_wiring.py` and `gate_offline.sh` Gate 10, update `gate_offline.sh:1890` / `CHANGELOG.md` / `OUTSTANDING_BUGS.md`, and split word-49 advertisement into a separate round.   Q4: READY WITH CHANGES -- Rule on `D1–D9`: ship decode + both offset sites together (`D1`), widen to 64-bit now (`D2`), drop `printf` (`D3`), keep word 49 = 0 (`D4`), preserve exact SDH read-back via `d->sectorsize = idata & 0xa0` (`D5`), add no CHS `sector == 0` guard (`D6`), wire Gate 10 + `check_probe_wiring.py` (`D7`), update live docs/comments (`D8`), and confirm sibling probes stay green (`D9`).
+
+---
+
+## Q1: The Repair
+
+### Q1(a) Premises (`S1–S24`, `P1–P4`) and Partition `7.1`
+
+1. **Verification of `S1–S24`**:
+   - **`S1–S5, S7–S19, S21–S23` (`READ` / `DERIVED`)**: Verified directly against [`src/devices/dev_wdc.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L329-L2022), [`src/include/thirdparty/wdcreg.h`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/thirdparty/wdcreg.h#L47-L223), [`src/disk/diskimage.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/disk/diskimage.c#L270-L303), [`regress/diff_wdc_identify.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_wdc_identify.c#L5281-L5637), [`regress/wdc_altdigin_probe.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/wdc_altdigin_probe.py#L1-L461), and [`regress/landisk_aux_probe.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/landisk_aux_probe.py#L1-L193). (Minor note on `S19`: while no probe writes `wd_sdh` with bit 6 set, [`row_484_read_cap_holds_on_lba_path()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_wdc_identify.c#L5293) (`READ`) sets `d.lba = 1` directly in C.)
+   - **Correction to `S6` ("a 2 GiB disk") (`READ`)**: While `2^22` sectors equals 2 GiB, reaching `((d->head & 0xf) << 24) + (cyl << 8) + d->sector >= 2^22` in [`wdc__read()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L472-L474) and [`wdc__write()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L564-L566) does **not** require a 2 GiB disk. By `S3`, the producers of `d->head`, `d->cyl_hi`, `d->cyl_lo`, and `d->sector` are unconstrained guest register stores (`0..15` for `head`, `0..255` for `cyl_hi`, `cyl_lo`, `sector`). **Every** LBA request with `d->head != 0` (`1..15`) has `((d->head & 0xf) << 24) >= 2^24 > 2^22`, so `512 * (...)` overflows 32-bit signed `int` even on the 2 MiB (`4,096`-sector) witness disk (`N1`, `N2`).
+   - **Correction to `S20` and Partition `7.1` rows 2–3 (`READ`)**:
+     - `S20`'s algebraic statement—that on `16/63` geometry, `(sector - 1) + 63*head + 1008*cyl != (head << 24) + (cyl << 8) + sector` for all `head in 0..15`, `cyl in 0..65535`, `sector in 0..255` (`sector` cancels to `752*cyl - 16777153*head = 1`, which modulo 16 requires `head = 15`, where `16777153*15 + 1 = 251,657,296 > 752*65535 = 49,282,320`)—is **true for the computed `offset`**, but **false for what the model serves or writes**.
+     - By `S8`, [`diskimage__internal_access()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/disk/diskimage.c#L1591-L1629) (`READ`) zero-fills every read whose sector lies outside `[0, nr_of_logical_blocks)` (or past file EOF `total_size` via `memset` at line 1628) and refuses every write outside `[0, total_size)`.
+     - Consequently, on the 4,096-sector witness disk (`nr_of_logical_blocks = 5,040`), for **every** LBA request where **both** the CHS sector index and the LBA28 sector index lie at or above `4,096` (on Read) / `4,096` (on Write)—which includes every `cyl >= 20` (`65,516` of the `65,536` cylinder values, including all `cyl_hi != 0` as `P16` admits) and every `head >= 1` with `cyl >= 8`—both `HEAD` and `FIX` serve **identical** `0x00` bytes on read and perform **identical** no-op refusals on write. Likewise, on an all-zero disk such as `landisk`'s `wdc-scratch-64m.img` (`S18`), every in-bounds read also serves identical zeros.
+   - **Refinement to `S24` (`READ`)**: In [`wdc_lba_probe.frozen.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/wdclbaaddr/witness_20261024/wdc_lba_probe.frozen.py#L453), `got[logical]` is masked `& 0xffff` per register, and [`COMB(lo, hi)`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/wdclbaaddr/witness_20261024/wdc_lba_probe.frozen.py#L472-L475) returns `None` if either register was not found in the `reg` dump. However, if gxemul dies during boot, [`Emu.__init__()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/wdclbaaddr/witness_20261024/wdc_lba_probe.frozen.py#L334) swallows the `OSError` in `drain(boot_wait)` and then [`self.send("reg\n")`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/wdclbaaddr/witness_20261024/wdc_lba_probe.frozen.py#L339-L345) raises an unhandled `OSError` (`EIO`) on `os.write` to the closed pty master (`Q2(d)`).
+
+2. **Resolution of `P1–P4`**:
+   - **`P1` (bits 7 and 5 in `wd_sdh`) (`READ`)**: Whether bits 7 and 5 (`WDSD_IBM = 0xa0` in [`wdcreg.h:76`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/thirdparty/wdcreg.h#L76)) are called "obsolete always-1" (`B_distro_patches.md`) or "reserved" in ATA-2 (`S12`, section 7.2.12) does **not** change any design decision: the model must ignore bits 7 and 5 when decoding `d->lba`, `d->drive`, and `d->head`, and must preserve them as written on `wd_sdh` read-back (`S4`, `D5`).
+   - **`P2` (`d->sectorsize`) (`READ`)**: Nothing in the repair depends on WD1003's historical sector-size table (`S4` proves `d->sectorsize` has no reader outside [`case wd_sdh:`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L2006-L2022)).
+   - **`P3` ("latent") (`READ` / `DERIVED`)**: Calling the defect "latent" while word 49 is `0` only explains why word-49-checking guests (`NetBSD` `S13`, `OpenBSD` `S22`) avoided it; it does **not** make the fix optional. The witness (`S15`) proves the defect is reachable by ordinary guest PIO stores on an unmodified `malta` machine (`R17`), and guests that do not gate LBA on word 49 bit 9 (such as FreeBSD `ata`/`ada`, `1.5`, or Linux `ide-disk` when `lba_capacity_is_ok()` promotes the drive, `S23`) suffer silent wrong-sector reads and writes.
+   - **`P4` (honouring LBA with word 49 = 0) (`READ`)**: Honouring LBA-mode commands when bit 6 of `wd_sdh` is set while leaving IDENTIFY word 49 = 0 is the **right interim state** for this round (`R13`, `R23`). Note that `dev_wdc.c` *already* populates LBA capacity words 60–61 while word 49 is 0 ([`wdc_initialize_identify_struct()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L374-L407), `S10`, `S12`). Keeping word 49 = 0 avoids flipping `NetBSD` (`S13`) and `OpenBSD` (`S22`) onto a new code path in the same commit (`D4`). This interim state must be documented in [`dev_wdc.c:374-377`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L374-L377), [`diff_wdc_identify.c:5606-5618`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_wdc_identify.c#L5606-L5618), `CHANGELOG.md`, and `OUTSTANDING_BUGS.md`.
+
+3. **Partition `7.1` check (`READ`)**:
+   - The 4-way partition in `7.1` accurately classifies the **computed `offset`** on `wdc__read`/`wdc__write` and the `d->lba` decode on `wd_sdh`, subject to three qualifications for **observable behavior**:
+     1. If `!diskimage_exist(machine, d->drive, DISKIMAGE_IDE)` (e.g., drive 1 with no disk attached), [`wdc_command()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L947-L954) aborts with `WDCE_ABRT` before reaching `wdc__read`/`wdc__write`.
+     2. On `WDCC_READ` / `WDCC_READMULTI` with bit 6 of `wd_sdh` set, the bytes served to the guest change **if and only if** the CHS range and the LBA28 range do not both fall in the zero-filled out-of-range region (`< 0` or `>= total_size`, `S8`) and the disk image bytes at the two ranges differ.
+     3. On `WDCC_WRITE` / `WDCC_WRITEMULTI` with bit 6 of `wd_sdh` set, the disk state changes **if and only if** the guest completes at least one 512-byte (or `512 * write_count`) data-port drain (`S7`), the disk is writable (`d->writable`), and the CHS and LBA28 offsets do not both fall outside `[0, total_size)` (`S8`).
+   - Nothing outside the four fixed sites in `7.2(b)` (`case wd_sdh:` write decode, `case wd_sdh:` read-back composition, `wdc__read` LBA block, `wdc__write` LBA block) needs to change in `src/devices/dev_wdc.c`.
+
+---
+
+### Q1(b) The Decode and Read-Back (`D5, P2, R13`)
+
+- **Evaluation of mechanisms `(i)–(iv)` (`READ`)**:
+  - Look at [`case wd_sdh:`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L2006-L2022) (`READ`):
+    - At `HEAD`, `(d->sectorsize << 6) + (d->lba << 5) + (d->drive << 4) + d->head` is byte-exact for all 256 values `0x00..0xff` **only** because `d->sectorsize` holds bits `7..6` and `d->lba` holds bit `5` (`S1`).
+    - Once `d->lba = (idata >> 6) & 1;`, leaving the read-back formula untouched (`V17`) drops bit 5 on write and duplicates bit 6 into bit 5 on read-back (`0xb3 -> 0x93`, `0x4c -> 0x6c`).
+  - **Best mechanism: `(ii)` (repurpose `d->sectorsize` in-place to hold the non-decoded bits 7 and 5, `idata & 0xa0`)**:
+    - On write (`MEM_WRITE`):
+      - `d->sectorsize = idata & 0xa0;` (or keep the 2-bit value `((idata >> 6) & 2) | ((idata >> 5) & 1)` if a 2-bit integer is preferred, though `idata & 0xa0` is direct)
+      - `d->lba = (idata >> 6) & 1;`
+      - `d->drive = (idata >> 4) & 1;`
+      - `d->head = idata & 0xf;`
+    - On read (`MEM_READ`):
+      - `odata = (d->sectorsize & 0xa0) | (d->lba << 6) | (d->drive << 4) | d->head;`
+  - **Why `(ii)` beats `(i)`, `(iii)`, and `(iv)` (`R13`)**:
+    1. **Zero struct changes**: Unlike `(iii)`, it adds no field to [`struct wdc_data`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L106-L154) and removes no field (`P2`, `R13`).
+    2. **Orthogonal partition of the 8 bits**: `{7, 5}` (`d->sectorsize`), `{6}` (`d->lba << 6`), `{4}` (`d->drive << 4`), and `{3..0}` (`d->head`) are disjoint bit masks whose union is `0xff`.
+    3. **Byte-exact across all 256 inputs (`0x00..0xff`)**: Kills `V16` (which fails `N4`: `0x4c -> 0xec`), `V17` (which fails `sdh rb2`: `0xb3 -> 0x93` and `N4`: `0x4c -> 0x6c`), and `V18` (which fails `sdh rb`: `0xe5 -> 0xa5` and `N4`: `0x4c -> 0x0c`).
+    4. **Compatibility with `R13`**: Preserving byte-exact SDH read-back is not an uninvited feature addition—`HEAD` *already* has byte-exact SDH read-back (`S1`), so breaking it (`V17`) would be a regression introduced by this round's own edit.
+    5. **Debug lines (`2010–2012, 2018–2020`)**: Update the `debug()` format in `case wd_sdh:` to print `lba=%i` (or `sdh=0x%02x, lba=%i, drive=%i, head=%i`) so trace output matches the decoded bit.
+
+---
+
+### Q1(c) The Arithmetic and the Two Sites (`D2, D3, P8, R11`)
+
+1. **64-bit widening is mandatory in this round (`D2`, `P8`, `S3`, `S6`, `V15`) (`READ`)**:
+   - In [`wdc__read()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L472-L474) and [`wdc__write()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L564-L566), `d->head & 0xf` is bits `27..24` of the LBA28 sector number.
+   - Multiplying by `512` (`<< 9`) places `d->head & 0xf` at bits **`36..33`** of the byte offset.
+   - In 32-bit `int`, bits `36..33` **do not exist**: for **every** `d->head != 0` (`1..15`), `512 * (((d->head & 0xf) << 24) + (cyl << 8) + d->sector)` overflows 32-bit signed `int` (undefined behavior in C) and, in 32-bit two's-complement arithmetic, shifts `(d->head & 0xf)` completely out of the 32-bit word (`((head & 0xf) << 33) & 0xffffffff == 0`)!
+   - Worse still, for `head = 1, cyl = 0, sector = 5` (`N1`, `N2`), 32-bit wrap yields `offset = 2560` (sector 5), which **bypasses `#416`'s bounds check** in [`diskimage__internal_access()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/disk/diskimage.c#L1591-L1601) (`S8`) and silently reads or overwrites sector 5 of the 4,096-sector disk!
+   - Therefore, both sites **must** widen the product to 64 bits in this round, matching the `(int64_t)` idiom already used on the CHS line immediately above them ([`dev_wdc.c:466-468, 559-561`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L466-L468)):
+     `offset = (int64_t)512 * (((d->head & 0xf) << 24) + (cyl << 8) + d->sector);`
+   - Keeping the two inline `if (d->lba)` blocks (rather than refactoring `wdc__read`/`wdc__write` into a helper) preserves the local structure of both functions and matches the 4-site floor accounting (`7.2(b)`, `V14`).
+
+2. **The `printf` calls (`475, 567`; `D3`) (`READ`)**:
+   - The `printf("LBA offset = %lli\n", (long long)offset);` lines inside `#if 0` ([`dev_wdc.c:475, 567`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L475)) **must not** be enabled as `printf`: they would spam host `stdout` on every LBA sector read/write and corrupt console output in `drive_guest.py` / `Emu` sessions. Delete them (or convert them to `debug()`; note [`wdc_command()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L970-L981) already logs every READ/WRITE command via `debug()`).
+
+3. **Control-flow trace (`R11`, `S7`, `8.3`, `8.4`, `8.8`) (`READ`)**:
+   - **`wdc__read(struct wdc_data *d, int count)` ([`dev_wdc.c:459-549`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L459-L549))**:
+     1. Computes `int cyl = (d->cyl_hi << 8) + d->cyl_lo;` (`:465`) and initializes `uint64_t offset` to the CHS byte offset (`:466-468`).
+     2. With `if (d->lba)` enabled (`:472-474`), `offset` is overwritten with `(int64_t)512 * (((d->head & 0xf) << 24) + (cyl << 8) + d->sector)`, which lies in `[0, (2^28 - 1) * 512] = [0, 0x1fffffff00]` (always non-negative when passed as `off_t` / `int64_t` to `diskimage_access`).
+     3. Enters `while (count > 0)` (`:478`), enforces the `#484` ring occupancy cap (`:514-528`), calls `diskimage_access(d->cpu->machine, d->drive, DISKIMAGE_IDE, 0, offset, buf, 512 * to_read)` (`:531-533`), pushes big-endian 16-bit halfwords into `d->read_buf` via `wdc_put_in_read_buf(d, ...)` (`:501-505`), increments `offset += 512 * to_read` (`:544`), and sets `d->int_assert = 1` (`:548`).
+   - **`wdc__write(struct wdc_data *d, int count)` ([`dev_wdc.c:555-575`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L555-L575)) and write drain ([`dev_wdc.c:1846-1880`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L1846-L1880))**:
+     1. Computes `cyl` (`:558`), initializes `offset` to CHS (`:559-561`), and with `if (d->lba)` enabled (`:564-566`), overwrites `offset` with the 64-bit LBA28 byte offset **before** `d->write_offset = offset;` (`:572`).
+     2. Arms `d->write_in_progress = d->cur_command;` (`:570`), `d->write_count = count;` (`:571`), `d->write_buf_p = 0;` (`:573`), `d->status |= WDCS_DRQ;` (`:574`).
+     3. As the guest stores 512 bytes (or `512 * write_count` for `WDCC_WRITEMULTI`) to `wd_data`, [`DEVICE_ACCESS(wdc)`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L1864-L1879) calls `diskimage_access(..., 1, d->write_offset, b, 512 * count)` (`:1868-1870`), advances `d->write_offset += 512 * count` (`:1873`), asserts the interrupt (`:1875`), and clears `write_in_progress` when `write_count == 0` (`:1877-1878`).
+   - No control-flow, ring-cap (`#484`), or write-drain (`#478/#479`) invariant is disturbed.
+
+---
+
+### Q1(d) The Option Set (`R12, P18`)
+
+- **Member of the `R12` option set**: **Member 7 (`IMPLEMENT`)** (and **Member 4 (`ACCEPT`)** for bit 6 of `wd_sdh`). Under `R12`, options 1–6 (`CLAMP`, `MASK`, `IGNORE`, `ACCEPT`, `FAULT`, `DECLINE`) must not be chosen by reflex when the unimplemented path is a small, bounded calculation that the file already sketched under `#if 0`.
+- **Why `FAULT` (`R12` member 5) is not appropriate and what `DECLINE` looks like here (`P18`, `READ`)**:
+  - Architectural bus fault (`return 0` from `DEVICE_ACCESS(wdc)`, which raises `EXCEPTION_DBE` on MIPS, as documented in the `#494`/`#495` comments at [`dev_wdc.c:750-757, 1547-1553`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L750-L757)) is **not** how ATA controllers report command errors and would crash or wedge a guest kernel in an unrecoverable bus-error trap.
+  - Controller-level command refusal in `dev_wdc.c` is `DECLINE` (`R12` member 6 / `P18(b)`): setting `d->error |= WDCE_ABRT; d->int_assert = 1;` and returning without setting `WDCS_DRQ`, as the no-disk check ([`dev_wdc.c:947-954`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L947-L954)), ATAPI `WDCC_IDENTIFY` ([`dev_wdc.c:955-962`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L955-L962)), `SET_FEATURES` default (`:1000`), `WDCC_SEC_*` (`:1110`), and `default:` (`:1155`) do (`READ`).
+- **Why honouring LBA (`P18(a)`) beats aborting with `WDCE_ABRT` (`P18(b)`)**:
+  1. ATA-2 (`S12`, section 9.1 lines 1850–1851) states *"A host shall not attempt to use LBA addressing unless the device indicates the mode is supported"*; it does **not** require a device to abort bit-6 commands when word 49 bit 9 is 0 (especially when words 60–61 are already non-zero, `S10`).
+  2. Real guests that issue LBA commands without checking word 49 bit 9 (e.g. FreeBSD `ata`/`ada`, `1.5`, and Linux `ide-disk` via `lba_capacity_is_ok()`, `S23`) work when LBA28 is honoured (`P18(a)`) and fail if aborted (`P18(b)`), whereas CHS guests (`NetBSD`, `OpenBSD`) leave bit 6 clear and never enter the `if (d->lba)` arm.
+  3. `P18`'s four-option list `(a)–(d)` is complete for command-level dispositions.
+
+---
+
+### Q1(e) What Must NOT Change & `R23` Single-Round Scope
+
+- **Completeness of the "must NOT change" list (`3.1`, `Q1(e)`) (`READ`)**:
+  - The list in `Q1(e)` (`wdc_initialize_identify_struct` word 49 / words 57–58 / words 60–61; CHS offset formula and its `(int64_t)` cast; `diskimage__internal_access` `#416` bounds check; `WDCC_READMULTI`/`WDCC_WRITEMULTI` command dispatch; ATAPI packet commands; `#420/#442` alt-status/digin handling) is complete if supplemented with two explicit invariants in `dev_wdc.c`:
+    1. **The `#484` read-ring occupancy cap** ([`dev_wdc.c:514-528`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L514-L528)) and **the `#478/#479` write-drain bounds guards** ([`dev_wdc.c:1851-1880`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L1851-L1880)).
+    2. **All 256 words of the `WDCC_IDENTIFY` response** ([`dev_wdc.c:329-453`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L329-L453)), so no existing IDENTIFY row in `diff_wdc_identify.c` changes value.
+- **Is this ONE round under `R23`?**: **Yes.** Although three functions in `src/devices/dev_wdc.c` are touched (`DEVICE_ACCESS(wdc)` at `case wd_sdh:`, `wdc__read`, and `wdc__write`), all three belong to **one device (`dev_wdc.c`)**, implement **one semantic contract** (LBA28 taskfile addressing), are witnessed together by **one rung-3 probe (`wdc_lba_probe.py`)**, and cannot be split (`D1`): enabling the LBA offset blocks without fixing the bit-6 decode breaks every standard CHS (`0xa0`) request (`V1`), while fixing the bit-6 decode with the LBA offset blocks still in `#if 0` is a complete no-op on addressing (`S2`).
+
+---
+
+### Q1(f) Tags, Trees, and Stale Comments in `dev_wdc.c`
+
+- **Tags and trees (`S4`, `Section 4`)**:
+  - Tag all edited sites in [`src/devices/dev_wdc.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c) (`wdc__read` at `:470-476`, `wdc__write` at `:562-568`, and `case wd_sdh:` at `:2006-2022`) with the round's issue number (`/* #NNN (wdclbaaddr): ... */`), and apply the identical edit to `est/src/devices/dev_wdc.c` (`S4`).
+- **Comments in `src/devices/dev_wdc.c` (`READ` lines 1–2145)**:
+  - No comment inside `src/devices/dev_wdc.c` currently says "`d->lba` is unread" (those statements are in [`regress/diff_wdc_identify.c:5613-5616`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_wdc_identify.c#L5613-L5616), [`regress/gate_offline.sh:1890`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_offline.sh#L1890), `CHANGELOG.md`, and `OUTSTANDING_BUGS.md`; see `Q3(d)`).
+  - However, two comments inside `src/devices/dev_wdc.c` should be updated alongside the code edit:
+    1. [`dev_wdc.c:374-377`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L374-L377) (`/* 49: capabilities: (0x200 = LBA, 0x100 = DMA support.) */`): add a brief note that LBA28 commands are honoured (`#NNN`), while word 49 is kept `0` until LBA advertisement is gated across the guest fleet.
+    2. [`dev_wdc.c:2006`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L2006) (`case wd_sdh: /* 6: sectorsize/drive/head */`): note ATA `LBA` in bit 6 (`/* 6: sdh (bit 6 = LBA, bit 4 = drive, bits 3..0 = head/LBA[27:24]) */`).
+
+---
+
+## Q2: The Detector
+
+### Q2(a) Grading Cells `C1–C20` (`R1–R6, R9, R10`)
+
+- **How `R4`, `R5`, `R6`, `R9`, and `R10` apply**:
+  - At `R` (`wdc__read`) and `W` (`wdc__write`), the guard is `if (d->lba)` (reading `d->lba`, written at `wd_sdh` `:2015`), and the guarded body `offset = (int64_t)512 * (((d->head & 0xf) << 24) + (cyl << 8) + d->sector);` reads `d->head` (`:2017`), `d->cyl_hi` (`:2001`), `d->cyl_lo` (`:1981`), and `d->sector` (`:1961`).
+  - Because the guarded body contains no conditional tests (`R5`, `R6`), the body-induced partition on each body-read field is 1-cell (`R6`), **except** where:
+    - **`R1(b)`** requires verbatim reinstatement of every fixed site (`V1`, `V14`, `V17`) to go red;
+    - **`R3` / `R4`** require killing single-edit operand swaps and guard qualifications built from fields the guarded body reads (`V2`, `V3`, `V4r/w`, `V5r/w`, `V6r/w`, `V8`, `V13r/w`, `V16`);
+    - **`R9` / `R10`** require **sibling parity** between `R` (`wdc__read`) and `W` (`wdc__write`) and **guard-field vs body-field disagreeing states** (`lba = 1` with individual body fields `0` vs non-zero).
+
+| Cell | Grade | Basis (`R*`) and Status (`W` vs `N*` / Clause `(e)`) |
+|---|---|---|
+| **C1** (`R, L=0`, CHS read stays CHS) | **FLOOR** | `R1(b)` site 1 (`V1`), `R3` (`V13r`), `R9`. Rowed in `W` (`chs s1`, `chs h1`) + `N8` (`chs c1`). |
+| **C2** (`R, L=1, sector != 0, cyl 0, head 0`) | **FLOOR** | `R1(a)`, `R1(b)` site 2 (`V14`), `R8` anchor. Rowed in `W` (`lba 70`). |
+| **C3** (`R, L=1, sector 0, cyl_lo != 0`) | **FLOOR** | `R4`/`R10` disagreeing state (`sector == 0, cyl_lo != 0`), kills `V5r, V6r`. Rowed in `W` (`lba 256`). |
+| **C4** (`R, L=1, sector 0, cyl 0, head 0`) | **FLOOR** | `R10` disagreeing state (`lba == 1`, all body fields `0`), kills `V6r, V11`. Rowed in `W` (`lba 0`). |
+| **C5** (`R, L=1, head != 0`) | **FLOOR** | `R4(2)` / `R10` body-read field `d->head != 0`; kills `V4r`, `V8`, and 32-bit `V15`. **Owed `N1` (`lba h1`)**. |
+| **C6** (`R, L=1, cyl_hi != 0`) | **Clause-(e) `IMAGE`** *(or FLOOR `N9` if disk enlarged)* | `R10` body-read field `d->cyl_hi != 0`, but on the 4,096-sector disk (`P16`) both CHS (`>= 256*1008`) and LBA (`>= 65536`) exceed `5,040` and zero-fill (`S8`). Disclose under clause `(e)` (`R6`) or enlarge image for `N9`. |
+| **C7** (`W, L=0`, CHS write stays CHS) | **FLOOR** | `R1(b)` site 1 on write, `R3` (`V13w`), `R9` sibling parity with `C1`. **Owed `N6` (`chs wr`)**. |
+| **C8** (`W, L=1, sector != 0, cyl 0, head 0`) | **FLOOR** | `R1(a)`, `R1(b)` site 3 (`V14`), `R8` write anchor. Rowed in `W` (`lba wr`, `lba wr2`; refine with `N7`). |
+| **C9** (`W, L=1, sector 0, cyl_lo != 0`) | **FLOOR** | `R9` sibling parity with `C3`, `R4`/`R10` at `W`; kills `V5w, V6w`. **Owed `N5` (`lba wr c1`)**. |
+| **C10** (`W, L=1, head != 0`) | **FLOOR** | `R9` sibling parity with `C5`, `R4(2)`/`R10` at `W`; kills `V4w, V8, V15` on write. **Owed `N2` (`lba wr h1`)**. |
+| **C11** (`W, L=1, cyl_hi != 0`) | **Clause-(e) `IMAGE`** | Write sibling of `C6`: on the 4,096-sector disk (`P16`), both CHS and LBA offsets exceed `4,096` and are refused (`S8`). Disclose under clause `(e)` (`R6`). |
+| **C12** (`decode: 0xe0`, bits 7,6,5 set) | **FLOOR** | `R1(a)`. Rowed in `W` (`lba *`). |
+| **C13** (`decode: 0xa0/0xa1`, bit 6 clear, bits 7,5 set) | **FLOOR** | `R1(b)` site 1 (`V1`). Rowed in `W` (`chs *`). |
+| **C14** (`decode: 0x40`, bit 6 set, bits 7,5 clear) | **FLOOR** | `R3`/`R4` on `wd_sdh` decode (`idata`); kills `V2` (on LBA) and `V3`. **Owed `N3` (`lba 40`)**. |
+| **C15** (`read-back: 0xe5`, bit 6 set) | **FLOOR** | `R9` claim->row; kills `V18`. Rowed in `W` (`sdh rb`). |
+| **C16** (`read-back: 0xb3`, bit 6 clear, bit 5 set) | **FLOOR** | `R1(b)` site 4 (`V17`). Rowed in `W` (`sdh rb2`). |
+| **C17** (`read-back: 0x4c`, bit 6 set, bits 7,5 clear) | **FLOOR** | `R3`/`R9` ("byte-exact read-back"); kills `V16` (`odata |= 0xa0`). **Owed `N4` (`sdh rb3`)**. |
+| **C18** (`IDENTIFY word 49 == 0`) | **FLOOR** | `R9` claim->row (pins word 49 = 0 at rung 3). Rowed in `W` (`id w49`). |
+| **C19** (`WDCC_READMULTI` / `WRITEMULTI`, `seccnt > 1`) | **Clause-(e) debt** | `R5`/`R6`: neither `cur_command` nor `seccnt` appears in the initial `offset` expression (`S5`). Disclose under clause `(e)`. |
+| **C20** (`-e maltabe`; `drive = 1`) | **Clause-(e) debt** | `R5`/`R6`: offset arithmetic is host-integer and does not read `d->drive` (`V19`). Disclose under clause `(e)`. |
+
+- **Missing cell check**: No additional floor cell is missing; `C12 + C13 + C14` cover single-bit and conjunctive masks on `idata` bits `{7, 6, 5}`, and `C15 + C16 + C17` cover `{1, 0}` on bits `{7, 6, 5}` for read-back.
+
+---
+
+### Q2(b) Classifying Variants `V1–V20` (`7.5`, `R1, R3, R4`)
+
+1. **Corrections to `7.5`'s predicted-red table (`READ`)**:
+   - **Correction 1 (`V1`, `V2`, and `V13r` also turn `lba wr` and `lba wr2` RED)**:
+     - In [`build_lbawr()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/wdclbaaddr/witness_20261024/wdc_lba_probe.frozen.py#L304-L317) (`READ`), after writing to LBA 70 with `SEL_LBA` (`0xe0`), the session reads back the target and neighbour sectors using **`SEL_CHS` (`0xa0`, or `0xa1` under `N7`)**!
+     - Under **`V1`** (`d->lba = (idata >> 5) & 1`) and **`V2`** (`d->lba = (idata >> 7) & 1`), `0xa0`/`0xa1` has bit 5 = 1 and bit 7 = 1, so those read-backs take the **LBA** path instead of the CHS path! And under **`V13r`** (LBA unconditional in `wdc__read`), those read-backs also take the LBA path!
+     - Therefore, under `V1`, `V2`, and `V13r`, `lba wr` reads LBA 71 (`TAG(71)` instead of `0x88887777`, or `0x00000000` at LBA `(1<<24)+8` under `N7`) and `lba wr2` reads LBA 70 (`0x88887777` instead of `TAG(69)`, or `0x00000000` at LBA `(1<<24)+7` under `N7`). Thus **`lba wr` and `lba wr2` go RED under `V1`, `V2`, and `V13r`**, which `7.5` omitted.
+   - **Correction 2 (`V4w` is NOT killed by `N2` as written in `7.4`!)**:
+     - Look at **`V4w`** (`if (d->lba && d->head == 0)` in `wdc__write`) and **`N2`** (`7.4` line 572):
+     - Under `V4w`, `N2`'s write (`select 0xe1`, `head = 1 != 0`, `sector = 5, cyl = 0`) fails `d->head == 0` and falls back to the **CHS** path, writing `0x99996666` to **CHS sector 67** (`(5-1) + 63*1 = 67`) and leaving **sector 5 untouched (`TAG(5) = 0xfffa0005`)**!
+     - Because `N2` in `7.4` only reads back **sector 5** (`select 0xa0, sector 6, cyl 0`), `N2` sees `0xfffa0005` under `V4w`—the **exact same value** as `want on FIX` (`0xfffa0005`)! Thus **`V4w` escapes `N2` unless `N2` also checks sector 67 (`select 0xa1, sector 5, cyl 0`, want `TAG(67) = 0xffbc0043`)**! (See `Q2(c)` below.)
+
+2. **Full classification of `V1–V20` (`7.5`)**:
+   - **Detected by `W` today**:
+     - `V1` (Floor `(b)` site 1): `chs s1`, `chs s2`, `chs h1`, `lba wr`, `lba wr2` (+ `N3`, `N6`, `N8`).
+     - `V2` (Floor `(d)`): `chs s1`, `chs s2`, `chs h1`, `lba wr`, `lba wr2` (+ `N3`, `N6`, `N8`).
+     - `V5r` (Floor `(d)`): `lba 256`.
+     - `V6r` (Floor `(d)`): `lba 256`, `lba 0`.
+     - `V11` (Floor `(d)`): `lba 70`, `lba 256`, `lba 0`, `lba wr`, `lba wr2` (+ `N3`, `N5`).
+     - `V13r` (Floor `(d)`): `chs s1`, `chs s2`, `chs h1`, `lba wr`, `lba wr2` (+ `N8`).
+     - `V14` (Floor `(b)` sites 2 & 3): read-only enabled reds `lba wr`, `lba wr2` (+ `N5`); write-only enabled reds `lba 70`, `lba 256`, `lba 0` (+ `N1`, `N3`).
+     - `V17` (Floor `(b)` site 4): `sdh rb2` (+ `N4`).
+     - `V18` (Floor `(d)`): `sdh rb` (+ `N4`).
+     - `V20` (Floor `(d)`): `lba wr`, `lba wr2` (+ `N5`).
+   - **Floor `(d)` variants owed a row in `N1–N8`**:
+     - `V3` (`lba = ((idata >> 6) & 1) && ((idata >> 5) & 1)`): killed by **`N3`** (`0x40`).
+     - `V4r` (`if (d->lba && d->head == 0)` at `R`): killed by **`N1`** (`0xe1`).
+     - `V4w` (`if (d->lba && d->head == 0)` at `W`): killed by **`N2`** *once `N2` checks sector 67 (`0xa1, sector 5, cyl 0`)*!
+     - `V5w` (`if (d->lba && cyl == 0)` at `W`): killed by **`N5`** (`cyl_lo = 1`).
+     - `V6w` (`if (d->lba && d->sector != 0)` at `W`): killed by **`N5`** (`sector = 0`).
+     - `V8` (LBA formula drops `(d->head & 0xf) << 24`): killed by **`N1`** (reads sector 5 = `0xfffa0005` instead of `0x00000000`) and **`N2`** (overwrites sector 5 with `0x99996666`).
+     - `V13w` (LBA unconditional at `W`): killed by **`N6`** (`chs wr`).
+     - `V15` (32-bit `int` product): on x86_64 GCC/Clang `-O3`, `512 * (((d->head & 0xf) << 24) + ...)` evaluates in 32-bit `eax` (`shll $9, %eax`) before `cltq`, shifting `head` (bits `27..24`) to bits `36..33` (out of the 32-bit word), so `V15` behaves identically to `V8` on `head = 1` and is killed by **`N1`** and **`N2`**. Regardless of how any compiler/flags compile signed-overflow UB, widening the source to `(int64_t)512 * ...` is **mandatory** (`D2`, `P8`).
+     - `V16` (read-back forces bits 7 and 5 to 1): killed by **`N4`** (`0x4c -> 0xec`).
+   - **Truly equivalent in every reachable state**:
+     - `V12` (`& 0xf` dropped from `d->head & 0xf`): **Equivalent (`S3`, `P9`)**. `d->head` is only ever assigned `idata & 0xf` at [`dev_wdc.c:2017`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L2017) (`0..15`) and zeroed at `DEVINIT`, so `(d->head & 0xf) == d->head` in every reachable state. (`DRAFTER_INPUTS.md` line 48's claim that "`& 0xf` dropped needs LBA >= 2^24" is false by `S3`.)
+   - **Equivalent on the 4,096-sector disk (`IMAGE`, `P16`) / Clause `(e)`**:
+     - `V7` (`if (d->lba && d->cyl_hi == 0)`): equivalent on the 4,096-sector disk because for `cyl_hi >= 1`, both CHS (`>= 256 * 1008`) and LBA (`>= 65536`) exceed `5,040` sectors (`S8`). Killed by `N9` if the disk is enlarged (`P16`).
+     - `V9` (`head << 20` or any `head << k` with `k >= 12` on the 4,096-sector disk): equivalent on the 4,096-sector disk because `2^12 + 5 = 4,101 >= 4,096` (on Read, sectors `4,096..5,039` hit EOF in `fread_helper` and are zero-filled by `memset` at [`diskimage.c:1628`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/disk/diskimage.c#L1628), and `>= 5,040` are zero-filled at `:1598`; on Write, `>= 4,096` is refused at `:1595`). For `k <= 11`, `N1` (`2^k + 5 < 4,096`) already kills `head << k`.
+     - `V10` (`d->cyl_lo << 8`, dropping `cyl_hi`): equivalent on the 4,096-sector disk for the same reason as `V7`; killed by `N9` if the disk is enlarged (`P16`).
+     - `V19` (`if (d->lba && d->drive == 0)`): outside `R4` (clause `(e)`, `C20`); on the single-disk `malta` setup, `drive == 1` is aborted at [`dev_wdc.c:947-954`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L947-L954) before reaching `wdc__read`/`wdc__write`.
+   - **Completeness of `7.2(d)` dominating predicates and `R4` closure (`READ`)**:
+     - `7.2(d)`'s list of dominating predicates in `wdc__read`, `wdc__write`, and `DEVICE_ACCESS(wdc)` is complete (`!d->io_enabled` at `:1176`, `writeflag == MEM_WRITE` / `relative_addr == wd_data` at `:1179-1180`, `switch (relative_addr)` at `:1194`, `case wd_sdh:` at `:2006`, `writeflag == MEM_READ` at `:2007`).
+     - One variant requested by `3.1` (`DRAFTER_INPUTS.md` line 48: *"`<< 8` wrong"*) was omitted from `V1–V20`: **`V_cyl_shift`** (dropping `(cyl << 8)` or shifting `cyl` by the wrong count in the LBA formula). It is already killed at `R` by `W`'s `lba 256` (`cyl = 1, sector = 0`) and at `W` by **`N5`** (`lba wr c1`).
+
+---
+
+### Q2(c) Checking Rows `N1–N9` (`7.4`) and Resolving `P10, P11, P13, P14, P16`
+
+1. **Verification of `N1–N9` (`7.4`) — Critical Bug Found in `N2` (`READ` / `DERIVED`)**:
+   - **Critical correction to `N2` (`lba wr h1`)**:
+     - In `7.4` (line 572), `N2` performs `WRITE, select 0xe1 (head=1), sector 5, cyl 0, payload 0x99996666`, and then performs **only** `CHS READ of sector 5 (select 0xa0, sector 6, cyl 0)`, listing `want on HEAD = 0x00bc0043 (or check sector 67 = 0x99996666 on HEAD)` and `want on FIX = 0xfffa0005 (TAG(5) untouched)`.
+     - **Two bugs in `N2` as written**:
+       1. **On `HEAD` (and under `V4w`), sector 5 is ALSO untouched (`0xfffa0005`)!** On `HEAD` and `V4w`, `0xe1, sector 5, cyl 0` takes the CHS path and writes `0x99996666` to **CHS sector 67** (`(5 - 1) + 63*1 = 67`), leaving sector 5 equal to `TAG(5) = 0xfffa0005`. Thus, if `N2` only reads sector 5 (`0xa0, sector 6, cyl 0`), `N2` returns `0xfffa0005` on **both `HEAD` and `FIX`** (failing `--expect bug`!) and **cannot detect `V4w`**!
+       2. **`0x00bc0043` is a hex typo for `TAG(67) = 0xffbc0043`** (`67 = 0x0043`, `67 ^ 0xffff = 0xffbc`, whereas `0x00bc0043` computed `67 ^ 0xff`), and on `HEAD` sector 67 holds the written payload `0x99996666`, not `TAG(67)`.
+     - **Fix for `N2`**: After the `0xe1, sector 5, cyl 0` write of `0x99996666`, read back **both** candidate destinations (just as `lba wr` + `lba wr2` and `N6` read back two sectors):
+       - **`lba wr h1`** (reads CHS sector 67 via `select 0xa1, sector 5, cyl 0`): `want on HEAD = 0x99996666` (written on `HEAD` and `V4w`), `want on FIX = 0xffbc0043` (`TAG(67)` untouched, because LBA `16,777,221 >= 4,096` was refused by `S8`). **Kills `HEAD` and `V4w`.**
+       - **`lba wr h1s5`** (reads CHS sector 5 via `select 0xa0, sector 6, cyl 0`): `want on HEAD = 0xfffa0005` (`TAG(5)`), `want on FIX = 0xfffa0005` (or if `--expect bug` requires every row to differ on `HEAD` vs `FIX`, XOR or combine with sector 67, or gate `lba wr h1s5` as a `FIX == HEAD` conservation check like `lba wr2`!). Note that in [`wdc_lba_probe.frozen.py:481`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/wdclbaaddr/witness_20261024/wdc_lba_probe.frozen.py#L481), **`lba wr2` ALREADY has `want_fix == want_bug == TAG(69)`**! So having `lba wr h1` (`want_fix = 0xffbc0043`, `want_bug = 0x99996666`) and `lba wr h1s5` (`want_fix = 0xfffa0005`, `want_bug = 0xfffa0005`, which turns RED under `V8` and `V15` where it reads `0x99996666`) fits the existing probe structure (`lba wr` / `lba wr2`) with zero friction!
+   - **Verification of `N1, N3, N4, N5, N6, N7, N8, N9` wants**:
+     - **`N1` (`lba h1`)**: `HEAD` CHS `(5-1) + 63*1 = 67 -> TAG(67) = 0xffbc0043`; `FIX` LBA `16,777,221 >= 5,040 -> 0x00000000`. Verified.
+     - **`N3` (`lba 40`)**: `HEAD` (`0x40 >> 5 & 1 == 0`) CHS `70 - 1 = 69 -> TAG(69) = 0xffba0045`; `FIX` (`0x40 >> 6 & 1 == 1`) LBA `70 -> TAG(70) = 0xffb90046`. Verified.
+     - **`N4` (`sdh rb3`)**: `0x4c -> 0x4c` on `HEAD` and `FIX`; `0xec` on `V16`, `0x6c` on `V17`, `0x0c` on `V18`. Verified.
+     - **`N5` (`lba wr c1`)**: Write `0x77778888` to `(0xe0, sector 0, cyl_lo 1, cyl_hi 0)`, read back sector 256 via `(0xa4, sector 5, cyl 0)` (`(5-1) + 63*4 = 256`, legal CHS `sector = 5 <= 63`): `HEAD` writes CHS `1007` so sector 256 is `TAG(256) = 0xfeff0100`; `FIX` writes LBA `256` so sector 256 is `0x77778888`. Verified.
+     - **`N6` (`chs wr`)**: Write `0x66669999` to `(0xa0, sector 10, cyl 0)`, read `(0xa0, sector 10, cyl 0)` (`want = 0x66669999`) and `(0xa0, sector 11, cyl 0)` (`want = TAG(10) = 0xfff5000a`). Kills `V13w`. Verified.
+     - **`N7` (`P10` fix for `lba wr` / `lba wr2`)**: Reading index 70 via `(0xa1, sector 8, cyl 0)` (`7 + 63 = 70`) and index 69 via `(0xa1, sector 7, cyl 0)` (`6 + 63 = 69`) uses strictly legal CHS sector numbers (`1..63`) instead of `71, 70 > 63`. **Adopt `N7`.**
+     - **`N8` (`chs c1`, `P11`)**: `READ (0xa0, sector 1, cyl_lo 1, cyl_hi 0)` -> CHS index `1008 -> TAG(1008) = 0xfc0f03f0` on `HEAD`/`FIX` vs `TAG(257) = 0xfefe0101` if LBA is used. **Adopt `N8` in place of redundant `chs s2` (`R21`).**
+     - **`N9` (`lba ch1`, `P16`)**: Keep the 4,096-sector disk (fast image creation in Gate 10) and disclose `C6`/`C11`/`V7`/`V10` under clause `(e)` (`IMAGE`). *(Note: if `P16` were ever exercised by enlarging the disk, `TAG(n)` could be defined as `((((n ^ (n >> 16)) & 0xffff) ^ 0xffff) << 16) | (n & 0xffff)`, which is 100% identical to `TAG(n)` for all `n < 65536` while distinguishing `TAG(65536) = 0xfffe0000` from `TAG(0) = 0xffff0000`.)*
+
+2. **Session count and write isolation (`P13, P14`) (`READ`)**:
+   - **No 4th gxemul invocation is needed (`P13`)**: Each `Emu` session dumps 16 general registers (`t0..t7` and `s0..s7`, [`wdc_lba_probe.frozen.py:451`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/wdclbaaddr/witness_20261024/wdc_lba_probe.frozen.py#L451)). `N3`, `N4`, and `N8` fit in the existing `chs` / `lba` sessions, and `N1`, `N2`, `N5`, `N6` fit in `lba` / `lbawr`.
+   - **All writes can share the single `lbawr` session (`P14`)**:
+     - `lba wr`: writes LBA `70` (`FIX`) / CHS `1007` (`HEAD`), reads indices `70` and `69`.
+     - `N2`: writes LBA `16,777,221` (refused on `FIX`) / CHS `67` (`HEAD`, `V4w`) / LBA `5` (`V8`, `V15`), reads indices `67` and `5`.
+     - `N5`: writes LBA `256` (`FIX`) / CHS `1007` (`HEAD`), reads index `256`.
+     - `N6`: writes CHS `9` (`FIX`, `HEAD`) / LBA `10` (`V13w`), reads indices `9` and `10`.
+     - The read-back sets `{69, 70}`, `{5, 67}`, `{256}`, and `{9, 10}` are **pairwise disjoint** (and neither `lba wr` nor `N5` reads CHS `1007`), so they cannot interfere with one another inside `lbawr`.
+
+---
+
+### Q2(d) Probe-Side Weaknesses (`S24, P5, P6, P7, P10, P12, P15, P17`)
+
+1. **`S24` and `P7` (`COMB` and child crash handling) (`READ`)**:
+   - In [`wdc_lba_probe.frozen.py:453, 472-475`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/wdclbaaddr/witness_20261024/wdc_lba_probe.frozen.py#L453), `got[logical]` is masked `& 0xffff` and `COMB(lo, hi)` safely returns `None` when a register is missing.
+   - However, in [`Emu.send()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/wdclbaaddr/witness_20261024/wdc_lba_probe.frozen.py#L338-L340), `os.write(self.master, s.encode("ascii"))` is **not** wrapped in `try/except OSError`. If gxemul crashes during boot (`Emu.__init__` `:334`), the slave pty closes, `drain` swallows the `OSError`, and `send("reg\n")` (`:345`) crashes the Python script with an unhandled `OSError: [Errno 5] Input/output error` instead of reporting a clean failure with `self.proc.poll()`. Guard `os.write` in `Emu.send()` with `try/except OSError` and report `proc.poll()` when non-`None`.
+2. **`P5` (not polling `WDCS_BSY` / `WDCS_DRQ`) (`READ`)**:
+   - By `S7`, `dev_wdc.c` is purely synchronous (never sets `WDCS_BSY`; `wdc__read` fills `read_buf` during the command store and `wdc__write` flushes to disk on the 256th halfword store). No status-poll loop is needed (`R13`).
+3. **`P6` (`e_sw16` in `build_lbawr` at `:274-281`) (`READ`)**:
+   - `e_sw16` emits `sh` (`len == 2`), and 1 payload halfword + 255 zero halfwords (`1 + 1 + 254 = 256` stores = 512 bytes) triggers the drain at [`dev_wdc.c:1864`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L1864). With 4 write sequences in `build_lbawr` (`lba wr`, `N2`, `N5`, `N6`), replace the 254 unrolled `e_sw16(ZERO, D_DATA)` calls with a 3-instruction MIPS zero-fill helper loop (or keep unrolled, as 4 × 256 instructions is ~4 KiB).
+4. **`P12` (`N1` want on `FIX` is `0x00000000`) (`READ`)**:
+   - Because MIPS registers initialize to `0x00000000` at reset, pre-load `N1`'s destination registers `rlo` and `rhi` with non-zero poison constants (e.g. `e_li16(rlo, 0xdead); e_li16(rhi, 0xbeef)`) immediately before `e_read_tag(rlo, rhi)`. That way, `rlo`/`rhi` can become `0x0000` **only** if the two `lhu` loads from `D_DATA` actually execute and read `0x0000` from the controller.
+5. **`P15` (`--expect` dual-tree CLI vs `gate_offline.sh` Gate 10) (`READ`)**:
+   - In [`gate_offline.sh:1049-1053`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_offline.sh#L1049-L1053) (`READ`), standalone probes are invoked with a **single** positional argument: `python3 "$SCRIPT_DIR/wdc_lba_probe.py" "$GXEMUL_BIN"`.
+   - In [`wdc_lba_probe.frozen.py:424-441`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/wdclbaaddr/witness_20261024/wdc_lba_probe.frozen.py#L424-L441) (`READ`), omitting `--expect` still runs **both** `gxemul_base` and `gxemul_est` (defaulting `argv[2]` to `est/src/gxemul`).
+   - **Fix**: When invoked without `--expect` and with 1 positional argument (`python3 regress/wdc_lba_probe.py "$GXEMUL_BIN"`), run **only the `FIX` check against `sys.argv[1]`** (matching [`wdc_altdigin_probe.py:400-405`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/wdc_altdigin_probe.py#L400-L405)), while keeping `--expect bug|fix <base_bin> <est_bin>` for two-tree witness runs.
+6. **`P17` (`ram:*` canaries)**:
+   - Keep `ram:chs`, `ram:lba`, `ram:lbawr` as session-liveness guards, but do not count them toward `dev_wdc.c` cell coverage (`R21`).
+
+---
+
+### Q2(e) Compliance with `R2, R6, R7, R19, R20, R21`
+
+- **`R2` (Sites and Roles)**: Once `N1–N8` land, every fixed site (`wd_sdh` write decode, `wd_sdh` read-back, `wdc__read` LBA block, `wdc__write` LBA block) and every body-read role (`sector`, `cyl_lo`, `head`, plus `0x40`/`0x4c` on `wd_sdh`) has a dedicated row on both `R` and `W`.
+- **`R6` (Granularity / Clause `(e)` disclosure)**: Add an explicit `Clause (e) disclosures:` block to the top docstring of `regress/wdc_lba_probe.py` naming `C6`/`C11` (`cyl_hi != 0` / `V7` / `V10` on the 4,096-sector disk), `C19` (`WDCC_READMULTI`/`WRITEMULTI`, `seccnt > 1`), and `C20` (`-e maltabe`, `drive = 1`, `V19`).
+- **`R7` (Observability)**: Satisfied at rung 3—every row observes guest register state populated by real MIPS PIO loads/stores to the `malta` PCI IDE controller (`0x180001f0..0x180001f7`).
+- **`R19` (Negative Path)**: Satisfied by `N1` (out-of-range LBA `16,777,221` read zero-filled by `S8`) and `N2` (out-of-range LBA `16,777,221` write refused by `S8`, leaving both sector 67 and sector 5 untouched).
+- **`R20` (Why A Variant Died)**: Every sector `n` carries a unique self-identifying `TAG(n) = ((n ^ 0xffff) << 16) | n`. *(Detail: note that `0x88887777`, `0x99996666`, `0x77778888`, `0x66669999` satisfy `(hi ^ lo) == 0xffff` and thus equal `TAG(30583)`, `TAG(26214)`, `TAG(34952)`, `TAG(39321)`; on the 4,096-sector disk `n < 4,096`, so they never collide with any in-bounds `TAG(n)`, though payloads with `(hi ^ lo) != 0xffff` such as `0x88887776` are even cleaner if the image is ever enlarged.)*
+- **`R21` (No Padding)**: Replace `chs s2` (which duplicates `chs s1` in cell `C1`) with `N8` (`chs c1`, testing `cyl_lo = 1` on the CHS path).
+
+---
+
+## Q3: Wiring, Sibling Gates, and Existing Records
+
+### Q3(a) `regress/diff_wdc_identify.c` (`D4, R1, R15, R17`)
+
+1. **[`row_no_lba_claim()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_wdc_identify.c#L5606-L5637) (`READ`)**:
+   - **Keep the row, update its comment**: Its assertion (`words[49] == 0 && words[57] == (cap & 0xffff) && words[60] == (cap & 0xffff)`) remains 100% true in this round because word 49 stays `0` (`D4`). However, its comment at lines `5613–5616` (*"wdc__read (line 470) and wdc__write (line 562) have the `if (d->lba)` LBA offset calculation inside `#if 0` — the controller ONLY ever computes `offset = 512 * ((sector-1) + ...)` (CHS)"*) becomes **false** and must be updated to state that LBA28 commands are honoured (`#NNN`) while word 49 remains `0` pending fleet-wide LBA advertisement testing.
+   - **Add a rung-1 LBA decode/addressing row** in `diff_wdc_identify.c` (exercising `wd_sdh` bit-6 decode, byte-exact read-back, and `wdc__read`/`wdc__write` LBA28 vs CHS offset selection) as fast rung-1 coverage supplementing—not replacing (`R17`)—the rung-3 `wdc_lba_probe.py` witness (`R15`).
+2. **Effect on [`row_484_read_cap_holds_on_lba_path()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_wdc_identify.c#L5281-L5304) (`8.1`, `READ`)**:
+   - In `row_484_read_cap_holds_on_lba_path()`, `d.lba = 1; d.sector = 1; d.cyl_lo = 0; d.cyl_hi = 0; d.head = 0; d.seccnt = 1;` is run against a 64 KiB (`128`-sector) backing file with `read_Status` pre-filled to `WDC_READ_RING_CAP - 256`.
+   - On `HEAD`, `wdc__read(&d)` computed CHS `offset = 0` (sector 0); on `FIX`, it computes LBA `offset = 512` (sector 1), which is still in-bounds (`< 65,536`) and hits the exact same `#484` ring-cap `break` at [`dev_wdc.c:526`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L526).
+   - Thus `row_484_read_cap_holds_on_lba_path()` **passes unchanged** and, for the first time, actually exercises the `if (d->lba)` branch its name and comment (`:5283`) claimed to test.
+
+---
+
+### Q3(b) `regress/gate_offline.sh` and `regress/check_probe_wiring.py` (`D7, R15`)
+
+- **Mandatory edits in the same commit (`READ`)**:
+  1. **[`regress/check_probe_wiring.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/check_probe_wiring.py#L37-L105) (`READ`)**: Add `"wdc_lba_probe.py"` to `STANDALONE` (lines `37–73`). Without this, `check_probe_wiring.py` (Gate 10b in `gate_offline.sh:1069`) **fails immediately** with `FAIL: *_probe.py on disk not classified in check_probe_wiring.py` (`:88-92`), and also enforces that `gate_offline.sh` contains an active invocation line (`:96-105`).
+  2. **[`regress/gate_offline.sh`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_offline.sh#L1049-L1066) (`READ`)**:
+     - Invoke `python3 "$SCRIPT_DIR/wdc_lba_probe.py" "$GXEMUL_BIN"` in Gate 10 alongside `wdc_altdigin_probe.py`, `wdc_altoffset_probe.py`, and `wdc_altoffset_sig_probe.py` (`:1049-1060`), and include `wdc_lba` in the Gate 10 banner/pass summary (`:919, :1065`).
+     - Update the stale comment at [`regress/gate_offline.sh:1890`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_offline.sh#L1890) (`# #405/#407: IDENTIFY word 49 must stay 0 while LBA offset is #if 0`).
+  3. **[`regress/gate_sh_rounding.sh`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_sh_rounding.sh#L1-L54) (`READ`)**: Needs no edit (only runs SH4 rounding + `landisk_aux_probe.py`).
+
+---
+
+### Q3(c) Sibling Gates (`S18, S19, S21, S22, S23, D9`)
+
+- **Impact on every existing probe and guest rig (`READ` / `DERIVED`)**:
+  1. **[`regress/wdc_altdigin_probe.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/wdc_altdigin_probe.py#L166-L200) (`READ`)**, `wdc_altoffset_probe.py`, `wdc_altoffset_sig_probe.py` (`S19`): Write only `0xa0` and `0xb0` (bit 6 = 0) to `wd_sdh`. `d->lba` stays `0`; **100% unaffected**.
+  2. **[`regress/landisk_aux_probe.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/landisk_aux_probe.py#L1-L193) (`READ`, `S18`, `S22`)**: Boots OpenBSD/landisk `bsd.rd` with an all-zero `wdc-scratch-64m.img` ([`regress/images.md:94`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/images.md#L94), `READ`). OpenBSD `wd.c` checks word 49 bit 9 (`S22`) and stays in CHS mode (`0xa0 | head`), and the probe never reads/writes disk sectors. **100% unaffected.**
+  3. **NetBSD/hpcmips (`S13`, `S21`) and OpenBSD/cats (`S21`)**: NetBSD checks `WD_CAP_LBA` (`0x0200`) in word 49 ([`wd.c.txt:364`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/research_20261022/distro_patches/netbsd_pkgsrc/netbsd_src_refs/wd.c.txt#L364), `READ`), hpcmips uses ATAPI CD-ROM (`is_atapi`), and cats has no disk. **100% unaffected.**
+  4. **Debian/cobalt (`S21`, `S23`, `D9`)**: Cobalt instantiates `wdc` ([`machine_cobalt.c:127`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_cobalt.c#L127)) and `test_cobalt_linux.sh` passes `-d debian-cobalt.img`. If Linux `ide-disk` promotes the drive to LBA via `lba_capacity_is_ok()` (`S23`) despite word 49 = 0, `HEAD` served wrong CHS sectors (`S20`) whereas `FIX` serves the right LBA28 sectors. Run `gate_offline.sh` at verification time to confirm all gates pass.
+
+---
+
+### Q3(d) Documentation and Ledger Files (`D8`)
+
+- **Must be updated in the same commit**:
+  1. [`regress/diff_wdc_identify.c:5613-5616`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_wdc_identify.c#L5613-L5616) (`READ`) — remove the claim that `if (d->lba)` is inside `#if 0`.
+  2. [`regress/gate_offline.sh:1890`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_offline.sh#L1890) (`READ`) — update `# while LBA offset is #if 0`.
+  3. `CHANGELOG.md` and `OUTSTANDING_BUGS.md` (item 2, `DERIVED`) — add the `#NNN` (`wdclbaaddr`) entry and update item 2 / `#405/#407` cross-references so no live doc claims `d->lba` is unread or `#if 0`'d.
+- **Leave untouched**:
+  - Dated research/triage artifacts under [`regress/artifacts/research_20261022/`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/research_20261022/TRIAGE.md) (`TRIAGE.md`, `B_distro_patches.md`, `ADJ_RULINGS.md`, `READ`) are point-in-time historical records and should not be rewritten.
+
+---
+
+### Q3(e) Follow-Up Work (`D4, D6, P4`)
+
+- **Separate follow-up ledger item (out of scope for this round, `R23`)**:
+  - **Advertising LBA support (`0x0200`) in IDENTIFY word 49** ([`wdc_initialize_identify_struct()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L377), `D4`, `P4`): Setting `id[49] = 0x0200` switches every word-49-honouring guest (`NetBSD`, `OpenBSD`, `Linux`) from CHS to LBA on `wdc` disks (`S13`, `S22`, `S23`) and flips `row_no_lba_claim()` (`C18`). It belongs in its own round gated against all disk-booting guest rigs.
+  - **CHS `d->sector == 0` handling (`D6`)**: Needs **no** follow-up round; `#416` (`S8`) already clamps `offset = -512` (`sector = 0, head = 0, cyl = 0`) cleanly, and ATA-2 does not define a separate error bit for `sector = 0` when `head > 0 || cyl > 0`.
+
+---
+
+## Q4: Disagreements `D1–D9` (`Section 3.5`)
+
+- **`D1` (Bit-6 decode vs LBA offset blocks)**: **Ship both together in this round.** Enabling the LBA28 offset blocks with `d->lba` still decoded from bit 5 (`(idata >> 5) & 1`) misroutes every standard CHS command (`0xa0 | head`, bit 5 = 1) into LBA addressing (`S1, V1`), while fixing bit 6 alone leaves `d->lba` unread (`S2, V14, R23`).
+- **`D2` (32-bit vs 64-bit LBA product)**: **Widen to 64-bit (`(int64_t)512 * ...`) in this round.** Every LBA request with `d->head != 0` (`1..15`) has `((d->head & 0xf) << 24) >= 2^24 > 2^22`, which overflows 32-bit signed `int` (UB) and shifts `head` completely out of 32-bit arithmetic, bypassing `#416`'s bounds check (`S3, S6, P8, V15, N1, N2`).
+- **`D3` (`printf("LBA offset...")` in `#if 0`)**: **Delete the `printf` lines (or convert to `debug()`).** Host `stdout` `printf` on every disk read/write pollutes guest serial transcripts and breaks console harnesses (`S2, R13`).
+- **`D4` (IDENTIFY word 49 and `row_no_lba_claim()`)**: **Keep IDENTIFY word 49 = 0 in this round; keep `row_no_lba_claim()` with its comment updated and add a rung-1 LBA row in `diff_wdc_identify.c` alongside rung-3 `wdc_lba_probe.py`.** Flipping word 49 changes guest OS behavior across the fleet and is a separate round (`S4, S10, S12, S13, S22, P4, C18, R15, R17, R23`).
+- **`D5` (`wd_sdh` read-back and `d->sectorsize`)**: **Preserve byte-exact read-back across `0x00..0xff` by storing `d->sectorsize = idata & 0xa0` and composing `odata = (d->sectorsize & 0xa0) | (d->lba << 6) | (d->drive << 4) | d->head`.** Adds zero struct fields, preserves `HEAD`'s byte-exact SDH read-back invariant, and kills `V16, V17, V18` with `sdh rb`, `sdh rb2`, and `N4` (`S1, S4, P1, P2, C15–C17, N4, R1(b), R13`).
+- **`D6` (CHS `sector == 0` guard)**: **Do not add a `d->sector == 0` guard on the CHS path.** `#416` (`S8`) already zero-fills/refuses `offset = -512` at `(sector=0, head=0, cyl=0)`, and adding an unrequested CHS guard violates `R13` (`S5, S8, P3, R13`).
+- **`D7` (Gate wiring)**: **Wire `wdc_lba_probe.py` into `regress/check_probe_wiring.py` (`STANDALONE`) and `regress/gate_offline.sh` (Gate 10) in the same commit, with single-binary default CLI mode (`python3 regress/wdc_lba_probe.py "$GXEMUL_BIN"`).** Required by `R15` and enforced automatically by `check_probe_wiring.py` (`P15, R15`).
+- **`D8` (Stale comments and docs)**: **Update `diff_wdc_identify.c:5613-5616`, `gate_offline.sh:1890`, `CHANGELOG.md`, and `OUTSTANDING_BUGS.md` in the same commit; leave dated `regress/artifacts/research_20261022/*` files untouched.** Live gate/test comments must not contradict the tree (`S4, D8`).
+- **`D9` (Sibling probes and guest rigs)**: **Existing `wdc_altdigin_probe.py`, `wdc_altoffset*_probe.py`, and `landisk_aux_probe.py` are unaffected** because none sets bit 6 of `wd_sdh` (`S18, S19, S22`); on `test_cobalt_linux.sh` (`S21, S23`), any Linux LBA access is repaired rather than broken (`S20`).

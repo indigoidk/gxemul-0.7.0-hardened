@@ -1,0 +1,157 @@
+The brief is a design review, so I will read the rest of the packet and then check the premises against the tree instead of ratifying them.The packet is in. Next I will check the premises that the repair and the rows depend on, starting with the SDH decode, who reads `lba` and `sectorsize`, and the probe’s scoring.VERDICT: READY WITH CHANGES -- honour LBA28 from bit 6 at both sites, keep word 49 at 0, but the product has to be 64-bit, the SDH byte has to be repartitioned, and the detector is short four floor rows.
+Q1: Member 7. Bit 6. Repack bits 7 and 5 into `sectorsize`. 64-bit product at both sites. Delete both `printf`s. Word 49 stays 0.
+Q2: Ship N1–N6, N7 and N8. C6/C11, V9 (k≥12), V12 and V15 stay disclosed. A `None` want fails. Drop `neg appar`. Single-leg gate 10, denominator by equality.
+Q3: Do not advertise. The boot battery cannot see it. Ledger term `probe:` only after the same script is green. Re-author the word-49 sentence in the same commit.
+Q4: The `0xe0`/`head=0` sentence is not the defect. Word 53 does not declare words 54–58 invalid. `wdccylwrap` stays as it is.
+
+Basis: READ `src/devices/dev_wdc.c`, `src/disk/diskimage.c`, `src/include/wdc.h`, `src/include/thirdparty/wdcreg.h`, `src/include/diskimage.h`, `src/include/memory.h`, `src/core/debugmsg.c`, `src/core/main.c`, the frozen probe, `RESULTS_base.txt`, `drive_guest.py`, `gate_offline.sh` (working tree), `wdc_altdigin_probe.py`, the ATA-2 draft, and the NetBSD `wdc.c` / `ata_wdc.c` / `wd.c` excerpts. S22 is DERIVED (CHANGELOG was not opened). `git show` was not available, so HEAD line 5293 was not re-checked; the working-tree fixture is at `diff_wdc_identify.c:5363`.
+
+## Q1
+
+**S1–S24.** None of the behaviour claims I could check is false. Sharpenings:
+
+* **S6** (READ). The sum fits in a signed 32-bit `int` for every value the writers can produce: head `0..15`, cylinder `0..65535`, sector `0..255`, maximum `(15<<24)+(65535<<8)+255 = 268435455 = 2^28−1`. The overflow is only `512 *` that sum, and it starts at sum `2^22` (`512 * 2^22 = 2^31`, which is not an `int`). Head nibble `1` is LBA `2^24+sector`, which is already past `2^22` on a disk of any size. The multiply is undefined before `diskimage_access` runs. 7.1’s “a disk over 2 GiB” is the wrong domain.
+* **S20** (enumerated, not sampled). `sector` cancels. Equality is `752*cyl = head*16777153 + 1`. `16777153 ≡ 33 (mod 752)`. Residues of `1+33*head` for head `0..15` are `1, 34, 67, 100, 133, 166, 199, 232, 265, 298, 331, 364, 397, 430, 463, 496`. None is `0`. Zero coincidences on 16/63. `+` and `|` are the same value on that domain: the four fields occupy disjoint bits.
+* **S3, S4** (READ). The only assignments are `dev_wdc.c:1951, 1961, 1981, 2001, 2014–2017`. Attach does `memset(d, 0)` at 2080. `wdc_new_command_reset` does not touch the task file. `d->lba` is read at 472, 564 (both inside `#if 0`) and in the SDH arm. `d->sectorsize` is read only in that arm. No other file under `src/` names either. `wdc.h` keeps `struct wdc_data` opaque. The alt-ctrl fixture pokes `d.lba = 1` and then issues `WDCC_SEC_FREEZE_LOCK` and `0xaa`, not a media command.
+* **S2** (READ). `DEVICE_ACCESS` takes `unsigned char *data`, so `idata = data[0]` is `0..255`.
+* **S8** (READ). Offset `−512` misses the `override_base_offset` branch (the override is 0) and is zero-filled in `diskimage__internal_access`. The served bytes are zeros.
+
+**P1.** No decision depends on “obsolete, always 1” versus “reserved”. The read-back is the only consumer. Preserve the bits the guest wrote. Forcing bits 7 and 5 to 1 is V16.
+
+**P2.** The read-back design does not need a size meaning. The field is bits 7–6 today. ATA-2 puts L in bit 6 and calls bits 7 and 5 reserved (`ata2` 1603–1610, READ). `WDSD_IBM` is `0xa0`, “forced to 512 byte sector, ecc”, which is the older bits-7-and-5 pattern. Nothing interprets `sectorsize` as a size.
+
+**P3.** “Latent” changes queue order. The witness already shows a guest that sets the L bit is served the wrong sector (`RESULTS_base.txt` 47–51, READ). That is the measured delta (R13). Word 49 = 0 means a guest that honours the bit does not issue LBA. It does not make the CHS answer correct.
+
+**P4.** The interim is acceptable if the comment and the changelog say so. After the repair the device honours LBA while bit 9 stays clear. ATA-2 says a host shall not issue LBA unless bit 9 is set, and that bit 9 set makes words 60–61 valid (S12, READ at 1849–1851 and 2871–2873). Words 60–61 are already nonzero while bit 9 is clear (432–442, READ). Leave them. Do not zero them in this round.
+
+**7.1.** The split on bit 6 is right, and non-media opcodes do not compute an address (only `WDCC_READ` / `READMULTI` / `WRITE` / `WRITEMULTI` call the two functions, 973 and 982, READ). Two cells need a different statement. Every LBA with head ≥ 1 is undefined in the `int` product, not merely “right if the disk is large”. Past-end LBA stays a zero-filled read and a refused write, with no error bit, which is the CHS behaviour today (S8). The SDH observable stays byte-exact; the composition expression does not.
+
+**Q1(b).** Use (ii). No new field.
+
+```c
+d->lba        = (idata >> 6) & 1;
+d->drive      = (idata >> 4) & 1;
+d->head       = idata & 0xf;
+d->sectorsize = idata & 0xa0;          /* bits 7 and 5, kept for read-back */
+odata = d->sectorsize | (d->lba << 6) | (d->drive << 4) | d->head;
+```
+
+Those four pieces are disjoint and cover the byte, so every `idata` in `0..255` reads back as itself. (i) also works and needs no new field. (iii) is an addition (R13) with a smaller mechanism already available. V17 is what you get from changing only line 2015: `0xb3` reads back `0x93`, `0xe5` still reads `0xe5`, `0x4c` reads `0x6c`. The existing `sdh rb` row does not see it. `sdh rb2` does. N4 sees `0x6c` and also V16 (`0x4c` forced to `0xec`). V17’s predicted delta is not the licence; the witness already requires the byte to round-trip, and N4 has to be measured with the fix. Update the debug lines at 2010–2012 and 2018–2020 so they stop calling the preserved bits a size. `sectorsize` keeps a reader under (ii). Do not delete the field this round.
+
+**Q1(c).** One static helper, used at both sites, returning the byte offset. CHS expression unchanged, including `sector - 1`. LBA arm:
+
+```c
+(uint64_t)512 * (((uint64_t)(d->head & 0xf) << 24)
+    + ((uint64_t)cyl << 8) + (uint64_t)d->sector)
+```
+
+`512 * (int64_t)sum` is the same promotion and matches the CHS line. Delete the `printf` at 475 and 567. Do not turn them into `debug()`. `debug()` prints whenever verbosity is non-negative (`debugmsg.c:365–376`, READ). `-V` is single-step, not `-v` (`main.c:473–478`), and single-step increments that level, so `debug()` prints on the witness command line. The `printf` sits outside `if (d->lba)`, so flipping `#if 0` to `#if 1` would log every media command. The helper’s return is assigned before `wdc__read`’s chunk loop and before `wdc__write`’s three stores (570–572). The loop `break`, `d->int_assert = 1`, and the drain at 1868–1873 stay as they are. A helper also removes V20’s “capture `write_offset` before the LBA arm” as a statement-order bug; the `lba wr` rows still catch a write that uses the CHS offset.
+
+**Q1(d).** Member **7 IMPLEMENT** (R12). The path is compiled out, and the compiled-out expression keys off bit 5 and overflows, so member 4 (“keep the value, delete the kill”) would ship the FreeBSD patch (D1, D2, S14). Member 5 FAULT is an unmapped bus (`return 0` from a stand-in device). It is not available here. `WDCE_ABRT` is available, at the no-disk arm (947–954) and the `default:` arm (1155–1156), and that is a decline of the command. Refusing LBA while word 49 stays 0 matches the ATA-2 host rule and leaves the guest that ignores word 49 with no disk. The measured defect is the wrong sector. Honour the command. No member is missing once ABRT is counted as that decline.
+
+**Q1(e).** One round (R23). Same device, same address class, same detector. Advertising is a second round. Leave unchanged: the CHS formula, drive and head extraction, ATAPI, the `#481` reset arm (it does not clear the task file; do not start clearing it), `wdc_altstatus`, IDENTIFY bytes including words 60–61, the no-disk and `default:` ABRT arms, the inbuf guard, and `seccnt == 0` meaning 256. 48-bit opcodes stay in `default:`.
+
+**Q1(f).** Tag each edited site. `dev_wdc.c` has no sentence that says the arms are permanently disabled; the `#if 0` is the sentence. These become false and are this round’s text: `row_no_lba_claim` (“arms are `#if 0`”, “`d->lba` never reaches an offset”, FAIL text “neither is implemented”) at working-tree 5700–5729, and `gate_offline.sh:1942` “advertise LBA that is `#if 0`'d out”. The printf name `no unimplemented capability claimed` stays, so the gate’s name pin stays. Add one comment at the word-49 store: LBA is honoured, bit 9 stays 0, words 60–61 are left as they are. I did not re-check the est/ mirror (NOT CHECKABLE here). The product edit is `src/devices/dev_wdc.c`.
+
+## Q2
+
+**Q2(a).** Grades, with the rule:
+
+| cell | grade | why |
+|---|---|---|
+| C1, C2, C3, C4, C8, C12, C13, C15, C16, C18 | rowed | witness rows. C18 carries the “word 49 unchanged” claim |
+| C5, C10 | FLOOR (d) and R10 | every current LBA row uses head 0, so the `<< 24` term is zero and V4/V8 cannot move them. Head ≥ 1 is also the UB region of the unwidened product, so these rows exist only together with the cast |
+| C7 | FLOOR, sibling | V13w and a write-site V1 are invisible to the CHS read rows |
+| C9 | FLOOR, sibling | V5w/V6w. The read site already has `lba 256` and `lba 0` |
+| C14 | FLOOR (d) | V3 passes every `0xe0` and every `0xa0` row |
+| C17 | FLOOR | V16 leaves `0xe5` and `0xb3` unchanged. Both have bits 7 and 5 set |
+| C6, C11 | (e), IMAGE | both readings fall past a 4096-sector file (P16) |
+| C19, C20 | (e) | S5; drive is not a field the LBA body reads (R4) |
+
+R5 does not move C5 to (e). R5 limits case-splits the body does not have. V4 is a weakening of the new guard (R3), and V8 deletes a term the body reads. No cell is missing inside the function boundary. Caller predicates (`diskimage_exist`, the switch arm) stop at that boundary (R4). The drafter’s list of dominating predicates is complete.
+
+**Q2(b).** V1, V2, V5r, V6r, V11, V13r, V14, V17 (`sdh rb2` → `0x93`, `sdh rb` still passes), V18, V20: predicted red rows are right, and the current witness rows see them. V3, V4, V5w, V6w, V8, V13w, V16: red only with N1–N6, as the table says. V12 is equivalent in every reachable state (P9: the only writer is `idata & 0xf`, and the struct is zeroed). V7 and V10 are invisible on this image. V9 is invisible for `k ≥ 12` (`2^12+5 = 4101`, past the file and inside the 5040-sector capacity, so the read is zeros either way). N1 does catch `k ≤ 11` (`<< 11` is LBA 2053, inside the file). V19 is outside R4. V15: I will not predict `-O3`. The source is undefined, so a wrap to `512 * 16777221 ≡ 2560 (mod 2^32)`, sector 5, is one two’s-complement result, and a compiler that widens serves zeros like the fix. N1 is not an oracle for it. Widen anyway. The contract stays blind to the width.
+
+**Q2(c).** Wants I re-walked match the table: `TAG(67)=0xffbc0043`, `TAG(5)=0xfffa0005`, `TAG(69)=0xffba0045`, `TAG(70)=0xffb90046`, `TAG(256)=0xfeff0100`, `TAG(1007)=0xfc1003ef`, `TAG(10)=0xfff5000a`, payload combines as stated. CHS indices 67, 9, 256, 1007 and the valid triples `(0xa1, sector 8)` = index 70 and `(0xa1, sector 7)` = index 69 are right. N5’s `0xa4/sector 5` is index 256 and `0xaf/sector 63` is index 1007.
+
+* **P10.** Use N7. The model has no sector-range check (READ; nothing compares `sector` with `sectors_per_track`), and the witness’s sector 71/70 measurement matches index 70/69. The shipped stimulus should be a triple ATA-2 defines.
+* **P11.** Make `lba 0`’s HEAD want the literal `0x00000000`, both columns `eq`. `nehead` also passes an empty-ring read.
+* **P13.** N4 is owed. `0xe5` and `0xb3` both have bits 7 and 5 set.
+* **P14.** N3 is owed because V3 depends on bit 6 and bit 5 together. Which drivers write a bare `0x40` is NOT CHECKABLE here and does not matter.
+* **P16.** Disclose. Do not enlarge the image. `TAG(65536) = 0xffff0000 = TAG(0)`, so N9 as written does not tell V10 from the fix. A widened tag and a 32 MiB file would, and that is still (e), not floor.
+* **Zeros versus a dead read** (READ `wdc_get_inbuf`, 284–307). An empty ring returns `(uint64_t)-1` per byte. A 16-bit little-endian data read composes `0xfeff`, and the tag pair is `0xfefffeff`, not zeros. N1’s zero want fails on that path. A dead session stores `None`, and `None == 0` fails. The same-session tagged read is still worth scoring. It is not what keeps the zero row honest.
+
+Each shipped row’s channel moves under its variant: N1 is `TAG(67)` on V4r, `TAG(5)` on V8, zeros on the fix; N2’s two read-backs swap the same way and the row fails if either mismatches; N3 is `TAG(69)` under V2 and V3; N4 is `0xec` under V16 and `0x6c` under V17; N5 separates CHS index 1007 from LBA 256; N6 separates CHS index 9 from LBA 10.
+
+**Q2(d).** Two outcomes today, and neither is the null medium the gate should record as a bare `3/19`.
+
+* A non-emulator that exits hits `os.write` in `Emu.send` (349–354, READ). That `OSError` is uncaught. No sentinel, no result line, process dies.
+* A binary that stays up and never yields registers: `COMB(None, None)` is `None` (472–474), and `None == None` passes `chs h1` and, on the HEAD column, `lba 256`. `neg appar` is constants and always passes (526, 534–535). That is 3/19 HEAD, 2/19 FIX, `CONTROL=FAIL`, exit 1. The prediction is right for that path only.
+
+`need_exec` SKIPs the whole gate (S16, R22). It is not a red pin. Copy `wdc_altdigin_probe.py:430–449`: a register that was never sampled fails, and the probe prints `WDC_LBA_RESULT=n/d` and `WDC_LBA_CONTROL=OK`. Catch `OSError`, still print those lines, exit 1. Then the dead run is one score: `0/N`, `CONTROL=FAIL`, result line present. Record `(c): by construction via gate 10's result-line check and CONTROL=OK equality, leg not run`. Drop `neg appar`. It cannot fail, and its comment says the parser must report FAIL while the row is counted as a pass (`RESULTS_base.txt:52`).
+
+**Q2(e).** Contract, replacing 7.6:
+
+```text
+CATCHES: decode off bit 6 or qualified with bit 5 or bit 7 (V1-V3; N3 is the V3 row);
+  LBA arm disabled, unconditional, or qualified on head, cyl or sector, at either site
+  (V4-V6, V13, V14; N1 N2 N5 N6);
+  head term or sector-1 in the LBA arm (V8, V11); a head shift that still lands
+  inside the file (k <= 11);
+  read-back losing a bit or forcing bits 7 and 5 (V16-V18; N4);
+  word 49 nonzero (C18).
+BLIND, BY CONSTRUCTION: cyl_hi and a head shift that still misses the file (V7, V9 for k >= 12, V10);
+  the multiply's width (V15) -- the source is widened, the rows do not observe it;
+  `& 0xf` (V12, equivalent); drive 1 and big-endian guests (C19's MULTI labels, C20);
+  48-bit commands; the deleted printf; past-end completion with no error bit.
+```
+
+If every in-range LBA moved by one sector, `lba 70`, `lba 256`, `lba 0`, `lba wr` and `lba wr2` go red. N1 does not: `2^24+5` and `2^24+6` are both past the file. If every write moved by one sector, `lba wr` and `lba wr2` go red; N6 goes red for a CHS-only write shift.
+
+## Q3
+
+**Q3(a).** Keep word 49 at 0. The warrant for honouring LBA is the witness, not an advertisement. The warrant for advertising does not exist yet.
+
+**P5.** The “five rigs” sentence is false. `drive_guest.py`’s `RIGS` has `luna88k` and `landisk` (READ). Luna88k disks are SCSI (`diskimage.c:1701–1710`, READ). Landisk reaches `dev_wdc.c` only when `_images/wdc-scratch-64m.img` exists, attached `-d iR:` over an all-zero image (S18, READ in `drive_guest.py` and `images.md`). CHS and LBA both read zeros. The installer-prompt oracle does not change. I found no rig whose disk contents would change. A private FreeBSD image outside this tree is NOT CHECKABLE.
+
+**P6.** The boot battery cannot license the advertisement. The follow-up’s gate is a guest that honours bit 9, on a non-zero disk, with a checked sector. The in-tree OpenBSD path reads capabilities from `tb[49] >> 8` (S22, DERIVED). Landisk is that guest, and its current oracle cannot see a wrong sector. Words 60–61 already hold the capacity; they move only if a later round sets bit 9, and they must stay valid then (S12). They do not move this round.
+
+**Q3(b).** Single-leg. Gate 10 beside `wdc_altdigin_probe.py`. One binary, the FIX column, against `$PMAX`. Do not add another dated exemption; that is the open `wdcaltoffleg` debt (S16, P7). Keep the two-column invocation for the witness and the variant table.
+
+Lines: `WDC_LBA_RESULT=<passed>/<total>`, `WDC_LBA_CONTROL=OK`, sentinel `WDCLBA_PROBE_DONE`. Gate checks, in the altdigin shape: result line present and parsed; control equal to `OK`; denominator equal to a literal; numerator equal to that denominator. Not `check_min`.
+
+The literal counts ram rows. Dropping `neg appar` leaves 18. N3 folds into the `lba` session and N4 into the `sdh` session. N1 is its own session (`+ ram + N1`). N2, N5 and N6 share one write session; the sectors they touch (`5, 9, 10, 67, 256, 1007`) are disjoint (`+ ram + 3`). Scored rows: **26**. If the sessions are split, the literal moves by hand with a comment, as the altdigin pin did from 16 to 19 to 22. `CLASS_DETECTOR` on `regress/wdc_lba_probe.py`. The frozen witness copy follows the `#533` pair: `CLASS_WITNESS` for the witness script, and the frozen file stays a recorded instrument (S23). Add those lines without reverting the uncommitted `+15` in `check_probe_wiring.py`.
+
+**Q3(c).** `probe:regress/wdc_lba_probe.py -- rung 3, unmodified evbmips -e malta, regress/artifacts/wdclbaaddr/witness_20261024/` after the fixed leg is green on that same script. Not before. Clause (i)’s second half is open (R17). `detector:` would be the wrong term once both legs exist (R18).
+
+**P15.** (a) The sector tags are the device signature. The SDH bytes are not: RAM can hold `0xe5`. The tag rows already satisfy clause (ii); `lba 70` returned `0xffba0045`, which is `TAG(69)` and is not a RAM constant. (b) The order rule is the ladder’s clause (i). `WITNESS.md` names it loosely. Correct that sentence when the fixed leg is written up. (c) The binary is identified by `dev_wdc.c`’s md5, which matches HEAD, and the five dirty `src/` files are off the malta/wdc path. That is enough. None of the three demotes the term.
+
+The record shows: base leg red against the FIX wants, on the committed `dev_wdc.c`, before the edit (this witness); fix leg green afterwards; the script identity (md5) of the run that went green. The HEAD column is not rewritten to follow the fix.
+
+**Q3(d).** This round’s obligations, same change (the row’s own comment says so, and the FAIL text becomes a wrong record, R16 L4):
+
+* `row_no_lba_claim`: keep the `00 00` assertion and the name `no unimplemented capability claimed`. Replace “neither is implemented” and the “`#if 0`, never reaches an offset” paragraph with “LBA is honoured and not advertised; DMA is not implemented”.
+* `gate_offline.sh` comment “advertise LBA that is `#if 0`'d out”. The name pin at the `grep -c` stays.
+* The word-49 comment in `dev_wdc.c`.
+
+I read both sentences still present in the working tree (5700–5729 and `gate_offline.sh:1942`), so the peer hunks have not taken those lines. Stage only those hunks. Do not stage the rest of `diff_wdc_identify.c` (`+526`), `gate_offline.sh`, `gate_sh_rounding.sh`, or `check_probe_wiring.py`.
+
+**P17.** No committed row’s expected value depends on bit 5. The fixture pokes the field and issues no media command. S19’s probes write `0xa0` and `0xb0`, bit 6 clear, so they stay CHS. The prose that `&& !d->lba` “defeats the abort on every LBA-mode driver” is false while `d->lba` is bit 5 (`0xa0` sets it) and becomes true when `d->lba` is bit 6. Date that sentence on `wdcaltfixture`. Do not rescore it here.
+
+**Q3(e).** The changelog block says: witness path; base measured red before the edit, fix green after, same script; word 49 unchanged and LBA not advertised; words 60–61 unchanged; LBA28 honoured only for `0x20`, `0xc4`, `0x30`, `0xc5`; decode is bit 6; read-back repartitioned and byte-exact; product widened, because the `int` form is undefined at LBA ≥ `2^22` and at every head ≥ 1; `printf` not enabled; CHS formula unchanged; 48-bit commands still abort (S11); NetBSD and the in-tree OpenBSD stay on CHS while bit 9 is clear. It does not say guests now use LBA, that FreeBSD 10+ was re-verified (S13’s report limit: the port commit message, UNVERIFIED), that the FreeBSD patch was applied, or that V7, V9 for `k≥12`, or V10 are covered.
+
+File the advertisement follow-up with the non-zero-disk gate above. In the same changelog paragraph, say an out-of-range LBA completes like an out-of-range CHS access: read zeros, write dropped, no error bit. That is `#416`’s existing contract, inherited. It does not need a new defect row in this round.
+
+## Q4
+
+1. **READ, both comments are real, and they disagree.** `#485` at `dev_wdc.c:1081–1082` says no ATA document is in this tree and none is available. `#525` at 638–645 cites `_scratchpad/ata2_x3t10_948d.txt` by path. “In this tree” is literally true of the repository. “None is available” is false in the same file. `gate_offline.sh:1525` (working tree) says there is no ATA document in this tree, in the self-consistency comment; that oracle really does not need the spec. Not this round’s edit. A later comment can stop saying the document is unavailable.
+
+2. **The question overstates the draft.** Word 53 is `0x0002` (383–385, READ): bit 1 set, bit 0 clear. ATA-2 7.15.21 (2900–2906, READ): bit 0 set means words 54–58 are valid; bit 0 clear means they **may** be valid. Bit 1 clear would make 64–70 invalid; bit 1 is set. Annex D.2.5 says bit 0 shall be 1 in a valid translation and that an unsupported mode clears bit 0 and zeros 54–58. The model fills 57–58 and never runs IDP (985–989, a TODO). That is a pre-existing tension with the annex, not a declaration that 54–58 are invalid, and not this round’s change.
+
+3. **Inherited, not a new sibling to fix.** `diskimage_access` zero-fills an out-of-range read and refuses the write, and both `wdc__read` and the drain discard the return (531–533, 1868–1870, READ). CHS already behaves this way. Say so in the changelog. Do not open a defect row from this round.
+
+4. **READ `ADJ_RULINGS.md:4–5` and 18–19.** The header says neither seat built or ran anything. “Grok’s argument is the measured one” is a source argument that won the disagreement. The word was wrong when it was written. The witness in section 2 is the measurement, and it agrees with the latent-until-word-49-is-decided half. Do not rewrite the adjudication. The witness supersedes the tense.
+
+5. **The sentence is true and is not the defect.** `0xe0` has a zero low nibble, so head is 0 under the current decode and under bit 6. `0xe1` is head 1. The fact that decides the patch is that `0xa0` sets bit 5, so `d->lba` is 1 on a CHS select (S1, D1, S13). The shipping probe’s header has to say that. Leave the frozen file’s bytes frozen (its md5 is the witness identity) and correct the account in the shipping header and in the fixed-leg `WITNESS.md` note.
+
+6. **`wdccylwrap` does not change severity this round.** While bit 9 stays 0, a guest that honours it still has only the CHS words, which is the population that row describes. A guest that ignores word 49 will use LBA after this repair and will take capacity from words 60–61, which are already filled. The follow-up that sets bit 9 is the round that revisits `wdccylwrap`.
