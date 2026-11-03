@@ -1,0 +1,105 @@
+VERDICT: PROCEED WITH CHANGES (3)
+
+The proposed constant and exemption are correct for guest-reachable calls at `987cb596`. The three changes I request are:
+
+1. Correct the interrupt, user-break, and exception-category explanations.
+2. Repair the proposed probe/gate integration, including its row names.
+3. Add a second general-exception code and retain the witness’s BL-clear TRAPA control.
+
+The checkout’s current HEAD is `8372aeeb`, and its working files already contain later #577 material. I therefore reviewed the named commit `987cb596` directly. Your quoted source and manual line numbers match that commit. The two last-change hashes and upstream-import history also check out. Nothing was built, executed, or edited.
+
+**Q1. The defect is real, but several supporting statements need correction.**
+
+The strongest independent confirmation is in the manual’s substantive text, beyond the supplied revision-history excerpt:
+
+- §5.6.1 identifies a general exception with BL set as a manual-reset source at line 12376 and specifies EXPEVT H'020 at lines 12383–12384.
+- §5.7 directly states both H'020 and undefined SPC/SSR at lines 13164–13166.
+- The operand multiple-hit description independently specifies H'140 at lines 12499–12500. [Manual](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/sh7750_hardware.txt:12372)
+
+The premise audit is:
+
+| Premise | Finding |
+|---|---|
+| H'140 is the only currently raised reset-category code needing preservation | **Confirmed.** The sole raiser is the associative-write path in `dev_sh4.c:1178`. Other exception callers supply general-exception codes; power/manual reset have no raiser through this function. |
+| No existing committed row re-pins | **Confirmed for the six permitted probe rows.** This does not establish compatibility with every other regression or external guest. |
+| `EXPEVT_BREAK` has no raiser | **Confirmed.** It occurs only in the definition; the device’s UBC cases are TODO stubs. |
+| Interrupt delivery cannot reach this block with BL set | **Confirmed for current callers.** `cpu_dyntrans.c:250` is the sole interrupt caller and checks BL first. |
+| That gate prevents an interrupt from latching the rewritten EXPEVT/resetting | **False.** Even a hypothetical BL-set interrupt call writes INTEVT, replaces the local `expevt` with `-1`, skips the EXPEVT assignment, and selects `VBR+0x600`. The gate is essential to interrupt acceptance semantics, but the temporary rewrite would not survive. |
+| Witness instruction encodings and expected values | **Confirmed statically.** `0xc301` decodes as TRAPA #1, normally H'160. The three MOV.L encodings, UTLB addresses, and valid-bit seed agree with the decoder and device definitions. |
+
+“A user break would be the other exemption” needs qualification. The manual says that with BL set, a UBC match sets its condition flags **without starting exception handling** (§20.3.3, lines 41448–41452). Future UBC support must suppress delivery appropriately; merely preserving H'1E0 in this function would not implement that behavior.
+
+Also, the detector drives **one general exception and one reset-category exception**, not “two general-exception codes.”
+
+For guest dependencies, the source exposes EXPEVT through MMIO, so guest software can certainly distinguish the changed value. I found no in-tree consumer requiring H'000 specifically for this path, but cannot prove that arbitrary guest software never depended on the bug.
+
+**Q2. The proposed eight rows do not cover every reachable cell.**
+
+Here “general” excludes user break.
+
+| Event | BL clear | BL set |
+|---|---|---|
+| General exception | Unchanged: retains its code and normal vector. **No committed/proposed detector member.** | **Changed:** H'000 → H'020; same reset arm. Proposed TRAPA row covers it. |
+| TLB multiple hit | Unchanged: H'140 and reset arm. Existing trigger/SR rows cover it. | **Changed:** H'000 → H'140; same reset arm. Proposed multiple-hit row covers it. |
+| Interrupt | Unchanged: eligible interrupts set INTEVT and vector through `VBR+0x600`. **No member.** | Unchanged: delivery blocked/pending. **No targeted member.** |
+| User break | No implemented raiser. | No implemented raiser; hardware suppresses exception handling on a match. |
+
+The six existing rows comprise four observations from one multiple-hit session, another multiple-hit session with altered SR, and a single-hit/no-exception control. They are not six separate partition cells.
+
+The witness’s BL-clear TRAPA session fills a useful missing cell and should become a committed row. Interrupt coverage need not expand in this narrowly scoped change, but should not be claimed.
+
+**Q3. Mutation results, predicted from source—not measured here.**
+
+All counterexamples below have BL set.
+
+| Candidate | Equivalent? | Counterexample and existing row that fails |
+|---|---|---|
+| (a) Always POWER | No | TRAPA produces H'000 instead of H'020; multiple hit produces H'000 instead of H'140. **Both new rows fail.** |
+| (b) Delete rewrite/block | No | TRAPA retains H'160. **General row fails; multiple-hit row passes.** |
+| (c) Always MANUAL | No | Multiple hit becomes H'020. **Multiple-hit row fails.** |
+| (d) Exempt TRAPA | No | TRAPA retains H'160; multiple hit becomes H'020. **Both fail.** |
+| (e) Additionally exempt codes below H'100 | No | A load TLB miss retains H'040, or a misaligned load retains H'0E0. **Neither proposed row fails.** |
+| (f) Rewrite only TRAPA | No | Any other raised general code retains its original value, e.g. H'180. **Neither proposed row fails.** |
+
+Candidate **(e) contains a false classification**: `<0x100` includes general exceptions H'040–H'0E0 and excludes the reset-category H'140.
+
+I interpreted “widened” as retaining the H'140 exemption and adding `<0x100`. If it instead **replaces** the H'140 exemption, the multiple-hit row fails because H'140 becomes H'020. An actual reset-category exemption `{H'000, H'020, H'140}` is equivalent over current guest-reachable callers; it differs from the proposed fix on a hypothetical BL-set power-reset call.
+
+Candidates (a)–(d), plus `M_power`, are covered by the stated floor. Additive (e) and (f) are non-equivalent survivors requiring clause-(e) disclosure under the eight-row proposal.
+
+**Yes, add a second general code. Prefer a code below H'100.** A simple source-supported choice is:
+
+- `MOV.L @r1,r0`, encoding `0x6012`;
+- `r1=0x8c020001`, SR `0x500000f0`, one step;
+- underlying exception H'0E0; expected EXPEVT **H'020**.
+
+This catches both survivors above. RES_INST catches the TRAPA-only rewrite but misses the additive numeric-range exemption.
+
+Together with BL-clear TRAPA expecting H'160, that makes **ten rows**. Remaining code-specific escapes still require disclosure. So do untested state qualifications: every proposed BL row has RB clear, whereas an exception inside an existing handler can have RB set.
+
+For the identity experiment, deleting only the rewrite while retaining the diagnostic gives a cleaner comparison. Deleting the entire block additionally changes logging, although its EXPEVT predictions are as stated.
+
+**Q4. Keep the narrow implementation; keep logging with `floodclass`.**
+
+An explicit general-exception classifier, or explicit preservation of all reset-category codes, is another implementation option. Neither is necessary for current callers, and numeric ordering cannot substitute for classification.
+
+I would leave the `(once)` latch to `floodclass`. It is a separate observable behavior change. `fatal()` itself only logs here (`src/core/debugmsg.c:384`); this patch removes no host-stopping operation.
+
+The omitted module-reset effects are **observable**, although they need not ride with this EXPEVT correction. For example, the manual requires TSTR to become zero on manual reset at line 20505. This tree models readable/writable TSTR and uses it to control timer operation, but the reset arm does not reset it. Describe this as existing incomplete reset emulation, rather than absence of an observable requirement.
+
+**Q5. The SR preset is right; the proposed wiring has a concrete failure.**
+
+`0x500000f0` is MD|BL|IMASK, with RB and FD clear. Startup SR is MD|IMASK (`cpu_sh.c:123`); the existing special SR row also has BL clear. Thus the six existing expectations remain valid.
+
+The debugger registers SR as direct storage, and settings writes do not call `sh_update_sr()`. Retaining RB clear is consistent with the existing register seeds.
+
+Two integration details matter:
+
+- **Both proposed names fail the existing gate matcher.** `tlbm bl general` has 15 characters; `tlbm bl multihit` has 16. The probe uses `%-14s `, so each gets only one following space. The gate requires two in `^$v  .*ok$`. Shorten them—for example, `tlbm bl trapa` and `tlbm bl mhit`—or deliberately change the matcher.
+- At `987cb596`, `session()` hardcodes the three-store program and `step 3`. It needs a program/step override or another helper for TRAPA. Putting replacement instructions in `pre` alone would fail because the hardcoded trigger overwrites them.
+
+With the two additional sessions recommended above, pin the denominator to **10**, and enumerate all ten names. Existing PC coverage supports the unchanged shared reset arm; I do not require another PC assertion for this patch.
+
+**Unsettled within the permitted evidence:** the raw witness script/transcripts, clone and binary provenance, and reported measurements; historical CHANGELOG/ledger and pending-hunk status; dependencies in other regression files or external guests; and full reset conformance beyond the inspected behavior. The proposed additional-row and mutation outcomes above are static predictions, not new measurements.
+
+VERDICT: PROCEED WITH CHANGES (3)

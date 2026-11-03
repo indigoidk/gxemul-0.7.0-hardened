@@ -1,0 +1,3512 @@
+Reading additional input from stdin...
+OpenAI Codex v0.159.2
+--------
+workdir: C:\DocumentNoSnc\CC\GXEMUL
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: max
+reasoning summaries: none
+session id: 01a1a054-7057-7862-860b-5ad3fbf5d8b7
+--------
+user
+# PANEL PASS 1 -- `shblreset` (#577): a SuperH general exception taken with SR.BL set stores the power-on reset code where the manual says manual reset, and clobbers the TLB multiple-hit code
+
+Fired 2026-11-02 17:5x.  HEAD `987cb596`.  Roster (owner 2026-11-02): GPT-6 Astra, Fable 5.1, glm-5.3, Argon (Gemini web), Grok 4.7.
+Astra is on its weekly wall (hotmail login, "try again at Nov 8th"); its pass 1 is OWED and recorded as SEAT WALLED.  The owner holds
+every commit until Astra answers; the round runs to the F2 pass and then waits.
+
+## READ THIS FIRST -- PLEASE DO NOT SIMPLY RATIFY
+
+A recent panel had seven of nine seats confirm a premise this brief's author stated wrongly.  **Check the premises, not just the
+derivations.**  Where I state something as fact, ask whether it is true.  A seat that re-derives a premise from something this brief
+did NOT give it is worth more than a seat that agrees.
+
+**THE TREE UNDER REVIEW IS `GXEMUL-SEC/src/` at HEAD `987cb596`.**  Do not read `./src/` under the project root (a pristine 2021 upstream
+copy) nor `.claude/worktrees/` (an older fork copy); if your line numbers disagree with mine, say so rather than reconciling.
+**If you cannot read files that is expected** -- every fact you need is inlined.  Name any premise you cannot settle from this packet
+rather than guessing.  **VERDICT LINE FIRST** (`VERDICT: PROCEED / PROCEED WITH CHANGES (<n>) / DO NOT PROCEED`), repeated last.
+File-reading seats: scope your reading to `GXEMUL-SEC/src/`, `GXEMUL-SEC/regress/sh_tlbmulti_probe.py`, `regress/gate_sh_rounding.sh`
+(HEAD copies) and the manual `C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\sh7750_hardware.txt`.  Reading only; nothing is to be built or run.
+
+## 1. The defect as filed, the proposed fix, and the MEASURED witness
+
+Ledger row `shblreset` (open, MED): "BL already set stores EXPEVT_RESET_POWER instead of EXPEVT_RESET_MANUAL".  `src/cpus/cpu_sh.c`,
+`sh_exception()`, HEAD :910-918: when `sr & SH_SR_BL`, after a `fatal()` print, `expevt = EXPEVT_RESET_POWER;` -- EVERY exception code is
+rewritten to H'000.  The manual (section 3) says a general exception with BL set performs a MANUAL reset with EXPEVT = H'020, and lists
+the two TLB multiple-hit exceptions as reset-category in their own right with code H'140, which the BL rule therefore must not touch.
+
+**Proposed fix (one predicate, one constant):**
+
+```diff
+-		/*  This is actually OK in two cases: a User Break,
+-		    or on NMI interrupts if a special flag is set?  */
+-		/*  TODO  */
+-
+-		expevt = EXPEVT_RESET_POWER;
++		/*  #577: a general exception taken with BL set is a MANUAL
++		    reset -- sh7750_hardware.txt 5.5.3 (:12302-12304), EXPEVT
++		    H'020 (:678-681) -- not a power-on reset (H'000), which is
++		    what stood here.  The two TLB multiple-hit exceptions are
++		    reset-category in their own right (Table 5.2, :12006 and
++		    :12010; code H'140, :12461) and keep their code.  A user
++		    break would be the other exemption; EXPEVT_BREAK is never
++		    raised in this tree.  Interrupts do not reach this path:
++		    cpu_dyntrans.c gates their delivery on BL.  */
++		if (expevt != EXPEVT_RESET_TLB_MULTI_HIT)
++			expevt = EXPEVT_RESET_MANUAL;
+```
+
+Control flow is unchanged: `EXPEVT_RESET_POWER`, `EXPEVT_RESET_MANUAL` and `EXPEVT_RESET_TLB_MULTI_HIT` share one arm (:1015-1021: pc =
+0xa0000000, vbr = 0, SR |= IMASK, FD cleared); only the latched EXPEVT value differs.  The `fatal()` at :911 stays (disclosed below).
+
+**Witness, rung 3, MEASURED 2026-11-02 17:4x** -- `regress/artifacts/shblreset/witness_20261102/sh_blreset_witness.py` on a fresh WSL clone
+of HEAD (`/tmp/gxdivw`, binary newer than source) and on the same clone plus the fix (`/tmp/gxfix577`); unmodified in-tree `-E landisk
+-M 64`, the rig kernel loaded for construction only; the cold debugger pre-sets SR, places one real guest instruction (TRAPA #1,
+0xc301) or the committed multiple-hit program (`sh_tlbmulti_probe.py`'s three stores) at 0x8c010000, steps, and reads EXPEVT and PC
+back with `print expevt` / `print pc`, anchored to the command echo (the dump does not show them):
+
+```
+                                 HEAD (witness_head.out)                    fixed (witness_fixed.out)
+bl trapa expevt    sr=MD|BL      0x00000000 want 0x00000020 FAILED-FOR-THE-REASON-UNDER-TEST   0x00000020 ok
+bl trapa pc        same session  0xa0000000 ok  (LIVENESS: the reset path ran)                 0xa0000000 ok
+nobl trapa expevt  sr=MD         0x00000160 ok  (CONTROL: the general vector, EXPEVT readable)  0x00000160 ok
+bl multihit        sr=MD|BL      0x00000000 want 0x00000140 FAILED-FOR-THE-REASON-UNDER-TEST   0x00000140 ok
+RESULT                           2/4                                                            4/4
+```
+
+The second red row is the clobber half: on HEAD a BL-set guest's TLB multiple hit latches H'000, so its reset handler cannot tell a
+multiple hit from a power-on.  Both halves are red for exactly the predicted value, and the same script reads 4/4 on the fixed clone
+(clause (i) of the witness rule).
+
+## 2. SETTLED PREMISES (C0 output and what is re-read today)
+
+C0 at `987cb596`: `git log -1 -- src/cpus/cpu_sh.c` = `7e5c0f6c 2026-08-23 #458`; `-- regress/sh_tlbmulti_probe.py` = `0678450e
+2026-08-22 #457`; `grep -c shblreset CHANGELOG.md` = 0; `OUTSTANDING_BUGS.md:24063` carries the id entry.  **The round has not shipped.**
+`git log -L910,918:src/cpus/cpu_sh.c` returns one commit, the upstream import: the block is upstream residue.
+
+* `EXPEVT_RESET_POWER 0x000`, `EXPEVT_RESET_MANUAL 0x020`, `EXPEVT_RESET_TLB_MULTI_HIT 0x140`, `EXPEVT_TRAPA 0x160`, `EXPEVT_BREAK 0x1e0`
+  (`src/include/thirdparty/sh4_exception.h:57-73`).  `SH_SR_BL 0x10000000`, `SH_SR_MD 0x40000000`, `SH_SR_RB 0x20000000` (`cpu_sh.h:192-194`).
+* `EXPEVT_RESET_MANUAL` appears at HEAD only in the define and in the :1016 case label; `EXPEVT_BREAK` only in the define: the user-break
+  exemption the old comment mentions has no raiser in this tree (`git grep` over `src/`).
+* The only raiser of `EXPEVT_RESET_TLB_MULTI_HIT` is `dev_sh4.c:1178` (the UTLB associative-write multiple hit, #457).
+* Interrupts do not reach the BL block: `cpu_dyntrans.c:247-250` delivers an SH interrupt only when `!(sr & SH_SR_BL)` (quoted below).
+  An NMI is not modelled separately in this tree (the old comment's "NMI interrupts if a special flag is set?" has no code behind it).
+* `regress/sh_tlbmulti_probe.py:55-57` already records the clobber as a fact ("`cpu_sh.c` rewrites ANY expevt to `EXPEVT_RESET_POWER`
+  when `SR.BL` is set ... a BL-set guest silently latches `0x000` instead") -- that note becomes a historical note under this fix.
+* The committed `tlbm` rows all run with BL CLEAR (reset SR has BL clear; the `tlbm sr` row pre-sets 0x40008000), so no committed row
+  re-pins under this fix (read from the probe; the pass-1 question Q5 asks you to check).
+* Working tree: `regress/sh_tlbmulti_probe.py` is CLEAN; `regress/gate_sh_rounding.sh` holds three unrelated uncommitted hunks of
+  this session's 09-17 work (old :530/:590/:822) AND round #576's two staged hunks are pending in a HEAD-based copy (not committed); this
+  round's gate hunk (section 5) is staged the same way and the two rounds' copies are reconciled at whichever lands second.
+
+**Stated as questions:**
+* Does the manual's "registers of the other modules are set to their states following a manual reset" (5.5.3) carry any observable this
+  round must model?  I believe NOT: the tree models neither reset's module effects, on either value, and this round changes the EXPEVT
+  code only (disclosed, section 6).
+* Is `EXPEVT_RESET_TLB_MULTI_HIT` the ONLY code the BL rule must exempt?  Table 5.2 lists power-on, manual, H-UDI and the two multiple
+  hits as reset-category; of those only H'140 is ever raised through `sh_exception()` here.
+
+## 3. THE CODE AND THE INTERRUPT GATE, VERBATIM (HEAD)
+
+`src/cpus/cpu_sh.c:910-918`:
+```c
+	if (cpu->cd.sh.sr & SH_SR_BL) {
+		fatal("[ sh_exception(): BL bit already set. ]\n");
+
+		/*  This is actually OK in two cases: a User Break,
+		    or on NMI interrupts if a special flag is set?  */
+		/*  TODO  */
+
+		expevt = EXPEVT_RESET_POWER;
+	}
+```
+`:941-955` (the common code; EXPEVT is latched here, BEFORE the switch):
+```c
+	cpu->cd.sh.spc = cpu->pc;
+	cpu->cd.sh.ssr = cpu->cd.sh.sr;
+	cpu->cd.sh.sgr = cpu->cd.sh.r[15];
+
+	if (intevt > 0) {
+		cpu->cd.sh.intevt = intevt;
+		expevt = -1;
+	} else {
+		cpu->cd.sh.expevt = expevt;
+	}
+
+	sh_update_sr(cpu, cpu->cd.sh.sr | SH_SR_MD | SH_SR_RB | SH_SR_BL);
+
+	/*  Most exceptions set PC to VBR + 0x100.  */
+	cpu->pc = vbr + 0x100;
+```
+`:1015-1021` (the reset arm the three codes share):
+```c
+	case EXPEVT_RESET_POWER:
+	case EXPEVT_RESET_MANUAL:
+	case EXPEVT_RESET_TLB_MULTI_HIT:
+		cpu->pc = 0xa0000000;
+		cpu->cd.sh.vbr = 0x00000000;
+		sh_update_sr(cpu, (cpu->cd.sh.sr | SH_SR_IMASK) & ~SH_SR_FD);
+		break;
+```
+`src/cpus/cpu_dyntrans.c:247-250`:
+```c
+		if (cpu->cd.sh.int_to_assert > 0 && !(cpu->cd.sh.sr & SH_SR_BL)
+		    && ((cpu->cd.sh.sr & SH_SR_IMASK) >> SH_SR_IMASK_SHIFT)
+		    < cpu->cd.sh.int_level)
+			sh_exception(cpu, 0, cpu->cd.sh.int_to_assert, 0);
+```
+
+## 4. THE MANUAL, VERBATIM (`_scratchpad/sh7750_hardware.txt`, SH7750 Hardware Manual Rev. 7.00; line numbers from `awk NR`)
+
+```
+  678:                                    When a general exception other than a user break occurs, a
+  679:                                    manual reset is executed. The value in EXPEVT at this time
+  680: 6.6.2 Pair Single-       196        is H'0000 0020; the value of the SPC and SSR registers is
+  681:                                    undefined.
+12300: 5.5.3 Exception Requests and BL Bit
+12301: When the BL bit in SR is 0, general exception and interrupts are accepted.
+12302: When the BL bit in SR is 1 and a general exception other than a user break is generated, the CPU's
+12303: internal registers and the registers of the other modules are set to their states following a manual
+12304: reset, and the CPU branches to the same address as in a reset (H'A000 0000). For the operation in
+12305: the event of a user break, see section 20, User Break Controller (UBC).
+12306: If an ordinary interrupt occurs, the interrupt request is held pending and is accepted after the BL
+```
+Table 5.2 (:11998-12012), the reset category -- these lines are UNSTAGGERED (name and code on one line):
+```
+12000: Reset  Abort type Power-on reset                   1       1   H'A000 0000 --  H'000
+12002:                      Manual reset                  1       2   H'A000 0000 --  H'020
+12004:                      H-UDI reset                   1       1   H'A000 0000 --  H'000
+12006:                      Instruction TLB multiple-hit  1       3   H'A000 0000 --  H'140
+12010:                      Data TLB multiple-hit exception 1     4   H'A000 0000 --  H'140
+12012: General Re-          User break before instruction 2       0   (VBR/DBR) H'100/-- H'1E0
+12461:    Exception code H'140 is set in EXPEVT, initialization of VBR and SR is performed, and a
+12462:    branch is made to PC = H'A000 0000.
+```
+(:678-681 is a revision-history table rendered with an interleaved column -- "6.6.2 Pair Single- 196" at :680 belongs to another
+row; the sentence reads continuously across :678-681 without it.)
+
+## 5. THE PROPOSED DETECTOR
+
+**Vehicle: `regress/sh_tlbmulti_probe.py`** (clean at HEAD; its `session(pre=...)` already pre-sets SR, runs a program at CODE, and reads
+`expevt`/`pc`/`vbr`/`sr` back through `print`).  Two rows appended, both under `pre=["sr=0x500000f0"]` (MD|BL, IMASK 0xf; RB clear
+so the pre-exception stores use bank 0 exactly as the committed rows do):
+
+| row | program | reads | want | channel: what differs under HEAD or a weakened fix |
+|---|---|---|---|---|
+| `tlbm bl general` | TRAPA #1 (0xc301), step 1 | expevt | 0x00000020 | HEAD and the verbatim reinstatement give 0x000; the identity body (no rewrite) gives 0x160 |
+| `tlbm bl multihit` | the committed three-store program | expevt | 0x00000140 | HEAD gives 0x000; a fix without the exemption gives 0x020 |
+
+A `pc` readback on the BL rows is not added: `tlbm pc` already pins the shared arm, and the fix does not touch it.  Gate
+(`gate_sh_rounding.sh:254-259`): `sh_tlbmulti rows run` 6 -> 8 (EQUALITY); the two names join the per-row loop.  The probe's docstring
+note at :55-57 is reworded to the past tense with the round number.
+
+**Floor.**  (a) the base leg: the two new rows red (the witness already measured both values on HEAD); (b) the verbatim reinstatement
+(`expevt = EXPEVT_RESET_POWER;`): both rows red; (c) identity body for a predicate round = the BL block deleted (no rewrite at all):
+`tlbm bl general` reads 0x160 -> red, `tlbm bl multihit` reads 0x140 -> GREEN by construction (the row cannot distinguish "exempted" from
+"never rewritten"), so clause (c) is carried by `tlbm bl general` alone -- stated in the contract; (d) the fix ADDS one predicate
+(`expevt != EXPEVT_RESET_TLB_MULTI_HIT`), so the (d) mutants weaken it: `M_noexempt` (always MANUAL) -> `bl multihit` red;
+`M_wrongexempt` (exempt TRAPA instead of the multiple hit, i.e. `expevt != EXPEVT_TRAPA`) -> `bl general` reads 0x160 red, `bl
+multihit` reads 0x020 red; `M_power` (exempt kept, constant POWER) -> `bl general` red.  (e) the contract names the two general-exception
+codes actually driven (TRAPA; the multiple hit) and discloses the rest: a re-introduction keyed to ONE other general code (say
+`expevt == EXPEVT_RES_INST`) escapes both rows -- clause (e) material, since the body tests nothing on `expevt` beyond the new predicate.
+**Q3 asks whether a second general code (RES_INST, a TLB miss) should ride as a row at two sessions.**
+
+**De-escalation does not apply**: no host-stopping check is removed; the `fatal()` print stays.
+
+## 6. DISCLOSED, NOT IN SCOPE
+
+* The `fatal()` at :911 is unlatched and guest-drivable (a guest can take general exceptions with BL set in a loop): the held
+  `floodclass` row's class; this round changes the code value only.  **Q4 asks whether a `(once)` latch should ride here** -- it is the
+  house idiom, one field and two lines, same function, but it is a second behaviour change in a one-constant round.
+* The manual's "registers of the other modules" manual-reset effects are not modelled under either value.
+* SPC/SSR are "undefined" by the manual on this path; the tree stores pc and sr into them as for every exception; unchanged.
+* H-UDI reset (H'000) has no raiser; nothing to exempt.
+
+## 7. QUESTIONS
+
+**Q1, premise audit.**  Which premise in sections 1-5 is false?  In particular: (a) is `EXPEVT_RESET_TLB_MULTI_HIT` the only code the
+BL rule must exempt at HEAD; (b) does any committed row or guest path depend on H'000 being latched on this path; (c) is the user-break
+sentence right (no raiser); (d) do interrupts truly never reach the block (the `intevt > 0` path sets `expevt = -1` AFTER the block --
+walk it: an interrupt delivered with BL set would be rewritten too, so the `cpu_dyntrans.c` gate is load-bearing); (e) the witness
+rows' encodings and wants.
+
+**Q2, the partition.**  Over {general exception, TLB multiple hit, interrupt, user break} x {BL clear, BL set}: which cells does the fix
+change, which does it leave, and does the detector (two new rows + the six committed) have a member in each reachable cell?
+
+**Q3, candidate weakenings.**  For each, EQUIVALENT to the fixed form or not, the input at which it first differs, and the row that
+reds: (a) `expevt = EXPEVT_RESET_POWER;` verbatim; (b) the block deleted; (c) exemption removed (always MANUAL); (d) exemption on the
+wrong code (`!= EXPEVT_TRAPA`); (e) exemption widened to `expevt < 0x100` (every reset-category code); (f) `if (expevt == EXPEVT_TRAPA)
+expevt = EXPEVT_RESET_MANUAL;` (keyed to the one general code the table drives).  Which are floor, which clause (e)?  Should a second
+general-code row ride?
+
+**Q4, option-set completeness.**  The disposition is to CORRECT THE CONSTANT with one exemption.  Is there a member this brief did not
+name?  Does the unlatched `fatal()` ride here as `(once)`, or stay with `floodclass`?
+
+**Q5, the vehicle.**  Two rows in `sh_tlbmulti_probe.py`, pin 6 -> 8.  Do the committed rows re-pin under the fix (I read NO: all run
+BL clear)?  Is the SR pre-set 0x500000f0 right (RB clear, so the program's bank-0 seeds are the ones the stores use)?
+
+**If, while verifying a claim, you found something ELSE -- say so.**  End with `VERDICT: PROCEED / PROCEED WITH CHANGES (<n>) / DO NOT
+PROCEED`, and name every premise you could not settle from this packet.
+codex
+VERDICT: PROCEED WITH CHANGES (provisional; audit pending)
+
+I’ll check the premises against the permitted source files and manual, then walk the exception partition and detector mutations. I’ll only read files; nothing will be built or run.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-Location; rg --files -g AGENTS.md -g '"'!src/**'"' -g '"'!.claude/**'"' -g '"'!GXEMUL-SEC/.claude/**'"'" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-Content -LiteralPath 'GXEMUL-SEC/src/cpus/cpu_sh.c' | Select-Object -Skip 870 -First 190" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-Content -LiteralPath 'GXEMUL-SEC/regress/sh_tlbmulti_probe.py'" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$auditManual = '"'_scratchpad/sh7750_hardware.txt'; Get-Content -LiteralPath "'$auditManual | Select-Object -Skip 11970 -First 380' in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 526ms:
+
+	if ((new_fpscr & SH_FPSCR_FR) != (old_fpscr & SH_FPSCR_FR)) {
+		int i;
+		for (i=0; i<SH_N_FPRS; i++) {
+			uint32_t tmp = cpu->cd.sh.fr[i];
+			cpu->cd.sh.fr[i] = cpu->cd.sh.xf[i];
+			cpu->cd.sh.xf[i] = tmp;
+		}
+	}
+
+	cpu->cd.sh.fpscr = new_fpscr;
+}
+
+
+/*
+ *  sh_exception():
+ *
+ *  Causes a transfer of control to an exception or interrupt handler.
+ *  If intevt > 0, then it is an interrupt, otherwise an exception.
+ *
+ *  vaddr contains the faulting address, on TLB exceptions.
+ */
+void sh_exception(struct cpu *cpu, int expevt, int intevt, uint32_t vaddr)
+{
+	uint32_t vbr = cpu->cd.sh.vbr;
+
+	if (!quiet_mode) {
+		if (intevt > 0)
+			debug("[ interrupt 0x%03x", intevt);
+		else
+			debug("[ exception 0x%03x", expevt);
+
+		debug(", pc=0x%08" PRIx32" ", (uint32_t)cpu->pc);
+		if (intevt == 0)
+			debug("vaddr=0x%08" PRIx32" ", vaddr);
+
+		debug(" ]\n");
+	}
+
+	if (cpu->cd.sh.sr & SH_SR_BL) {
+		fatal("[ sh_exception(): BL bit already set. ]\n");
+
+		/*  #577: a general exception taken with BL set is a MANUAL
+		    reset: sh7750_hardware.txt 5.5.3 (:12302-12304) and 5.6.1
+		    (2) Manual Reset, :12376 and :12383-12384 -- "Exception code
+		    H'020 is set in EXPEVT" -- not a power-on reset (H'000),
+		    which is what stood here.  The two TLB multiple-hit
+		    exceptions are reset-category in their own right (Table
+		    5.2, :12006 and :12010; code H'140, :12461) and keep their
+		    code.  A user break under BL is suppressed at the UBC
+		    (:41448-41452) and never reaches here; EXPEVT_BREAK has no
+		    raiser in this tree.  An interrupt cannot latch a code here
+		    either: cpu_dyntrans.c delivers none while BL is set, and
+		    the intevt path below discards expevt before storing it.  */
+		if (expevt != EXPEVT_RESET_TLB_MULTI_HIT)
+			expevt = EXPEVT_RESET_MANUAL;
+	}
+
+	if (cpu->is_halted) {
+		/*
+		 *  If the exception occurred on a 'sleep' instruction, then let
+		 *  the instruction following the sleep instruction be the one
+		 *  where execution resumes when the interrupt service routine
+		 *  returns.
+		 */
+		cpu->is_halted = false;
+		cpu->pc += sizeof(uint16_t);
+	}
+
+	if (cpu->delay_slot) {
+		cpu->delay_slot = EXCEPTION_IN_DELAY_SLOT;
+		cpu->pc -= sizeof(uint16_t);
+	}
+
+
+	/*
+	 *  Stuff common to all exceptions:
+	 */
+
+	cpu->cd.sh.spc = cpu->pc;
+	cpu->cd.sh.ssr = cpu->cd.sh.sr;
+	cpu->cd.sh.sgr = cpu->cd.sh.r[15];
+
+	if (intevt > 0) {
+		cpu->cd.sh.intevt = intevt;
+		expevt = -1;
+	} else {
+		cpu->cd.sh.expevt = expevt;
+	}
+
+	sh_update_sr(cpu, cpu->cd.sh.sr | SH_SR_MD | SH_SR_RB | SH_SR_BL);
+
+	/*  Most exceptions set PC to VBR + 0x100.  */
+	cpu->pc = vbr + 0x100;
+
+
+	/*  Specific cases:  */
+	switch (expevt) {
+
+	case -1:	/*  Interrupt  */
+		cpu->pc = vbr + 0x600;
+		break;
+
+	/*
+	 *  #457: EXPEVT_RESET_TLB_MULTI_HIT joins this group, and joining it is
+	 *  the whole fix.  dev_sh4.c raises it when a guest ASSOCIATIVE write to
+	 *  the UTLB address array matches more than one entry; this switch had no
+	 *  arm for it, so it fell to the default below and ran exit(1).  Three
+	 *  ordinary privileged guest stores ended the host process.
+	 *
+	 *  The manual puts it in exactly this group.  **Table 5.2 Exceptions**
+	 *  (_scratchpad/sh7750_hardware.txt:11994, rows at :12006 and :12010) lists
+	 *  BOTH TLB multiple-hit exceptions as Reset / Abort category, vector
+	 *  H'A000 0000, code H'140 -- the same rows as power-on and manual reset.
+	 *
+	 *  The arm below is NOT Manual_reset() transcribed.  That routine (:12392)
+	 *  is ten statements and includes Initialize_CPU() and
+	 *  Initialize_Module(Manual); this arm is three, because EXPEVT and
+	 *  MD|RB|BL are already done by the common code above, and because NOT
+	 *  reinitialising the CPU is the faithful part here -- 3.6.4's software
+	 *  processing inspects the UTLB entries AFTER the reset, which a full
+	 *  re-init would destroy.
+	 *
+	 *  EXPEVT survives the grouping by construction: the common code above
+	 *  assigns cpu->cd.sh.expevt BEFORE this switch, so 0x140 is already
+	 *  latched and the guest's reset handler can tell a multiple hit from a
+	 *  power-on (0x000) or a manual reset (0x020).  A review seat asked
+	 *  whether grouping would clobber it; it does not.
+	 *
+	 *  *** DO NOT REWRITE THIS AS A SEPARATE ARM THAT SETS pc AND vbr ONLY. ***
+	 *  That is the likelier implementation than the fix itself, and it was
+	 *  MEASURED passing a witness that pins alive + expevt + pc + vbr -- because
+	 *  sh_update_sr() is a NO-OP from the reset-default SR (IMASK already 0xf,
+	 *  FD already clear).  It only becomes observable when the guest holds FD or
+	 *  a low IMASK at fault time, which is why the detector pre-sets SR and pins
+	 *  the result.  Figure 5.2 (:12228) specifies SR.{MD,RB,BL,FD,IMASK} <-
+	 *  11101111 for the reset transition, so the third statement is required,
+	 *  not decoration.
+	 *
+	 *  Deleting the detection instead was considered and is REFUTED by
+	 *  **3.7.4 UTLB Address Array** (:10111, sentence at :10141-10143), which
+	 *  both raises the exception AND supplies the ordering: "D and V specified
+	 *  in the data field are written to that entry.  If there is more than one
+	 *  matching entry, a data TLB multiple hit exception results."  Write first,
+	 *  then raise -- so dev_sh4.c's update-before-count is faithful and a
+	 *  scan-first rewrite would be less so.
+	 *
+	 *  (An earlier draft cited 3.6.4's "the contents of PPN ... may also be
+	 *  corrupted" as that warrant.  A review seat pointed out it is the wrong
+	 *  sentence: the device loop writes V and D, never PPN.  The conclusion was
+	 *  right and the reason was not, which is the kind of thing that gets
+	 *  reused.)
+	 */
+	case EXPEVT_RESET_POWER:
+	case EXPEVT_RESET_MANUAL:
+	case EXPEVT_RESET_TLB_MULTI_HIT:
+		cpu->pc = 0xa0000000;
+		cpu->cd.sh.vbr = 0x00000000;
+		sh_update_sr(cpu, (cpu->cd.sh.sr | SH_SR_IMASK) & ~SH_SR_FD);
+		break;
+
+	case EXPEVT_TLB_MISS_LD:
+	case EXPEVT_TLB_MISS_ST:
+		cpu->pc = vbr + 0x400;
+		// fall through
+	case EXPEVT_TLB_PROT_LD:
+	case EXPEVT_TLB_PROT_ST:
+	case EXPEVT_TLB_MOD:
+		cpu->cd.sh.tea = vaddr;
+		cpu->cd.sh.pteh &= ~SH4_PTEH_VPN_MASK;
+		cpu->cd.sh.pteh |= (vaddr & SH4_PTEH_VPN_MASK);
+		break;
+
+	case EXPEVT_TRAPA:
+		/*
+		 *  Note: The TRA register is already set by the implementation
+		 *  of the trapa instruction. See cpu_sh_instr.c for details.
+		 *  Here, spc is incremented, so that a return from the trap
+		 *  handler transfers control to the instruction _following_
+		 *  the trapa.
+		 */
+		cpu->cd.sh.spc += sizeof(uint16_t);
+		break;
+
+	case EXPEVT_RES_INST:
+		/*
+		 *  Note: Having this code here makes it possible to catch
+		 *  reserved instructions; during normal instruction execution,
+		 *  these are not very common.
+		 */
+
+ succeeded in 531ms:
+#!/usr/bin/env python3
+"""#457: a guest UTLB associative write matching two entries ended the host.
+
+Prints one line per row:  <name> <got> <want> ok|FAIL
+then SH_TLBMULTI_CONTROL=OK|DEAD and SH_TLBMULTI_RESULT=<passed>/<total>.
+gate_sh_rounding.sh does the asserting.
+
+What this protects
+------------------
+`dev_sh4.c` raises `sh_exception(cpu, EXPEVT_RESET_TLB_MULTI_HIT, 0, 0)` when an
+ASSOCIATIVE write to the UTLB address array matches more than one entry.
+`sh_exception()` had no case for `0x140`, so it fell to the `default:` arm and ran
+`exit(1)`.  Three ordinary privileged guest stores ended the host process.
+
+Measured on the committed build, `-E landisk`, unmodified, under `step 3`:
+
+    8c010000:  2102  mov.l r0,@r1 ; r1 = 0xf6000000     <- entry 0, indexed
+    8c010002:  2542  mov.l r4,@r5 ; r5 = 0xf6000100     <- entry 1, indexed
+    8c010004:  2762  mov.l r6,@r7 ; r7 = 0xf6000080     <- ASSOCIATIVE
+    [ exception 0x140, pc=0x8c010004 vaddr=0x00000000 ]
+    sh_exception(): exception 0x140 is not yet implemented.
+      -> host process gone
+
+*** SURVIVAL IS NOT ENOUGH, AND NEITHER IS EXPEVT PLUS PC.  Six mutants were BUILT
+and measured against this row set. ***
+
+    mutA  detection deleted                passes alive
+    mutB  own arm -> general vector        passes alive
+    mutC  own arm, pc + vbr only           passes alive, expevt, pc AND vbr
+    mutD  n_hits > 2                       passes alive
+    mutE  device raises RESET_MANUAL       passes alive, pc, vbr
+    mutF  n_hits >= 1                      passes EVERY row on the trigger
+
+`expevt == 0x140 && pc == 0xa0000000` kills mutA, mutB, mutD and mutE, and is passed
+by mutC and mutF.  Two rows exist solely to kill those two:
+
+  * `sr under FD` -- pre-sets SR to 0x40008000 (MD|FD, IMASK=0) before the trigger,
+    so the reset transition's THIRD statement becomes observable.  From the
+    reset-default SR that statement is a NO-OP (IMASK already 0xf, FD already clear),
+    which is exactly why mutC -- an arm that sets pc and vbr and forgets it -- is
+    invisible to every other row.  Figure 5.2 (`sh7750_hardware.txt:12228`) specifies
+    SR.{MD,RB,BL,FD,IMASK} <- 11101111 for this transition.
+  * `single hit` -- the identical program with entry 1 given a DIFFERENT VPN.  Nothing
+    should fire.  It is the only row that sees mutF, which fires on one match.
+
+*** THE RIG IS LANDISK, NOT TESTSH, AND THAT IS FORCED. ***  landisk's PROM leaves
+`vbr = 0x8c000000` (`promemul/sh_ipl_g.c:55`), so `vbr == 0` after the fault is a REAL
+transition and mutB's `vbr + 0x100` is distinguishable.  Measured cold-start `vbr` on
+testsh is already `0x00000000`, which would make that row vacuous there.
+
+Two further facts worth carrying, both measured rather than assumed:
+
+  * The exception flips `SR.RB`, so `r0-r7` are the other bank afterwards.  Anything
+    read back across the fault uses `r8-r15`, which are unbanked.
+  * `cpu_sh.c` USED TO rewrite ANY expevt to `EXPEVT_RESET_POWER` when `SR.BL` is set
+    (a BL-set guest silently latched `0x000`, the multiple hit included).  #577 makes it
+    `EXPEVT_RESET_MANUAL` with the multiple-hit code exempt; the BL rows at the end of
+    this file pin both halves.
+"""
+import os
+import pty
+import re
+import select
+import sys
+import time
+
+BIN = sys.argv[1]
+KERNEL = sys.argv[2]
+
+CODE = 0x8c010000
+UTLB_AA = 0xf6000000           # SH4_UTLB_AA, 16 MB window
+ENTRY0 = UTLB_AA + 0x000
+ENTRY1 = UTLB_AA + 0x100
+ASSOC = UTLB_AA + 0x080        # SH4_UTLB_A, the associative form
+VPN_A = 0x12345100             # VPN 0x12345000, ASID 0, V=1
+VPN_B = 0x22345100             # a DIFFERENT VPN -- the single-hit control
+
+MOV_L_R0_AT_R1 = 0x2102        # mov.l r0,@r1
+MOV_L_R4_AT_R5 = 0x2542        # mov.l r4,@r5
+MOV_L_R6_AT_R7 = 0x2762        # mov.l r6,@r7
+
+rows = []
+
+
+def row(name, got, want):
+    ok = (got == want)
+    rows.append(ok)
+    print("%-14s %-24s %-24s %-10s %s"
+          % (name, got, want, "#457", "ok" if ok else "FAIL"))
+
+
+def session(pre=(), entry1_vpn=VPN_A, settle=8.0, trigger=True, program=None, steps=None):
+    """Install two UTLB entries then do the associative write. Returns (regs, died).
+
+    `pre` runs before the trigger -- used to pre-set SR so the reset transition's
+    SR update is observable.
+    #577: `program` (a list of 16-bit words placed at CODE) and `steps` replace the
+    three-store multiple-hit program for the BL rows; the default is that program.
+    """
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.execv(BIN, [BIN, "-V", "-E", "landisk", "-M", "64", KERNEL])
+        os._exit(127)
+    buf = ""
+
+    def rd(t):
+        nonlocal buf
+        end = time.time() + t
+        while time.time() < end:
+            r, _, _ = select.select([fd], [], [], 0.25)
+            if not r:
+                continue
+            try:
+                d = os.read(fd, 65536)
+            except OSError:
+                return False
+            if not d:
+                return False
+            buf += d.decode("latin-1", "replace")
+        return True
+
+    alive = rd(settle)
+    #  *** THE CONTROL MUST NOT RUN THE TRIGGER. ***  The first draft ran the three
+    #  stores unconditionally, so the "does the session come up" control EXERCISED the
+    #  defect and reported DEAD on the committed build -- a control failing for the
+    #  very reason it exists to rule out.  Rule 4: did it fail for the reason under
+    #  test?  It did not.
+    if program is None:
+        trig = ["r0=0x%08x" % VPN_A, "r1=0x%x" % ENTRY0,
+                "r4=0x%08x" % entry1_vpn, "r5=0x%x" % ENTRY1,
+                "r6=0x%08x" % VPN_A, "r7=0x%x" % ASSOC,
+                "put h 0x%x, 0x%04x" % (CODE, MOV_L_R0_AT_R1),
+                "put h 0x%x, 0x%04x" % (CODE + 2, MOV_L_R4_AT_R5),
+                "put h 0x%x, 0x%04x" % (CODE + 4, MOV_L_R6_AT_R7),
+                "pc=0x%x" % CODE, "step 3"]
+    else:   # #577: an arbitrary short program; the caller seeds registers through `pre`
+        trig = ["put h 0x%x, 0x%04x" % (CODE + 2 * i, w) for i, w in enumerate(program)]
+        trig += ["pc=0x%x" % CODE, "step %d" % (steps if steps is not None else len(program))]
+    cmds = list(pre) + ([] if not trigger else trig) + [
+        #  `registers` does not exist as a command, and a bare dump would not show
+        #  these anyway: cpu_sh.c prints expevt/vbr only under `coprocs & 2`.
+        #  `print <name>` reads them through CPU_SETTINGS_ADD_REGISTER32.  Established
+        #  by trying the candidates against a live session, not assumed.
+        "print expevt", "print pc", "print vbr", "print sr"]
+    for c in cmds:
+        try:
+            os.write(fd, (c + "\n").encode("latin-1"))
+        except OSError:
+            alive = False
+            break
+        if not rd(1.2):
+            alive = False
+            break
+    try:
+        os.write(fd, b"quit\n")
+        time.sleep(0.2)
+        os.kill(pid, 9)
+        os.waitpid(pid, 0)
+    except Exception:
+        pass
+    return buf, not alive
+
+
+def reg(t, name):
+    """Read back one `print <name>`: the debugger echoes the command, then the value.
+
+    Anchored to the ECHO rather than scanning for a bare hex word, because the
+    transcript is full of addresses and the wrong one would be indistinguishable from
+    the right one -- the same reason this project's verdict extractor anchors instead
+    of grepping.
+    """
+    m = re.search(r"print\s+%s\s*\r?\n\s*0x([0-9a-f]+)" % re.escape(name), t)
+    return ("0x%08x" % int(m.group(1), 16)) if m else "absent"
+
+
+#  ---- control: the session comes up at all ------------------------------------
+ctl, ctl_died = session(trigger=False)
+print("SH_TLBMULTI_CONTROL=%s" % ("DEAD" if ctl_died else "OK"))
+if ctl_died:
+    print("SH_TLBMULTI_RESULT=0/0")
+    sys.exit(0)
+
+#  ---- the trigger, at reset-default SR ----------------------------------------
+t, died = session()
+row("tlbm alive", "died" if died else "alive", "alive")
+row("tlbm expevt", reg(t, "expevt") if not died else "died", "0x00000140")
+row("tlbm pc", reg(t, "pc") if not died else "died", "0xa0000000")
+row("tlbm vbr", reg(t, "vbr") if not died else "died", "0x00000000")
+
+#  ---- the SR row: the ONLY row that sees a pc+vbr-only arm --------------------
+t2, died2 = session(pre=["sr=0x40008000"])
+row("tlbm sr", reg(t2, "sr") if not died2 else "died", "0x700000f0")
+
+#  ---- the single-hit control: the ONLY row that sees `n_hits >= 1` ------------
+#  A LIVENESS control too: it proves the three stores execute and the session
+#  survives them, so "died" on the rows above is the SECOND match and not the
+#  program.
+t3, died3 = session(entry1_vpn=VPN_B)
+row("tlbm single", "died" if died3 else reg(t3, "expevt"), "0x00000000")
+
+
+#  ---- #577: a general exception taken with SR.BL set is a MANUAL reset -----------
+#  sh7750_hardware.txt 5.5.3 (:12302-12304): with BL set, a general exception other than a
+#  user break performs a manual reset; EXPEVT is H'020 (5.6.1 (2) Manual Reset, :12376 and
+#  :12383-12384 "Exception code H'020 is set in EXPEVT").  Table 5.2 (:12006,
+#  :12010) lists the two TLB multiple-hit exceptions as reset-category in their own right,
+#  code H'140 (:12461), so the BL rule must not touch them.  HEAD's sh_exception() rewrote
+#  EVERY code to EXPEVT_RESET_POWER (H'000) when BL was set; #577 makes it EXPEVT_RESET_MANUAL
+#  with the multiple-hit code exempt.  Rows run under sr = MD|BL (0x500000f0, RB clear as in the
+#  committed rows; the debugger's `sr=' writes the field without a bank swap -- Fable, pass 2);
+#  `tlbm trapa' is the BL-CLEAR control that pins
+#  the general vector's own code.  Contract: TRAPA (H'160) and a misaligned load (H'0E0) are
+#  the two general codes driven; any edit that moves a code between the rewritten set and the
+#  exempt set ONLY at a code this table does not drive -- H'040-H'0C0, H'100, H'120, H'180,
+#  H'1A0, H'800, H'820 -- in either direction (the rewrite keyed to such a code, or an exemption
+#  added at one) is clause-(e) disclosure.  The identity medium for this predicate round is the
+#  REWRITE deleted (the guard and its fatal() stay): `tlbm bl trapa' and `tlbm bl ldmis' then
+#  read their own codes (red); `tlbm bl mhit' reads H'140 either way and cannot carry it.  A
+#  qualification of the GUARD itself on a state no BL row varies -- SR.RB (every BL row presets
+#  RB clear, while a second exception is taken with RB set), SR.IMASK (every BL row presets 0xf;
+#  the committed `tlbm sr' row presets 0x40008000, IMASK 0, with BL clear) or SR.MD (every BL row
+#  presets MD|BL; BL set with MD clear is a guest-reachable state the rows never hold) or SR.FD
+#  (every row presets FD clear) --
+#  keeps all ten rows green and is disclosed, not rowed (Grok and Opus, F2; unmeasured, no score
+#  claimed); the cheapest rows if ever wanted: sr=0x700000f0, trapa #1, want H'020; and
+#  sr=0x100000f0 (BL set, MD clear), trapa #1, want H'020.
+#  Names stay at 13 characters or fewer: row() prints `%-14s' and the gate anchors `^$v  .*ok$'
+#  with TWO spaces (Grok, pass 1 -- the padded-column trap).
+SR_MD_BL = 0x500000f0
+SR_MD = 0x400000f0
+TRAPA_1 = 0xc301            # trapa #1  : 1100 0011 0000 0001
+MOV_L_AT_R1_R2 = 0x6212     # mov.l @r1,r2 : 0110 0010 0001 0010
+t5, died5 = session(pre=["sr=0x%08x" % SR_MD_BL], program=[TRAPA_1], steps=1)
+row("tlbm bl trapa", "died" if died5 else reg(t5, "expevt"), "0x00000020")
+t6, died6 = session(pre=["sr=0x%08x" % SR_MD_BL])
+row("tlbm bl mhit", "died" if died6 else reg(t6, "expevt"), "0x00000140")
+t7, died7 = session(pre=["sr=0x%08x" % SR_MD_BL, "r1=0x%08x" % (CODE + 1)], program=[MOV_L_AT_R1_R2], steps=1)
+row("tlbm bl ldmis", "died" if died7 else reg(t7, "expevt"), "0x00000020")
+t8, died8 = session(pre=["sr=0x%08x" % SR_MD], program=[TRAPA_1], steps=1)
+row("tlbm trapa", "died" if died8 else reg(t8, "expevt"), "0x00000160")
+
+print("SH_TLBMULTI_RESULT=%d/%d" % (sum(1 for r in rows if r), len(rows)))
+
+ succeeded in 561ms:
+7. The CPU branches to the determined exception handling vector address, and the exception
+
+    handling routine begins.
+
+5.3.2 Exception Handling Vector Addresses
+
+The reset vector address is fixed at H'A000 0000. General exception and interrupt vector addresses
+are determined by adding the offset for the specific event to the vector base address, which is set
+by software in the vector base register (VBR). In the case of the TLB miss exception, for example,
+the offset is H'0000 0400, so if H'9C08 0000 is set in VBR, the exception handling vector address
+will be H'9C08 0400. If a further exception occurs at the exception handling vector address, a
+duplicate exception will result, and recovery will be difficult; therefore, fixed physical addresses
+(P1, P2) should be specified for vector addresses.
+
+                                  Rev.7.00 Oct. 10, 2008 Page 151 of 1074
+                                                                 REJ09B0366-0700
+Section 5 Exceptions
+
+5.4 Exception Types and Priorities
+
+Table 5.2 shows the types of exceptions, with their relative priorities, vector addresses, and
+exception/interrupt codes.
+
+Table 5.2 Exceptions
+
+Exception Execution                                Priority Priority Vector               Exception
+                                                   Level Order Address       Offset Code
+Category Mode        Exception
+
+Reset  Abort type Power-on reset                   1       1   H'A000 0000 --  H'000
+
+                     Manual reset                  1       2   H'A000 0000 --  H'020
+
+                     H-UDI reset                   1       1   H'A000 0000 --  H'000
+
+                     Instruction TLB multiple-hit  1       3   H'A000 0000 --  H'140
+
+                     exception
+
+                     Data TLB multiple-hit exception 1     4   H'A000 0000 --  H'140
+
+General Re-          User break before instruction 2       0   (VBR/DBR) H'100/-- H'1E0
+
+exception execution execution*1
+
+       type          Instruction address error     2       1   (VBR)         H'100 H'0E0
+
+                     Instruction TLB miss exception 2      2   (VBR)         H'400 H'040
+
+                     Instruction TLB protection    2       3   (VBR)         H'100 H'0A0
+
+                     violation exception
+
+                     General illegal instruction   2       4   (VBR)         H'100 H'180
+
+                     exception
+
+                     Slot illegal instruction exception 2  4   (VBR)         H'100 H'1A0
+
+                     General FPU disable exception 2       4   (VBR)         H'100 H'800
+
+                     Slot FPU disable exception    2       4   (VBR)         H'100 H'820
+
+                     Data address error (read)     2       5   (VBR)         H'100 H'0E0
+
+                     Data address error (write)    2       5   (VBR)         H'100 H'100
+
+                     Data TLB miss exception (read) 2      6   (VBR)         H'400 H'040
+
+                     Data TLB miss exception (write) 2     6   (VBR)         H'400 H'060
+
+                     Data TLB protection           2       7   (VBR)         H'100 H'0A0
+
+                     violation exception (read)
+
+                     Data TLB protection           2       7   (VBR)         H'100 H'0C0
+
+                     violation exception (write)
+
+                     FPU exception                 2       8   (VBR)         H'100 H'120
+
+                     Initial page write exception  2       9   (VBR)         H'100 H'080
+
+       Completion Unconditional trap (TRAPA) 2             4   (VBR)         H'100 H'160
+
+       type          User break after instruction  2       10  (VBR/DBR) H'100/-- H'1E0
+
+                     execution*1
+
+Rev.7.00 Oct. 10, 2008 Page 152 of 1074
+REJ09B0366-0700
+                                                                             Section 5 Exceptions
+
+Exception Execution                                Priority Priority Vector              Exception
+                                                   Level Order Address       Offset Code
+Category Mode        Exception                                               H'600 H'1C0
+                                                                             H'600 H'200
+Interrupt Completion Nonmaskable interrupt         3  --  (VBR)
+                                                                                         H'220
+type                 External IRL3-IRL0 0          4  *2  (VBR)                          H'240
+                                                                                         H'260
+                     interrupts             1                                            H'280
+                                                                                         H'2A0
+                                            2                                            H'2C0
+                                                                                         H'2E0
+                                            3                                            H'300
+                                                                                         H'320
+                                            4                                            H'340
+                                                                                         H'360
+                                            5                                            H'380
+                                                                                         H'3A0
+                                            6                                            H'3C0
+                                                                             H'600 H'400
+                                            7                                            H'420
+                                                                                         H'440
+                                            8                                            H'460
+                                                                                         H'B00
+                                            9                                            H'B80
+                                                                                         H'480
+                                            A                                            H'4A0
+                                                                                         H'4C0
+                                            B                                            H'4E0
+                                                                                         H'500
+                                            C                                            H'520
+                                                                                         H'540
+                                            D                                            H'560
+                                                                                         H'580
+                                            E                                            H'5A0
+                                                                                         H'600
+                     Peripheral TMU0        TUNI0 4   *2  (VBR)                          H'620
+                                            TUNI1
+                     module      TMU1       TUNI2
+                     interrupt              TICPI2
+
+                     (module/ TMU2
+
+                     source)
+
+                                 TMU3       TUNI3
+
+                                 TMU4       TUNI4
+
+                                 RTC        ATI
+
+                                            PRI
+
+                                            CUI
+
+                                 SCI        ERI
+
+                                            RXI
+
+                                            TXI
+
+                                            TEI
+
+                                 WDT        ITI
+
+                                 REF        RCMI
+
+                                            ROVI
+
+                                 H-UDI      H-UDI
+
+                                 GPIO       GPIOI
+
+                                                      Rev.7.00 Oct. 10, 2008 Page 153 of 1074
+                                                                                     REJ09B0366-0700
+Section 5 Exceptions
+
+Exception Execution                             Priority Priority Vector              Exception
+                                                Level Order Address       Offset Code
+Category Mode        Exception
+
+Interrupt  Completion Peripheral DMAC    DMTE0 4  *2  (VBR)               H'600  H'640
+                                         DMTE1                                   H'660
+           type      module              DMTE2                                   H'680
+                                         DMTE3                                   H'6A0
+                     interrupt
+
+                     (module/
+
+                     source)
+
+                                         DMTE4                                   H'780
+                                         *3
+
+                                         DMTE5                                   H'7A0
+                                         *3
+
+                                         DMTE6                                   H'7C0
+                                         *3
+
+                                         DMTE7                                   H'7E0
+                                         *3
+
+                                         DMAE                                    H'6C0
+
+                                SCIF     ERI                                     H'700
+
+                                         RXI                                     H'720
+
+                                         BRI                                     H'740
+
+                                         TXI                                     H'760
+
+Priority: Priority is first assigned by priority level, then by priority order within each level (the lowest
+number represents the highest priority).
+Exception transition destination: Control passes to H'A000 0000 in a reset, and to [VBR + offset] in
+other cases.
+Exception code: Stored in EXPEVT for a reset or general exception, and in INTEVT for an interrupt.
+IRL: Interrupt request level (pins IRL3-IRL0).
+Module/source: See the sections on the relevant peripheral modules.
+
+Notes: 1. When BRCR.UBDE = 1, PC = DBR. In other cases, PC = VBR + H'100.
+          2. The priority order of external interrupts and peripheral module interrupts can be set by
+               software.
+          3. SH7750R only.
+
+Rev.7.00 Oct. 10, 2008 Page 154 of 1074
+REJ09B0366-0700
+                                                                                                       Section 5 Exceptions
+
+5.5 Exception Flow
+
+5.5.1 Exception Flow
+
+Figure 5.2 shows an outline flowchart of the basic operations in instruction execution and
+exception handling. For the sake of clarity, the following description assumes that instructions are
+executed sequentially, one by one. Figure 5.2 shows the relative priority order of the different
+kinds of exceptions (reset/general exception/interrupt). Register settings in the event of an
+exception are shown only for SSR, SPC, SGR, EXPEVT/INTEVT, SR, and PC, but other registers
+may be set automatically by hardware, depending on the exception. For details, see section 5.6,
+Description of Exceptions. Also, see section 5.6.4, Priority Order with Multiple Exceptions, for
+exception handling during execution of a delayed branch instruction and a delay slot instruction,
+and in the case of instructions in which two data accesses are performed.
+
+Reset                     Yes
+
+requested?
+
+No
+
+Execute next instruction
+
+         General          Yes  Is highest-         Yes
+exception requested?
+                               priority exception
+                 No
+                               re-exception
+         Interrupt
+       requested?              type?         Cancel instruction execution
+                                   No                       result
+                 No
+                          Yes
+
+                          SSR  SR                           EXPEVT  exception code
+                          SPC  PC                           SR. {MD, RB, BL, FD, IMASK}  11101111
+                          SGR  R15                          PC  H'A000 0000
+                          EXPEVT/INTEVT  exception code
+                          SR.{MD,RB,BL}  111
+                          PC  (BRCR.UBDE=1 && User_Break?
+
+                                      DBR: (VBR + Offset))
+
+       Figure 5.2 Instruction Execution and Exception Handling
+
+                                                          Rev.7.00 Oct. 10, 2008 Page 155 of 1074
+                                                                                          REJ09B0366-0700
+Section 5 Exceptions
+
+5.5.2 Exception Source Acceptance
+A priority ranking is provided for all exceptions for use in determining which of two or more
+simultaneously generated exceptions should be accepted. Five of the general exceptions--the
+general illegal instruction exception, slot illegal instruction exception, general FPU disable
+exception, slot FPU disable exception, and unconditional trap exception--are detected in the
+process of instruction decoding, and do not occur simultaneously in the instruction pipeline. These
+exceptions therefore all have the same priority. General exceptions are detected in the order of
+instruction execution. However, exception handling is performed in the order of instruction flow
+(program order). Thus, an exception for an earlier instruction is accepted before that for a later
+instruction. An example of the order of acceptance for general exceptions is shown in figure 5.3.
+
+Rev.7.00 Oct. 10, 2008 Page 156 of 1074
+REJ09B0366-0700
+                                                                         Section 5 Exceptions
+
+Pipeline flow:                                   TLB miss (data access)
+                       IF ID EX MA WB
+      Instruction n    IF ID EX MA WB
+      Instruction n+1
+                                General illegal instruction exception
+
+Instruction n+2        TLB miss (instruction access)
+                       IF ID EX MA WB
+
+Instruction n+3                      IF ID EX MA WB                      Legend:
+                                                                         IF: Instruction fetch
+Order of detection:                                                      ID: Instruction decode
+                                                                         EX: Instruction execution
+      General illegal instruction exception (instruction n+1) and        MA: Memory access
+      TLB miss (instruction n+2) are detected simultaneously             WB: Write-back
+
+      TLB miss (instruction n)       Program order
+Order of exception handling:                1
+
+      TLB miss (instruction n)
+
+      Re-execution of instruction n
+
+General illegal instruction exception
+(instruction n+1)
+
+                                                             2
+
+Re-execution of instruction n+1
+
+TLB miss (instruction n+2)
+                                                             3
+
+Re-execution of instruction n+2
+
+Execution of instruction n+3         4
+
+Figure 5.3 Example of General Exception Acceptance Order
+
+                                                                Rev.7.00 Oct. 10, 2008 Page 157 of 1074
+                                                                                               REJ09B0366-0700
+Section 5 Exceptions
+
+5.5.3 Exception Requests and BL Bit
+When the BL bit in SR is 0, general exception and interrupts are accepted.
+When the BL bit in SR is 1 and a general exception other than a user break is generated, the CPU's
+internal registers and the registers of the other modules are set to their states following a manual
+reset, and the CPU branches to the same address as in a reset (H'A000 0000). For the operation in
+the event of a user break, see section 20, User Break Controller (UBC).
+If an ordinary interrupt occurs, the interrupt request is held pending and is accepted after the BL
+bit has been cleared to 0 by software. If a nonmaskable interrupt (NMI) occurs, it can be held
+pending or accepted according to the setting made by software.
+Thus, normally, SPC and SSR are saved and then the BL bit in SR is cleared to 0, to enable
+multiple exception state acceptance.
+
+5.5.4 Return from Exception Handling
+The RTE instruction is used to return from exception handling. When the RTE instruction is
+executed, the SPC contents are restored to PC and the SSR contents to SR, and the CPU returns
+from the exception handling routine by branching to the SPC address. If SPC and SSR were saved
+to external memory, set the BL bit in SR to 1 before restoring the SPC and SSR contents and
+issuing the RTE instruction.
+
+5.6 Description of Exceptions
+
+The various exception handling operations are described here, covering exception sources,
+transition addresses, and processor operation when a transition is made.
+
+Rev.7.00 Oct. 10, 2008 Page 158 of 1074
+REJ09B0366-0700
+                                                                                                       Section 5 Exceptions
+
+5.6.1 Resets
+
+(1) Power-On Reset
+
+� Sources:
+     SCK2 pin high level and RESET pin low level
+     When the watchdog timer overflows while the WT/IT bit is set to 1 and the RSTS bit is
+        cleared to 0 in WTCSR. For details, see section 10, Clock Oscillation Circuits.
+
+� Transition address: H'A000 0000
+� Transition operations:
+
+    Exception code H'000 is set in EXPEVT, initialization of VBR and SR is performed, and a
+    branch is made to PC = H'A000 0000.
+    In the initialization processing, the VBR register is set to H'0000 0000, and in SR, the MD,
+    RB, and BL bits are set to 1, the FD bit is cleared to 0, and the interrupt mask bits (IMASK)
+    are set to B'1111.
+    CPU and on-chip peripheral module initialization is performed. For details, see the register
+    descriptions in the relevant sections. For some CPU functions, the TRST pin and RESET pin
+    must be driven low. It is therefore essential to execute a power-on reset and drive the TRST
+    pin low when powering on.
+    If the SCK2 pin is changed to the low level while the RESET pin is low, a manual reset may
+    occur after the power-on reset operation. Do not drive the SCK2 pin low during this interval
+
+ exited 1 in 1341ms:
+
+Path                      
+----                      
+C:\DocumentNoSnc\CC\GXEMUL
+
+
+
+codex
+The working copies already contain a later #577 revision, so they do not match the packet. I’ll read the source and probe directly from commit `987cb596` and keep those findings separate from the current files.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'git -C GXEMUL-SEC rev-parse HEAD' in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'git -C GXEMUL-SEC show 987cb596:regress/sh_tlbmulti_probe.py' in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$auditLines = git -C GXEMUL-SEC show 987cb596:src/cpus/cpu_sh.c; for ($auditIndex = 885; $auditIndex -lt 1085; $auditIndex++) { '"'{0}: {1}' -f ("'$auditIndex + 1), $auditLines[$auditIndex] }' in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$auditLines = Get-Content -LiteralPath '"'_scratchpad/sh7750_hardware.txt'; foreach ("'$auditSpan in @(@(650,690), @(12370,12495), @(41415,41470))) { for ($auditIndex = $auditSpan[0] - 1; $auditIndex -lt $auditSpan[1]; $auditIndex++) { '"'{0}: {1}' -f ("'$auditIndex + 1), $auditLines[$auditIndex] } }' in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "git -C GXEMUL-SEC grep -n -E 'sh_exception\\(|EXPEVT_RESET_MANUAL|EXPEVT_RESET_POWER|EXPEVT_RESET_TLB_MULTI_HIT|EXPEVT_BREAK|SH_SR_BL|SH_SR_MD|SH_SR_RB' 987cb596 -- src/cpus/cpu_dyntrans.c src/cpus/cpu_sh.c src/include/cpu_sh.h src/include/thirdparty/sh4_exception.h src/devices/dev_sh4.c src/cpus/cpu_sh_instr.c src/memory_sh.c" in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 179ms:
+8372aeeb7e615d7244c0bbc0fb1284ea454aa57b
+
+ succeeded in 185ms:
+#!/usr/bin/env python3
+"""#457: a guest UTLB associative write matching two entries ended the host.
+
+Prints one line per row:  <name> <got> <want> ok|FAIL
+then SH_TLBMULTI_CONTROL=OK|DEAD and SH_TLBMULTI_RESULT=<passed>/<total>.
+gate_sh_rounding.sh does the asserting.
+
+What this protects
+------------------
+`dev_sh4.c` raises `sh_exception(cpu, EXPEVT_RESET_TLB_MULTI_HIT, 0, 0)` when an
+ASSOCIATIVE write to the UTLB address array matches more than one entry.
+`sh_exception()` had no case for `0x140`, so it fell to the `default:` arm and ran
+`exit(1)`.  Three ordinary privileged guest stores ended the host process.
+
+Measured on the committed build, `-E landisk`, unmodified, under `step 3`:
+
+    8c010000:  2102  mov.l r0,@r1 ; r1 = 0xf6000000     <- entry 0, indexed
+    8c010002:  2542  mov.l r4,@r5 ; r5 = 0xf6000100     <- entry 1, indexed
+    8c010004:  2762  mov.l r6,@r7 ; r7 = 0xf6000080     <- ASSOCIATIVE
+    [ exception 0x140, pc=0x8c010004 vaddr=0x00000000 ]
+    sh_exception(): exception 0x140 is not yet implemented.
+      -> host process gone
+
+*** SURVIVAL IS NOT ENOUGH, AND NEITHER IS EXPEVT PLUS PC.  Six mutants were BUILT
+and measured against this row set. ***
+
+    mutA  detection deleted                passes alive
+    mutB  own arm -> general vector        passes alive
+    mutC  own arm, pc + vbr only           passes alive, expevt, pc AND vbr
+    mutD  n_hits > 2                       passes alive
+    mutE  device raises RESET_MANUAL       passes alive, pc, vbr
+    mutF  n_hits >= 1                      passes EVERY row on the trigger
+
+`expevt == 0x140 && pc == 0xa0000000` kills mutA, mutB, mutD and mutE, and is passed
+by mutC and mutF.  Two rows exist solely to kill those two:
+
+  * `sr under FD` -- pre-sets SR to 0x40008000 (MD|FD, IMASK=0) before the trigger,
+    so the reset transition's THIRD statement becomes observable.  From the
+    reset-default SR that statement is a NO-OP (IMASK already 0xf, FD already clear),
+    which is exactly why mutC -- an arm that sets pc and vbr and forgets it -- is
+    invisible to every other row.  Figure 5.2 (`sh7750_hardware.txt:12228`) specifies
+    SR.{MD,RB,BL,FD,IMASK} <- 11101111 for this transition.
+  * `single hit` -- the identical program with entry 1 given a DIFFERENT VPN.  Nothing
+    should fire.  It is the only row that sees mutF, which fires on one match.
+
+*** THE RIG IS LANDISK, NOT TESTSH, AND THAT IS FORCED. ***  landisk's PROM leaves
+`vbr = 0x8c000000` (`promemul/sh_ipl_g.c:55`), so `vbr == 0` after the fault is a REAL
+transition and mutB's `vbr + 0x100` is distinguishable.  Measured cold-start `vbr` on
+testsh is already `0x00000000`, which would make that row vacuous there.
+
+Two further facts worth carrying, both measured rather than assumed:
+
+  * The exception flips `SR.RB`, so `r0-r7` are the other bank afterwards.  Anything
+    read back across the fault uses `r8-r15`, which are unbanked.
+  * `cpu_sh.c` rewrites ANY expevt to `EXPEVT_RESET_POWER` when `SR.BL` is set, before
+    the assignment.  This tree resets with BL clear, so the path is live -- but a
+    BL-set guest silently latches `0x000` instead.
+"""
+import os
+import pty
+import re
+import select
+import sys
+import time
+
+BIN = sys.argv[1]
+KERNEL = sys.argv[2]
+
+CODE = 0x8c010000
+UTLB_AA = 0xf6000000           # SH4_UTLB_AA, 16 MB window
+ENTRY0 = UTLB_AA + 0x000
+ENTRY1 = UTLB_AA + 0x100
+ASSOC = UTLB_AA + 0x080        # SH4_UTLB_A, the associative form
+VPN_A = 0x12345100             # VPN 0x12345000, ASID 0, V=1
+VPN_B = 0x22345100             # a DIFFERENT VPN -- the single-hit control
+
+MOV_L_R0_AT_R1 = 0x2102        # mov.l r0,@r1
+MOV_L_R4_AT_R5 = 0x2542        # mov.l r4,@r5
+MOV_L_R6_AT_R7 = 0x2762        # mov.l r6,@r7
+
+rows = []
+
+
+def row(name, got, want):
+    ok = (got == want)
+    rows.append(ok)
+    print("%-14s %-24s %-24s %-10s %s"
+          % (name, got, want, "#457", "ok" if ok else "FAIL"))
+
+
+def session(pre=(), entry1_vpn=VPN_A, settle=8.0, trigger=True):
+    """Install two UTLB entries then do the associative write. Returns (regs, died).
+
+    `pre` runs before the trigger -- used to pre-set SR so the reset transition's
+    SR update is observable.
+    """
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.execv(BIN, [BIN, "-V", "-E", "landisk", "-M", "64", KERNEL])
+        os._exit(127)
+    buf = ""
+
+    def rd(t):
+        nonlocal buf
+        end = time.time() + t
+        while time.time() < end:
+            r, _, _ = select.select([fd], [], [], 0.25)
+            if not r:
+                continue
+            try:
+                d = os.read(fd, 65536)
+            except OSError:
+                return False
+            if not d:
+                return False
+            buf += d.decode("latin-1", "replace")
+        return True
+
+    alive = rd(settle)
+    #  *** THE CONTROL MUST NOT RUN THE TRIGGER. ***  The first draft ran the three
+    #  stores unconditionally, so the "does the session come up" control EXERCISED the
+    #  defect and reported DEAD on the committed build -- a control failing for the
+    #  very reason it exists to rule out.  Rule 4: did it fail for the reason under
+    #  test?  It did not.
+    cmds = list(pre) + ([] if not trigger else [
+        "r0=0x%08x" % VPN_A, "r1=0x%x" % ENTRY0,
+        "r4=0x%08x" % entry1_vpn, "r5=0x%x" % ENTRY1,
+        "r6=0x%08x" % VPN_A, "r7=0x%x" % ASSOC,
+        "put h 0x%x, 0x%04x" % (CODE, MOV_L_R0_AT_R1),
+        "put h 0x%x, 0x%04x" % (CODE + 2, MOV_L_R4_AT_R5),
+        "put h 0x%x, 0x%04x" % (CODE + 4, MOV_L_R6_AT_R7),
+        "pc=0x%x" % CODE, "step 3"]) + [
+        #  `registers` does not exist as a command, and a bare dump would not show
+        #  these anyway: cpu_sh.c prints expevt/vbr only under `coprocs & 2`.
+        #  `print <name>` reads them through CPU_SETTINGS_ADD_REGISTER32.  Established
+        #  by trying the candidates against a live session, not assumed.
+        "print expevt", "print pc", "print vbr", "print sr"]
+    for c in cmds:
+        try:
+            os.write(fd, (c + "\n").encode("latin-1"))
+        except OSError:
+            alive = False
+            break
+        if not rd(1.2):
+            alive = False
+            break
+    try:
+        os.write(fd, b"quit\n")
+        time.sleep(0.2)
+        os.kill(pid, 9)
+        os.waitpid(pid, 0)
+    except Exception:
+        pass
+    return buf, not alive
+
+
+def reg(t, name):
+    """Read back one `print <name>`: the debugger echoes the command, then the value.
+
+    Anchored to the ECHO rather than scanning for a bare hex word, because the
+    transcript is full of addresses and the wrong one would be indistinguishable from
+    the right one -- the same reason this project's verdict extractor anchors instead
+    of grepping.
+    """
+    m = re.search(r"print\s+%s\s*\r?\n\s*0x([0-9a-f]+)" % re.escape(name), t)
+    return ("0x%08x" % int(m.group(1), 16)) if m else "absent"
+
+
+#  ---- control: the session comes up at all ------------------------------------
+ctl, ctl_died = session(trigger=False)
+print("SH_TLBMULTI_CONTROL=%s" % ("DEAD" if ctl_died else "OK"))
+if ctl_died:
+    print("SH_TLBMULTI_RESULT=0/0")
+    sys.exit(0)
+
+#  ---- the trigger, at reset-default SR ----------------------------------------
+t, died = session()
+row("tlbm alive", "died" if died else "alive", "alive")
+row("tlbm expevt", reg(t, "expevt") if not died else "died", "0x00000140")
+row("tlbm pc", reg(t, "pc") if not died else "died", "0xa0000000")
+row("tlbm vbr", reg(t, "vbr") if not died else "died", "0x00000000")
+
+#  ---- the SR row: the ONLY row that sees a pc+vbr-only arm --------------------
+t2, died2 = session(pre=["sr=0x40008000"])
+row("tlbm sr", reg(t2, "sr") if not died2 else "died", "0x700000f0")
+
+#  ---- the single-hit control: the ONLY row that sees `n_hits >= 1` ------------
+#  A LIVENESS control too: it proves the three stores execute and the session
+#  survives them, so "died" on the rows above is the SECOND match and not the
+#  program.
+t3, died3 = session(entry1_vpn=VPN_B)
+row("tlbm single", "died" if died3 else reg(t3, "expevt"), "0x00000000")
+
+print("SH_TLBMULTI_RESULT=%d/%d" % (sum(1 for r in rows if r), len(rows)))
+
+ succeeded in 188ms:
+987cb596:src/cpus/cpu_dyntrans.c:247:		if (cpu->cd.sh.int_to_assert > 0 && !(cpu->cd.sh.sr & SH_SR_BL)
+987cb596:src/cpus/cpu_dyntrans.c:250:			sh_exception(cpu, 0, cpu->cd.sh.int_to_assert, 0);
+987cb596:src/cpus/cpu_sh.c:123:	cpu->cd.sh.sr = SH_SR_MD | SH_SR_IMASK;
+987cb596:src/cpus/cpu_sh.c:733:		    (cpu->cd.sh.sr & SH_SR_MD)? "MD" : "!md",
+987cb596:src/cpus/cpu_sh.c:734:		    (cpu->cd.sh.sr & SH_SR_RB)? "RB" : "!rb",
+987cb596:src/cpus/cpu_sh.c:735:		    (cpu->cd.sh.sr & SH_SR_BL)? "BL" : "!bl",
+987cb596:src/cpus/cpu_sh.c:850:	if ((new_sr & SH_SR_RB) != (old_sr & SH_SR_RB)) {
+987cb596:src/cpus/cpu_sh.c:886: *  sh_exception():
+987cb596:src/cpus/cpu_sh.c:893:void sh_exception(struct cpu *cpu, int expevt, int intevt, uint32_t vaddr)
+987cb596:src/cpus/cpu_sh.c:910:	if (cpu->cd.sh.sr & SH_SR_BL) {
+987cb596:src/cpus/cpu_sh.c:911:		fatal("[ sh_exception(): BL bit already set. ]\n");
+987cb596:src/cpus/cpu_sh.c:917:		expevt = EXPEVT_RESET_POWER;
+987cb596:src/cpus/cpu_sh.c:952:	sh_update_sr(cpu, cpu->cd.sh.sr | SH_SR_MD | SH_SR_RB | SH_SR_BL);
+987cb596:src/cpus/cpu_sh.c:966:	 *  #457: EXPEVT_RESET_TLB_MULTI_HIT joins this group, and joining it is
+987cb596:src/cpus/cpu_sh.c:1015:	case EXPEVT_RESET_POWER:
+987cb596:src/cpus/cpu_sh.c:1016:	case EXPEVT_RESET_MANUAL:
+987cb596:src/cpus/cpu_sh.c:1017:	case EXPEVT_RESET_TLB_MULTI_HIT:
+987cb596:src/cpus/cpu_sh.c:1083:	default:fatal("sh_exception(): exception 0x%x is not yet "
+987cb596:src/cpus/cpu_sh_instr.c:51:	if (!(cpu->cd.sh.sr & SH_SR_MD)) {				\
+987cb596:src/cpus/cpu_sh_instr.c:53:		sh_exception(cpu, EXPEVT_RES_INST, 0, 0);		\
+987cb596:src/cpus/cpu_sh_instr.c:62:			sh_exception(cpu, EXPEVT_FPU_SLOT_DISABLE, 0, 0);\
+987cb596:src/cpus/cpu_sh_instr.c:64:			sh_exception(cpu, EXPEVT_FPU_DISABLE, 0, 0);	\
+987cb596:src/cpus/cpu_sh_instr.c:212:		sh_exception(cpu, EXPEVT_ADDR_ERR_LD, 0, (vaddr));	\
+987cb596:src/cpus/cpu_sh_instr.c:218:		sh_exception(cpu, EXPEVT_ADDR_ERR_ST, 0, (vaddr));	\
+987cb596:src/cpus/cpu_sh_instr.c:245:	sh_exception(cpu, EXPEVT_RES_INST, 0, 0);
+987cb596:src/cpus/cpu_sh_instr.c:260:	if (cpu->cd.sh.int_to_assert > 0 && !(cpu->cd.sh.sr & SH_SR_BL)
+987cb596:src/cpus/cpu_sh_instr.c:2832:	if (!(cpu->cd.sh.sr & SH_SR_BL) && cpu->cd.sh.int_to_assert > 0 &&
+987cb596:src/cpus/cpu_sh_instr.c:2853:		sh_exception(cpu, EXPEVT_SLOT_INST, 0, 0);
+987cb596:src/cpus/cpu_sh_instr.c:2858:	sh_exception(cpu, EXPEVT_TRAPA, 0, 0);
+987cb596:src/cpus/cpu_sh_instr.c:3210:				sh_exception(cpu, EXPEVT_SLOT_INST, 0, 0);
+987cb596:src/cpus/cpu_sh_instr.c:3212:				sh_exception(cpu, EXPEVT_RES_INST, 0, 0);
+987cb596:src/cpus/cpu_sh_instr.c:3235:				sh_exception(cpu, EXPEVT_SLOT_INST, 0, 0);
+987cb596:src/cpus/cpu_sh_instr.c:3237:				sh_exception(cpu, EXPEVT_RES_INST, 0, 0);
+987cb596:src/cpus/cpu_sh_instr.c:3292:			sh_exception(cpu, EXPEVT_SLOT_INST, 0, 0);
+987cb596:src/cpus/cpu_sh_instr.c:3294:			sh_exception(cpu, EXPEVT_RES_INST, 0, 0);
+987cb596:src/cpus/cpu_sh_instr.c:3711:			// (SH_SR_MD set = privileged; SQMD prohibits USER access.)
+987cb596:src/cpus/cpu_sh_instr.c:3712:			if (!(cpu->cd.sh.sr & SH_SR_MD)) {
+987cb596:src/cpus/cpu_sh_instr.c:3713:				sh_exception(cpu, EXPEVT_RES_INST, 0, 0);
+987cb596:src/devices/dev_sh4.c:1178:				sh_exception(cpu,
+987cb596:src/devices/dev_sh4.c:1179:				    EXPEVT_RESET_TLB_MULTI_HIT, 0, 0);
+987cb596:src/include/cpu_sh.h:192:#define	SH_SR_BL		0x10000000	/*  Exception/Interrupt Block */
+987cb596:src/include/cpu_sh.h:193:#define	SH_SR_RB		0x20000000	/*  Register Bank 0/1  */
+987cb596:src/include/cpu_sh.h:194:#define	SH_SR_MD		0x40000000	/*  Privileged Mode  */
+987cb596:src/include/cpu_sh.h:242:void sh_exception(struct cpu *cpu, int expevt, int intevt, uint32_t vaddr);
+987cb596:src/include/thirdparty/sh4_exception.h:57:#define	EXPEVT_RESET_POWER	0x000	/* Power-On reset */
+987cb596:src/include/thirdparty/sh4_exception.h:58:#define	EXPEVT_RESET_MANUAL	0x020	/* Manual reset */
+987cb596:src/include/thirdparty/sh4_exception.h:59:#define	EXPEVT_RESET_TLB_MULTI_HIT	0x140	/* SH4 only */
+987cb596:src/include/thirdparty/sh4_exception.h:73:#define	EXPEVT_BREAK		0x1e0	/* User break */
+
+ succeeded in 224ms:
+886:  *  sh_exception():
+887:  *
+888:  *  Causes a transfer of control to an exception or interrupt handler.
+889:  *  If intevt > 0, then it is an interrupt, otherwise an exception.
+890:  *
+891:  *  vaddr contains the faulting address, on TLB exceptions.
+892:  */
+893: void sh_exception(struct cpu *cpu, int expevt, int intevt, uint32_t vaddr)
+894: {
+895: 	uint32_t vbr = cpu->cd.sh.vbr;
+896: 
+897: 	if (!quiet_mode) {
+898: 		if (intevt > 0)
+899: 			debug("[ interrupt 0x%03x", intevt);
+900: 		else
+901: 			debug("[ exception 0x%03x", expevt);
+902: 
+903: 		debug(", pc=0x%08" PRIx32" ", (uint32_t)cpu->pc);
+904: 		if (intevt == 0)
+905: 			debug("vaddr=0x%08" PRIx32" ", vaddr);
+906: 
+907: 		debug(" ]\n");
+908: 	}
+909: 
+910: 	if (cpu->cd.sh.sr & SH_SR_BL) {
+911: 		fatal("[ sh_exception(): BL bit already set. ]\n");
+912: 
+913: 		/*  This is actually OK in two cases: a User Break,
+914: 		    or on NMI interrupts if a special flag is set?  */
+915: 		/*  TODO  */
+916: 
+917: 		expevt = EXPEVT_RESET_POWER;
+918: 	}
+919: 
+920: 	if (cpu->is_halted) {
+921: 		/*
+922: 		 *  If the exception occurred on a 'sleep' instruction, then let
+923: 		 *  the instruction following the sleep instruction be the one
+924: 		 *  where execution resumes when the interrupt service routine
+925: 		 *  returns.
+926: 		 */
+927: 		cpu->is_halted = false;
+928: 		cpu->pc += sizeof(uint16_t);
+929: 	}
+930: 
+931: 	if (cpu->delay_slot) {
+932: 		cpu->delay_slot = EXCEPTION_IN_DELAY_SLOT;
+933: 		cpu->pc -= sizeof(uint16_t);
+934: 	}
+935: 
+936: 
+937: 	/*
+938: 	 *  Stuff common to all exceptions:
+939: 	 */
+940: 
+941: 	cpu->cd.sh.spc = cpu->pc;
+942: 	cpu->cd.sh.ssr = cpu->cd.sh.sr;
+943: 	cpu->cd.sh.sgr = cpu->cd.sh.r[15];
+944: 
+945: 	if (intevt > 0) {
+946: 		cpu->cd.sh.intevt = intevt;
+947: 		expevt = -1;
+948: 	} else {
+949: 		cpu->cd.sh.expevt = expevt;
+950: 	}
+951: 
+952: 	sh_update_sr(cpu, cpu->cd.sh.sr | SH_SR_MD | SH_SR_RB | SH_SR_BL);
+953: 
+954: 	/*  Most exceptions set PC to VBR + 0x100.  */
+955: 	cpu->pc = vbr + 0x100;
+956: 
+957: 
+958: 	/*  Specific cases:  */
+959: 	switch (expevt) {
+960: 
+961: 	case -1:	/*  Interrupt  */
+962: 		cpu->pc = vbr + 0x600;
+963: 		break;
+964: 
+965: 	/*
+966: 	 *  #457: EXPEVT_RESET_TLB_MULTI_HIT joins this group, and joining it is
+967: 	 *  the whole fix.  dev_sh4.c raises it when a guest ASSOCIATIVE write to
+968: 	 *  the UTLB address array matches more than one entry; this switch had no
+969: 	 *  arm for it, so it fell to the default below and ran exit(1).  Three
+970: 	 *  ordinary privileged guest stores ended the host process.
+971: 	 *
+972: 	 *  The manual puts it in exactly this group.  **Table 5.2 Exceptions**
+973: 	 *  (_scratchpad/sh7750_hardware.txt:11994, rows at :12006 and :12010) lists
+974: 	 *  BOTH TLB multiple-hit exceptions as Reset / Abort category, vector
+975: 	 *  H'A000 0000, code H'140 -- the same rows as power-on and manual reset.
+976: 	 *
+977: 	 *  The arm below is NOT Manual_reset() transcribed.  That routine (:12392)
+978: 	 *  is ten statements and includes Initialize_CPU() and
+979: 	 *  Initialize_Module(Manual); this arm is three, because EXPEVT and
+980: 	 *  MD|RB|BL are already done by the common code above, and because NOT
+981: 	 *  reinitialising the CPU is the faithful part here -- 3.6.4's software
+982: 	 *  processing inspects the UTLB entries AFTER the reset, which a full
+983: 	 *  re-init would destroy.
+984: 	 *
+985: 	 *  EXPEVT survives the grouping by construction: the common code above
+986: 	 *  assigns cpu->cd.sh.expevt BEFORE this switch, so 0x140 is already
+987: 	 *  latched and the guest's reset handler can tell a multiple hit from a
+988: 	 *  power-on (0x000) or a manual reset (0x020).  A review seat asked
+989: 	 *  whether grouping would clobber it; it does not.
+990: 	 *
+991: 	 *  *** DO NOT REWRITE THIS AS A SEPARATE ARM THAT SETS pc AND vbr ONLY. ***
+992: 	 *  That is the likelier implementation than the fix itself, and it was
+993: 	 *  MEASURED passing a witness that pins alive + expevt + pc + vbr -- because
+994: 	 *  sh_update_sr() is a NO-OP from the reset-default SR (IMASK already 0xf,
+995: 	 *  FD already clear).  It only becomes observable when the guest holds FD or
+996: 	 *  a low IMASK at fault time, which is why the detector pre-sets SR and pins
+997: 	 *  the result.  Figure 5.2 (:12228) specifies SR.{MD,RB,BL,FD,IMASK} <-
+998: 	 *  11101111 for the reset transition, so the third statement is required,
+999: 	 *  not decoration.
+1000: 	 *
+1001: 	 *  Deleting the detection instead was considered and is REFUTED by
+1002: 	 *  **3.7.4 UTLB Address Array** (:10111, sentence at :10141-10143), which
+1003: 	 *  both raises the exception AND supplies the ordering: "D and V specified
+1004: 	 *  in the data field are written to that entry.  If there is more than one
+1005: 	 *  matching entry, a data TLB multiple hit exception results."  Write first,
+1006: 	 *  then raise -- so dev_sh4.c's update-before-count is faithful and a
+1007: 	 *  scan-first rewrite would be less so.
+1008: 	 *
+1009: 	 *  (An earlier draft cited 3.6.4's "the contents of PPN ... may also be
+1010: 	 *  corrupted" as that warrant.  A review seat pointed out it is the wrong
+1011: 	 *  sentence: the device loop writes V and D, never PPN.  The conclusion was
+1012: 	 *  right and the reason was not, which is the kind of thing that gets
+1013: 	 *  reused.)
+1014: 	 */
+1015: 	case EXPEVT_RESET_POWER:
+1016: 	case EXPEVT_RESET_MANUAL:
+1017: 	case EXPEVT_RESET_TLB_MULTI_HIT:
+1018: 		cpu->pc = 0xa0000000;
+1019: 		cpu->cd.sh.vbr = 0x00000000;
+1020: 		sh_update_sr(cpu, (cpu->cd.sh.sr | SH_SR_IMASK) & ~SH_SR_FD);
+1021: 		break;
+1022: 
+1023: 	case EXPEVT_TLB_MISS_LD:
+1024: 	case EXPEVT_TLB_MISS_ST:
+1025: 		cpu->pc = vbr + 0x400;
+1026: 		// fall through
+1027: 	case EXPEVT_TLB_PROT_LD:
+1028: 	case EXPEVT_TLB_PROT_ST:
+1029: 	case EXPEVT_TLB_MOD:
+1030: 		cpu->cd.sh.tea = vaddr;
+1031: 		cpu->cd.sh.pteh &= ~SH4_PTEH_VPN_MASK;
+1032: 		cpu->cd.sh.pteh |= (vaddr & SH4_PTEH_VPN_MASK);
+1033: 		break;
+1034: 
+1035: 	case EXPEVT_TRAPA:
+1036: 		/*
+1037: 		 *  Note: The TRA register is already set by the implementation
+1038: 		 *  of the trapa instruction. See cpu_sh_instr.c for details.
+1039: 		 *  Here, spc is incremented, so that a return from the trap
+1040: 		 *  handler transfers control to the instruction _following_
+1041: 		 *  the trapa.
+1042: 		 */
+1043: 		cpu->cd.sh.spc += sizeof(uint16_t);
+1044: 		break;
+1045: 
+1046: 	case EXPEVT_RES_INST:
+1047: 		/*
+1048: 		 *  Note: Having this code here makes it possible to catch
+1049: 		 *  reserved instructions; during normal instruction execution,
+1050: 		 *  these are not very common.
+1051: 		 */
+1052: 		/*  #217: (Codex/Fable) a guest reserved instruction must take the
+1053: 		    illegal-instruction exception (the general vector is set up
+1054: 		    above), not exit() the host.  */
+1055: 		break;
+1056: 
+1057: 	case EXPEVT_FPU_DISABLE:
+1058: 		break;
+1059: 
+1060: 	case EXPEVT_SLOT_INST:
+1061: 	case EXPEVT_FPU_SLOT_DISABLE:
+1062: 		/*
+1063: 		 *  #315: the two DELAY-SLOT variants. Both are raised by code
+1064: 		 *  already in this tree -- `trapa` in a delay slot, and the
+1065: 		 *  FPU-availability macro when the FPU is disabled and
+1066: 		 *  cpu->delay_slot is set -- but neither had a case here, so
+1067: 		 *  each fell to the default below and called exit(). A guest
+1068: 		 *  putting a trapa or an FP instruction in a branch delay slot
+1069: 		 *  killed the host process outright; both were measured doing
+1070: 		 *  exactly that. They take the same general vector as their
+1071: 		 *  non-slot counterparts, which is already set up above.
+1072: 		 */
+1073: 		break;
+1074: 
+1075: 	case EXPEVT_ADDR_ERR_LD:
+1076: 	case EXPEVT_ADDR_ERR_ST:
+1077: 		/*  CPU address error (misaligned access). Sets TEA to
+1078: 		    the faulting address; uses the general exception
+1079: 		    vector (VBR + 0x100) already set above.  */
+1080: 		cpu->cd.sh.tea = vaddr;
+1081: 		break;
+1082: 
+1083: 	default:fatal("sh_exception(): exception 0x%x is not yet "
+1084: 		    "implemented.\n", expevt);
+1085: 		exit(1);
+
+ succeeded in 558ms:
+650:                               bit is cleared to 0, and the interrupt mask bits (IMASK) are set
+651:                               to B'1111.
+652: 
+653:                               ...
+654: 
+655:                               SR.IMASK = B'1111;
+656: 
+657:                               Note amended
+658: 
+659:                               Note: * FPU instructions are instructions in which the first 4 bits
+660:                                          of the instruction code are H'F (but excluding undefined
+661:                                          instruction H'FFFD), and the LDS, STS, LDS.L, and
+662:                                          STS.L instructions corresponding to FPUL and FPSCR.
+663: 
+664:                               Description amended
+665: 
+666:                               INTEVT = H'00000400 ~ H'00000B80;
+667: 
+668: Rev.7.00 Oct. 10, 2008 Page xii of lxxxiv
+669: REJ09B0366-0700
+670: Item                     Page    Revision (See Manual for Details)
+671: 5.7 Usage Notes          182
+672:                                  Description amended
+673: 6.5 Floating-Point       194
+674:                                  2. If a general exception or interrupt occurs when SR.BL = 1
+675: Exceptions
+676:                                  a. General exception
+677: � Enable/disable
+678: exception handling                  When a general exception other than a user break occurs, a
+679:                                     manual reset is executed. The value in EXPEVT at this time
+680: 6.6.2 Pair Single-       196        is H'0000 0020; the value of the SPC and SSR registers is
+681:                                     undefined.
+682: Precision Data Transfer
+683:                                  ...
+684: 6.7 Usage Notes          197 to
+685:                          207     3. SPC when an exception occurs
+686: 
+687:                                  a. Re-execution type general exception
+688: 
+689:                                     The PC value for the instruction in which the general
+690:                                     exception occurred is set in SPC, and the instruction is re-
+12370: Section 5 Exceptions
+12371: 
+12372: (2) Manual Reset
+12373: 
+12374: � Sources:
+12375:      SCK2 pin low level and RESET pin low level
+12376:      When a general exception other than a user break occurs while the BL bit is set to 1 in SR
+12377:      When the watchdog timer overflows while the WT/IT bit and RSTS bit are both set to 1 in
+12378:         WTCSR. For details, see section 10, Clock Oscillation Circuits.
+12379: 
+12380: � Transition address: H'A000 0000
+12381: � Transition operations:
+12382: 
+12383:     Exception code H'020 is set in EXPEVT, initialization of VBR and SR is performed, and a
+12384:     branch is made to PC = H'A000 0000.
+12385:     In the initialization processing, the VBR register is set to H'0000 0000, and in SR, the MD,
+12386:     RB, and BL bits are set to 1, the FD bit is cleared to 0, and the interrupt mask bits (IMASK)
+12387:     are set to B'1111.
+12388:     CPU and on-chip peripheral module initialization is performed. For details, see the register
+12389:     descriptions in the relevant sections.
+12390: 
+12391:    Manual_reset()
+12392:    {
+12393: 
+12394:          EXPEVT = H'00000020;
+12395:          VBR = H'00000000;
+12396:          SR.MD = 1;
+12397:          SR.RB = 1;
+12398:          SR.BL = 1;
+12399:          SR.IMASK = B'1111;
+12400:          SR.FD = 0;
+12401:          Initialize_CPU();
+12402:          Initialize_Module(Manual);
+12403:          PC = H'A0000000;
+12404:    }
+12405: 
+12406: Rev.7.00 Oct. 10, 2008 Page 160 of 1074
+12407: REJ09B0366-0700
+12408: Table 5.3 Types of Reset                                         Section 5 Exceptions
+12409: 
+12410:                 Reset State Transition               Internal States
+12411:                         Conditions                   On-Chip Peripheral Modules
+12412:                                                      See Register Configuration in
+12413: Type            SCK2      RESET         CPU          each section
+12414: Power-on reset                          Initialized
+12415: Manual reset    High      Low           Initialized
+12416: 
+12417:                 Low       Low
+12418: 
+12419: (3) H-UDI Reset
+12420: 
+12421: � Source: SDIR.TI3-TI0 = B'0110 (negation) or B'0111 (assertion)
+12422: � Transition address: H'A000 0000
+12423: � Transition operations:
+12424: 
+12425:     Exception code H'000 is set in EXPEVT, initialization of VBR and SR is performed, and a
+12426:     branch is made to PC = H'A000 0000.
+12427:     In the initialization processing, the VBR register is set to H'0000 0000, and in SR, the MD,
+12428:     RB, and BL bits are set to 1, the FD bit is cleared to 0, and the interrupt mask bits (IMASK)
+12429:     are set to B'1111.
+12430:     CPU and on-chip peripheral module initialization is performed. For details, see the register
+12431:     descriptions in the relevant sections.
+12432: 
+12433:    H-UDI_reset()
+12434:    {
+12435: 
+12436:          EXPEVT = H'00000000;
+12437:          VBR = H'00000000;
+12438:          SR.MD = 1;
+12439:          SR.RB = 1;
+12440:          SR.BL = 1;
+12441:          SR.IMASK = B'1111;
+12442:          SR.FD = 0;
+12443:          Initialize_CPU();
+12444:          Initialize_Module(PowerOn);
+12445:          PC = H'A0000000;
+12446:    }
+12447: 
+12448:                                         Rev.7.00 Oct. 10, 2008 Page 161 of 1074
+12449:                                                                        REJ09B0366-0700
+12450: Section 5 Exceptions
+12451: 
+12452: (4) Instruction TLB Multiple-Hit Exception
+12453: 
+12454: � Source: Multiple ITLB address matches
+12455: � Transition address: H'A000 0000
+12456: � Transition operations:
+12457: 
+12458:     The virtual address (32 bits) at which this exception occurred is set in TEA, and the
+12459:     corresponding virtual page number (22 bits) is set in PTEH [31:10]. ASID in PTEH indicates
+12460:     the ASID when this exception occurred.
+12461:     Exception code H'140 is set in EXPEVT, initialization of VBR and SR is performed, and a
+12462:     branch is made to PC = H'A000 0000.
+12463:     In the initialization processing, the VBR register is set to H'0000 0000, and in SR, the MD,
+12464:     RB, and BL bits are set to 1, the FD bit is cleared to 0, and the interrupt mask bits (IMASK)
+12465:     are set to B'1111.
+12466:     CPU and on-chip peripheral module initialization is performed in the same way as in a manual
+12467:     reset. For details, see the register descriptions in the relevant sections.
+12468: 
+12469:    TLB_multi_hit()
+12470:    {
+12471: 
+12472:          TEA = EXCEPTION_ADDRESS;
+12473:          PTEH.VPN = PAGE_NUMBER;
+12474:          EXPEVT = H'00000140;
+12475:          VBR = H'00000000;
+12476:          SR.MD = 1;
+12477:          SR.RB = 1;
+12478:          SR.BL = 1;
+12479:          SR.IMASK = B'1111;
+12480:          SR.FD = 0;
+12481:          Initialize_CPU();
+12482:          Initialize_Module(Manual);
+12483:          PC = H'A0000000;
+12484:    }
+12485: 
+12486: Rev.7.00 Oct. 10, 2008 Page 162 of 1074
+12487: REJ09B0366-0700
+12488:                                                                                                        Section 5 Exceptions
+12489: 
+12490: (5) Operand TLB Multiple-Hit Exception
+12491: 
+12492: � Source: Multiple UTLB address matches
+12493: � Transition address: H'A000 0000
+12494: � Transition operations:
+12495: 
+41415:                                                                               Section 20 User Break Controller (UBC)
+41416: 
+41417: � Example of sequence of instructions with a branch (however, the example of a sequence of
+41418:     instructions with no branch should be applied when the branch destination of a delayed branch
+41419:     instruction is the instruction itself + 4):
+41420:              100 Instruction A: BT/S L200 (0 instructions after instruction A)
+41421:              102 Instruction B (1 instruction after instruction A, 0 instructions after instruction B)
+41422:     L200 200 Instruction C (3 instructions after instruction A, 2 instructions after instruction B)
+41423:              202 Instruction D (4 instructions after instruction A, 3 instructions after instruction B)
+41424: 
+41425: 20.3.3 User Break Operation Sequence
+41426: 
+41427: The sequence of operations from setting of break conditions to user break exception handling is
+41428: described below.
+41429: 
+41430: 1. Specify pre- or post-execution breaking in the case of an instruction access, inclusion or
+41431:     exclusion of the data bus value in the break conditions in the case of an operand access, and
+41432:     use of independent or sequential channel A and B break conditions, in the break control
+41433:     register (BRCR). Set the break addresses in the break address registers for each channel
+41434:     (BARA, BARB), the ASIDs corresponding to the break space in the break ASID registers
+41435:     (BASRA, BASRB), and the address and ASID masking methods in the break address mask
+41436:     registers (BAMRA, BAMRB). If the data bus value is to be included in the break conditions,
+41437:     also set the break data in the break data register (BDRB) and the data mask in the break data
+41438:     mask register (BDMRB).
+41439: 
+41440: 2. Set the break bus conditions in the break bus cycle registers (BBRA, BBRB). If even one of
+41441:     the BBRA/BBRB instruction access/operand access select (ID bit) and read/write select groups
+41442:     (RW bit) is set to 00, a user break interrupt will not be generated on the corresponding channel.
+41443:     Make the BBRA and BBRB settings after all other break-related register settings have been
+41444:     completed. If breaks are enabled with BBRA/BBRB while the break address, data, or mask
+41445:     register, or the break control register is in the initial state after a reset, a break may be
+41446:     generated inadvertently.
+41447: 
+41448: 3. The operation when a break condition is satisfied depends on the BL bit (in the CPU's SR
+41449:     register). When the BL bit is 0, exception handling is started and the condition match flag
+41450:     (CMFA/CMFB) for the respective channel is set for the matched condition. When the BL bit is
+41451:     1, the condition match flag (CMFA/CMFB) for the respective channel is set for the matched
+41452:     condition but exception handling is not started.
+41453:     The condition match flags (CMFA, CMFB) are set by a branch condition match, but are not
+41454:     automatically cleared. Therefore, a memory store instruction should be used on the BRCR
+41455: 
+41456:                                                                            Rev.7.00 Oct. 10, 2008 Page 865 of 1074
+41457:                                                                                                            REJ09B0366-0700
+41458: Section 20 User Break Controller (UBC)
+41459: 
+41460:     register to clear the flags to 0. See section 20.3.6, Condition Match Flag Setting, for the exact
+41461:     setting conditions for the condition match flags.
+41462: 
+41463: 4. When sequential condition mode has been selected, and the channel B condition is matched
+41464:     after the channel A condition has been matched, a break is effected at the instruction at which
+41465:     the channel B condition was matched. See section 20.3.8, Contiguous A and B Settings for
+41466:     Sequential Conditions, for the operation when the channel A condition match and channel B
+41467:     condition match occur close together. With sequential conditions, only the channel B condition
+41468:     match flag is set. When sequential condition mode has been selected, if it is wished to clear the
+41469:     channel A match when the channel A condition has been matched but the channel B condition
+41470:     has not yet been matched, this can be done by writing 0 to the SEQ bit in the BRCR register.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "git -C GXEMUL-SEC grep -n -E 'sh_exception|EXPEVT_RESET_POWER|EXPEVT_RESET_MANUAL|EXPEVT_RESET_TLB_MULTI_HIT|EXPEVT_BREAK' 987cb596 -- src" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$auditLines = git -C GXEMUL-SEC show 987cb596:regress/gate_sh_rounding.sh; for ($auditIndex = 225; $auditIndex -lt 269; $auditIndex++) { '"'{0}: {1}' -f ("'$auditIndex + 1), $auditLines[$auditIndex] }; git -C GXEMUL-SEC grep -n -E '"'sh_tlbmulti|SH_TLBMULTI' 987cb596 -- regress/gate_sh_rounding.sh" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "git -C GXEMUL-SEC grep -n -i -E 'expevt|nmi|ubc' 987cb596 -- src/cpus/cpu_sh.c src/cpus/cpu_sh_instr.c src/cpus/cpu_dyntrans.c src/devices/dev_sh4.c src/promemul/sh_ipl_g.c src/machines/machine_landisk.c src/include/cpu_sh.h src/memory" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$auditLines = git -C GXEMUL-SEC show 987cb596:src/cpus/cpu_sh_instr.c; foreach ($auditSpan in @(@(195,269), @(2825,2870), @(5290,5360))) { for ($auditIndex = $auditSpan[0] - 1; $auditIndex -lt $auditSpan[1]; $auditIndex++) { '"'{0}: {1}' -f ("'$auditIndex + 1), $auditLines[$auditIndex] } }; git -C GXEMUL-SEC grep -n -E '"'trapa|0xc3|0xC3' 987cb596 -- src/cpus/cpu_sh_instr.c" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -i -e 'manual reset' -e 'instruction.*TRAPA' -e '11000011' '_scratchpad/sh7750_hardware.txt' | Select-Object -First 100" in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 199ms:
+987cb596:src/cpus/cpu_dyntrans.c:250:			sh_exception(cpu, 0, cpu->cd.sh.int_to_assert, 0);
+987cb596:src/cpus/cpu_sh.c:886: *  sh_exception():
+987cb596:src/cpus/cpu_sh.c:893:void sh_exception(struct cpu *cpu, int expevt, int intevt, uint32_t vaddr)
+987cb596:src/cpus/cpu_sh.c:911:		fatal("[ sh_exception(): BL bit already set. ]\n");
+987cb596:src/cpus/cpu_sh.c:917:		expevt = EXPEVT_RESET_POWER;
+987cb596:src/cpus/cpu_sh.c:966:	 *  #457: EXPEVT_RESET_TLB_MULTI_HIT joins this group, and joining it is
+987cb596:src/cpus/cpu_sh.c:1015:	case EXPEVT_RESET_POWER:
+987cb596:src/cpus/cpu_sh.c:1016:	case EXPEVT_RESET_MANUAL:
+987cb596:src/cpus/cpu_sh.c:1017:	case EXPEVT_RESET_TLB_MULTI_HIT:
+987cb596:src/cpus/cpu_sh.c:1083:	default:fatal("sh_exception(): exception 0x%x is not yet "
+987cb596:src/cpus/cpu_sh_instr.c:53:		sh_exception(cpu, EXPEVT_RES_INST, 0, 0);		\
+987cb596:src/cpus/cpu_sh_instr.c:62:			sh_exception(cpu, EXPEVT_FPU_SLOT_DISABLE, 0, 0);\
+987cb596:src/cpus/cpu_sh_instr.c:64:			sh_exception(cpu, EXPEVT_FPU_DISABLE, 0, 0);	\
+987cb596:src/cpus/cpu_sh_instr.c:212:		sh_exception(cpu, EXPEVT_ADDR_ERR_LD, 0, (vaddr));	\
+987cb596:src/cpus/cpu_sh_instr.c:218:		sh_exception(cpu, EXPEVT_ADDR_ERR_ST, 0, (vaddr));	\
+987cb596:src/cpus/cpu_sh_instr.c:245:	sh_exception(cpu, EXPEVT_RES_INST, 0, 0);
+987cb596:src/cpus/cpu_sh_instr.c:2853:		sh_exception(cpu, EXPEVT_SLOT_INST, 0, 0);
+987cb596:src/cpus/cpu_sh_instr.c:2858:	sh_exception(cpu, EXPEVT_TRAPA, 0, 0);
+987cb596:src/cpus/cpu_sh_instr.c:3210:				sh_exception(cpu, EXPEVT_SLOT_INST, 0, 0);
+987cb596:src/cpus/cpu_sh_instr.c:3212:				sh_exception(cpu, EXPEVT_RES_INST, 0, 0);
+987cb596:src/cpus/cpu_sh_instr.c:3235:				sh_exception(cpu, EXPEVT_SLOT_INST, 0, 0);
+987cb596:src/cpus/cpu_sh_instr.c:3237:				sh_exception(cpu, EXPEVT_RES_INST, 0, 0);
+987cb596:src/cpus/cpu_sh_instr.c:3292:			sh_exception(cpu, EXPEVT_SLOT_INST, 0, 0);
+987cb596:src/cpus/cpu_sh_instr.c:3294:			sh_exception(cpu, EXPEVT_RES_INST, 0, 0);
+987cb596:src/cpus/cpu_sh_instr.c:3713:				sh_exception(cpu, EXPEVT_RES_INST, 0, 0);
+987cb596:src/cpus/memory_sh.c:249:	sh_exception(cpu, expevt, 0, vaddr);
+987cb596:src/cpus/memory_sh.c:368:		sh_exception(cpu, (flags & FLAG_WRITEFLAG)?
+987cb596:src/devices/dev_sh4.c:1178:				sh_exception(cpu,
+987cb596:src/devices/dev_sh4.c:1179:				    EXPEVT_RESET_TLB_MULTI_HIT, 0, 0);
+987cb596:src/include/cpu_sh.h:242:void sh_exception(struct cpu *cpu, int expevt, int intevt, uint32_t vaddr);
+987cb596:src/include/thirdparty/sh4_exception.h:57:#define	EXPEVT_RESET_POWER	0x000	/* Power-On reset */
+987cb596:src/include/thirdparty/sh4_exception.h:58:#define	EXPEVT_RESET_MANUAL	0x020	/* Manual reset */
+987cb596:src/include/thirdparty/sh4_exception.h:59:#define	EXPEVT_RESET_TLB_MULTI_HIT	0x140	/* SH4 only */
+987cb596:src/include/thirdparty/sh4_exception.h:73:#define	EXPEVT_BREAK		0x1e0	/* User break */
+
+ succeeded in 210ms:
+987cb596:src/cpus/cpu_sh.c:137:	CPU_SETTINGS_ADD_REGISTER32("expevt", cpu->cd.sh.expevt);
+987cb596:src/cpus/cpu_sh.c:208:		for (i=SH_INTEVT_NMI; i<0x1000; i+=0x20) {
+987cb596:src/cpus/cpu_sh.c:794:		debug("cpu%i: expevt = 0x%" PRIx32"  intevt = 0x%" PRIx32
+987cb596:src/cpus/cpu_sh.c:795:		    "  tra = 0x%" PRIx32"\n", x, cpu->cd.sh.expevt,
+987cb596:src/cpus/cpu_sh.c:893:void sh_exception(struct cpu *cpu, int expevt, int intevt, uint32_t vaddr)
+987cb596:src/cpus/cpu_sh.c:901:			debug("[ exception 0x%03x", expevt);
+987cb596:src/cpus/cpu_sh.c:914:		    or on NMI interrupts if a special flag is set?  */
+987cb596:src/cpus/cpu_sh.c:917:		expevt = EXPEVT_RESET_POWER;
+987cb596:src/cpus/cpu_sh.c:947:		expevt = -1;
+987cb596:src/cpus/cpu_sh.c:949:		cpu->cd.sh.expevt = expevt;
+987cb596:src/cpus/cpu_sh.c:959:	switch (expevt) {
+987cb596:src/cpus/cpu_sh.c:966:	 *  #457: EXPEVT_RESET_TLB_MULTI_HIT joins this group, and joining it is
+987cb596:src/cpus/cpu_sh.c:979:	 *  Initialize_Module(Manual); this arm is three, because EXPEVT and
+987cb596:src/cpus/cpu_sh.c:985:	 *  EXPEVT survives the grouping by construction: the common code above
+987cb596:src/cpus/cpu_sh.c:986:	 *  assigns cpu->cd.sh.expevt BEFORE this switch, so 0x140 is already
+987cb596:src/cpus/cpu_sh.c:993:	 *  MEASURED passing a witness that pins alive + expevt + pc + vbr -- because
+987cb596:src/cpus/cpu_sh.c:1015:	case EXPEVT_RESET_POWER:
+987cb596:src/cpus/cpu_sh.c:1016:	case EXPEVT_RESET_MANUAL:
+987cb596:src/cpus/cpu_sh.c:1017:	case EXPEVT_RESET_TLB_MULTI_HIT:
+987cb596:src/cpus/cpu_sh.c:1023:	case EXPEVT_TLB_MISS_LD:
+987cb596:src/cpus/cpu_sh.c:1024:	case EXPEVT_TLB_MISS_ST:
+987cb596:src/cpus/cpu_sh.c:1027:	case EXPEVT_TLB_PROT_LD:
+987cb596:src/cpus/cpu_sh.c:1028:	case EXPEVT_TLB_PROT_ST:
+987cb596:src/cpus/cpu_sh.c:1029:	case EXPEVT_TLB_MOD:
+987cb596:src/cpus/cpu_sh.c:1035:	case EXPEVT_TRAPA:
+987cb596:src/cpus/cpu_sh.c:1046:	case EXPEVT_RES_INST:
+987cb596:src/cpus/cpu_sh.c:1057:	case EXPEVT_FPU_DISABLE:
+987cb596:src/cpus/cpu_sh.c:1060:	case EXPEVT_SLOT_INST:
+987cb596:src/cpus/cpu_sh.c:1061:	case EXPEVT_FPU_SLOT_DISABLE:
+987cb596:src/cpus/cpu_sh.c:1075:	case EXPEVT_ADDR_ERR_LD:
+987cb596:src/cpus/cpu_sh.c:1076:	case EXPEVT_ADDR_ERR_ST:
+987cb596:src/cpus/cpu_sh.c:1084:		    "implemented.\n", expevt);
+987cb596:src/cpus/cpu_sh.c:1326:			debug("subc\tr%i,r%i\n", r4, r8);
+987cb596:src/cpus/cpu_sh_instr.c:53:		sh_exception(cpu, EXPEVT_RES_INST, 0, 0);		\
+987cb596:src/cpus/cpu_sh_instr.c:62:			sh_exception(cpu, EXPEVT_FPU_SLOT_DISABLE, 0, 0);\
+987cb596:src/cpus/cpu_sh_instr.c:64:			sh_exception(cpu, EXPEVT_FPU_DISABLE, 0, 0);	\
+987cb596:src/cpus/cpu_sh_instr.c:205: *  store raises a CPU address-error exception (EXPEVT_ADDR_ERR_LD / _ST),
+987cb596:src/cpus/cpu_sh_instr.c:212:		sh_exception(cpu, EXPEVT_ADDR_ERR_LD, 0, (vaddr));	\
+987cb596:src/cpus/cpu_sh_instr.c:218:		sh_exception(cpu, EXPEVT_ADDR_ERR_ST, 0, (vaddr));	\
+987cb596:src/cpus/cpu_sh_instr.c:245:	sh_exception(cpu, EXPEVT_RES_INST, 0, 0);
+987cb596:src/cpus/cpu_sh_instr.c:1843: *  subc_rm_rn: rn = rn - rm - t; t = borrow
+987cb596:src/cpus/cpu_sh_instr.c:1868:X(subc_rm_rn)
+987cb596:src/cpus/cpu_sh_instr.c:2853:		sh_exception(cpu, EXPEVT_SLOT_INST, 0, 0);
+987cb596:src/cpus/cpu_sh_instr.c:2858:	sh_exception(cpu, EXPEVT_TRAPA, 0, 0);
+987cb596:src/cpus/cpu_sh_instr.c:3210:				sh_exception(cpu, EXPEVT_SLOT_INST, 0, 0);
+987cb596:src/cpus/cpu_sh_instr.c:3212:				sh_exception(cpu, EXPEVT_RES_INST, 0, 0);
+987cb596:src/cpus/cpu_sh_instr.c:3235:				sh_exception(cpu, EXPEVT_SLOT_INST, 0, 0);
+987cb596:src/cpus/cpu_sh_instr.c:3237:				sh_exception(cpu, EXPEVT_RES_INST, 0, 0);
+987cb596:src/cpus/cpu_sh_instr.c:3292:			sh_exception(cpu, EXPEVT_SLOT_INST, 0, 0);
+987cb596:src/cpus/cpu_sh_instr.c:3294:			sh_exception(cpu, EXPEVT_RES_INST, 0, 0);
+987cb596:src/cpus/cpu_sh_instr.c:3663: *  EXPEVT_RES_INST -- illegal instruction -- where the manual says an ADDRESS
+987cb596:src/cpus/cpu_sh_instr.c:3664: *  ERROR is flagged, and this tree defines EXPEVT_ADDR_ERR_LD/ST separately.
+987cb596:src/cpus/cpu_sh_instr.c:3671: *  Those are filed as `sh4sqexpevt`, unwitnessed.  The TODO was wrong; that
+987cb596:src/cpus/cpu_sh_instr.c:3713:				sh_exception(cpu, EXPEVT_RES_INST, 0, 0);
+987cb596:src/cpus/cpu_sh_instr.c:3757:		 *  EXPEVT rows exist to catch exactly that.
+987cb596:src/cpus/cpu_sh_instr.c:3871:	// which raises the EXPEVT_ADDR_ERR_LD address error -- this fused loop
+987cb596:src/cpus/cpu_sh_instr.c:4375:		case 0xa:	/*  SUBC Rm,Rn  */
+987cb596:src/cpus/cpu_sh_instr.c:4376:			ic->f = instr(subc_rm_rn);
+987cb596:src/devices/dev_sh4.c:35: *	x)  UBC (User Break Controller)
+987cb596:src/devices/dev_sh4.c:1179:				    EXPEVT_RESET_TLB_MULTI_HIT, 0, 0);
+987cb596:src/devices/dev_sh4.c:1880:	case SH4_EXPEVT:
+987cb596:src/devices/dev_sh4.c:1882:			odata = cpu->cd.sh.expevt;
+987cb596:src/devices/dev_sh4.c:1884:			cpu->cd.sh.expevt = idata;
+987cb596:src/devices/dev_sh4.c:1896:	/*  UBC: User Break Controller  */
+987cb596:src/devices/dev_sh4.c:1898:	case 0xff000014:    /*  SH4_UBC_BASRA  */
+987cb596:src/devices/dev_sh4.c:1899:	case 0xff000018:    /*  SH4_UBC_BASRB  */
+987cb596:src/devices/dev_sh4.c:1901:	case 0xff200000:    /*  SH4_UBC_BARA  */
+987cb596:src/devices/dev_sh4.c:1902:	case 0xff200004:    /*  SH4_UBC_BAMRA  */
+987cb596:src/devices/dev_sh4.c:1903:	case 0xff200008:    /*  SH4_UBC_BBRA  */
+987cb596:src/devices/dev_sh4.c:1904:	case 0xff20000c:    /*  SH4_UBC_BARB  */
+987cb596:src/devices/dev_sh4.c:1905:	case 0xff200010:    /*  SH4_UBC_BAMRB  */
+987cb596:src/devices/dev_sh4.c:1906:	case 0xff200014:    /*  SH4_UBC_BBRB  */
+987cb596:src/devices/dev_sh4.c:1907:	case 0xff200018:    /*  SH4_UBC_BDRB  */
+987cb596:src/devices/dev_sh4.c:1908:	case 0xff20001c:    /*  SH4_UBC_BDMRB  */
+987cb596:src/devices/dev_sh4.c:1909:	case 0xff200020:    /*  SH4_UBC_BRCR  */
+987cb596:src/devices/dev_sh4.c:2046:			 *  diagnostic degrades from unmissable to once-per-timer for the device
+987cb596:src/devices/dev_sh4.c:2949:	    PCI_SUBCLASS_BRIDGE_HOST, 0);
+987cb596:src/include/cpu_sh.h:139:	uint32_t	expevt;		/*  Exception Event Register  */
+987cb596:src/include/cpu_sh.h:242:void sh_exception(struct cpu *cpu, int expevt, int intevt, uint32_t vaddr);
+987cb596:src/promemul/sh_ipl_g.c:101:	if (cpu->cd.sh.expevt == EXPEVT_TRAPA &&
+987cb596:src/promemul/sh_ipl_g.c:107:		fatal("[ SH-IPL+G PROM emulation: expevt=0x%x, "
+987cb596:src/promemul/sh_ipl_g.c:108:		    " tra=0x%x ]\n", (int)cpu->cd.sh.expevt,
+
+ succeeded in 229ms:
+226: #    * `tlbm sr` pre-sets SR to 0x40008000 so the reset transition's THIRD statement
+227: #      is observable.  From the reset-default SR that statement is a NO-OP, which is
+228: #      why an arm that sets pc and vbr and forgets it passes every other row.
+229: #    * `tlbm single` gives entry 1 a different VPN so nothing should fire.  It is the
+230: #      only row that sees a `n_hits >= 1` mutant, and it doubles as the liveness
+231: #      control -- it proves the three stores execute and the session survives them.
+232: #
+233: #  landisk and not testsh, deliberately: landisk's PROM leaves vbr = 0x8c000000, so
+234: #  `vbr == 0` is a real transition.  On testsh vbr is already 0 and that row would be
+235: #  vacuous.
+236: TMLOG=$LOGDIR/gate_sh_tlbmulti.log
+237: #  *** -u ON ALL SIX PROBES IN THIS GATE. ***  `probeslow` recorded the streaming
+238: #  mitigation as APPLIED and called it "the general fix" -- and it had been applied to
+239: #  NONE of them: the -u lived only in ad-hoc measurement scripts.  These six are exactly
+240: #  the six probes `probetimebased` names as having no prompt detection, so they are also
+241: #  the six whose runs are longest and most worth not losing.  Redirected to a file,
+242: #  stdout is block buffered and a killed run loses everything it had already measured.
+243: python3 -u sh_tlbmulti_probe.py "$PMAX" "$KERNEL" > "$TMLOG" 2>&1 || true
+244: 
+245: if ! grep -q "SH_TLBMULTI_RESULT=" "$TMLOG"; then
+246:     note "sh_tlbmulti probe produced no result line; last lines follow"
+247:     tail -5 "$TMLOG" | sed 's/^/       /'
+248:     check "sh_tlbmulti probe completed" "no" "yes"
+249: else
+250:     grep -E " ok$| FAIL$" "$TMLOG" | sed 's/^/       /'
+251:     tmctrl=$(grep -o "SH_TLBMULTI_CONTROL=[A-Z]*" "$TMLOG" | tail -1 | cut -d= -f2)
+252:     check "sh_tlbmulti control proves it measures" "${tmctrl:-missing}" "OK"
+253:     tmres=$(grep -o "SH_TLBMULTI_RESULT=[0-9]*/[0-9]*" "$TMLOG" | tail -1 | cut -d= -f2)
+254:     check "sh_tlbmulti rows run"     "${tmres#*/}" 6
+255:     check "sh_tlbmulti rows correct" "${tmres%/*}" "${tmres#*/}"
+256:     for v in "tlbm alive" "tlbm expevt" "tlbm pc" "tlbm vbr" "tlbm sr" "tlbm single"; do
+257:         n=$(count "$TMLOG" "^$v  .*ok$")
+258:         check "  $v" "$n" 1
+259:     done
+260: fi
+261: 
+262: # ---- #455: an interrupt at priority 0 ended the host process -----------------
+263: #  Wired in the SAME commit as the fix.  Gate 6's structural note says a probe that
+264: #  ships with its wiring cannot skip its census pin, because the wiring forces a
+265: #  gate run -- #441's did not, and its pin then went latently red between two
+266: #  commits.
+267: #
+268: #  This probe drives BOTH SH rigs, and which row uses which is forced rather than
+269: #  stylistic.
+987cb596:regress/gate_sh_rounding.sh:236:TMLOG=$LOGDIR/gate_sh_tlbmulti.log
+987cb596:regress/gate_sh_rounding.sh:243:python3 -u sh_tlbmulti_probe.py "$PMAX" "$KERNEL" > "$TMLOG" 2>&1 || true
+987cb596:regress/gate_sh_rounding.sh:245:if ! grep -q "SH_TLBMULTI_RESULT=" "$TMLOG"; then
+987cb596:regress/gate_sh_rounding.sh:246:    note "sh_tlbmulti probe produced no result line; last lines follow"
+987cb596:regress/gate_sh_rounding.sh:248:    check "sh_tlbmulti probe completed" "no" "yes"
+987cb596:regress/gate_sh_rounding.sh:251:    tmctrl=$(grep -o "SH_TLBMULTI_CONTROL=[A-Z]*" "$TMLOG" | tail -1 | cut -d= -f2)
+987cb596:regress/gate_sh_rounding.sh:252:    check "sh_tlbmulti control proves it measures" "${tmctrl:-missing}" "OK"
+987cb596:regress/gate_sh_rounding.sh:253:    tmres=$(grep -o "SH_TLBMULTI_RESULT=[0-9]*/[0-9]*" "$TMLOG" | tail -1 | cut -d= -f2)
+987cb596:regress/gate_sh_rounding.sh:254:    check "sh_tlbmulti rows run"     "${tmres#*/}" 6
+987cb596:regress/gate_sh_rounding.sh:255:    check "sh_tlbmulti rows correct" "${tmres%/*}" "${tmres#*/}"
+
+ succeeded in 257ms:
+195: #define	ieee_store_float_value(v, fmt)					\
+196: 	sh_dn(cpu, (ieee_store_float_value)((v), (fmt)), (fmt))
+197: #define	ieee_store_float_value_rm(v, fmt, rm)				\
+198: 	sh_dn(cpu, (ieee_store_float_value_rm)((v), (fmt), (rm)), (fmt))
+199: #endif
+200: 
+201: /*
+202:  *  SH_ALIGN_CHECK_LD / _ST:
+203:  *
+204:  *  SuperH requires naturally-aligned memory access. A misaligned load or
+205:  *  store raises a CPU address-error exception (EXPEVT_ADDR_ERR_LD / _ST),
+206:  *  with TEA set to the faulting address. amask is 1 for 16-bit accesses
+207:  *  and 3 for 32-bit accesses. (8-bit accesses are always aligned.)
+208:  */
+209: #define SH_ALIGN_CHECK_LD(vaddr, amask)					\
+210: 	if ((vaddr) & (amask)) {					\
+211: 		SYNCH_PC;						\
+212: 		sh_exception(cpu, EXPEVT_ADDR_ERR_LD, 0, (vaddr));	\
+213: 		return;							\
+214: 	}
+215: #define SH_ALIGN_CHECK_ST(vaddr, amask)					\
+216: 	if ((vaddr) & (amask)) {					\
+217: 		SYNCH_PC;						\
+218: 		sh_exception(cpu, EXPEVT_ADDR_ERR_ST, 0, (vaddr));	\
+219: 		return;							\
+220: 	}
+221: 
+222: 
+223: /*
+224:  *  nop: Nothing
+225:  */
+226: X(nop)
+227: {
+228: }
+229: 
+230: 
+231: /*
+232:  *  reserved:  An encoding this emulator does not implement.
+233:  *
+234:  *  #314: the decoder used to `goto bad` for these, which reaches the shared
+235:  *  label in cpu_dyntrans.c and sets cpu->running = 0 -- so a guest executing
+236:  *  any instruction missing from the tables stopped the whole emulator. Real
+237:  *  silicon raises the general illegal-instruction exception, which is what
+238:  *  the guest kernel is written to handle. Measured halting on this rig, among
+239:  *  others: SLEEP, MAC.L, STC SGR, STC.L/LDC.L DBR, SYNCO, PREFI, ICBI,
+240:  *  MOVLI.L and MOVCO.L.
+241:  */
+242: X(reserved)
+243: {
+244: 	SYNCH_PC;
+245: 	sh_exception(cpu, EXPEVT_RES_INST, 0, 0);
+246: }
+247: 
+248: 
+249: /*
+250:  *  sleep:  Wait for interrupt
+251:  */
+252: X(sleep)
+253: {
+254: 	RES_INST_IF_NOT_MD;
+255: 
+256: 	/*
+257: 	 *  If there is an interrupt, then just return. Otherwise
+258: 	 *  re-run the sleep instruction (after a delay).
+259: 	 */
+260: 	if (cpu->cd.sh.int_to_assert > 0 && !(cpu->cd.sh.sr & SH_SR_BL)
+261: 	    && ((cpu->cd.sh.sr & SH_SR_IMASK) >> SH_SR_IMASK_SHIFT)
+262: 	    < cpu->cd.sh.int_level)
+263: 		return;
+264: 
+265: 	SYNCH_PC;
+266: 	cpu->cd.sh.next_ic = ic;
+267: 	cpu->is_halted = true;
+268: 
+269: 	cpu->wants_to_idle = true;
+2825: 	RES_INST_IF_NOT_MD;
+2826: 	sh_update_sr(cpu, reg(ic->arg[1]));
+2827: 
+2828: #if 0
+2829: /*  NOTE: This code causes NetBSD/landisk to get past a point where it
+2830:     otherwise hangs, but it causes Linux/Dreamcast to bug out instead. :/  */
+2831: 
+2832: 	if (!(cpu->cd.sh.sr & SH_SR_BL) && cpu->cd.sh.int_to_assert > 0 &&
+2833: 	    ( (cpu->cd.sh.sr & SH_SR_IMASK) >> SH_SR_IMASK_SHIFT)
+2834: 	    < cpu->cd.sh.int_level) {
+2835: 		/*  Cause interrupt immediately, by dropping out of the
+2836: 		    main dyntrans loop:  */
+2837: 		cpu->cd.sh.next_ic = &nothing_call;
+2838: 	}
+2839: #endif
+2840: }
+2841: 
+2842: 
+2843: /*
+2844:  *  trapa:  Immediate trap.
+2845:  *
+2846:  *  arg[0] = imm << 2
+2847:  */
+2848: X(trapa)
+2849: {
+2850: 	SYNCH_PC;
+2851: 
+2852: 	if (cpu->delay_slot) {
+2853: 		sh_exception(cpu, EXPEVT_SLOT_INST, 0, 0);
+2854: 		return;
+2855: 	}
+2856: 
+2857: 	cpu->cd.sh.tra = ic->arg[0];
+2858: 	sh_exception(cpu, EXPEVT_TRAPA, 0, 0);
+2859: }
+2860: 
+2861: 
+2862: /*
+2863:  *  copy_fp_register:   Copy a register into another, with FP avail check.
+2864:  *  lds_rm_fpscr:       Copy Rm into FPSCR.
+2865:  *
+2866:  *  arg[0] = ptr to source
+2867:  *  arg[1] = ptr to destination
+2868:  */
+2869: X(copy_fp_register)
+2870: {
+5290: 
+5291: 
+5292: 
+5293: 
+5294: 
+5295: 
+5296: 
+5297: 
+5298: 
+5299: 
+5300: 
+5301: 
+5302: 
+5303: 
+5304: 
+5305: 
+5306: 
+5307: 
+5308: 
+5309: 
+5310: 
+5311: 
+5312: 
+5313: 
+5314: 
+5315: 
+5316: 
+5317: 
+5318: 
+5319: 
+5320: 
+5321: 
+5322: 
+5323: 
+5324: 
+5325: 
+5326: 
+5327: 
+5328: 
+5329: 
+5330: 
+5331: 
+5332: 
+5333: 
+5334: 
+5335: 
+5336: 
+5337: 
+5338: 
+5339: 
+5340: 
+5341: 
+5342: 
+5343: 
+5344: 
+5345: 
+5346: 
+5347: 
+5348: 
+5349: 
+5350: 
+5351: 
+5352: 
+5353: 
+5354: 
+5355: 
+5356: 
+5357: 
+5358: 
+5359: 
+5360: 
+987cb596:src/cpus/cpu_sh_instr.c:2844: *  trapa:  Immediate trap.
+987cb596:src/cpus/cpu_sh_instr.c:2848:X(trapa)
+987cb596:src/cpus/cpu_sh_instr.c:3287:		 *  `trapa` uses. FPU-disabled still wins over both, because
+987cb596:src/cpus/cpu_sh_instr.c:4248:			case 0xc3:	/*  MOVCA.L R0,@Rn  */
+987cb596:src/cpus/cpu_sh_instr.c:4865:			ic->f = instr(trapa);
+
+ succeeded in 290ms:
+555:                                                            Power-on reset state         RESET = 0,  Manual reset state
+590:(2) Manual Reset      160     accepted.
+595:                              manual reset, and the CPU branches to the same address as in
+679:                                    manual reset is executed. The value in EXPEVT at this time
+807:Output in Manual Reset
+819:9.8.5 Hardware          285   Note: * In a manual reset, STATUS = HH (reset) is set and an internal reset started after waiting
+1022:DRAM Interface             in sleep mode, and in the case of a manual reset.
+2967:        10.11.1 Invalid Manual Reset Triggered by Watchdog Timer (SH7750 and SH7750S).. 309
+3471:Figure 9.2 STATUS Output in Manual Reset.......................................................................... 276
+3474:Figure 9.5 STATUS Output in Standby  Manual Reset Sequence ...................................... 278
+3480:Figure 9.8 STATUS Output in Sleep  Manual Reset Sequence........................................... 280
+3483:Figure 9.11 STATUS Output in Deep Sleep  Manual Reset Sequence ................................. 282
+3901:Figure 22.11 Manual Reset Input Timing.................................................................................... 945
+5736:                            manual reset               SCK2 SCK2 SCK2 SCK2
+6360:                    manual reset
+6985:                         manual reset
+7674:                       manual reset
+8034:Note: * Initialized by a power-on reset and manual reset.
+8532:low. The CPU enters the power-on reset state if the MRESET pin is high, and the manual reset
+8536:registers are initialized. In the manual reset state, the internal state of the CPU and registers of on-
+8538:state controller (BSC) is not initialized in the manual reset state, refreshing operations continue.
+8573:                        Power-on reset state         RESET = 0,         Manual reset state
+8750:Notes: 1. The initial value is the value after a power-on reset or manual reset.
+8909:    the discretion of software. After a power-on or manual reset the LRUI bits are initialized to 0,
+9329:    Not affected by a manual reset.
+10285:given in table 4.2. The EMODE bit is initialized to 0 after a power-on reset or manual reset.
+10353:Notes: 1. The initial value is the value after a power-on or manual reset.
+10566:    The tag is not initialized by a power-on or manual reset.
+10570:    valid. The V bit is initialized to 0 by a power-on reset, but retains its value in a manual reset.
+10578:    power-on reset, but retains its value in a manual reset.
+10582:    by a power-on or manual reset.
+10589:    accessed way. The LRU bits are initialized to 0 by a power-on reset but not by a manual reset.
+11061:    not initialized by a power-on or manual reset.
+11065:    valid. The V bit is initialized to 0 by a power-on reset, but retains its value in a manual reset.
+11073:    by a power-on or manual reset.
+11080:    accessed way. The LRU bits are initialized to 0 by a power-on reset but not by a manual reset.
+11896:Notes: 1. H'0000 0000 is set in a power-on reset, and H'0000 0020 in a manual reset.
+12002:                     Manual reset                  1       2   H'A000 0000 --  H'020
+12349:    If the SCK2 pin is changed to the low level while the RESET pin is low, a manual reset may
+12372:(2) Manual Reset
+12415:Manual reset    High      Low           Initialized
+13164:        When a general exception other than a user break occurs, a manual reset is executed. The
+15051:MOVCA.L R0,@Rn      R0  (Rn) (without fetching   0000nnnn11000011 --
+15126:                           PC + 2  SPC, SR  SSR, 11000011iiiiiiii --        --
+15378:a. Include a NOP instruction in the eight words of data following each TRAPA instruction,
+15380:b. Include an OR R0,R0 instruction in the five words of data following each TRAPA instruction,
+17554:H'0000 0000 by a power-on reset, but not by a manual reset or when the device enters standby
+17638:Exit by Reset: Sleep mode is exited by means of a power-on or manual reset via the RESET pin,
+17639:or a power-on or manual reset executed when the watchdog timer overflows.
+17851:1. Interrupts and manual resets are not available;
+17881:Note that hardware standby mode cannot be exited using interrupts or a manual reset.
+17930:Manual Reset
+17943:Note: * In a manual reset, STATUS = HH (reset) is set and an internal reset started after waiting
+17946:               Figure 9.2 STATUS Output in Manual Reset
+17987:Standby  Manual Reset
+18001:Notes: 1. When standby mode is exited by means of a manual reset, a WDT count is not
+18006:         Figure 9.5 STATUS Output in Standby  Manual Reset Sequence
+18042:Sleep  Manual Reset
+18056:          Figure 9.8 STATUS Output in Sleep  Manual Reset Sequence
+18092:Deep Sleep  Manual Reset
+18106:          Figure 9.11 STATUS Output in Deep Sleep  Manual Reset Sequence
+18283:    Power-on reset or manual reset can be selected.
+18906:1            Manual reset
+19126:10.11.1 Invalid Manual Reset Triggered by Watchdog Timer (SH7750 and SH7750S)
+19128:Under certain conditions the watchdog timer (WDT) may trigger an invalid manual reset.
+19130:Conditions Under which Problem Occurs: The internal WDT triggers an invalid manual reset
+19383:R64CNT is not initialized by a power-on or manual reset, or in standby mode.
+19409:RSECCNT is not initialized by a power-on or manual reset, or in standby mode.
+19431:RMINCNT is not initialized by a power-on or manual reset, or in standby mode.
+19457:RHRCNT is not initialized by a power-on or manual reset, or in standby mode.
+19480:RWKCNT is not initialized by a power-on or manual reset, or in standby mode.
+19511:RDAYCNT is not initialized by a power-on or manual reset, or in standby mode.
+19539:RMONCNT is not initialized by a power-on or manual reset, or in standby mode.
+19568:RYRCNT is not initialized by a power-on or manual reset, or in standby mode.
+19602:not initialized by a power-on or manual reset, or in standby mode.
+19624:initialized by a power-on or manual reset, or in standby mode.
+19650:initialized by a power-on or manual reset, or in standby mode.
+19675:initialized by a power-on or manual reset, or in standby mode.
+19710:initialized by a power-on or manual reset, or in standby mode.
+19739:not initialized by a power-on or manual reset, or in standby mode.
+19758:The CIE and AIE bits are initialized to 0 by a power-on or manual reset; the value of bits other
+19837:undefined. In a manual reset, bits other than RTCEN and START are initialized, while the value
+19944:manual reset, or by the device entering standby mode.
+20469:TOCR is initialized to H'00 by a power-on or manual reset, but is not initialized in standby mode.
+20505:TSTR is initialized to H'00 by a power-on or manual reset, or standby mode. In module standby
+20594:initialized and retain their contents on a manual reset and in standby mode.
+20623:initialized and retain their contents on a manual reset and in standby mode.
+20648:The TCR registers for channels 0 to 2 are initialized to H'0000 by a power-on or manual reset, but
+20651:their contents on a manual reset and in standby mode.
+20853:TCPR2 is not initialized by a power-on or manual reset, or in standby mode.
+21876:BCR1 is initialized to H'00000000 by a power-on reset, but is not initialized by a manual reset or
+22294:BCR2 is initialized to H'3FFC by a power-on reset, but is not initialized by a manual reset or in
+22368:BCR3 is initialized to H'0000 by a power-on reset, but is not initialized by a manual reset or in
+22428:BCR4 is initialized to H'00000000 by a power-on reset, but is not initialized by a manual reset or
+22535:WCR1 is initialized to H'77777777 by a power-on reset, but is not initialized by a manual reset or
+22678:WCR2 is initialized to H'FFFEEFFF by a power-on reset, but is not initialized by a manual reset
+23094:WCR3 is initialized to H'07777777 by a power-on reset, but is not initialized by a manual reset or
+23183:MCR is initialized to H'00000000 by a power-on reset, but is not initialized by a manual reset or in
+23569:PCR is initialized to H'0000 by a power-on reset, but is not initialized by a manual reset or in
+23788:RTCSR is initialized to H'0000 by a power-on reset, but is not initialized by a manual reset or in
+
+codex
+The archived source confirms both EXPEVT defects. I also found two problems in the brief: an interrupt’s temporary rewrite would be discarded before EXPEVT is stored, and both proposed row names are too long for the gate’s two-space matcher. I’m checking the remaining coverage claims and the manual’s user-break behavior.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$auditLines = git -C GXEMUL-SEC show 987cb596:src/devices/dev_sh4.c; foreach ($auditSpan in @(@(1095,1193), @(1875,1925))) { for ($auditIndex = $auditSpan[0] - 1; $auditIndex -lt $auditSpan[1]; $auditIndex++) { '"'{0}: {1}' -f ("'$auditIndex + 1), $auditLines[$auditIndex] } }; git -C GXEMUL-SEC grep -n -E '"'SH4_TSTR|tstr' 987cb596 -- src/devices/dev_sh4.c; git -C GXEMUL-SEC grep -n 'cd.sh.expevt' 987cb596 -- src" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$auditLines = git -C GXEMUL-SEC show 987cb596:src/cpus/cpu_sh.c; foreach ($auditSpan in @(@(100,145), @(195,225), @(827,864))) { for ($auditIndex = $auditSpan[0] - 1; $auditIndex -lt $auditSpan[1]; $auditIndex++) { '"'{0}: {1}' -f ("'$auditIndex + 1), $auditLines[$auditIndex] } }; git -C GXEMUL-SEC grep -n -E '"'cd.sh.sr[ \\t]*=|cd.sh.expevt|SH_INTEVT_NMI|NMIB|sh_cpu_interrupt|int_to_assert' 987cb596 -- src/promemul/sh_ipl_g.c src/machines/machine_landisk.c src/cpus/cpu_sh.c src/devices/dev_sh4.c" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$auditLines = Get-Content -LiteralPath '"'_scratchpad/sh7750_hardware.txt'; foreach ("'$auditSpan in @(@(12490,12528), @(13150,13183), @(15010,15025), @(15118,15132), @(20485,20509), @(9317,9337))) { for ($auditIndex = $auditSpan[0] - 1; $auditIndex -lt $auditSpan[1]; $auditIndex++) { '"'{0}: {1}' -f ("'$auditIndex + 1), $auditLines[$auditIndex] } }' in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$auditLines = git -C GXEMUL-SEC show 987cb596:src/cpus/memory_sh.c; foreach ($auditSpan in @(@(50,85), @(205,257), @(350,378))) { for ($auditIndex = $auditSpan[0] - 1; $auditIndex -lt $auditSpan[1]; $auditIndex++) { '"'{0}: {1}' -f ("'$auditIndex + 1), $auditLines[$auditIndex] } }; git -C GXEMUL-SEC grep -n -E '"'expevt[ \\t]*=|SH_ALIGN_CHECK_LD|mov.l.*@r|mov.l.*@R|case 0x6' 987cb596 -- src/cpus/memory_sh.c src/cpus/cpu_sh_instr.c src/cpus/cpu_sh_instr_loadstore.c" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$auditLines = git -C GXEMUL-SEC show 987cb596:src/cpus/cpu_sh_instr.c; for ($auditIndex = 4850; $auditIndex -lt 4876; $auditIndex++) { '"'{0}: {1}' -f ("'$auditIndex + 1), $auditLines[$auditIndex] }; $auditLines = git -C GXEMUL-SEC show 987cb596:src/include/thirdparty/sh4_exception.h; for ($auditIndex = 52; $auditIndex -lt 80; $auditIndex++) { '"'{0}: {1}' -f ("'$auditIndex + 1), $auditLines[$auditIndex] }; $auditLines = git -C GXEMUL-SEC show 987cb596:src/promemul/sh_ipl_g.c; for ($auditIndex = 34; $auditIndex -lt 72; $auditIndex++) { '"'{0}: {1}' -f ("'$auditIndex + 1), $auditLines[$auditIndex] }' in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 249ms:
+100: 		fatal("SH64 emulation not implemented. Sorry.\n");
+101: 		exit(1);
+102: 	}
+103: 
+104: 	cpu->instruction_has_delayslot = sh_cpu_instruction_has_delayslot;
+105: 
+106: 	cpu->translate_v2p = sh_translate_v2p;
+107: 
+108: 	cpu->run_instr = sh_run_instr;
+109: 	cpu->update_translation_table = sh_update_translation_table;
+110: 	cpu->invalidate_translation_caches =
+111: 	    sh_invalidate_translation_caches;
+112: 	cpu->invalidate_code_translation =
+113: 	    sh_invalidate_code_translation;
+114: 
+115: 	/*  Initial value of FPSCR (according to the SH4 manual).  VERIFIED
+116: 	    2026-08-22 against a real copy: "Floating-point status/control
+117: 	    register, FPSCR (32 bits, initial value = H'0004 0001)".  Exact.  */
+118: 	cpu->cd.sh.fpscr = 0x00040001;
+119: 
+120: 	/*  (Initial value of the program counter on reboot is 0xA0000000.)  */
+121: 
+122: 	/*  Start in Privileged Mode:  */
+123: 	cpu->cd.sh.sr = SH_SR_MD | SH_SR_IMASK;
+124: 
+125: 	/*  Stack pointer at end of physical RAM:  */
+126: 	cpu->cd.sh.r[15] = cpu->machine->physical_ram_in_mb * 1048576 - 64;
+127: 
+128: 	CPU_SETTINGS_ADD_REGISTER64("pc", cpu->pc);
+129: 	CPU_SETTINGS_ADD_REGISTER32("sr", cpu->cd.sh.sr);
+130: 	CPU_SETTINGS_ADD_REGISTER32("pr", cpu->cd.sh.pr);
+131: 	CPU_SETTINGS_ADD_REGISTER32("vbr", cpu->cd.sh.vbr);
+132: 	CPU_SETTINGS_ADD_REGISTER32("sgr", cpu->cd.sh.sgr);
+133: 	CPU_SETTINGS_ADD_REGISTER32("gbr", cpu->cd.sh.gbr);
+134: 	CPU_SETTINGS_ADD_REGISTER32("dbr", cpu->cd.sh.dbr);
+135: 	CPU_SETTINGS_ADD_REGISTER32("macl", cpu->cd.sh.macl);
+136: 	CPU_SETTINGS_ADD_REGISTER32("mach", cpu->cd.sh.mach);
+137: 	CPU_SETTINGS_ADD_REGISTER32("expevt", cpu->cd.sh.expevt);
+138: 	CPU_SETTINGS_ADD_REGISTER32("intevt", cpu->cd.sh.intevt);
+139: 	CPU_SETTINGS_ADD_REGISTER32("tra", cpu->cd.sh.tra);
+140: 	CPU_SETTINGS_ADD_REGISTER32("fpscr", cpu->cd.sh.fpscr);
+141: 	CPU_SETTINGS_ADD_REGISTER32("fpul", cpu->cd.sh.fpul);
+142: 
+143: 	/*
+144: 	 *  #458: EXPOSE THE INTERRUPT PRIORITY TABLE, and this is detector
+145: 	 *  material rather than a convenience.
+195: 		snprintf(tmpstr, sizeof(tmpstr), "itlb_lo_%i", i);
+196: 		CPU_SETTINGS_ADD_REGISTER32(tmpstr, cpu->cd.sh.itlb_lo[i]);
+197: 	}
+198: 	for (i=0; i<SH_N_UTLB_ENTRIES; i++) {
+199: 		char tmpstr[15];
+200: 		snprintf(tmpstr, sizeof(tmpstr), "utlb_hi_%i", i);
+201: 		CPU_SETTINGS_ADD_REGISTER32(tmpstr, cpu->cd.sh.utlb_hi[i]);
+202: 		snprintf(tmpstr, sizeof(tmpstr), "utlb_lo_%i", i);
+203: 		CPU_SETTINGS_ADD_REGISTER32(tmpstr, cpu->cd.sh.utlb_lo[i]);
+204: 	}
+205: 
+206: 	/*  Register the CPU's interrupts:  */
+207: 	if (cpu->cd.sh.cpu_type.arch == 4) {
+208: 		for (i=SH_INTEVT_NMI; i<0x1000; i+=0x20) {
+209: 			struct interrupt templ;
+210: 			char name[100];
+211: 			snprintf(name, sizeof(name), "%s.irq[0x%x]",
+212: 			    cpu->path, i);
+213: 			memset(&templ, 0, sizeof(templ));
+214: 			templ.line = i;
+215: 			templ.name = name;
+216: 			templ.extra = cpu;
+217: 			templ.interrupt_assert = sh_cpu_interrupt_assert;
+218: 			templ.interrupt_deassert = sh_cpu_interrupt_deassert;
+219: 			interrupt_handler_register(&templ);
+220: 		}
+221: 	} else {
+222: 		struct interrupt templ;
+223: 		memset(&templ, 0, sizeof(templ));
+224: 		templ.line = i;
+225: 		templ.name = cpu->path;
+827: 		for (i=0; i<SH_N_ITLB_ENTRIES; i++)
+828: 			printf("cpu%i: itlb_hi_%-2i = 0x%08" PRIx32"  "
+829: 			    "itlb_lo_%-2i = 0x%08" PRIx32"\n", j, i,
+830: 			    (uint32_t) cpu->cd.sh.itlb_hi[i], i,
+831: 			    (uint32_t) cpu->cd.sh.itlb_lo[i]);
+832: 		for (i=0; i<SH_N_UTLB_ENTRIES; i++)
+833: 			printf("cpu%i: utlb_hi_%-2i = 0x%08" PRIx32"  "
+834: 			    "utlb_lo_%-2i = 0x%08" PRIx32"\n", j, i,
+835: 			    (uint32_t) cpu->cd.sh.utlb_hi[i], i,
+836: 			    (uint32_t) cpu->cd.sh.utlb_lo[i]);
+837: 	}
+838: }
+839: 
+840: 
+841: /*
+842:  *  sh_update_sr():
+843:  *
+844:  *  Writes a new value to the status register.
+845:  */
+846: void sh_update_sr(struct cpu *cpu, uint32_t new_sr)
+847: {
+848: 	uint32_t old_sr = cpu->cd.sh.sr;
+849: 
+850: 	if ((new_sr & SH_SR_RB) != (old_sr & SH_SR_RB)) {
+851: 		int i;
+852: 		for (i=0; i<SH_N_GPRS_BANKED; i++) {
+853: 			uint32_t tmp = cpu->cd.sh.r[i];
+854: 			cpu->cd.sh.r[i] = cpu->cd.sh.r_bank[i];
+855: 			cpu->cd.sh.r_bank[i] = tmp;
+856: 		}
+857: 	}
+858: 
+859: 	cpu->cd.sh.sr = new_sr;
+860: }
+861: 
+862: 
+863: /*
+864:  *  sh_update_fpscr():
+987cb596:src/cpus/cpu_sh.c:123:	cpu->cd.sh.sr = SH_SR_MD | SH_SR_IMASK;
+987cb596:src/cpus/cpu_sh.c:137:	CPU_SETTINGS_ADD_REGISTER32("expevt", cpu->cd.sh.expevt);
+987cb596:src/cpus/cpu_sh.c:159:	 *  int_to_assert and int_level are deliberately NOT exposed.  A draft did
+987cb596:src/cpus/cpu_sh.c:208:		for (i=SH_INTEVT_NMI; i<0x1000; i+=0x20) {
+987cb596:src/cpus/cpu_sh.c:217:			templ.interrupt_assert = sh_cpu_interrupt_assert;
+987cb596:src/cpus/cpu_sh.c:218:			templ.interrupt_deassert = sh_cpu_interrupt_deassert;
+987cb596:src/cpus/cpu_sh.c:351: *  #458: recompute int_to_assert / int_level from the whole table.  Lifted
+987cb596:src/cpus/cpu_sh.c:352: *  VERBATIM out of sh_cpu_interrupt_deassert(), which now calls it too, so the
+987cb596:src/cpus/cpu_sh.c:362:static void sh_recalc_int_to_assert(struct cpu *cpu)
+987cb596:src/cpus/cpu_sh.c:366:	cpu->cd.sh.int_to_assert = 0;
+987cb596:src/cpus/cpu_sh.c:374:			cpu->cd.sh.int_to_assert = index * 0x20;
+987cb596:src/cpus/cpu_sh.c:504:	 *  standing.  Rewriting the nibbles without this leaves int_to_assert stale,
+987cb596:src/cpus/cpu_sh.c:508:	 *  changed.  sh_cpu_interrupt_assert() selects with `int_to_assert == 0 ||
+987cb596:src/cpus/cpu_sh.c:519:	sh_recalc_int_to_assert(cpu);
+987cb596:src/cpus/cpu_sh.c:538: *  sh_cpu_interrupt_assert():
+987cb596:src/cpus/cpu_sh.c:540:void sh_cpu_interrupt_assert(struct interrupt *interrupt)
+987cb596:src/cpus/cpu_sh.c:592:	if (cpu->cd.sh.int_to_assert == 0 || prio > cpu->cd.sh.int_level) {
+987cb596:src/cpus/cpu_sh.c:593:		cpu->cd.sh.int_to_assert = irq_nr;
+987cb596:src/cpus/cpu_sh.c:600: *  sh_cpu_interrupt_deassert():
+987cb596:src/cpus/cpu_sh.c:602:void sh_cpu_interrupt_deassert(struct interrupt *interrupt)
+987cb596:src/cpus/cpu_sh.c:613:		    into sh_recalc_int_to_assert() so the recompute path and
+987cb596:src/cpus/cpu_sh.c:615:		sh_recalc_int_to_assert(cpu);
+987cb596:src/cpus/cpu_sh.c:795:		    "  tra = 0x%" PRIx32"\n", x, cpu->cd.sh.expevt,
+987cb596:src/cpus/cpu_sh.c:859:	cpu->cd.sh.sr = new_sr;
+987cb596:src/cpus/cpu_sh.c:949:		cpu->cd.sh.expevt = expevt;
+987cb596:src/cpus/cpu_sh.c:986:	 *  assigns cpu->cd.sh.expevt BEFORE this switch, so 0x140 is already
+987cb596:src/devices/dev_sh4.c:1882:			odata = cpu->cd.sh.expevt;
+987cb596:src/devices/dev_sh4.c:1884:			cpu->cd.sh.expevt = idata;
+987cb596:src/promemul/sh_ipl_g.c:101:	if (cpu->cd.sh.expevt == EXPEVT_TRAPA &&
+987cb596:src/promemul/sh_ipl_g.c:108:		    " tra=0x%x ]\n", (int)cpu->cd.sh.expevt,
+
+ succeeded in 244ms:
+50:  *  cause exceptions.)
+51:  *
+52:  *  Same return values as sh_translate_v2p().
+53:  */
+54: static int translate_via_mmu(struct cpu *cpu, uint32_t vaddr,
+55: 	uint64_t *return_paddr, int flags)
+56: {
+57: 	int wf = flags & FLAG_WRITEFLAG;
+58: 	int i, urb, urc, require_asid_match, cur_asid, expevt = 0;
+59: 	uint32_t hi, lo = 0, mask = 0;
+60: 	int sh;		/*  Shared  */
+61: 	int d;		/*  Dirty bit  */
+62: 	int v;		/*  Valid bit  */
+63: 	int pr;		/*  Protection  */
+64: 	int i_start;
+65: 
+66: 	cur_asid = cpu->cd.sh.pteh & SH4_PTEH_ASID_MASK;
+67: 	require_asid_match = !(cpu->cd.sh.mmucr & SH4_MMUCR_SV)
+68: 	    || !(cpu->cd.sh.sr & SH_SR_MD);
+69: 
+70: 	if (!(flags & FLAG_NOEXCEPTIONS)) {
+71: 		/*
+72: 		 *  Increase URC every time the UTLB is accessed.
+73: 		 *
+74: 		 *  THE TODO THAT USED TO SIT HERE IS ANSWERED, 2026-08-22,
+75: 		 *  against a real SH7750 Hardware Manual (Rev.7.00,
+76: 		 *  REJ09B0366-0700) obtained by owner directive.  It asked
+77: 		 *  whether URC should be left alone by `ldtlb`, wondered
+78: 		 *  whether this was the right place, and floated setting it
+79: 		 *  to a random value instead.  The MMUCR field definition
+80: 		 *  settles all three:
+81: 		 *
+82: 		 *      "URC is incremented each time the UTLB is accessed.
+83: 		 *       When URB > 0, URC is reset to 0 when the condition
+84: 		 *       URC = URB occurs. ...  URC is not incremented by an
+85: 		 *       LDTLB instruction."
+205: 		/*  Kernel access:  */
+206: 		switch (pr) {
+207: 		case 0:
+208: 		case 2:	if (wf)
+209: 				goto protection_violation;
+210: 			return 1;
+211: 		case 1:
+212: 		case 3:	if (wf && !d)
+213: 				goto initial_write_exception;
+214: 			return 1 + d;
+215: 		}
+216: 	}
+217: 
+218: 	/*  User access  */
+219: 	switch (pr) {
+220: 	case 0:
+221: 	case 1:	goto protection_violation;
+222: 	case 2:	if (wf)
+223: 			goto protection_violation;
+224: 		return 1;
+225: 	case 3:	if (wf && !d)
+226: 			goto initial_write_exception;
+227: 		return 1 + d;
+228: 	}
+229: 
+230: 
+231: tlb_miss:
+232: 	expevt = wf? EXPEVT_TLB_MISS_ST : EXPEVT_TLB_MISS_LD;
+233: 	goto exception;
+234: 
+235: protection_violation:
+236: 	expevt = wf? EXPEVT_TLB_PROT_ST : EXPEVT_TLB_PROT_LD;
+237: 	goto exception;
+238: 
+239: initial_write_exception:
+240: 	expevt = EXPEVT_TLB_MOD;
+241: 
+242: 
+243: exception:
+244: 	if (flags & FLAG_NOEXCEPTIONS) {
+245: 		*return_paddr = 0;
+246: 		return 2;
+247: 	}
+248: 
+249: 	sh_exception(cpu, expevt, 0, vaddr);
+250: 
+251: 	return 0;
+252: }
+253: 
+254: 
+255: /*
+256:  *  sh_translate_sq_v2p():
+257:  *
+350: 	}
+351: 
+352: 	/*  Store queue region:  */
+353: 	if (vaddr >= 0xe0000000 && vaddr < 0xe4000000) {
+354: 		/*  Note/TODO: Take SH4_MMUCR_SQMD into account.  */
+355: 		*return_paddr = vaddr;
+356: 		return 2;
+357: 	}
+358: 
+359: 	if (user) {
+360: 		if (flags & FLAG_NOEXCEPTIONS) {
+361: 			*return_paddr = 0;
+362: 			return 2;
+363: 		}
+364: 
+365: 		// Hopefully correct behavior; nbjoerg on #GXemul (FreeNode)
+366: 		// noticed that this case was easily triggered inside a
+367: 		// guest OS, by:  int main(void){ *(int *)-4 = 0; }
+368: 		sh_exception(cpu, (flags & FLAG_WRITEFLAG)?
+369: 		    EXPEVT_TLB_MISS_ST : EXPEVT_TLB_MISS_LD, 0, vaddr);
+370: 		return 0;
+371: 	}
+372: 
+373: 	/*  P1,P2: Direct-mapped physical memory.  */
+374: 	if (vaddr >= 0x80000000 && vaddr < 0xc0000000) {
+375: 		*return_paddr = vaddr & 0x1fffffff;
+376: 		return 2;
+377: 	}
+378: 
+987cb596:src/cpus/cpu_sh_instr.c:202: *  SH_ALIGN_CHECK_LD / _ST:
+987cb596:src/cpus/cpu_sh_instr.c:209:#define SH_ALIGN_CHECK_LD(vaddr, amask)					\
+987cb596:src/cpus/cpu_sh_instr.c:717:	SH_ALIGN_CHECK_LD(addr, 1);
+987cb596:src/cpus/cpu_sh_instr.c:742:	SH_ALIGN_CHECK_LD(addr, 3);
+987cb596:src/cpus/cpu_sh_instr.c:774:	SH_ALIGN_CHECK_LD(addr, (cpu->cd.sh.fpscr & SH_FPSCR_SZ) ? 7 : 3);
+987cb596:src/cpus/cpu_sh_instr.c:864:	SH_ALIGN_CHECK_LD(addr, d ? 7 : 3);
+987cb596:src/cpus/cpu_sh_instr.c:941:	SH_ALIGN_CHECK_LD(addr, d ? 7 : 3);
+987cb596:src/cpus/cpu_sh_instr.c:1004:	SH_ALIGN_CHECK_LD(addr, 1);
+987cb596:src/cpus/cpu_sh_instr.c:1028:	SH_ALIGN_CHECK_LD(addr, 3);
+987cb596:src/cpus/cpu_sh_instr.c:1073:	SH_ALIGN_CHECK_LD(addr, 1);
+987cb596:src/cpus/cpu_sh_instr.c:1100:	SH_ALIGN_CHECK_LD(addr, 3);
+987cb596:src/cpus/cpu_sh_instr.c:1132:	SH_ALIGN_CHECK_LD(addr, 3);
+987cb596:src/cpus/cpu_sh_instr.c:1167:	SH_ALIGN_CHECK_LD(addr, 3);
+987cb596:src/cpus/cpu_sh_instr.c:1218:	SH_ALIGN_CHECK_LD(addr, 1);
+987cb596:src/cpus/cpu_sh_instr.c:1244:	SH_ALIGN_CHECK_LD(addr, 3);
+987cb596:src/cpus/cpu_sh_instr.c:1271:	SH_ALIGN_CHECK_LD(addr, 3);
+987cb596:src/cpus/cpu_sh_instr.c:1318:	SH_ALIGN_CHECK_LD(addr, 1);
+987cb596:src/cpus/cpu_sh_instr.c:4225:			case 0x6a:	/*  STS FPSCR,Rn  */
+987cb596:src/cpus/cpu_sh_instr.c:4307:		case 0x6:	/*  MOV.L Rm,@-Rn  */
+987cb596:src/cpus/cpu_sh_instr.c:4366:		case 0x6:	/*  CMP/HI Rm,Rn  */
+987cb596:src/cpus/cpu_sh_instr.c:4605:			case 0x62:	/*  STS.L FPSCR,@-Rn  */
+987cb596:src/cpus/cpu_sh_instr.c:4610:			case 0x66:	/*  LDS.L @Rm+,FPSCR  */
+987cb596:src/cpus/cpu_sh_instr.c:4616:			case 0x6a:	/*  LDS Rm,FPSCR  */
+987cb596:src/cpus/cpu_sh_instr.c:4641:	case 0x6:
+987cb596:src/cpus/cpu_sh_instr.c:4667:		case 0x6:	/*  MOV.L @Rm+,Rn  */
+987cb596:src/cpus/cpu_sh_instr.c:4876:		case 0x6:
+987cb596:src/cpus/memory_sh.c:58:	int i, urb, urc, require_asid_match, cur_asid, expevt = 0;
+987cb596:src/cpus/memory_sh.c:232:	expevt = wf? EXPEVT_TLB_MISS_ST : EXPEVT_TLB_MISS_LD;
+987cb596:src/cpus/memory_sh.c:236:	expevt = wf? EXPEVT_TLB_PROT_ST : EXPEVT_TLB_PROT_LD;
+987cb596:src/cpus/memory_sh.c:240:	expevt = EXPEVT_TLB_MOD;
+
+ succeeded in 300ms:
+1095: 	} else {
+1096: 		odata = cpu->cd.sh.itlb_lo[e] & mask;
+1097: 		memory_writemax64(cpu, data, len, odata);
+1098: 	}
+1099: 
+1100: 	return 1;
+1101: }
+1102: 
+1103: 
+1104: DEVICE_ACCESS(sh4_utlb_aa)
+1105: {
+1106: 	uint64_t idata = 0, odata = 0;
+1107: 	int i, e = (relative_addr & SH4_UTLB_E_MASK) >> SH4_UTLB_E_SHIFT;
+1108: 	int a = relative_addr & SH4_UTLB_A;
+1109: 
+1110: 	if (writeflag == MEM_WRITE) {
+1111: 		int n_hits = 0;
+1112: 		int safe_to_invalidate = 0;
+1113: 		uint32_t vaddr_to_invalidate = 0;
+1114: 
+1115: 		idata = memory_readmax64(cpu, data, len);
+1116: 		if (a) {
+1117: 			for (i=-SH_N_ITLB_ENTRIES; i<SH_N_UTLB_ENTRIES; i++) {
+1118: 				uint32_t lo, hi;
+1119: 				uint32_t mask = 0xfffff000;
+1120: 				int sh;
+1121: 
+1122: 				if (i < 0) {
+1123: 					lo = cpu->cd.sh.itlb_lo[
+1124: 					    i + SH_N_ITLB_ENTRIES];
+1125: 					hi = cpu->cd.sh.itlb_hi[
+1126: 					    i + SH_N_ITLB_ENTRIES];
+1127: 				} else {
+1128: 					lo = cpu->cd.sh.utlb_lo[i];
+1129: 					hi = cpu->cd.sh.utlb_hi[i];
+1130: 				}
+1131: 
+1132: 				sh = lo & SH4_PTEL_SH;
+1133: 				if (!(lo & SH4_PTEL_V))
+1134: 					continue;
+1135: 
+1136: 				switch (lo & SH4_PTEL_SZ_MASK) {
+1137: 				case SH4_PTEL_SZ_1K:  mask = 0xfffffc00; break;
+1138: 				case SH4_PTEL_SZ_64K: mask = 0xffff0000; break;
+1139: 				case SH4_PTEL_SZ_1M:  mask = 0xfff00000; break;
+1140: 				}
+1141: 
+1142: 				if ((hi & mask) != (idata & mask))
+1143: 					continue;
+1144: 
+1145: 				if ((lo & SH4_PTEL_SZ_MASK) ==
+1146: 				    SH4_PTEL_SZ_4K) {
+1147: 					safe_to_invalidate = 1;
+1148: 					vaddr_to_invalidate = hi & mask;
+1149: 				}
+1150: 
+1151: 				if (!sh && (hi & SH4_PTEH_ASID_MASK) !=
+1152: 				    (cpu->cd.sh.pteh & SH4_PTEH_ASID_MASK))
+1153: 					continue;
+1154: 
+1155: 				if (i < 0) {
+1156: 					cpu->cd.sh.itlb_lo[i +
+1157: 					    SH_N_ITLB_ENTRIES] &= ~SH4_PTEL_V;
+1158: 					if (idata & SH4_UTLB_AA_V)
+1159: 						cpu->cd.sh.itlb_lo[
+1160: 						    i+SH_N_ITLB_ENTRIES] |=
+1161: 						    SH4_PTEL_V;
+1162: 				} else {
+1163: 					cpu->cd.sh.utlb_lo[i] &=
+1164: 					    ~(SH4_PTEL_D | SH4_PTEL_V);
+1165: 					if (idata & SH4_UTLB_AA_D)
+1166: 						cpu->cd.sh.utlb_lo[i] |=
+1167: 						    SH4_PTEL_D;
+1168: 					if (idata & SH4_UTLB_AA_V)
+1169: 						cpu->cd.sh.utlb_lo[i] |=
+1170: 						    SH4_PTEL_V;
+1171: 				}
+1172: 
+1173: 				if (i >= 0)
+1174: 					n_hits ++;
+1175: 			}
+1176: 
+1177: 			if (n_hits > 1)
+1178: 				sh_exception(cpu,
+1179: 				    EXPEVT_RESET_TLB_MULTI_HIT, 0, 0);
+1180: 		} else {
+1181: 			if ((cpu->cd.sh.utlb_lo[e] & SH4_PTEL_SZ_MASK) ==
+1182: 			    SH4_PTEL_SZ_4K) {
+1183: 				safe_to_invalidate = 1;
+1184: 				vaddr_to_invalidate =
+1185: 				    cpu->cd.sh.utlb_hi[e] & ~0xfff;
+1186: 			}
+1187: 
+1188: 			cpu->cd.sh.utlb_hi[e] &=
+1189: 			    ~(SH4_PTEH_VPN_MASK | SH4_PTEH_ASID_MASK);
+1190: 			cpu->cd.sh.utlb_hi[e] |= (idata &
+1191: 			    (SH4_UTLB_AA_VPN_MASK | SH4_UTLB_AA_ASID_MASK));
+1192: 
+1193: 			cpu->cd.sh.utlb_lo[e] &= ~(SH4_PTEL_D | SH4_PTEL_V);
+1875: 			odata = cpu->cd.sh.tra;
+1876: 		else
+1877: 			cpu->cd.sh.tra = idata;
+1878: 		break;
+1879: 
+1880: 	case SH4_EXPEVT:
+1881: 		if (writeflag == MEM_READ)
+1882: 			odata = cpu->cd.sh.expevt;
+1883: 		else
+1884: 			cpu->cd.sh.expevt = idata;
+1885: 		break;
+1886: 
+1887: 	case SH4_INTEVT:
+1888: 		if (writeflag == MEM_READ)
+1889: 			odata = cpu->cd.sh.intevt;
+1890: 		else
+1891: 			cpu->cd.sh.intevt = idata;
+1892: 		break;
+1893: 
+1894: 
+1895: 	/********************************/
+1896: 	/*  UBC: User Break Controller  */
+1897: 
+1898: 	case 0xff000014:    /*  SH4_UBC_BASRA  */
+1899: 	case 0xff000018:    /*  SH4_UBC_BASRB  */
+1900: 
+1901: 	case 0xff200000:    /*  SH4_UBC_BARA  */
+1902: 	case 0xff200004:    /*  SH4_UBC_BAMRA  */
+1903: 	case 0xff200008:    /*  SH4_UBC_BBRA  */
+1904: 	case 0xff20000c:    /*  SH4_UBC_BARB  */
+1905: 	case 0xff200010:    /*  SH4_UBC_BAMRB  */
+1906: 	case 0xff200014:    /*  SH4_UBC_BBRB  */
+1907: 	case 0xff200018:    /*  SH4_UBC_BDRB  */
+1908: 	case 0xff20001c:    /*  SH4_UBC_BDMRB  */
+1909: 	case 0xff200020:    /*  SH4_UBC_BRCR  */
+1910: 		/*  TODO  */
+1911: 		break;
+1912: 
+1913: 
+1914: 	/********************************/
+1915: 	/*  TMU: Timer Management Unit  */
+1916: 
+1917: 	case SH4_TOCR:
+1918: 		/*  Timer Output Control Register  */
+1919: 		if (writeflag == MEM_WRITE) {
+1920: 			d->tocr = idata;
+1921: 			if (idata & TOCR_TCOE)
+1922: 				fatal("[ sh4 timer: TCOE not yet "
+1923: 				    "implemented ]\n");
+1924: 		} else {
+1925: 			odata = d->tocr;
+987cb596:src/devices/dev_sh4.c:375:	uint32_t	tstr;
+987cb596:src/devices/dev_sh4.c:478:		if (!(d->tstr & (TSTR_STR0 << i)))
+987cb596:src/devices/dev_sh4.c:1929:	case SH4_TSTR:
+987cb596:src/devices/dev_sh4.c:1932:			odata = d->tstr;
+987cb596:src/devices/dev_sh4.c:1934:			if (idata & 1 && !(d->tstr & 1))
+987cb596:src/devices/dev_sh4.c:1936:			if (idata & 2 && !(d->tstr & 2))
+987cb596:src/devices/dev_sh4.c:1938:			if (idata & 4 && !(d->tstr & 4))
+987cb596:src/devices/dev_sh4.c:1940:			if (!(idata & 1) && d->tstr & 1)
+987cb596:src/devices/dev_sh4.c:1942:			if (!(idata & 2) && d->tstr & 2)
+987cb596:src/devices/dev_sh4.c:1944:			if (!(idata & 4) && d->tstr & 4)
+987cb596:src/devices/dev_sh4.c:1946:			d->tstr = idata;
+987cb596:src/cpus/cpu_sh.c:137:	CPU_SETTINGS_ADD_REGISTER32("expevt", cpu->cd.sh.expevt);
+987cb596:src/cpus/cpu_sh.c:795:		    "  tra = 0x%" PRIx32"\n", x, cpu->cd.sh.expevt,
+987cb596:src/cpus/cpu_sh.c:949:		cpu->cd.sh.expevt = expevt;
+987cb596:src/cpus/cpu_sh.c:986:	 *  assigns cpu->cd.sh.expevt BEFORE this switch, so 0x140 is already
+987cb596:src/devices/dev_sh4.c:1882:			odata = cpu->cd.sh.expevt;
+987cb596:src/devices/dev_sh4.c:1884:			cpu->cd.sh.expevt = idata;
+987cb596:src/promemul/sh_ipl_g.c:101:	if (cpu->cd.sh.expevt == EXPEVT_TRAPA &&
+987cb596:src/promemul/sh_ipl_g.c:108:		    " tra=0x%x ]\n", (int)cpu->cd.sh.expevt,
+
+ succeeded in 277ms:
+4851: 		switch (r8) {
+4852: 		case 0x0:
+4853: 			ic->f = instr(mov_b_r0_disp_gbr);
+4854: 			ic->arg[1] = lo8;
+4855: 			break;
+4856: 		case 0x1:
+4857: 			ic->f = instr(mov_w_r0_disp_gbr);
+4858: 			ic->arg[1] = lo8 << 1;
+4859: 			break;
+4860: 		case 0x2:
+4861: 			ic->f = instr(mov_l_r0_disp_gbr);
+4862: 			ic->arg[1] = lo8 << 2;
+4863: 			break;
+4864: 		case 0x3:
+4865: 			ic->f = instr(trapa);
+4866: 			ic->arg[0] = lo8 << 2;
+4867: 			break;
+4868: 		case 0x4:
+4869: 			ic->f = instr(mov_b_disp_gbr_r0);
+4870: 			ic->arg[1] = lo8;
+4871: 			break;
+4872: 		case 0x5:
+4873: 			ic->f = instr(mov_w_disp_gbr_r0);
+4874: 			ic->arg[1] = lo8 << 1;
+4875: 			break;
+4876: 		case 0x6:
+53: /*
+54:  * EXPEVT
+55:  */
+56: /* Reset exception */
+57: #define	EXPEVT_RESET_POWER	0x000	/* Power-On reset */
+58: #define	EXPEVT_RESET_MANUAL	0x020	/* Manual reset */
+59: #define	EXPEVT_RESET_TLB_MULTI_HIT	0x140	/* SH4 only */
+60: 
+61: /* General exception */
+62: #define	EXPEVT_TLB_MISS_LD	0x040	/* TLB miss (load) */
+63: #define	EXPEVT_TLB_MISS_ST	0x060	/* TLB miss (store) */
+64: #define	EXPEVT_TLB_MOD		0x080	/* Initial page write */
+65: #define	EXPEVT_TLB_PROT_LD	0x0a0	/* Protection violation (load) */
+66: #define	EXPEVT_TLB_PROT_ST	0x0c0	/* Protection violation (store)*/
+67: #define	EXPEVT_ADDR_ERR_LD	0x0e0	/* Address error (load) */
+68: #define	EXPEVT_ADDR_ERR_ST	0x100	/* Address error (store) */
+69: #define	EXPEVT_FPU		0x120	/* FPU exception */
+70: #define	EXPEVT_TRAPA		0x160	/* Unconditional trap (TRAPA) */
+71: #define	EXPEVT_RES_INST		0x180	/* Illegal instruction */
+72: #define	EXPEVT_SLOT_INST	0x1a0	/* Illegal slot instruction */
+73: #define	EXPEVT_BREAK		0x1e0	/* User break */
+74: #define	EXPEVT_FPU_DISABLE	0x800	/* FPU disabled */
+75: #define	EXPEVT_FPU_SLOT_DISABLE	0x820	/* Slot FPU disabled */
+76: 
+77: /* Software bit */
+78: #define	EXP_USER		0x001	/* exception from user-mode */
+79: 
+80: #define	_SH_TRA_BREAK		0xc3	/* magic number for debugger */
+35: #include <stdlib.h>
+36: #include <string.h>
+37: #include <sys/types.h>
+38: 
+39: #include "cpu.h"
+40: #include "cpu_sh.h"
+41: #include "machine.h"
+42: #include "memory.h"
+43: #include "misc.h"
+44: 
+45: #include "thirdparty/sh4_exception.h"
+46: 
+47: 
+48: /*
+49:  *  sh_ipl_g_emul_init():
+50:  */
+51: void sh_ipl_g_emul_init(struct machine *machine)
+52: {
+53: 	struct cpu *cpu = machine->cpus[0];
+54: 
+55: 	cpu->cd.sh.vbr = 0x8c000000;
+56: 	store_16bit_word(cpu, 0x8c000100, SH_INVALID_INSTR);
+57: 	store_16bit_word(cpu, 0x8c000102, 0x002b);  	/*  rte  */
+58: 	store_16bit_word(cpu, 0x8c000104, 0x0009);  	/*  nop  */
+59: }
+60: 
+61: 
+62: /*
+63:  *  sh_ipl_g_promcall():
+64:  *
+65:  *  SH-IPL+G PROM call emulation.
+66:  */
+67: static int sh_ipl_g_promcall(struct cpu *cpu)
+68: {
+69: 	/*
+70: 	 *  SH-IPL+G call numbers are in R0:
+71: 	 *
+72: 	 *  NOTE: r_bank[0], since this is in a trap handler!
+
+ succeeded in 656ms:
+12490: (5) Operand TLB Multiple-Hit Exception
+12491: 
+12492: � Source: Multiple UTLB address matches
+12493: � Transition address: H'A000 0000
+12494: � Transition operations:
+12495: 
+12496:     The virtual address (32 bits) at which this exception occurred is set in TEA, and the
+12497:     corresponding virtual page number (22 bits) is set in PTEH [31:10]. ASID in PTEH indicates
+12498:     the ASID when this exception occurred.
+12499:     Exception code H'140 is set in EXPEVT, initialization of VBR and SR is performed, and a
+12500:     branch is made to PC = H'A000 0000.
+12501:     In the initialization processing, the VBR register is set to H'0000 0000, and in SR, the MD,
+12502:     RB, and BL bits are set to 1, the FD bit is cleared to 0, and the interrupt mask bits (IMASK)
+12503:     are set to B'1111.
+12504:     CPU and on-chip peripheral module initialization is performed in the same way as in a manual
+12505:     reset. For details, see the register descriptions in the relevant sections.
+12506: 
+12507:    TLB_multi_hit()
+12508:    {
+12509: 
+12510:          TEA = EXCEPTION_ADDRESS;
+12511:          PTEH.VPN = PAGE_NUMBER;
+12512:          EXPEVT = H'00000140;
+12513:          VBR = H'00000000;
+12514:          SR.MD = 1;
+12515:          SR.RB = 1;
+12516:          SR.BL = 1;
+12517:          SR.IMASK = B'1111;
+12518:          SR.FD = 0;
+12519:          Initialize_CPU();
+12520:          Initialize_Module(Manual);
+12521:          PC = H'A0000000;
+12522:    }
+12523: 
+12524:                                                                            Rev.7.00 Oct. 10, 2008 Page 163 of 1074
+12525:                                                                                                            REJ09B0366-0700
+12526: Section 5 Exceptions
+12527: 
+12528: 5.6.2 General Exceptions
+13150:     execution type exception, the branch instruction PR register write operation (PC  PR
+13151:     operation performed in BSR, BSRF, JSR) is inhibited.
+13152: 
+13153: 5.7 Usage Notes
+13154: 
+13155: 1. Return from exception handling
+13156:     a. Check the BL bit in SR with software. If SPC and SSR have been saved to external
+13157:         memory, set the BL bit in SR to 1 before restoring them.
+13158:     b. Issue an RTE instruction. When RTE is executed, the SPC contents are set in PC, the SSR
+13159:         contents are set in SR, and branch is made to the SPC address to return from the exception
+13160:         handling routine.
+13161: 
+13162: 2. If a general exception or interrupt occurs when SR.BL = 1
+13163:     a. General exception
+13164:         When a general exception other than a user break occurs, a manual reset is executed. The
+13165:         value in EXPEVT at this time is H'0000 0020; the value of the SPC and SSR registers is
+13166:         undefined.
+13167:     b. Interrupt
+13168:         If an ordinary interrupt occurs, the interrupt request is held pending and is accepted after
+13169:         the BL bit in SR has been cleared to 0 by software. If a nonmaskable interrupt (NMI)
+13170:         occurs, it can be held pending or accepted according to the setting made by software. In the
+13171:         sleep or standby state, however, an interrupt is accepted even if the BL bit in SR is set to 1.
+13172: 
+13173: 3. SPC when an exception occurs
+13174:     a. Re-execution type general exception
+13175:         The PC value for the instruction in which the general exception occurred is set in SPC, and
+13176:         the instruction is re-executed after returning from exception handling. If an exception
+13177:         occurs in a delay slot instruction, however, the PC value for the delay slot instruction is
+13178:         saved in SPC regardless of whether or not the preceding delayed branch instruction
+13179:         condition is satisfied.
+13180:     b. Completion type general exception or interrupt
+13181:         The PC value for the instruction following that in which the general exception occurred is
+13182:         set in SPC. If an exception occurs in a branch instruction with delay slot, however, the PC
+13183:         value for the branch destination is saved in SPC.
+15010: LDC     Rm,GBR      Rm  GBR                      0100mmmm00011110 --           --
+15011:                                                                                LSB
+15012: LDC     Rm,VBR      Rm  VBR                      0100mmmm00101110 Privileged   --
+15013:                                                                                --
+15014: LDC     Rm,SSR      Rm  SSR                      0100mmmm00111110 Privileged   --
+15015:                                                                                --
+15016: LDC     Rm,SPC      Rm  SPC                      0100mmmm01001110 Privileged   --
+15017:                                                                                --
+15018: LDC     Rm,DBR      Rm  DBR                      0100mmmm11111010 Privileged
+15019:                                                                                --
+15020: LDC     Rm,Rn_BANK  Rm  Rn_BANK (n = 0 to 7) 0100mmmm1nnn1110 Privileged       --
+15021:                                                                                --
+15022: LDC.L @Rm+,SR       (Rm)  SR, Rm + 4  Rm         0100mmmm00000111 Privileged   --
+15023:                                                                                --
+15024: LDC.L @Rm+,GBR      (Rm)  GBR, Rm + 4  Rm 0100mmmm00010111 --                  --
+15025:                                                                                --
+15118: STS.L  MACL,@-Rn           PR  Rn                      0000nnnn00101010 --  --
+15119: STS.L  PR,@-Rn
+15120: TRAPA  #imm                Rn - 4  Rn, MACH  (Rn) 0100nnnn00000010 --       --
+15121: 
+15122:                            Rn - 4  Rn, MACL  (Rn) 0100nnnn00010010 --       --
+15123: 
+15124:                            Rn - 4  Rn, PR  (Rn)        0100nnnn00100010 --  --
+15125: 
+15126:                            PC + 2  SPC, SR  SSR, 11000011iiiiiiii --        --
+15127: 
+15128:                            #imm << 2  TRA,
+15129: 
+15130:                            H'160  EXPEVT,
+15131: 
+15132:                            VBR + H'0100  PC
+20485: 
+20486: Bit 0: TCOE  Description
+20487: 
+20488: 0            Timer clock pin (TCLK) is used as external clock input or input capture
+20489: 
+20490:              control input pin                           (Initial value)
+20491: 
+20492: 1            Timer clock pin (TCLK) is used as on-chip RTC output clock output pin*
+20493: 
+20494: Note: * Low level output in standby mode.
+20495: 
+20496:                                                  Rev.7.00 Oct. 10, 2008 Page 341 of 1074
+20497:                                                                                 REJ09B0366-0700
+20498: Section 12 Timer Unit (TMU)
+20499: 
+20500: 12.2.2 Timer Start Register (TSTR)
+20501: 
+20502: TSTR is an 8-bit readable/writable register that specifies whether the channel 0-2 timer counters
+20503: (TCNT) are operated or stopped.
+20504: 
+20505: TSTR is initialized to H'00 by a power-on or manual reset, or standby mode. In module standby
+20506: mode, TSTR is not initialized when the input clock selected by each channel is the on-chip RTC
+20507: output clock (RTCCLK), and is initialized only when the input clock is the external clock (TCLK)
+20508: or internal clock (Pck).
+20509: 
+9317: � SZ: Page size bits
+9318:     Specify the page size.
+9319:     00: 1-Kbyte page
+9320:     01: 4-Kbyte page
+9321:     10: 64-Kbyte page
+9322:     11: 1-Mbyte page
+9323: 
+9324: � V: Validity bit
+9325:     Indicates whether the entry is valid.
+9326:     0: Invalid
+9327:     1: Valid
+9328:     Cleared to 0 by a power-on reset.
+9329:     Not affected by a manual reset.
+9330: 
+9331: � PPN: Physical page number
+9332:     Upper 22 bits of the physical address.
+9333:     With a 1-Kbyte page, PPN bits [28:10] are valid.
+9334:     With a 4-Kbyte page, PPN bits [28:12] are valid.
+9335:     With a 64-Kbyte page, PPN bits [28:16] are valid.
+9336:     With a 1-Mbyte page, PPN bits [28:20] are valid.
+9337:     The synonym problem must be taken into account when setting the PPN (see section 3.5.5,
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$auditLines = git -C GXEMUL-SEC show 987cb596:src/cpus/cpu_sh.c; for ($auditIndex = 538; $auditIndex -lt 598; $auditIndex++) { '"'{0}: {1}' -f ("'$auditIndex + 1), $auditLines[$auditIndex] }; git -C GXEMUL-SEC grep -n -E '"'SH_INTEVT_NMI|NMIB|NMIE|void fatal|fatal\\(const' 987cb596 -- src" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "git -C GXEMUL-SEC log -1 --format='%h %ad %s' --date=short 987cb596 -- src/cpus/cpu_sh.c; git -C GXEMUL-SEC log -1 --format='%h %ad %s' --date=short 987cb596 -- regress/sh_tlbmulti_probe.py; git -C GXEMUL-SEC log --format='%h %ad %s' --date=short --no-patch -L910,918:src/cpus/cpu_sh.c 987cb596; git -C GXEMUL-SEC grep -n -F -e '%-14s' -e 't, died' -e 't2, died2' -e 't3, died3' 987cb596 -- regress/sh_tlbmulti_probe.py" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$auditLines = git -C GXEMUL-SEC show 987cb596:src/cpus/cpu_sh_instr.c; foreach ($auditSpan in @(@(726,754), @(4268,4297), @(4637,4659))) { for ($auditIndex = $auditSpan[0] - 1; $auditIndex -lt $auditSpan[1]; $auditIndex++) { '"'{0}: {1}' -f ("'$auditIndex + 1), $auditLines[$auditIndex] } }; git -C GXEMUL-SEC grep -n -F -e '"'mov_l_rm_rn' -e 'CPU_SETTINGS_ADD_REGISTER32' 987cb596 -- src/include/cpu.h src/cpus/cpu_sh_instr.c; rg -n -F -e '0110nnnnmmmm0010' -e '0010nnnnmmmm0010' '_scratchpad/sh7750_hardware.txt'" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$auditLines = git -C GXEMUL-SEC show 987cb596:src/devices/dev_sh4.c; for ($auditIndex = 1928; $auditIndex -lt 1951; $auditIndex++) { '"'{0}: {1}' -f ("'$auditIndex + 1), $auditLines[$auditIndex] }; $auditLines = Get-Content -LiteralPath '"'_scratchpad/sh7750_hardware.txt'; for ("'$auditIndex = 10126; $auditIndex -lt 10151; $auditIndex++) { '"'{0}: {1}' -f ("'$auditIndex + 1), $auditLines[$auditIndex] }' in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 202ms:
+539:  */
+540: void sh_cpu_interrupt_assert(struct interrupt *interrupt)
+541: {
+542: 	struct cpu *cpu = (struct cpu *) interrupt->extra;
+543: 	unsigned int irq_nr = interrupt->line;
+544: 	unsigned int index = irq_nr / 0x20;
+545: 	unsigned int prio;
+546: 
+547: 	/*  Assert the interrupt, and check its priority level:  */
+548: 	cpu->cd.sh.int_prio_and_pending[index] |= SH_INT_ASSERTED;
+549: 	prio = cpu->cd.sh.int_prio_and_pending[index] & SH_INT_PRIO_MASK;
+550: 
+551: 	/*
+552: 	 *  #455: PRIORITY 0 IS A DOCUMENTED, GUEST-SELECTABLE STATE, and the
+553: 	 *  comment that used to sit here -- "Interrupt not implemented? Hm."
+554: 	 *  -- was wrong twice over: nothing is unimplemented, and ending the
+555: 	 *  host process is not what the architecture asks for.
+556: 	 *
+557: 	 *  SH7750 Hardware Manual Rev.7.00 19.2, p. 828
+558: 	 *  (_scratchpad/sh7750_hardware.txt:39887): "When level 0 is set, the
+559: 	 *  interrupt is masked and interrupt requests are ignored."  And
+560: 	 *  19.3.1 (:40193): "IPRA to IPRC are initialized to H'0000 ... by a
+561: 	 *  reset" -- so EVERY on-chip source is priority 0 out of reset, which
+562: 	 *  cpu_sh_init's own "All others are zero" already reproduces.  One
+563: 	 *  ordinary guest store then ended the host.
+564: 	 *
+565: 	 *  SH_INT_ASSERTED IS DELIBERATELY LEFT SET.  "Ignored" is not
+566: 	 *  "discarded": 19.4.1 says the controller selects the highest-priority
+567: 	 *  request and "lower-priority interrupts are held pending"
+568: 	 *  (19.4.1, sh7750_hardware.txt:40508).  Masking blocks ACCEPTANCE, not
+569: 	 *  the request.  Stated narrowly on purpose: this entry point is
+570: 	 *  generic, so the durable claim is only that masking must not clear
+571: 	 *  the bit -- the line stays asserted until its matching deassert, and
+572: 	 *  how any particular peripheral latches its own source flag is that
+573: 	 *  device's business, not this function's.  Clearing the bit here would also make `sh4prioraise`
+574: 	 *  unfixable -- a later rescan would find nothing to deliver -- so this
+575: 	 *  is required rather than merely defensible.
+576: 	 *
+577: 	 *  Nothing is printed.  The sh4_val_first latch idiom used by #438,
+578: 	 *  #441, #443, #447 and #449 does NOT apply: that family answers "the
+579: 	 *  guest asked for a feature this model does not implement", whereas a
+580: 	 *  masked interrupt is correct guest behaviour that a kernel performs
+581: 	 *  routinely during early boot.  A diagnostic here would fire on it,
+582: 	 *  and fatal() has no quiet_mode early-out (debugmsg.c:384-390) so it
+583: 	 *  could not even be silenced with -q.
+584: 	 *
+585: 	 *  Selection below is already safe on its own terms: the deassert
+586: 	 *  rescan cannot pick a prio-0 entry either, since `prio > int_level`
+587: 	 *  is `0 > 0`.
+588: 	 */
+589: 	if (prio == 0)
+590: 		return;
+591: 
+592: 	if (cpu->cd.sh.int_to_assert == 0 || prio > cpu->cd.sh.int_level) {
+593: 		cpu->cd.sh.int_to_assert = irq_nr;
+594: 		cpu->cd.sh.int_level = prio;
+595: 	}
+596: }
+597: 
+598: 
+987cb596:src/core/debugmsg.c:384:void fatal(const char *fmt, ...)
+987cb596:src/cpus/cpu_sh.c:208:		for (i=SH_INTEVT_NMI; i<0x1000; i+=0x20) {
+987cb596:src/include/misc.h:262:void fatal(const char *fmt, ...);
+987cb596:src/include/thirdparty/sh4_exception.h:86:#define	SH_INTEVT_NMI		0x1c0
+
+ exited 1 in 185ms:
+At line:2 char:264
++ ... L-SEC log --format='%h %ad %s' --date=short --no-patch -L910,918:src/ ...
++                                                                 ~
+Missing argument in parameter list.
+    + CategoryInfo          : ParserError: (:) [], ParentContainsErrorRecordException
+    + FullyQualifiedErrorId : MissingArgument
+ 
+
+ succeeded in 219ms:
+726: 		    sizeof(data), MEM_READ, CACHE_DATA)) {
+727: 			/*  Exception.  */
+728: 			if (!cpu->running)
+729: 				cpu->cd.sh.next_ic = &nothing_call;
+730: 			return;
+731: 		}
+732: 	}
+733: 	if (cpu->byte_order == EMUL_LITTLE_ENDIAN)
+734: 		data = LE16_TO_HOST(data);
+735: 	else
+736: 		data = BE16_TO_HOST(data);
+737: 	reg(ic->arg[1]) = data;
+738: }
+739: X(load_l_rm_rn)
+740: {
+741: 	uint32_t addr = reg(ic->arg[0]);
+742: 	SH_ALIGN_CHECK_LD(addr, 3);
+743: 	uint32_t *p = (uint32_t *) cpu->cd.sh.host_load[addr >> 12];
+744: 	uint32_t data;
+745: 
+746: 	if (p != NULL) {
+747: 		data = p[(addr & 0xfff) >> 2];
+748: 	} else {
+749: 		SYNCH_PC;
+750: 		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+751: 		    sizeof(data), MEM_READ, CACHE_DATA)) {
+752: 			/*  Exception.  */
+753: 			if (!cpu->running)
+754: 				cpu->cd.sh.next_ic = &nothing_call;
+4268: 			case 0xfa:	/*  STC DBR,Rn  */
+4269: 				ic->f = instr(copy_privileged_register);
+4270: 				ic->arg[0] = (size_t)&cpu->cd.sh.dbr;
+4271: 				ic->arg[1] = (size_t)&cpu->cd.sh.r[r8];
+4272: 				break;
+4273: 			default:if (!cpu->translation_readahead)
+4274: 					fatal("Unimplemented opcode 0x%x,"
+4275: 					    "0x%03x\n", main_opcode,
+4276: 					    iword & 0xfff);
+4277: 				if (cpu->translation_readahead)
+4278: 					goto bad;
+4279: 				ic->f = instr(reserved);	/*  #314  */
+4280: 				break;
+4281: 			}
+4282: 		}
+4283: 		break;
+4284: 
+4285: 	case 0x1:
+4286: 		ic->f = instr(mov_l_rm_disp_rn);
+4287: 		ic->arg[1] = r8 + (lo4 << 4);
+4288: 		break;
+4289: 
+4290: 	case 0x2:
+4291: 		switch (lo4) {
+4292: 		case 0x0:	/*  MOV.B Rm,@Rn  */
+4293: 			ic->f = instr(mov_b_store_rm_rn);
+4294: 			break;
+4295: 		case 0x1:	/*  MOV.W Rm,@Rn  */
+4296: 			ic->f = instr(mov_w_store_rm_rn);
+4297: 			break;
+4637: 		ic->f = instr(mov_l_disp_rm_rn);
+4638: 		ic->arg[0] = r4 + (lo4 << 4);
+4639: 		break;
+4640: 
+4641: 	case 0x6:
+4642: 		switch (lo4) {
+4643: 		case 0x0:	/*  MOV.B @Rm,Rn  */
+4644: 			ic->f = instr(load_b_rm_rn);
+4645: 			break;
+4646: 		case 0x1:	/*  MOV.W @Rm,Rn  */
+4647: 			ic->f = instr(load_w_rm_rn);
+4648: 			break;
+4649: 		case 0x2:	/*  MOV.L @Rm,Rn  */
+4650: 			ic->f = instr(load_l_rm_rn);
+4651: 			break;
+4652: 		case 0x3:	/*  MOV Rm,Rn  */
+4653: 			ic->f = instr(mov_rm_rn);
+4654: 			break;
+4655: 		case 0x4:	/*  MOV.B @Rm+,Rn  */
+4656: 			ic->f = instr(mov_b_arg1_postinc_to_arg0);
+4657: 			/*  Note: Order  */
+4658: 			ic->arg[1] = (size_t)&cpu->cd.sh.r[r4];	/* m */
+4659: 			ic->arg[0] = (size_t)&cpu->cd.sh.r[r8];	/* n */
+987cb596:src/include/cpu.h:535:#define	CPU_SETTINGS_ADD_REGISTER32(name, var)				   \
+14626:MOV.L        @Rm,Rn         Rm  (Rn)                   0010nnnnmmmm0010 --   --
+14632:                            (Rm)  Rn                   0110nnnnmmmm0010 --   --
+
+ succeeded in 575ms:
+1929: 	case SH4_TSTR:
+1930: 		/*  Timer Start Register  */
+1931: 		if (writeflag == MEM_READ) {
+1932: 			odata = d->tstr;
+1933: 		} else {
+1934: 			if (idata & 1 && !(d->tstr & 1))
+1935: 				debug("[ sh4 timer: starting timer 0 ]\n");
+1936: 			if (idata & 2 && !(d->tstr & 2))
+1937: 				debug("[ sh4 timer: starting timer 1 ]\n");
+1938: 			if (idata & 4 && !(d->tstr & 4))
+1939: 				debug("[ sh4 timer: starting timer 2 ]\n");
+1940: 			if (!(idata & 1) && d->tstr & 1)
+1941: 				debug("[ sh4 timer: stopping timer 0 ]\n");
+1942: 			if (!(idata & 2) && d->tstr & 2)
+1943: 				debug("[ sh4 timer: stopping timer 1 ]\n");
+1944: 			if (!(idata & 4) && d->tstr & 4)
+1945: 				debug("[ sh4 timer: stopping timer 2 ]\n");
+1946: 			d->tstr = idata;
+1947: 		}
+1948: 		break;
+1949: 
+1950: 	case SH4_TCOR2:
+1951: 		timer_nr ++;
+10127: 
+10128: 1. UTLB address array read
+10129:     VPN, D, V, and ASID are read into the data field from the UTLB entry corresponding to the
+10130:     entry set in the address field. In a read, associative operation is not performed regardless of
+10131:     whether the association bit specified in the address field is 1 or 0.
+10132: 
+10133: 2. UTLB address array write (non-associative)
+10134:     VPN, D, V, and ASID specified in the data field are written to the UTLB entry corresponding
+10135:     to the entry set in the address field. The A bit in the address field should be cleared to 0.
+10136: 
+10137: 3. UTLB address array write (associative)
+10138:     When a write is performed with the A bit in the address field set to 1, comparison of all the
+10139:     UTLB entries is carried out using the VPN specified in the data field and PTEH.ASID. The
+10140:     usual address comparison rules are followed, but if a UTLB miss occurs, the result is no
+10141:     operation, and an exception is not generated. If the comparison identifies a UTLB entry
+10142:     corresponding to the VPN specified in the data field, D and V specified in the data field are
+10143:     written to that entry. If there is more than one matching entry, a data TLB multiple hit
+10144:     exception results. This associative operation is simultaneously carried out on the ITLB, and if a
+10145:     matching entry is found in the ITLB, V is written to that entry. Even if the UTLB comparison
+10146:     results in no operation, a write to the ITLB side only is performed as long as there is an ITLB
+10147:     match. If there is a match in both the UTLB and ITLB, the UTLB information is also written to
+10148:     the ITLB.
+10149: 
+10150: Rev.7.00 Oct. 10, 2008 Page 106 of 1074
+10151: REJ09B0366-0700
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "git -C GXEMUL-SEC log -1 --format='%h %ad %s' --date=short 987cb596 -- src/cpus/cpu_sh.c" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "git -C GXEMUL-SEC log --format='%h %ad %s' --date=short --no-patch '-L910,918:src/cpus/cpu_sh.c' 987cb596" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "git -C GXEMUL-SEC log -1 --format='%h %ad %s' --date=short 987cb596 -- regress/sh_tlbmulti_probe.py" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "git -C GXEMUL-SEC grep -n -F -e '%-14s' -e 't, died' -e 't2, died2' -e 't3, died3' 987cb596 -- regress/sh_tlbmulti_probe.py; "'$auditLines = git -C GXEMUL-SEC show 987cb596:src/include/cpu.h; for ($auditIndex = 524; $auditIndex -lt 549; $auditIndex++) { '"'{0}: {1}' -f ("'$auditIndex + 1), $auditLines[$auditIndex] }; $auditLines = git -C GXEMUL-SEC show 987cb596:src/core/debugmsg.c; for ($auditIndex = 372; $auditIndex -lt 401; $auditIndex++) { '"'{0}: {1}' -f ("'$auditIndex + 1), $auditLines[$auditIndex] }' in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 160ms:
+7e5c0f6c 2026-08-23 #458: SH-4 read two of four interrupt priority registers, and SCIF's came       from a register this machine never maps
+
+ succeeded in 160ms:
+0678450e 2026-08-22 #457 three guest stores ended the host process
+
+ succeeded in 166ms:
+39748e3c 2026-06-28 Import GXemul 0.7.0 (unmodified upstream baseline)
+
+ succeeded in 199ms:
+987cb596:regress/sh_tlbmulti_probe.py:87:    print("%-14s %-24s %-24s %-10s %s"
+987cb596:regress/sh_tlbmulti_probe.py:177:t, died = session()
+987cb596:regress/sh_tlbmulti_probe.py:184:t2, died2 = session(pre=["sr=0x40008000"])
+987cb596:regress/sh_tlbmulti_probe.py:191:t3, died3 = session(entry1_vpn=VPN_B)
+525: #define	INVALIDATE_VADDR		8
+526: #define	INVALIDATE_VADDR_UPPER4		16	/*  useful for PPC emulation  */
+527: 
+528: 
+529: /*  Note: 64-bit processors running in 32-bit mode use a 32-bit
+530:     display format, even though the underlying data is 64-bits.  */
+531: #define	CPU_SETTINGS_ADD_REGISTER64(name, var)				   \
+532: 	settings_add(cpu->settings, name, 1, SETTINGS_TYPE_UINT64,	   \
+533: 	    cpu->is_32bit? SETTINGS_FORMAT_HEX32 : SETTINGS_FORMAT_HEX64,  \
+534: 	    (void *) &(var));
+535: #define	CPU_SETTINGS_ADD_REGISTER32(name, var)				   \
+536: 	settings_add(cpu->settings, name, 1, SETTINGS_TYPE_UINT32,	   \
+537: 	    SETTINGS_FORMAT_HEX32, (void *) &(var));
+538: #define	CPU_SETTINGS_ADD_REGISTER16(name, var)				   \
+539: 	settings_add(cpu->settings, name, 1, SETTINGS_TYPE_UINT16,	   \
+540: 	    SETTINGS_FORMAT_HEX16, (void *) &(var));
+541: #define	CPU_SETTINGS_ADD_REGISTER8(name, var)				   \
+542: 	settings_add(cpu->settings, name, 1, SETTINGS_TYPE_UINT8,	   \
+543: 	    SETTINGS_FORMAT_HEX8, (void *) &(var));
+544: 
+545: 
+546: #define CPU_FAMILY_INIT(n,s)	void n ## _cpu_family_init(		\
+547: 	struct cpu_family *fp) {					\
+548: 	/*  Fill in the cpu_family struct with valid data for this arch.  */ \
+549: 	fp->name = strdup(s);						\
+373: 		v++;
+374: 
+375: 	if ((quiet_mode && !ss) || v < 0)
+376: 		return;
+377: 
+378: 	va_start(argp, fmt);
+379: 	va_debug(argp, fmt);
+380: 	va_end(argp);
+381: }
+382: 
+383: 
+384: void fatal(const char *fmt, ...)
+385: {
+386: 	va_list argp;
+387: 
+388: 	va_start(argp, fmt);
+389: 	va_debug(argp, fmt);
+390: 	va_end(argp);
+391: }
+392: 
+393: 
+394: void debugmsg_set_verbosity_level(int subsystem, int verbosity)
+395: {
+396: 	if (subsystem != SUBSYS_ALL)
+397: 		debugmsg_current_verbosity[subsystem] = verbosity;
+398: 	else
+399: 		for (size_t i = 0; i < debugmsg_nr_of_subsystems; ++i)
+400: 			debugmsg_current_verbosity[i] = verbosity;
+401: }
+
+codex
+The manual independently confirms H'020 in §5.6.1 and §5.7. It also says a user-break match with BL set records flags without starting exception handling. For coverage, I recommend adding a low-valued general exception and retaining the witness’s BL-clear TRAPA control: the proposed eight rows miss both a TRAPA-only rewrite and some incorrect numeric-range exemptions.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "git -C GXEMUL-SEC grep -n -E 'settings_access|SETTINGS_TYPE_UINT32|sr.*sh_update_sr|sh_update_sr.*sr' 987cb596 -- src/core/settings.c src/debugger/debugger.c src/core/debugger.c src/cpus/cpu_sh.c" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "git -C GXEMUL-SEC grep -n -E 'SH4_UTLB_AA[ \\t]|SH4_UTLB_A[ \\t]|SH4_UTLB_AA_V[ \\t]|SH4_UTLB_E_MASK|SH4_UTLB_E_SHIFT|SH_SR_IMASK[ \\t]|SH_SR_FD[ \\t]' 987cb596 -- src/include; "'$auditLines = git -C GXEMUL-SEC show 987cb596:src/devices/dev_sh4.c; for ($auditIndex = 1187; $auditIndex -lt 1204; $auditIndex++) { '"'{0}: {1}' -f ("'$auditIndex + 1), $auditLines[$auditIndex] }' in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 98ms:
+987cb596:src/core/settings.c:158: *  Used internally by settings_access() and settings_debugdump().
+987cb596:src/core/settings.c:189:	case SETTINGS_TYPE_UINT32:
+987cb596:src/core/settings.c:210: *  Used internally by settings_access().
+987cb596:src/core/settings.c:231:	case SETTINGS_TYPE_UINT32:
+987cb596:src/core/settings.c:442: *  settings_access():
+987cb596:src/core/settings.c:461:int settings_access(struct settings *settings, const char *fullname,
+987cb596:src/core/settings.c:466:	/*  printf("settings_access(fullname='%s')\n", fullname);  */
+987cb596:src/core/settings.c:490:			return settings_access(
+987cb596:src/cpus/cpu_sh.c:846:void sh_update_sr(struct cpu *cpu, uint32_t new_sr)
+987cb596:src/cpus/cpu_sh.c:952:	sh_update_sr(cpu, cpu->cd.sh.sr | SH_SR_MD | SH_SR_RB | SH_SR_BL);
+987cb596:src/cpus/cpu_sh.c:1020:		sh_update_sr(cpu, (cpu->cd.sh.sr | SH_SR_IMASK) & ~SH_SR_FD);
+
+ succeeded in 135ms:
+987cb596:src/include/thirdparty/sh4_mmu.h:123:#define	  SH4_UTLB_E_SHIFT		  8
+987cb596:src/include/thirdparty/sh4_mmu.h:124:#define	  SH4_UTLB_E_MASK		  0x00003f00
+1188: 			cpu->cd.sh.utlb_hi[e] &=
+1189: 			    ~(SH4_PTEH_VPN_MASK | SH4_PTEH_ASID_MASK);
+1190: 			cpu->cd.sh.utlb_hi[e] |= (idata &
+1191: 			    (SH4_UTLB_AA_VPN_MASK | SH4_UTLB_AA_ASID_MASK));
+1192: 
+1193: 			cpu->cd.sh.utlb_lo[e] &= ~(SH4_PTEL_D | SH4_PTEL_V);
+1194: 			if (idata & SH4_UTLB_AA_D)
+1195: 				cpu->cd.sh.utlb_lo[e] |= SH4_PTEL_D;
+1196: 			if (idata & SH4_UTLB_AA_V)
+1197: 				cpu->cd.sh.utlb_lo[e] |= SH4_PTEL_V;
+1198: 		}
+1199: 
+1200: 		if (safe_to_invalidate)
+1201: 			cpu->invalidate_translation_caches(cpu,
+1202: 			    vaddr_to_invalidate, INVALIDATE_VADDR);
+1203: 		else
+1204: 			cpu->invalidate_translation_caches(cpu, 0,
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$auditLines = git -C GXEMUL-SEC show 987cb596:src/core/settings.c; for ($auditIndex = 211; $auditIndex -lt 239; $auditIndex++) { '"'{0}: {1}' -f ("'$auditIndex + 1), $auditLines[$auditIndex] }' in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$auditLines = git -C GXEMUL-SEC show 987cb596:src/include/thirdparty/sh4_mmu.h; for ($auditIndex = 110; $auditIndex -lt 135; $auditIndex++) { '"'{0}: {1}' -f ("'$auditIndex + 1), $auditLines[$auditIndex] }; $auditLines = git -C GXEMUL-SEC show 987cb596:src/include/cpu_sh.h; for ($auditIndex = 180; $auditIndex -lt 196; $auditIndex++) { '"'{0}: {1}' -f ("'$auditIndex + 1), $auditLines[$auditIndex] }' in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 96ms:
+212: static int settings_write(struct settings *settings, int i, uint64_t *valuep)
+213: {
+214: 	if (!settings->writable[i])
+215: 		return SETTINGS_READONLY;
+216: 
+217: 	switch (settings->storage_type[i]) {
+218: 	case SETTINGS_TYPE_INT:
+219: 	case SETTINGS_TYPE_UINT:
+220: 		*((int *) settings->ptr[i]) = *valuep;
+221: 		break;
+222: 	case SETTINGS_TYPE_INT8:
+223: 	case SETTINGS_TYPE_UINT8:
+224: 		*((int8_t *) settings->ptr[i]) = *valuep;
+225: 		break;
+226: 	case SETTINGS_TYPE_INT16:
+227: 	case SETTINGS_TYPE_UINT16:
+228: 		*((int16_t *) settings->ptr[i]) = *valuep;
+229: 		break;
+230: 	case SETTINGS_TYPE_INT32:
+231: 	case SETTINGS_TYPE_UINT32:
+232: 		*((int32_t *) settings->ptr[i]) = *valuep;
+233: 		break;
+234: 	case SETTINGS_TYPE_INT64:
+235: 	case SETTINGS_TYPE_UINT64:
+236: 		*((int64_t *) settings->ptr[i]) = *valuep;
+237: 		break;
+238: 	case SETTINGS_TYPE_STRING:
+239: 		/*  Note: Strings cannot be read like this.  */
+
+ succeeded in 113ms:
+111: #define	  SH4_ITLB_DA1_PR		  0x00000040
+112: #define	  SH4_ITLB_DA1_V		  0x00000100
+113: #define	  SH4_ITLB_DA1_PPN_SHIFT	  11
+114: #define	  SH4_ITLB_DA1_PPN_MASK		  0x1ffffc00	/* [28:10] */
+115: /* data-array 2 */
+116: #define	SH4_ITLB_DA2			0xf3800000
+117: #define	  SH4_ITLB_DA2_SA_MASK		  0x00000003
+118: #define	  SH4_ITLB_DA2_TC		  0x00000004
+119: 
+120: /* UTLB */
+121: #define	SH4_UTLB_AA			0xf6000000
+122: /* address specification (common for address and data array(0,1)) */
+123: #define	  SH4_UTLB_E_SHIFT		  8
+124: #define	  SH4_UTLB_E_MASK		  0x00003f00
+125: #define	  SH4_UTLB_A			  0x00000080
+126: /* data specification */
+127: /* address-array */
+128: #define	  SH4_UTLB_AA_VPN_MASK		  0xfffffc00	/* [31:10] */
+129: #define	  SH4_UTLB_AA_D			  0x00000200
+130: #define	  SH4_UTLB_AA_V			  0x00000100
+131: #define	  SH4_UTLB_AA_ASID_MASK		  0x000000ff	/* [7:0] */
+132: /* data-array 1 */
+133: #define	SH4_UTLB_DA1			0xf7000000
+134: #define	  SH4_UTLB_DA1_WT		  0x00000001
+135: #define	  SH4_UTLB_DA1_SH		  0x00000002
+181: };
+182: 
+183: 
+184: /*  Status register bits:  */
+185: #define	SH_SR_T			0x00000001	/*  True/false  */
+186: #define	SH_SR_S			0x00000002	/*  Saturation  */
+187: #define	SH_SR_IMASK		0x000000f0	/*  Interrupt mask  */
+188: #define	SH_SR_IMASK_SHIFT		4
+189: #define	SH_SR_Q			0x00000100	/*  State for Divide Step  */
+190: #define	SH_SR_M			0x00000200	/*  State for Divide Step  */
+191: #define	SH_SR_FD		0x00008000	/*  FPU Disable  */
+192: #define	SH_SR_BL		0x10000000	/*  Exception/Interrupt Block */
+193: #define	SH_SR_RB		0x20000000	/*  Register Bank 0/1  */
+194: #define	SH_SR_MD		0x40000000	/*  Privileged Mode  */
+195: 
+196: /*  Floating-point status/control register bits:  */
+
+codex
+VERDICT: PROCEED WITH CHANGES (3)
+
+The proposed constant and exemption are correct for guest-reachable calls at `987cb596`. The three changes I request are:
+
+1. Correct the interrupt, user-break, and exception-category explanations.
+2. Repair the proposed probe/gate integration, including its row names.
+3. Add a second general-exception code and retain the witness’s BL-clear TRAPA control.
+
+The checkout’s current HEAD is `8372aeeb`, and its working files already contain later #577 material. I therefore reviewed the named commit `987cb596` directly. Your quoted source and manual line numbers match that commit. The two last-change hashes and upstream-import history also check out. Nothing was built, executed, or edited.
+
+**Q1. The defect is real, but several supporting statements need correction.**
+
+The strongest independent confirmation is in the manual’s substantive text, beyond the supplied revision-history excerpt:
+
+- §5.6.1 identifies a general exception with BL set as a manual-reset source at line 12376 and specifies EXPEVT H'020 at lines 12383–12384.
+- §5.7 directly states both H'020 and undefined SPC/SSR at lines 13164–13166.
+- The operand multiple-hit description independently specifies H'140 at lines 12499–12500. [Manual](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/sh7750_hardware.txt:12372)
+
+The premise audit is:
+
+| Premise | Finding |
+|---|---|
+| H'140 is the only currently raised reset-category code needing preservation | **Confirmed.** The sole raiser is the associative-write path in `dev_sh4.c:1178`. Other exception callers supply general-exception codes; power/manual reset have no raiser through this function. |
+| No existing committed row re-pins | **Confirmed for the six permitted probe rows.** This does not establish compatibility with every other regression or external guest. |
+| `EXPEVT_BREAK` has no raiser | **Confirmed.** It occurs only in the definition; the device’s UBC cases are TODO stubs. |
+| Interrupt delivery cannot reach this block with BL set | **Confirmed for current callers.** `cpu_dyntrans.c:250` is the sole interrupt caller and checks BL first. |
+| That gate prevents an interrupt from latching the rewritten EXPEVT/resetting | **False.** Even a hypothetical BL-set interrupt call writes INTEVT, replaces the local `expevt` with `-1`, skips the EXPEVT assignment, and selects `VBR+0x600`. The gate is essential to interrupt acceptance semantics, but the temporary rewrite would not survive. |
+| Witness instruction encodings and expected values | **Confirmed statically.** `0xc301` decodes as TRAPA #1, normally H'160. The three MOV.L encodings, UTLB addresses, and valid-bit seed agree with the decoder and device definitions. |
+
+“A user break would be the other exemption” needs qualification. The manual says that with BL set, a UBC match sets its condition flags **without starting exception handling** (§20.3.3, lines 41448–41452). Future UBC support must suppress delivery appropriately; merely preserving H'1E0 in this function would not implement that behavior.
+
+Also, the detector drives **one general exception and one reset-category exception**, not “two general-exception codes.”
+
+For guest dependencies, the source exposes EXPEVT through MMIO, so guest software can certainly distinguish the changed value. I found no in-tree consumer requiring H'000 specifically for this path, but cannot prove that arbitrary guest software never depended on the bug.
+
+**Q2. The proposed eight rows do not cover every reachable cell.**
+
+Here “general” excludes user break.
+
+| Event | BL clear | BL set |
+|---|---|---|
+| General exception | Unchanged: retains its code and normal vector. **No committed/proposed detector member.** | **Changed:** H'000 → H'020; same reset arm. Proposed TRAPA row covers it. |
+| TLB multiple hit | Unchanged: H'140 and reset arm. Existing trigger/SR rows cover it. | **Changed:** H'000 → H'140; same reset arm. Proposed multiple-hit row covers it. |
+| Interrupt | Unchanged: eligible interrupts set INTEVT and vector through `VBR+0x600`. **No member.** | Unchanged: delivery blocked/pending. **No targeted member.** |
+| User break | No implemented raiser. | No implemented raiser; hardware suppresses exception handling on a match. |
+
+The six existing rows comprise four observations from one multiple-hit session, another multiple-hit session with altered SR, and a single-hit/no-exception control. They are not six separate partition cells.
+
+The witness’s BL-clear TRAPA session fills a useful missing cell and should become a committed row. Interrupt coverage need not expand in this narrowly scoped change, but should not be claimed.
+
+**Q3. Mutation results, predicted from source—not measured here.**
+
+All counterexamples below have BL set.
+
+| Candidate | Equivalent? | Counterexample and existing row that fails |
+|---|---|---|
+| (a) Always POWER | No | TRAPA produces H'000 instead of H'020; multiple hit produces H'000 instead of H'140. **Both new rows fail.** |
+| (b) Delete rewrite/block | No | TRAPA retains H'160. **General row fails; multiple-hit row passes.** |
+| (c) Always MANUAL | No | Multiple hit becomes H'020. **Multiple-hit row fails.** |
+| (d) Exempt TRAPA | No | TRAPA retains H'160; multiple hit becomes H'020. **Both fail.** |
+| (e) Additionally exempt codes below H'100 | No | A load TLB miss retains H'040, or a misaligned load retains H'0E0. **Neither proposed row fails.** |
+| (f) Rewrite only TRAPA | No | Any other raised general code retains its original value, e.g. H'180. **Neither proposed row fails.** |
+
+Candidate **(e) contains a false classification**: `<0x100` includes general exceptions H'040–H'0E0 and excludes the reset-category H'140.
+
+I interpreted “widened” as retaining the H'140 exemption and adding `<0x100`. If it instead **replaces** the H'140 exemption, the multiple-hit row fails because H'140 becomes H'020. An actual reset-category exemption `{H'000, H'020, H'140}` is equivalent over current guest-reachable callers; it differs from the proposed fix on a hypothetical BL-set power-reset call.
+
+Candidates (a)–(d), plus `M_power`, are covered by the stated floor. Additive (e) and (f) are non-equivalent survivors requiring clause-(e) disclosure under the eight-row proposal.
+
+**Yes, add a second general code. Prefer a code below H'100.** A simple source-supported choice is:
+
+- `MOV.L @r1,r0`, encoding `0x6012`;
+- `r1=0x8c020001`, SR `0x500000f0`, one step;
+- underlying exception H'0E0; expected EXPEVT **H'020**.
+
+This catches both survivors above. RES_INST catches the TRAPA-only rewrite but misses the additive numeric-range exemption.
+
+Together with BL-clear TRAPA expecting H'160, that makes **ten rows**. Remaining code-specific escapes still require disclosure. So do untested state qualifications: every proposed BL row has RB clear, whereas an exception inside an existing handler can have RB set.
+
+For the identity experiment, deleting only the rewrite while retaining the diagnostic gives a cleaner comparison. Deleting the entire block additionally changes logging, although its EXPEVT predictions are as stated.
+
+**Q4. Keep the narrow implementation; keep logging with `floodclass`.**
+
+An explicit general-exception classifier, or explicit preservation of all reset-category codes, is another implementation option. Neither is necessary for current callers, and numeric ordering cannot substitute for classification.
+
+I would leave the `(once)` latch to `floodclass`. It is a separate observable behavior change. `fatal()` itself only logs here (`src/core/debugmsg.c:384`); this patch removes no host-stopping operation.
+
+The omitted module-reset effects are **observable**, although they need not ride with this EXPEVT correction. For example, the manual requires TSTR to become zero on manual reset at line 20505. This tree models readable/writable TSTR and uses it to control timer operation, but the reset arm does not reset it. Describe this as existing incomplete reset emulation, rather than absence of an observable requirement.
+
+**Q5. The SR preset is right; the proposed wiring has a concrete failure.**
+
+`0x500000f0` is MD|BL|IMASK, with RB and FD clear. Startup SR is MD|IMASK (`cpu_sh.c:123`); the existing special SR row also has BL clear. Thus the six existing expectations remain valid.
+
+The debugger registers SR as direct storage, and settings writes do not call `sh_update_sr()`. Retaining RB clear is consistent with the existing register seeds.
+
+Two integration details matter:
+
+- **Both proposed names fail the existing gate matcher.** `tlbm bl general` has 15 characters; `tlbm bl multihit` has 16. The probe uses `%-14s `, so each gets only one following space. The gate requires two in `^$v  .*ok$`. Shorten them—for example, `tlbm bl trapa` and `tlbm bl mhit`—or deliberately change the matcher.
+- At `987cb596`, `session()` hardcodes the three-store program and `step 3`. It needs a program/step override or another helper for TRAPA. Putting replacement instructions in `pre` alone would fail because the hardcoded trigger overwrites them.
+
+With the two additional sessions recommended above, pin the denominator to **10**, and enumerate all ten names. Existing PC coverage supports the unchanged shared reset arm; I do not require another PC assertion for this patch.
+
+**Unsettled within the permitted evidence:** the raw witness script/transcripts, clone and binary provenance, and reported measurements; historical CHANGELOG/ledger and pending-hunk status; dependencies in other regression files or external guests; and full reset conformance beyond the inspected behavior. The proposed additional-row and mutation outcomes above are static predictions, not new measurements.
+
+VERDICT: PROCEED WITH CHANGES (3)
+tokens used
+85,678
