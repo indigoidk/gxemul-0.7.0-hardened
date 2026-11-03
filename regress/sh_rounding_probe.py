@@ -170,7 +170,10 @@ VECTORS = [
      (0x0009 << 16) | 0x2122),
     #  A positive NaN also exceeds the positive range bound; the manual routes it to
     #  -MAX. This row is what catches a ladder with the checks in the wrong order.
-    ("ftrcS-nan qNaN+",  0, {"fr0": 0x7fc00000},
+    #  #576 relabel: 0x7fc00000 has the fraction MSB set, which the SH-4 convention classes as a
+    #  SIGNALING NaN (sh4_programming.txt :4980-4989; x86's convention is the reverse).  The row's
+    #  oracle is unchanged; only the label was wrong.  The gate's name list matches "ftrcS-nan".
+    ("ftrcS-nan sNaN+",  0, {"fr0": 0x7fc00000},
      (0x025a << 16) | 0xf03d, {RN: 0x80000000, RZ: 0x80000000},
      (0x0009 << 16) | 0x2122),
     #  The S bound is STRICT: 0x4effffff itself is NORM and truncates to 2147483520.
@@ -205,6 +208,53 @@ VECTORS = [
     ("subn fdiv 2ulp/1ulp", NODN, {"fr0": 0x00000002, "fr1": 0x00000001},
      instr(0xf013, 0),                       # fdiv fr1,fr0
      {RN: 0x40000000}),
+
+    # ---- #576: FCNVSD FPUL,DRn reads FPUL and writes DRn only (sh4_programming.txt 9.29,
+    #  :10866-10871).  HEAD also stored (int32_t) op1.f into FPUL -- upstream residue, the same
+    #  store FTRC makes, apparently copied -- so a guest reading FPUL after an FCNVSD saw a
+    #  truncated integer.  The
+    #  six FPUL rows read FPUL back through the guest's own `sts fpul,r2 ; mov.l r2,@r1' (the ftrc
+    #  shape); the two DRn rows read the converted halves with fmov.s and are the identity-medium
+    #  carriers (a handler that writes nothing leaves FPUL alone and only they go red).  Every row
+    #  runs under PR, the manual's defined arm.  `-0' carries NODN so the table has a DN=0 leg;
+    #  `0.1' targets DR0 (0xf0ad) while the others target DR2 (0xf2ad), so a FPUL store keyed on
+    #  {DR0, not DR0} is seen from both sides of THAT split (measured: M_g 42/52, M_gm 50/52); the
+    #  DRn VALUE is read back at DR2 only, and destinations other than DR0 and DR2 are unrowed,
+    #  so a store keyed on one of DR4..DR14, or a DRn store suppressed at DR0, escapes this
+    #  table (pass 2: Fable, Grok); both halves of the destination pair are seeded with the
+    #  sentinel.  Likewise unrowed STATE axes: FPSCR.SZ, FPSCR.FR, the reserved RM encodings
+    #  10/11, the FPSCR cause/enable/flag bits, and a delay slot -- no row varies any of them.
+    #  Every row runs with SZ = 0: the manual (:5148) makes [SZ, PR] = 11 a RESERVED setting whose
+    #  FPU operation is undefined, so these rows are legal only because SZ stays clear (Grok, F2).  0x7fc00000 is a SIGNALING NaN under the SH-4 convention
+    #  (fraction MSB = 1, manual :4980-4989), hence `snan'.  Disclosed, not rowed: finite
+    #  |v| >= 2^31 (an undefined cast on HEAD, except exactly -2^31, 0xcf000000, whose cast is
+    #  defined and also gave 0x80000000), -Inf, a quiet NaN, a subnormal input, and +0 (the one
+    #  fixed point of the removed cast, which no row can observe).  Every
+    #  row runs with sr.FD clear and FPSCR.PR set: the FD-set path (the FPU-disable exception)
+    #  and the PR=0 reserved encoding are not rowed here (Astra, pass 1; the PR=0 class is filed
+    #  as `shfpprreserved').
+    ("fcnvsd fpul 1.5",  PR, {"fpul": 0x3fc00000, "fr2": 0xdeadbeef, "fr3": 0xdeadbeef},
+     (0x025a << 16) | 0xf2ad, {RN: 0x3fc00000, RZ: 0x3fc00000},
+     (0x0009 << 16) | 0x2122),
+    ("fcnvsd fpul -1.5", PR, {"fpul": 0xbfc00000, "fr2": 0xdeadbeef, "fr3": 0xdeadbeef},
+     (0x025a << 16) | 0xf2ad, {RN: 0xbfc00000, RZ: 0xbfc00000},
+     (0x0009 << 16) | 0x2122),
+    ("fcnvsd fpul 0.1",  PR, {"fpul": 0x3dcccccd, "fr0": 0xdeadbeef, "fr1": 0xdeadbeef},
+     (0x025a << 16) | 0xf0ad, {RN: 0x3dcccccd, RZ: 0x3dcccccd},        # DR0
+     (0x0009 << 16) | 0x2122),
+    ("fcnvsd fpul -0",   NODN | PR, {"fpul": 0x80000000, "fr2": 0xdeadbeef, "fr3": 0xdeadbeef},
+     (0x025a << 16) | 0xf2ad, {RN: 0x80000000, RZ: 0x80000000},        # DN = 0 leg
+     (0x0009 << 16) | 0x2122),
+    ("fcnvsd fpul inf",  PR, {"fpul": 0x7f800000, "fr2": 0xdeadbeef, "fr3": 0xdeadbeef},
+     (0x025a << 16) | 0xf2ad, {RN: 0x7f800000, RZ: 0x7f800000},
+     (0x0009 << 16) | 0x2122),
+    ("fcnvsd fpul snan", PR, {"fpul": 0x7fc00000, "fr2": 0xdeadbeef, "fr3": 0xdeadbeef},
+     (0x025a << 16) | 0xf2ad, {RN: 0x7fc00000, RZ: 0x7fc00000},
+     (0x0009 << 16) | 0x2122),
+    ("fcnvsd dr hi",     PR, {"fpul": 0x3dcccccd, "fr2": 0xdeadbeef, "fr3": 0xdeadbeef},
+     (0xf12a << 16) | 0xf2ad, {RN: 0x3fb99999, RZ: 0x3fb99999}),
+    ("fcnvsd dr lo",     PR, {"fpul": 0x3dcccccd, "fr2": 0xdeadbeef, "fr3": 0xdeadbeef},
+     (0xf13a << 16) | 0xf2ad, {RN: 0xa0000000, RZ: 0xa0000000}),
 ]
 
 

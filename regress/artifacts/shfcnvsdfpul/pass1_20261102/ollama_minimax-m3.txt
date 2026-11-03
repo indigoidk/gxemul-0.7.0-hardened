@@ -1,0 +1,179 @@
+VERDICT: PROCEED WITH CHANGES (5)
+
+Q1. Premise audit.
+
+- **[READ]** The central architectural premise is sound: the manual defines `FCNVSD FPUL,DRn` as reading FPUL and writing DRn, and its pseudocode assigns only `DR[n>>1]`. The shown handler additionally writes FPUL. `FCNVDS DRm,FPUL`, by contrast, is expressly defined to write FPUL.
+
+- **[REASONED] Q1(a):** In the fixed code, removing the assignment leaves the DRn stores unchanged for every input. `op1` is populated from the original FPUL; the deleted assignment does not change `op1.f`; and both DRn stores depend only on `ieee`, which is computed from `op1.f`. There is no data-flow path from the deleted write to DRn.
+  - **[REASONED]** The formal pre-fix/post-fix comparison needs one qualification: for values whose cast is undefined, the pre-fix execution has no guaranteed DRn result either. That is a defect of the old program, not evidence that deletion changes the fixed program’s DRn result.
+
+- **[REASONED] Q1(b):** Nothing in the packet establishes that no other tree code or guest code depends on the accidental FPUL write.
+  - **[REASONED — not settleable from packet]** The single fact that would settle this is an exhaustive search report listing every read of `cd.sh.fpul`, every FCNVSD execution site, and any guest sequence that reads FPUL after FCNVSD.
+  - **[REASONED]** Even if such a dependency existed, it would be a dependency on an architectural bug. It would be compatibility evidence to record, not a reason to retain the write.
+
+- **[READ] Q1(c):** “`#297` removed the cast from FTRC” is false as stated. The packet says the cast remains on both FTRC arms and that `#297` added range checks before it. “Guarded the cast” or “made the cast reachable only for in-range values” is correct. The scoping note and bug-file wording owe that correction.
+
+- **[REASONED] Q1(d):** Subject to the defined-conversion qualification, the `+0` conclusion is correct: among finite FPUL values whose C conversion is defined, only bit pattern `0x00000000` is unchanged by HEAD. The full enumeration is in Q2.
+
+- **[READ] Q1(e):** The packet supports the debugger/FPUL path. It says existing FTRC-S rows already recover FPUL through the guest’s own `sts` and store, and the reported witness uses exactly:
+  1. `fcnvsd fpul,dr2`
+  2. `sts fpul,r2`
+  3. `mov.l r2,@r1`
+  
+  The witness output therefore supports both that the debugger seed reaches `cd.sh.fpul` and that `sts` exposes the overwritten value. The proposed rows should copy that three-instruction shape and step through all three instructions.
+  - **[REASONED]** The proposed table must explicitly set `FPSCR.PR=1`. The manual defines FCNVSD only for PR=1; relying on an incidental resemblance to the FTRC-D rows is too weak.
+
+- **[READ]** Other wording that should be corrected:
+  - “The handler has no terminating call” is literally too broad: the FD-disabled path contains `return`. A better statement is “there is no explicit `fatal`/`exit`; the only early exit is the FPU-disabled exception return.”
+  - “Harm is wrong guest data, not emulator failure” is plausible for the present implementation, but C undefined behavior does not provide that formal upper bound. Deleting the cast removes the issue rather than merely bounding it.
+
+- **[REASONED]** Section 7’s floor rule is internally ambiguous, rather than simply false. Clause (d) demands a removed behavior reintroduced under a different predicate, while the later rule limits the floor to predicates actually dominating the edit and says this body tests nothing. Q3 separates the objective mutation results from that policy ambiguity.
+
+Q2. Partition of FPUL inputs.
+
+- **[REASONED — domain premise]** For this detector, the producer is the cold debugger’s FPUL assignment, so the right domain is all `2^32` uint32 bit patterns, not merely the finite values produced by some guest instruction. If the domain were instead restricted to values obtainable from prior guest instructions, that subset would need to be supplied; it is not in the packet.
+
+- **[REASONED]** Let `b` be the original FPUL bit pattern and `T(b)` the uint32 result of HEAD’s assignment. The formal partition is:
+
+  1. **Defined and unchanged:** only `b = 0x00000000` (`+0`). The decoded value is zero, `(int32_t)0.0` is zero, and assigning zero to FPUL reproduces `0x00000000`.
+
+  2. **Defined and changed:** every other finite value whose conversion to int32 is defined. This includes negative zero, all nonzero subnormals, ordinary normals, and exactly `-2^31`.
+
+  3. **Undefined pre-fix result:** all NaNs, both infinities, positive finite values at least `+2^31`, and negative finite values below `-2^31`. The fixed result is deterministic—FPUL unchanged—but C does not define the old result, so one cannot formally promise that every runtime differs.
+
+- **[REASONED]** The “only `+0`” arithmetic can be enumerated without guessing:
+
+  - For nonzero subnormals and normals with biased exponent `E=1..126`, the magnitude is below 1, so truncation gives zero; the original nonzero bit pattern cannot equal zero.
+  - For `E=127`, the magnitude is in `[1,2)`, so truncation gives 1; that cannot equal the original encoding.
+  - For positive normals through `E=156`, the truncated magnitude remains below the original encoding.
+  - At positive `E=157`, with fraction `F`,
+    - original encoding: `b = 157·2^23 + F`;
+    - decoded value: `2^30 + 128F`.
+    - Equality would require  
+      `127F = 243,269,632`.
+    - `243,269,632 mod 127 = 116`, so no integer `F` satisfies it.
+  - At negative `E=156`, let `k = 2^29 + 64F` be the truncated magnitude. Equality after uint32 conversion would require  
+    `65F = 301,989,888`.
+    - `301,989,888 mod 65 = 18`, so no integer `F` satisfies it.
+  - At negative `E=157`, the truncated magnitude is already larger than the value required for bit-pattern equality.
+  - At `E=158`:
+    - positive values have an integral part of at least `2^31`, so the int32 conversion is undefined;
+    - negative `F=0` is exactly `-2^31`, which is defined, but produces `0x80000000` rather than the original `0xcf000000`;
+    - negative `F>0` is undefined.
+  - Negative zero is not unchanged: `(int32_t)-0.0` is zero, so HEAD changes `0x80000000` to `0x00000000`.
+
+- **[REASONED]** Section 7’s proposed table has representatives as follows:
+
+  | Partition or important subclass | Proposed FPUL row present? |
+  |---|---|
+  | Defined, changed finite values | Yes: 1.5, -1.5, ~0.1, -0 |
+  | Only defined unchanged value, `+0` | **No** |
+  | Finite out-of-range/undefined cast | **No**; 2^31 appears only in section 6 |
+  | NaN/infinity/undefined special casts | Yes: inf and nan |
+  | Smallest single subnormal | **No**; ~0.1 is a normal value |
+
+- **[REASONED]** At minimum, disclose the omitted `+0`, finite-out-of-range, and subnormal classes. If the partition is meant to be complete rather than merely representative, add:
+  - `fcnvsd fpul +0` as a control;
+  - `fcnvsd fpul 2^31` for finite out-of-range behavior;
+  - optionally `fcnvsd fpul minsub` because it is a robust, fully defined pre-fix failure: HEAD truncates it to zero.
+
+Q3. Candidate weakenings.
+
+- **[REASONED]** Let `U` denote the fixed form, which always leaves FPUL equal to its original bit pattern. Except where noted, none of the candidates is globally equivalent to `U`.
+
+| Candidate | First input at which it differs from `U` | Proposed row that turns red | Assessment |
+|---|---:|---|---|
+| (a) unconditional removed line | `0x00000001`; `+0` is still equal | `fcnvsd fpul 1.5`, `-1.5`, `0.1`, or `-0` | **Unambiguously inside the floor**, because this is clause (b)’s verbatim reinstatement. |
+| (b) write only for magnitude at least 1 | `0x3f800000` (`1.0`) | `fcnvsd fpul 1.5` or `-1.5` | Currently covered. |
+| (c) write zero only for magnitude below 1 | `0x00000001` | `fcnvsd fpul 0.1` or `-0` | Currently covered. |
+| (d) write `0x80000000` for specials | `0x7f800000` (`+Inf`) | `fcnvsd fpul inf` or `nan` | Currently covered. |
+| (e) write only under RM=RZ | `0x00000001`, provided the RZ leg runs | FPUL row in the RZ mode | Covered if the two modes are in fact RZ/non-RZ. In the non-RZ mode it is equivalent to `U`. |
+| (f) write only with DN clear | `0x00000001`, provided DN is clear | **None as proposed** | Missing: every proposed row has DN set. Add a DN-clear FPUL row, using a normal input such as 1.5. |
+| (g) write only when destination is not DR0 | `0x00000001`, provided DRn is nonzero | FPUL row if it uses DR2 or another nonzero pair | Conditional. The proposed table must explicitly pin a nonzero `n`; the reported witness uses DR2. With DR0, this candidate is equivalent to `U`. |
+| (h) write the low half of the DR result into FPUL | `0x00000001`; the low half of the converted double is zero | `fcnvsd fpul 1.5`, `0.1`, etc. | Currently covered. In particular, ~0.1 writes `0xa0000000` instead of preserving `0x3dcccccd`. |
+| (i) exchange the two DR stores | `0x00000001`; the two double halves differ | `fcnvsd dr hi` and `fcnvsd dr lo` | Currently covered. This is a liveness/store-order mutant rather than an FPUL-write weakening. |
+
+- **[REASONED — floor-rule premise not settleable from packet]** The packet’s two floor formulations conflict:
+  - clause (d) appears to require at least one different-predicate reinstatement;
+  - the final rule limits the floor to predicates actually dominating the edit, and the actual body has no value predicate.
+
+  The single fact that would settle this is a written project-rule clarification saying whether hypothetical predicates such as (b)–(h) are mandatory floor mutants or merely disclosure debt.
+
+- **[REASONED]** Subject to that clarification:
+  - (a) is unquestionably required.
+  - The existing rows already make (b), (c), and (d) natural explicit clause-(d) mutants.
+  - (f) should be added because DN is architecturally relevant, is explicitly discussed, and is entirely untested by the proposed table.
+  - (g) should be closed by pinning a nonzero DRn rather than adding another redundant row.
+  - (e) is already covered if the RZ leg exists.
+  - (h) is already covered incidentally.
+  - (i) belongs to the DR-liveness control.
+  - Any predicate not explicitly elevated to the floor should be named in the probe header as disclosed coverage debt rather than left implicit.
+
+Q4. Option-set completeness.
+
+- **[REASONED]** No additional product-code option is needed. Deletion is the minimal architecture-correct change. Saving FPUL in a temporary and restoring it after conversion would have the same final observable result, but it performs the prohibited write, adds needless code, and is inferior to deletion.
+
+- **[REASONED — not settleable from packet]** The requested fork-wide sibling-idiom search cannot be performed here. The single fact that would settle it is an exhaustive result for assignments to `cpu->cd.sh.fpul` in `src/cpus`, classified by whether each instruction is architecturally permitted to write FPUL.
+  - **[READ]** From the packet alone, FCNVDS and FTRC are legitimate FPUL writers; FCNVSD is not. That is enough for this defect but not enough to prove the sibling list complete.
+
+- **[REASONED] PR=0:** This is a distinct decoder/semantics defect. The manual says FCNVSD is reserved and invokes `undefined_operation` at PR=0, while the decoder converts anyway. The deletion neither introduces nor fixes that behavior. It should be filed separately, covering FCNVSD and FCNVDS.
+
+- **[REASONED] FCNVDS:** It is not a same-file control needed for this deletion. The proposed FCNVSD DRn rows already prove that conversion still occurs, and the witness’s FCNVDS control already proves that the valid FPUL-write channel remains live. Adding an FCNVDS behavior row to this fix would be scope growth; file it separately if desired.
+
+- **[REASONED] DN=1 subnormal input:** This is the already named operand-decode/DN-policy gap, not part of the accidental-write defect. File it separately. A FPUL-preservation-only subnormal detector can still be included, but it must not be presented as validating the disputed DRn denormal semantics.
+
+Q5. Vehicle and row count.
+
+- **[REASONED]** The identity-body medium is an adequate null-medium control for this CPU-register defect:
+  - every FPUL row is expected to be green because the identity body leaves FPUL alone;
+  - both DRn rows are expected to be red because the identity body does not write the expected converted halves;
+  - `0xdeadbeef` differs from both expected DRn halves, so accidental equality is not a concern.
+  
+  No device-signature analogue is owed. This is adequate only if the identity body truly decodes/retires the instruction and writes neither FPUL nor DRn. The fixed-build 6/6 run, identity-body receipt, and removed-line-reinstated red run remain separately owed.
+
+- **[REASONED]** The proposed eight rows produce:
+  - 1.5: 2 sessions
+  - -1.5: 2
+  - 0.1: 2
+  - -0: 2
+  - inf: 2
+  - nan: 2
+  - dr hi: 2
+  - dr lo: 2  
+  - total: `2+2+2+2+2+2+2+2 = 16` additional sessions.
+
+  If the current gate pin of 36 is unchanged otherwise, the equality pin would become `36 + 16 = 52`. Any row replacement or DN-clear addition must be recomputed from the actual table rather than copied from this number.
+
+- **[REASONED]** Sixteen sessions is defensible but not minimal for a one-line deletion. I would drop `fcnvsd fpul -1.5`:
+  - the unconditional and magnitude-greater-than-one mutants remain red on 1.5;
+  - the below-one mutants remain red on 0.1 or -0;
+  - the special mutant remains red on inf/nan;
+  - the swapped-store mutant remains red on the two DR rows.
+  
+  What would escape is specifically a mutant that corrupts FPUL only for negative operands. That is reasonable coverage debt, not loss of the core defect witness. The freed row may instead be used for `+0`, finite `2^31`, or the DN-clear case, depending on the desired partition.
+
+- **[REASONED]** Required detector details before editing the gate:
+  1. Set PR=1 explicitly for every FCNVSD row.
+  2. Pin the destination pair to a known nonzero DRn, such as DR2, so candidate (g) cannot pass.
+  3. Add one DN-clear FPUL case, or explicitly disclose candidate (f).
+  4. Confirm that the two modes include RM=RZ if candidate (e) is to count as covered.
+  5. Quote row names containing spaces in the shell `for` list.
+  6. Escape or otherwise control the `.` characters in the grep pattern, since the current `grep` expression treats them as regex wildcards.
+
+- **[REASONED — not settleable from packet]** The claim that the discriminator count remains 9 cannot be checked from the packet. The single fact that would settle it is a post-extension probe report showing the two mode identities and `disc=9`. Until then, `$want` may be recomputed confidently, but the unchanged discriminator count should remain provisional.
+
+- **[REASONED]** The five counted changes are:
+  1. Correct “removed from FTRC” to “guarded by range checks.”
+  2. Make PR=1, the nonzero destination pair, and the RM-mode assumptions explicit in the detector.
+  3. Add or disclose the DN-clear, `+0`, and finite-out-of-range partitions, while removing at least one redundant signed row if needed.
+  4. Clarify the clause-(d) floor conflict and update the gate equality/name wiring from the final table.
+  5. File PR=0, FCNVDS, and the DN-subnormal semantic gap separately, and obtain the fixed-build, identity-body, and reinstated-line receipts before shipping.
+
+- **[REASONED — consolidated premises not settleable from the packet]**
+  - Tree-wide or guest dependency on the old FPUL write: an exhaustive FPUL-reference/guest-sequence search would settle it.
+  - Complete sibling-writer idiom set: an exhaustive `cd.sh.fpul =` assignment search would settle it.
+  - Exact meaning of the two probe modes and the unchanged discriminator count: a post-extension probe report would settle it.
+  - The exact NaN DRn policy: the packet’s quoted `ieee_store_float_value_rm` routine and apparent self-referential macro notation do not unambiguously show which routine the FCNVSD macro calls; the verbatim macro expansion would settle it. This does not affect the proposed ~0.1 DRn rows.
+  - The floor’s treatment of hypothetical different-predicate mutants: an explicit project-rule statement would settle it.
+
+VERDICT: PROCEED WITH CHANGES (5)

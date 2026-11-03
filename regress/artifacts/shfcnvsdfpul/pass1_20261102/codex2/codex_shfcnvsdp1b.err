@@ -1,0 +1,2463 @@
+Reading additional input from stdin...
+OpenAI Codex v0.159.2
+--------
+workdir: C:\DocumentNoSnc\CC\GXEMUL
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: max
+reasoning summaries: none
+session id: 01a19e97-5544-7d50-b66a-c2a115662d7a
+--------
+user
+# PANEL PASS 1 -- `shfcnvsdfpul`: the SuperH FCNVSD handler overwrites FPUL, a register the instruction only reads
+
+PASS 1, fired 2026-11-02 17:0x.  HEAD at drafting (2026-10-30) and today: `987cb596`, unchanged.  Round number #576.
+Roster for this fix (owner ruling 2026-11-02): GPT-6 Astra, Fable 5.1, glm-5.3, Argon (Gemini web), Grok 4.7.  Packet-fed seats
+(glm, Argon): every fact you need is inlined; the artifact paths below are for the file-reading seats and are quoted where they matter.
+
+## READ THIS FIRST -- PLEASE DO NOT SIMPLY RATIFY
+
+A recent panel had seven of nine seats confirm a premise this brief's author stated
+wrongly.  **Check the premises, not just the derivations.**  Where I state something as
+fact, ask whether it is true.  A seat that re-derives a premise from something this brief
+did NOT give it is worth more than a seat that agrees.
+
+**THE TREE UNDER REVIEW IS `GXEMUL-SEC/src/`, and the older warning about this has changed.**
+The pristine-2021 copies this project's template warns about (`./src/` and two under
+`_archive/audit-results-*/builds/`) are GONE: `find` for `cpu_sh_instr.c` under the project
+root returned none of them today.  **Stray copies do exist, and one is the worse kind:**
+
+    d4512a77 5117  GXEMUL-SEC/src/cpus/cpu_sh_instr.c      <- THE TREE UNDER REVIEW
+    d4512a77 5117  est/  build/  build-asan/               the fork's other trees, same bytes
+    d4512a77 5117  _scratchpad/diagdiv_20261030/headtree/  same bytes, a scratch copy
+    d4512a77 5117  GXEMUL-SEC/regress/artifacts/stateaudit_20260923/.../head_tree/   same bytes
+    3f27aefa 5026  GXEMUL-SEC/.claude/worktrees/agent-ae870115d0e5f6f85/   OLDER FORK COPY, 91 lines short
+
+The last one is a nearly-right copy, so a line-number difference from it would be in the tens,
+not the hundreds.  Do not read under `.claude/worktrees/`.  If your line numbers disagree with
+mine, say so rather than reconciling.
+
+**If you cannot read files that is expected** -- every fact you need is inlined.  Name any
+premise you cannot settle from this packet rather than guessing at it.
+
+**Where this brief states an ARITHMETIC claim, ENUMERATE it rather than reasoning about it.**
+Walk the values.  A derivation that skips one masking line reads exactly like a correct one.
+
+**And ENUMERATE THE RIGHT DOMAIN -- a domain is itself a premise.**  Ask what the PRODUCER of
+these values can actually emit before you walk them.
+
+**VERDICT LINE FIRST**, so your answer survives truncation.
+
+**File-reading seats: scope your reading to `GXEMUL-SEC/src/` and `GXEMUL-SEC/regress/*.py`, plus
+the two manuals by absolute path: `C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\sh4_programming.txt` and
+`C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\sh7750_hardware.txt`.  Do not read `regress/artifacts/` or
+`tools/pipeline/ledger.json`.**  This round asks for reading only: nothing is to be built or
+run, and no tree is to be written.
+
+## 1. The defect as filed, and the proposed fix
+
+FCNVSD converts the single-precision value in FPUL to double precision and stores it in a
+register pair DRn.  This handler also stores a truncated integer back into FPUL.  Any guest
+code that uses FPUL after an FCNVSD sees the wrong value, and for NaN, infinity and
+out-of-range values the store comes from a C cast whose result is undefined.
+
+**Proposed fix: delete the one line** `cpu->cd.sh.fpul = (int32_t) op1.f;` from
+`X(fcnvsd_fpul_drn)`.  Nothing else in product code changes.
+
+Severity filed: MED.  Harm is wrong guest data, not an emulator failure: the handler has no
+terminating call and no memory access beyond the FP registers.
+
+**Reproduction: MEASURED 2026-11-02 16:5x, rung 3, on a clone of HEAD `987cb596` built fresh in WSL (`/tmp/gxdivw/gxemul`, binary
+newer than its source), machine `-E landisk -M 64` UNMODIFIED, the rig kernel loaded for construction only.**  Script and output are
+preserved at `GXEMUL-SEC/regress/artifacts/shfcnvsdfpul/witness_20261102/` (`sh_fcnvsd_witness.py`, `witness_head.out`, `RECEIPT.txt`);
+the output, verbatim:
+
+```
+row          got        want       role      verdict
+fpul 1.5     0x00000001 0x3fc00000 DEFECT    FAILED-FOR-THE-REASON-UNDER-TEST (FPUL holds the truncated integer the handler stores)
+fpul -1.5    0xffffffff 0xbfc00000 DEFECT    FAILED-FOR-THE-REASON-UNDER-TEST (FPUL holds the truncated integer the handler stores)
+fpul 0.1     0x00000000 0x3dcccccd DEFECT    FAILED-FOR-THE-REASON-UNDER-TEST (FPUL holds the truncated integer the handler stores)
+dr hi 1.5    0x3ff80000 0x3ff80000 LIVENESS  ok
+dr lo 0.1    0xa0000000 0xa0000000 LIVENESS  ok
+fcnvds ctl   0x3fc00000 0x3fc00000 CONTROL   ok
+RESULT=3/6
+```
+
+Shape: the cold debugger seeds `fpscr` (DN|PR|RN), `fpul`, and the DR2 pair with the sentinel `0xdeadbeef`; the guest executes `fcnvsd
+fpul,dr2` (0xf2ad) followed by `sts fpul,r2` (0x025a) and `mov.l r2,@r1` (0x2122) -- or `fmov.s fr2,@r1` / `fmov.s fr3,@r1` for the DRn
+halves -- into a sentinel word at 0x8c010100, read back with `dump`.  The three FPUL rows are red with EXACTLY the value section 6
+predicts for HEAD (the truncation), so the failure is for the reason under test; the two DRn rows show the conversion itself lands
+correctly on HEAD (liveness), and the FCNVDS row shows the FPUL write channel is live where the manual says write (control).  The
+same script must read 6/6 on the fixed build; that is clause (i) of the witness rule and is owed before the edit ships.
+
+## 2. PREMISES (C0 OUTPUT AND WHAT IS SETTLED)
+
+C0, run 2026-10-30 at `987cb596` and re-checked 2026-11-02 (HEAD unchanged, `grep -c shfcnvsdfpul CHANGELOG.md` still 0):
+
+    $ git log -1 --format='%h %ad %s' --date=short -- <file>
+    src/cpus/cpu_sh_instr.c      3ff21380 2026-08-22 #454 the store-queue PREF transfer is judged READ type, and a gate row pinned the opposite
+    src/core/float_emul.c        064caaf6 2026-08-02 Round 72 (#331-#334): there was no gradual underflow, and three architectures were relying on it
+    regress/sh_rounding_probe.py 1329d894 2026-10-02 #556 hrecord: 154 record corrections placed as 155 notes in the regression harness's comments and do
+    regress/gate_sh_rounding.sh  0901b388 2026-10-25 #572 wdclbaaddr: the IDE model decoded the select byte's LBA flag from bit 5 and left both LBA28 add
+
+    $ grep -c shfcnvsdfpul CHANGELOG.md
+    0
+
+    $ grep -n shfcnvsdfpul OUTSTANDING_BUGS.md
+    24069:#### `shfcnvsdfpul` (MED, an id for an entry this file already carries in prose) -- FCNVSD writes FPUL, which the instruction only reads
+
+    $ ls regress/sh_*
+    sh_halt_probe.py  sh_intprio_probe.py  sh_iprbcd_probe.py  sh_pclock_probe.py  sh_rounding_probe.py  sh_tlbmulti_probe.py
+
+**So the round has NOT shipped**: the CHANGELOG does not name the row.  No new tool is proposed.
+
+Settled, each re-read in this function or file today:
+
+* **The line is upstream residue.**  `git log -L3049,3063:src/cpus/cpu_sh_instr.c` returns one commit:
+  `39748e3c Import GXemul 0.7.0 (unmodified upstream baseline)`.  The fork never touched the handler.
+* **`fatal()` is not involved anywhere in this handler**, and neither is `exit`.
+* **`cd.sh.fpul` is `uint32_t`, `fr[]` is `uint32_t[]`** (`src/include/cpu_sh.h`:
+  `uint32_t	fpul;		/*  Floating-point Communication Reg  */`).
+* **`op1.f` is a `double`** (`struct ieee_float_value { double f; int nan; };`, `float_emul.h`).
+* **The deleted line does not feed the DRn result.**  `op1.f` is not assigned between the line and
+  the store, so deleting it cannot change the value written to DRn.  Check this by reading section 4.
+* **FPSCR resets to DN=1** (the comment above `sh_dn()` says "FPSCR RESETS TO 0x40001").
+* **The tree's FP exception model is absent by standing decision.**  `sh_dn()`'s comment calls this
+  "a NAMED divergence ... the exception model is its own queued round", and `float_emul.c`'s `#303`
+  comment says "SH-4's FPSCR.DN ... stays NOT modelled".  So the manual's `set_E()` and `invalid()`
+  branches in section 5 are out of scope here.
+
+**Stated as questions, because I am less sure of them:**
+
+* **The scoping note and the bug file both say the cast is the one `#297` "removed from FTRC".  I do not
+  think that is what happened.**  `X(ftrc_frm_fpul)` at HEAD still has `cpu->cd.sh.fpul = (int32_t) op1.f;`
+  on both arms.  What `#297` added is a ladder of range checks ahead of each cast, so that the cast is
+  only reached with an in-range value.  **Is "guarded" the right word, and does the row's wording owe a
+  correction?**
+* **Is FPUL really never written by the real instruction?**  The manual's pseudocode in section 5 assigns
+  only `DR[n>>1]`, and FCNVSD's `*FPUL` argument is read by `fpul_type` and the assignment.  Read it and
+  say whether you agree.
+* **Does any guest code depend on the current behaviour?**  I have read no guest source.  A guest reading
+  FPUL after an FCNVSD on HEAD gets the truncated integer.  I expect none depends on that, and I have no
+  evidence either way.
+
+## 3. THE DECODER, VERBATIM
+
+`GXEMUL-SEC/src/cpus/cpu_sh_instr.c`, anchor `grep -n 'FCNVSD FPUL,DRn' <file>` (`:5061-5068` at HEAD):
+
+```c
+		} else if ((iword & 0x01ff) == 0x00ad) {
+			/*  FCNVSD FPUL,DRn  */
+			ic->f = instr(fcnvsd_fpul_drn);
+			ic->arg[0] = (size_t)&cpu->cd.sh.fr[r8];
+		} else if ((iword & 0x01ff) == 0x00bd) {
+			/*  FCNVDS DRm,FPUL  */
+			ic->f = instr(fcnvds_drm_fpul);
+			ic->arg[0] = (size_t)&cpu->cd.sh.fr[r8];
+```
+
+Bit 8 is required clear, so `r8` is even and the pair `fr[r8]`, `fr[r8+1]` stays in the array.  The
+filed row `shoddprfield` records the same: "FCNVSD/FCNVDS are NOT affected."  The decoder does not test
+FPSCR.PR.
+
+## 4. THE FULL HANDLER AND ITS SIBLING, VERBATIM
+
+Same file, anchor `grep -n '^X(fcnvsd_fpul_drn)' <file>` (`:3043-3076` at HEAD).  This is both
+functions whole, including their header comment.  Neither has a common tail beyond what is shown.
+
+```c
+/*
+ *  fcnvsd_fpul_drn:  Convert single-precision to double-precision.
+ *  fcnvds_drm_fpul:  Convert double-precision to single-precision.
+ *
+ *  arg[0] = ptr to destination (double- or single-precision float)
+ */
+X(fcnvsd_fpul_drn)
+{
+	struct ieee_float_value op1;
+	int64_t ieee;
+
+	FLOATING_POINT_AVAILABLE_CHECK;
+
+	ieee_interpret_float_value(cpu->cd.sh.fpul, &op1, IEEE_FMT_S);
+	cpu->cd.sh.fpul = (int32_t) op1.f;
+
+	/*  Store double-precision result:  */
+	ieee = ieee_store_float_value(op1.f, IEEE_FMT_D);
+	reg(ic->arg[0]) = (uint32_t) (ieee >> 32);
+	reg(ic->arg[0] + sizeof(uint32_t)) = (uint32_t) ieee;
+}
+X(fcnvds_drm_fpul)
+{
+	struct ieee_float_value op1;
+	int64_t r1;
+
+	FLOATING_POINT_AVAILABLE_CHECK;
+
+	r1 = reg(ic->arg[0] + sizeof(uint32_t)) +
+	    ((uint64_t)reg(ic->arg[0]) << 32);
+	ieee_interpret_float_value(r1, &op1, IEEE_FMT_D);
+
+	cpu->cd.sh.fpul = ieee_store_float_value_rm(op1.f, IEEE_FMT_S, sh_fp_rm(cpu));
+}
+```
+
+The check macro, verbatim, with the only exit path the handler has before the conversion:
+
+```c
+#define	FLOATING_POINT_AVAILABLE_CHECK					\
+	if (cpu->cd.sh.sr & SH_SR_FD) {					\
+		/*  FPU disabled: Cause exception.  */			\
+		SYNCH_PC;						\
+		if (cpu->delay_slot)					\
+			sh_exception(cpu, EXPEVT_FPU_SLOT_DISABLE, 0, 0);\
+		else							\
+			sh_exception(cpu, EXPEVT_FPU_DISABLE, 0, 0);	\
+		return;							\
+	}
+```
+
+In this file `ieee_store_float_value(v, fmt)` is a macro, `sh_dn(cpu, (ieee_store_float_value)((v),
+(fmt)), (fmt))`.  `sh_dn()` flushes only a value that is subnormal IN THE DESTINATION format.  Every
+single-precision value, subnormal ones included, is normal as a double.  **So `sh_dn()` never changes an
+FCNVSD result** (enumerate this: the smallest single subnormal is 2^-149, and the smallest normal double
+is 2^-1022).
+
+What `ieee_interpret_float_value` (`src/core/float_emul.c`) gives for `IEEE_FMT_S`, condensed from my
+reading, not verbatim:
+
+* infinity: `f = INFINITY`, then the sign is applied;
+* any other all-ones exponent: `f = NAN`, `nan = 1`, and the sign step is JUMPED OVER (`goto
+  no_reasonable_result`);
+* `x == 0` or `x == 0x80000000`: `f = 0.0`, then the sign is applied, so `-0.0` is produced for `0x80000000`;
+* biased exponent 0 with nonzero mantissa: the true subnormal value (`#303`);
+* otherwise the normal value.
+
+`ieee_store_float_value_rm` for `IEEE_FMT_D`, verbatim in the two arms that matter, with the sign bit
+set first from `signbit(nf)`:
+
+```c
+		case FP_INFINITE:
+			if (fmt == IEEE_FMT_D)
+				r |= 0x7ff0000000000000ULL;
+```
+```c
+		case FP_NAN:
+			if (fmt == IEEE_FMT_D)
+				r |= 0x7fffffffffffffffULL;
+```
+
+**So every NaN FPUL produces one DRn value, with the payload lost.**  I did not read the `FP_ZERO` arm, so
+the `-0` DRn prediction in section 6 is a prediction.
+
+## 5. THE MANUALS, VERBATIM
+
+`C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\sh4_programming.txt`, Rev. 5.0, section 9.29.  Line numbers from
+`awk NR`.  The extraction drops the arrow character in the summary lines.
+
+```
+10861: PR Format             Summary of Operation Instruction Code    Execution
+10864: 0--                   --                       --              --  --
+10866: 1 FCNVSD FPUL, DRn (double) FPUL  DRn 1111nnn010101101 2           --
+10870: When FPSCR.PR = 1: This instruction converts the single-precision floating-point number in
+10871: FPUL to a double-precision floating-point number, and stores the result in DRn.
+10881:      case((FPSCR_PR){
+10883:              0: undefined_operation(); /* reserved */
+10885:              1: fcnvsd (n, *FPUL); break; /* FCNVSD */
+10891: void fcnvsd(int n, float *FPUL)
+10895:      case(fpul_type(FPUL)){
+10897:              PZERO :
+10899:              NZERO :
+10901:              PINF :
+10903:              NINF :               DR[n>>1] = *FPUL;    break;
+10905:              DENORM : set_E();                 break;
+10907:              qNaN :               qnan(n);     break;
+10909:              sNaN :               invalid(n);          break;
+10926:           if((FPSCR_DN == 1) || (abs == 0x00000000)){
+10934:           else                   return(DENORM);
+10948:    else if(abs < 0x7fc00000) return(qNaN);
+10950:    else                       return(sNaN);
+10958: FCNVSD(FPUL FRn) +NORM -NORM +0 -0 +INF -INF qNaN Invalid
+10960: Note: When DN = 1, the value of a denormalized number is treated as 0.
+```
+
+(Line 10958's minus signs are a replacement character in the extraction, shown here as `-`.  That one
+substitution aside, these lines are verbatim; blank lines and unquoted lines between them are omitted.)
+
+**Two things a careful reader will notice.**  The `case` list at 10897-10909 has no `NORM` label, while
+`fpul_type` returns NORM and the table at 10958 gives `+NORM`.  I read that as a manual omission; it does
+not change the point about FPUL.  And the pseudocode at 10948 classes the lower NaNs as qNaN and the upper
+as sNaN.
+
+The sibling, section 9.28, for contrast:
+
+```
+10754: 1 FCNVDS DRm,FPUL (float)DRm  FPUL  1111mmm010111101 2  --
+10758: When FPSCR.PR = 1: This instruction converts the double-precision floating-point number in
+10759: DRm to a single-precision floating-point number, and stores the result in FPUL.
+10763: an exception has occurred. When an exception occurs, correct exception information is reflected in
+10764: FPSCR.cause and FPSCR.flag, and FPUL is not updated. Appropriate processing should therefore
+```
+
+An unstaggered table line, `:16935`:
+`FCNVSD FPUL,DRn        float_to_ double [FPUL]  DRn 1111nnn010101101 --     --`.
+The table at `:6300-6301` is staggered (it prints the FCNVDS operation beside the FCNVSD name), so do not
+cite it.
+
+`C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\sh7750_hardware.txt` has **no prose description of FCNVSD**.  A grep for
+`FCNVSD` gives only instruction lists and timing tables (`:15226`, `:15828`, `:16022`, `:17062`, `:18211`),
+and `:15226` has the same stagger.  So this round rests on the programming manual alone.
+
+**A correction to my scoping note:** it quoted `:10870-10871` starting at "This instruction converts",
+dropping "When FPSCR.PR = 1:".  The qualifier matters for Q4.
+
+## 6. WHAT HEAD DOES, PER INPUT CLASS (rows 1.5, -1.5 and ~0.1 MEASURED above and matching this table exactly; the rest READ, not run)
+
+| FPUL in | value | FPUL after, HEAD | FPUL after, fixed | DRn (hi lo), both |
+|---|---|---|---|---|
+| `0x3f800000` | 1.0 | `0x00000001` | unchanged | `3ff00000 00000000` |
+| `0x3fc00000` | 1.5 | `0x00000001` | unchanged | `3ff80000 00000000` |
+| `0xbfc00000` | -1.5 | `0xffffffff` | unchanged | `bff80000 00000000` |
+| `0x3dcccccd` | ~0.1 | `0x00000000` | unchanged | `3fb99999 a0000000` |
+| `0x80000000` | -0 | `0x00000000` | unchanged | `80000000 00000000` (prediction) |
+| `0x4f000000` | 2^31 | C cast undefined | unchanged | `41e00000 00000000` |
+| `0x7f800000` | +Inf | C cast undefined | unchanged | `7ff00000 00000000` |
+| `0x7fc00000` | NaN | C cast undefined | unchanged | `7fffffff ffffffff` (a model policy, see below) |
+| `0x00000001` | smallest subnormal | `0x00000000` | unchanged | a normal double, see below |
+| `0x00000000` | +0 | `0x00000000` | unchanged | `00000000 00000000` |
+
+Arithmetic worth enumerating: `0x3dcccccd` has mantissa `0x4ccccd`.  Shifted left 29 into a 52-bit
+fraction with exponent `0x3fb`, that gives `3fb99999 a0000000`, by my hand derivation.  It is the only row
+above with a nonzero low word.
+
+**Three things the table implies, each a premise to check:**
+
+1. **+0 is the one input I believe HEAD leaves unchanged, so it cannot show the defect.**  I checked the
+   other in-range candidates by hand: solving `(int32_t)value(b) == b` over the exponent ranges where value
+   and bit pattern are of similar size gave no integer solution.  That is a hand derivation, not a run.
+   **Enumerate it if you can.**
+2. **The DRn NaN value is a model policy and I am not claiming it is correct.**  The manual routes qNaN to
+   `qnan(n)`, whose body I did not read.  This round fixes FPUL only.  A DRn row at NaN would pin the policy
+   rather than the architecture, so I propose none.
+3. **The subnormal DRn value disagrees with the manual's note at DN=1 and this round leaves that alone.**
+   10960 says a denormal is treated as 0 when DN = 1.  HEAD converts it to its true value, and `sh_dn()`
+   does not flush it (section 4).  That is the named "operands decode per DN=0" gap in `#303`'s comment.
+
+## 7. THE PROPOSED DETECTOR
+
+**Vehicle: extend `VECTORS` in `regress/sh_rounding_probe.py`.**  Facts about it, read today:
+
+* It runs real guest code on an unmodified `-E landisk`, through the cold debugger, one fresh session per
+  row per mode.  A row seeds registers through debugger assignments, including `fpul`, writes up to two
+  32-bit instruction words, single-steps, and reads back **one** 32-bit word from memory.
+* Its `ftrcS-*` rows already read FPUL back by the guest's own `sts` and store, and its `ftrcD-*` rows
+  already run with PR set.  So the row shapes needed already exist in the table.  DRn is read a half at a
+  time with `fmov.s`, as the `Ddiv 1.0/10.0 low` row reads one half under PR.  No new probe is proposed.
+* One readback per session means each input needs up to three sessions per mode: FPUL, high half, low half.
+
+**Gate wiring, from `git show HEAD:regress/gate_sh_rounding.sh`** (the working copy of this file holds
+another session's uncommitted edits, at old lines 530, 590 and 822, so I cite only HEAD):
+
+```sh
+check     "vector-mode pairs run"                  "$want" 36
+check     "vector-mode pairs correct"              "$got"  "$want"
+check     "vectors that discriminate the two modes" "$disc" 9
+for v in "fdiv" "float" "fadd " "fmac " "fmactie" "fipr" "ftrv" "fmul" \
+         "fsub band" "faddinf" "Ddiv" "ftrcS-inf" "ftrcS-ovf" "ftrcS-nan" "ftrcS-edge" \
+         "ftrcD-2p31" "ftrcD-neghalf"; do
+    n=$(grep -c "^$v.*ok$" "$LOG")
+    check "  $v: both modes correct" "$n" 2
+done
+```
+
+So the row total is pinned by EQUALITY and moves with every added row.  Each row name goes in the list and
+must not be a prefix of another row's name, because `grep -c "^$v.*ok$"` matches by prefix.  The probe
+prints names in a `%-28s` column, so names must also stay short of 28 characters.  **The discriminating
+count stays 9 by my reading**: the conversion to double does not use RM, the new rows' two modes want the
+same value, and `discriminating` is computed from the table's own dictionaries.
+
+**Proposed rows** (values from section 6, each run under both modes; the DN=0 leg is a Q3 question):
+
+| row | input | reads | channel: what differs under HEAD or a weakened fix |
+|---|---|---|---|
+| `fcnvsd fpul 1.5` | 1.5 | FPUL | truncates to 1; a value above 1 in size |
+| `fcnvsd fpul -1.5` | -1.5 | FPUL | truncates to `0xffffffff`; the sign path |
+| `fcnvsd fpul 0.1` | ~0.1 | FPUL | truncates to 0; a value below 1 in size |
+| `fcnvsd fpul -0` | -0 | FPUL | `0x80000000` becomes 0 |
+| `fcnvsd fpul inf` | +Inf | FPUL | an undefined cast; the specials |
+| `fcnvsd fpul nan` | NaN | FPUL | an undefined cast; the specials |
+| `fcnvsd dr hi` | ~0.1 | FR(n) | high half written and in the right register |
+| `fcnvsd dr lo` | ~0.1 | FR(n+1) | low half nonzero, so an unwritten register cannot pass |
+
+**Accept side:** these are not a removed guard, so the de-escalation clause does not apply.  The DRn rows are
+what show the instruction still does its work.
+
+**Floor (the project's minimum for shipping a detector).**
+* (a) red on the pre-fix build: the FPUL rows, once the owed measurement confirms it.
+* (b) red on the removed line reinstated verbatim: the same FPUL rows.
+* (d) a pure deletion owes the removed behaviour re-introduced under a DIFFERENT predicate.  The handler's
+  only dominating predicate is the FD check in the macro, and the body tests nothing.  Candidates are in Q3.
+* (e) the probe header names what the detector is designed to catch, and what it does not.
+
+**Clause (c), a null medium, a product carrying none of the behaviour under test.**  This is an
+instruction-handler round, so the medium is an IDENTITY BODY: the handler decodes and retires and writes
+nothing.  **On that medium every FPUL row goes GREEN by construction, because leaving FPUL alone is what they
+test.  Only the two DRn rows can go red**, which is why they are in the table.  The seeded DRn must also differ
+from the expected value.  Proposed record, in the required form:
+
+    (c): measured at regress/artifacts/shfcnvsdfpul/<dated dir>/RECEIPT.txt  -- NOT YET RUN, owed before ship
+
+The other permitted form, `(c): by construction via <row/pin>, leg not run`, would rest on the gate's
+equality pin and the sentinel `0xdeadbeef` in the readback word.  I do not propose it, because a dead run
+is a different medium from an identity body.
+
+**The expected witness rung is 3** (real guest instruction on an unmodified machine description).  Clause (ii)'s
+liveness and device-signature controls are written for device accesses; this is a CPU register, and the
+`0xdeadbeef` sentinel plus rows whose values could not arise by chance are what I would offer instead.
+**Is that adequate, or is a control owed?**
+
+## 8. QUESTIONS
+
+**Q1, premise audit.**  Which premise in sections 2, 4, 6 and 7 is false?  In particular:
+(a) does the deleted line's removal leave DRn byte-identical for every FPUL value;
+(b) does anything else in the tree rely on FCNVSD having changed FPUL;
+(c) is `#297` "removed" or "guarded";
+(d) is +0 the only in-range unchanged input;
+(e) do the cold-debugger seeds really reach `cd.sh.fpul`, and is FPUL's truncation visible through the guest's
+`sts` under the step count the probe uses for a three-instruction row?
+
+**Q2, the partition.**  Which FPUL inputs does the fix change the answer for, and which does it leave alone?
+Enumerate the partition, and say whether the row table in section 7 has a member in each part.
+
+**Q3, candidate weakenings.**  Here are candidate forms of the fixed handler.  For each, say whether it is
+EQUIVALENT to the fixed form or gives a different result, at which input the two first differ, and which
+proposed row, if any, turns red.  Then say which, if any, is inside the project's floor rather than disclosed
+coverage debt.  The rule: the floor enumerates the predicates dominating the edit, up to the function boundary,
+and partitions the body itself tests; this body tests nothing.  A value class no code tests is clause (e)
+disclosure.
+
+    (a) cpu->cd.sh.fpul = (int32_t) op1.f;                        the removed line, verbatim
+    (b) if (op1.f >= 1.0 || op1.f <= -1.0) <that line>            only when size is at least 1
+    (c) if (op1.f > -1.0 && op1.f < 1.0) cpu->cd.sh.fpul = 0;     only when size is below 1
+    (d) if (op1.nan || isinf(op1.f)) cpu->cd.sh.fpul = 0x80000000;  only the specials
+    (e) if (sh_fp_rm(cpu) == IEEE_RM_RZ) <that line>              only under one rounding mode
+    (f) if (!(cpu->cd.sh.fpscr & SH_FPSCR_DN_ZERO)) <that line>   only with DN clear
+    (g) if (ic->arg[0] != (size_t)&cpu->cd.sh.fr[0]) <that line>  only for a destination other than DR0
+    (h) after the store: cpu->cd.sh.fpul = (uint32_t) ieee;       the low half of the result
+    (i) the two reg() stores exchanged                            high and low halves swapped
+
+Form (f) is why I raise a DN=0 leg: the probe ORs DN into every row except those marked `NODN`, so the table
+as proposed never runs with DN clear.  Form (g) asks the same about using only one destination register.
+**Is either owed a row, or is each a disclosure?**  Please do not invent further forms unless you can name the
+input at which it first differs.
+
+**Q4, option-set completeness.**  The disposition is to delete.  Is there a member this brief did not name?
+Grep the fork for the idiom in sibling converts.  The neighbouring questions, each of which I propose to FILE
+rather than ride here, under the one-site rule:
+
+* **PR = 0.**  The manual marks FCNVSD reserved at PR=0 (10864, 10883), and the handler converts anyway.  So does
+  FCNVDS.  Does this differ from sibling PR=1-only instructions in the tree?  I have not checked whether a row
+  already holds this.
+* **FCNVDS has no row at all either.**  A grep of `regress/*.py` and `regress/*.sh` for `cnvsd` and `fcnvds`
+  matched nothing, case-insensitively.  Should one row of it ride here as a same-file control, or is that scope
+  growth?
+* **The DN=1 subnormal input** (section 6, item 3).  It is already a named gap.  Does it want its own row, or
+  does `#303`'s comment cover it?
+
+**Q5, the vehicle.**  Extending `VECTORS` moves the equality pin at `gate_sh_rounding.sh:64` and the name list at
+`:78`.  Re-checked 2026-11-02 by `git diff HEAD -- regress/gate_sh_rounding.sh`: the working copy holds THREE uncommitted hunks of
+this session's own earlier (09-17) work, none near those lines -- the `gdrom_default rows run` pin 60 -> 62 with its comment (old
+`:530`), a whitespace-only change in a `for v in` list (old `:590`), and `sh4_chcr: rows actually run` 27 -> 29 (old `:822`); each is
+paired with an uncommitted probe (`sh4_chcr_probe.py`) and must NOT ride with this round.  So this round's hunks are staged from a
+HEAD-based copy of the gate file carrying only its own changes (the project's #548 recipe: back up the working file, commit the
+HEAD-based copy, restore and md5-check), not by `git add` of the working file.  `sh_rounding_probe.py` itself is clean.
+Eight rows at two modes is sixteen
+more sessions.  **Is the row count proportionate to a one-line deletion?**  Name any row you would drop, and say
+what then stops turning red.
+
+**If, while verifying a claim, you found something ELSE -- say so.**
+
+**Please end with:** `VERDICT: PROCEED / PROCEED WITH CHANGES / DO NOT PROCEED`, repeated from your first line,
+and for any premise you could not settle from this packet, name it.
+
+## 9. VERDICT FORMAT FOR THIS PANEL
+
+First line and last line: `VERDICT: PROCEED / PROCEED WITH CHANGES (<n>) / DO NOT PROCEED`.  Then Q1-Q5 in order, each
+answer opening with the question number.  Name every premise you could not settle from this packet.  Packet-fed seats: do not plan
+to read files; everything is inlined above.
+codex
+I’ll check the handler, decoder, float helpers, manuals, and probe within the permitted paths. This will be a read-only review; I won’t build or execute anything.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-Location
+rg --files -g AGENTS.md -g '"'!GXEMUL-SEC/.claude/**'"' -g '"'!**/regress/artifacts/**'"' -g '"'!tools/pipeline/**'"' GXEMUL-SEC/src GXEMUL-SEC/regress
+rg -n 'fcnvsd_fpul_drn|fcnvds_drm_fpul|ftrc_frm_fpul|FLOATING_POINT_AVAILABLE_CHECK|sh_dn\\(|FCNVSD FPUL|r8 =|fpul' GXEMUL-SEC/src/cpus/cpu_sh_instr.c" in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 225ms:
+
+57:#define	FLOATING_POINT_AVAILABLE_CHECK					\
+148: *  sh_dn():  #334  --  FPSCR.DN, the denormalization mode.
+175:static uint64_t sh_dn(struct cpu *cpu, uint64_t ieee, int fmt)
+196:	sh_dn(cpu, (ieee_store_float_value)((v), (fmt)), (fmt))
+198:	sh_dn(cpu, (ieee_store_float_value_rm)((v), (fmt), (rm)), (fmt))
+771:	FLOATING_POINT_AVAILABLE_CHECK;
+862:	FLOATING_POINT_AVAILABLE_CHECK;
+938:	FLOATING_POINT_AVAILABLE_CHECK;
+1165:	FLOATING_POINT_AVAILABLE_CHECK;
+1439:	FLOATING_POINT_AVAILABLE_CHECK;
+1531:	FLOATING_POINT_AVAILABLE_CHECK;
+1587:	FLOATING_POINT_AVAILABLE_CHECK;
+2871:	FLOATING_POINT_AVAILABLE_CHECK;
+2876:	FLOATING_POINT_AVAILABLE_CHECK;
+2892:	FLOATING_POINT_AVAILABLE_CHECK;
+2915: *  float_fpul_frn:  Load FPUL into float register.
+2919:X(float_fpul_frn)
+2921:	int32_t fpul = cpu->cd.sh.fpul;
+2923:	FLOATING_POINT_AVAILABLE_CHECK;
+2927:		uint64_t ieee = ieee_store_float_value(fpul, IEEE_FMT_D);
+2932:		uint32_t ieee = ieee_store_float_value_rm(fpul, IEEE_FMT_S, sh_fp_rm(cpu));
+2939: *  ftrc_frm_fpul:  Truncate a float register into FPUL.
+2943:X(ftrc_frm_fpul)
+2947:	FLOATING_POINT_AVAILABLE_CHECK;
+2999:				cpu->cd.sh.fpul = 0x80000000;	/*  NaN  */
+3004:				cpu->cd.sh.fpul = 0x7fffffff;
+3011:				cpu->cd.sh.fpul = 0x80000000;
+3016:		cpu->cd.sh.fpul = (int32_t) op1.f;
+3022:				cpu->cd.sh.fpul = 0x80000000;	/*  NaN  */
+3027:				cpu->cd.sh.fpul = 0x7fffffff;
+3033:				cpu->cd.sh.fpul = 0x80000000;
+3038:		cpu->cd.sh.fpul = (int32_t) op1.f;
+3044: *  fcnvsd_fpul_drn:  Convert single-precision to double-precision.
+3045: *  fcnvds_drm_fpul:  Convert double-precision to single-precision.
+3049:X(fcnvsd_fpul_drn)
+3054:	FLOATING_POINT_AVAILABLE_CHECK;
+3056:	ieee_interpret_float_value(cpu->cd.sh.fpul, &op1, IEEE_FMT_S);
+3057:	cpu->cd.sh.fpul = (int32_t) op1.f;
+3064:X(fcnvds_drm_fpul)
+3069:	FLOATING_POINT_AVAILABLE_CHECK;
+3075:	cpu->cd.sh.fpul = ieee_store_float_value_rm(op1.f, IEEE_FMT_S, sh_fp_rm(cpu));
+3080: *  fsca_fpul_drn:  Sinus/cosinus approximation.
+3090:X(fsca_fpul_drn)
+3092:	double fpulAngle = ((double)cpu->cd.sh.fpul) * 2.0 * M_PI / 65536.0;
+3094:	FLOATING_POINT_AVAILABLE_CHECK;
+3096:	reg(ic->arg[0]) = ieee_store_float_value(sin(fpulAngle), IEEE_FMT_S);
+3098:	    ieee_store_float_value(cos(fpulAngle), IEEE_FMT_S);
+3116:	FLOATING_POINT_AVAILABLE_CHECK;
+3146:	FLOATING_POINT_AVAILABLE_CHECK;
+3189:	FLOATING_POINT_AVAILABLE_CHECK;
+3194:	FLOATING_POINT_AVAILABLE_CHECK;
+3222:	FLOATING_POINT_AVAILABLE_CHECK;
+3249:	FLOATING_POINT_AVAILABLE_CHECK;
+3277:	FLOATING_POINT_AVAILABLE_CHECK;
+3288:		 *  FLOATING_POINT_AVAILABLE_CHECK has already returned by here.
+3369:	FLOATING_POINT_AVAILABLE_CHECK;
+3410:	FLOATING_POINT_AVAILABLE_CHECK;
+3445:	FLOATING_POINT_AVAILABLE_CHECK;
+3483:	FLOATING_POINT_AVAILABLE_CHECK;
+3538:	FLOATING_POINT_AVAILABLE_CHECK;
+3559:	FLOATING_POINT_AVAILABLE_CHECK;
+3586:	FLOATING_POINT_AVAILABLE_CHECK;
+3617:	FLOATING_POINT_AVAILABLE_CHECK;
+3622:	FLOATING_POINT_AVAILABLE_CHECK;
+4071:	r8 = (iword >> 8) & 0xf;
+4222:				ic->arg[0] = (size_t)&cpu->cd.sh.fpul;
+4315:			if (r8 == r4)
+4593:				ic->arg[0] = (size_t)&cpu->cd.sh.fpul;
+4598:				ic->arg[0] = (size_t)&cpu->cd.sh.fpul;
+4603:				ic->arg[1] = (size_t)&cpu->cd.sh.fpul;
+4690:			if (r8 == r4)
+4695:			if (r8 == r4)
+5020:			ic->arg[0] = (size_t)&cpu->cd.sh.fpul;
+5026:			ic->arg[1] = (size_t)&cpu->cd.sh.fpul;
+5029:			ic->f = instr(float_fpul_frn);
+5033:			ic->f = instr(ftrc_frm_fpul);
+5062:			/*  FCNVSD FPUL,DRn  */
+5063:			ic->f = instr(fcnvsd_fpul_drn);
+5067:			ic->f = instr(fcnvds_drm_fpul);
+5076:			ic->f = instr(fsca_fpul_drn);
+Path                      
+----                      
+C:\DocumentNoSnc\CC\GXEMUL
+
+
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'ieee_interpret_float_value|ieee_store_float_value|FP_ZERO|FP_NAN|FP_INFINITE|#303|no_reasonable_result|IEEE_FMT_S|IEEE_FMT_D' GXEMUL-SEC/src/core/float_emul.c
+rg -n 'fpul|fr\\[|fpscr|SH_FPSCR' GXEMUL-SEC/src/include/cpu_sh.h
+rg -n 'ieee_float_value|double f|IEEE_RM' GXEMUL-SEC/src/include/float_emul.h
+rg -n -i 'fcnvsd|fcnvds|fpul|FPSCR|\\bPR\\b|NODN|VECTORS|steps|step|discriminating|28s|r1|ftrcS|ftrcD' GXEMUL-SEC/regress/sh_rounding_probe.py
+rg -n -i 'fcnvsd|fcnvds' GXEMUL-SEC/src GXEMUL-SEC/regress -g '*.py' -g '*.c' -g '*.h' -g '"'!artifacts/**'"' -g '"'!**/artifacts/**'"'" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$p='"'GXEMUL-SEC/src/cpus/cpu_sh_instr.c'
+"'$c=Get-Content -LiteralPath $p
+$spans=@(@(40,80),@(125,201),@(2858,3104),@(3268,3356),@(4038,4080),@(4950,5117))
+foreach($s in $spans){for($j=$s[0];$j -le $s[1];$j++){ '"'{0}:{1}' -f "'$j,$c[$j-1] }}' in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$p='"'C:\\DocumentNoSnc\\CC\\GXEMUL\\_scratchpad\\sh4_programming.txt'
+"'$c=Get-Content -LiteralPath $p
+$spans=@(@(10744,10825),@(10851,10970),@(16926,16942))
+foreach($s in $spans){for($j=$s[0];$j -le $s[1];$j++){ '"'{0}:{1}' -f "'$j,$c[$j-1] }}
+rg -n '"'FCNVSD|void qnan|qnan\\(|void invalid|invalid\\(|FPSCR_PR|FSTS|STS.*FPUL|FPUL.*STS' 'C:\\DocumentNoSnc\\CC\\GXEMUL\\_scratchpad\\sh4_programming.txt'
+rg -n 'FCNVSD' 'C:\\DocumentNoSnc\\CC\\GXEMUL\\_scratchpad\\sh7750_hardware.txt'" in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 282ms:
+50: *  ieee_interpret_float_value() (three sites, two operands) and 2 from
+51: *  ieee_store_float_value() -- measured identically on R3000 and R4000.
+74: *  ieee_interpret_float_value():
+79:void ieee_interpret_float_value(uint64_t x, struct ieee_float_value *fvp,
+86:	int exp_biased = 1;	/*  #303: biased exponent, saved so the S/D
+94:	case IEEE_FMT_S:	n_frac = 23; n_exp = 8; break;
+96:	case IEEE_FMT_D:	n_frac = 52; n_exp = 11; break;
+101:			fatal("ieee_interpret_float_value(): "
+113:	case IEEE_FMT_S:
+116:	case IEEE_FMT_D:
+117:		exp_biased = (x >> n_frac) & ((1 << n_exp) - 1);  /*  #303  */
+123:			fatal("ieee_interpret_float_value(): unimplemented "
+131:	case IEEE_FMT_S:
+135:			goto zero_or_no_reasonable_result;
+140:	case IEEE_FMT_D:
+144:			goto zero_or_no_reasonable_result;
+153:		goto no_reasonable_result;
+175:	case IEEE_FMT_S:
+176:	case IEEE_FMT_D:
+178:		    (fmt == IEEE_FMT_D && x == 0x8000000000000000ULL) ||
+179:		    (fmt == IEEE_FMT_S && x == 0x80000000ULL)) {
+181:			goto zero_or_no_reasonable_result;
+192:		/*  #303: biased exponent 0 with a nonzero mantissa is a
+221:		    flush operands to zero.  After #303 the SH contract is
+238:			fatal("ieee_interpret_float_value(): "
+271:zero_or_no_reasonable_result:
+275:no_reasonable_result:
+289: *  ieee_store_float_value_rm() so the PowerPC integer converts can share it;
+377:	double scaled = ldexp(nf, fmt == IEEE_FMT_S ? 149 : 1074);
+393: *  ieee_store_float_value_rm():
+422:uint64_t ieee_store_float_value_rm(double nf, int fmt, int rm)
+432:	case IEEE_FMT_S:	n_frac = 23; n_exp = 8; signofs = 31; break;
+434:	case IEEE_FMT_D:	n_frac = 52; n_exp = 11; signofs = 63; break;
+444:			fatal("ieee_store_float_value(): unimplemented format"
+496:	case IEEE_FMT_S:
+497:	case IEEE_FMT_D:
+505:		case FP_INFINITE:
+506:			if (fmt == IEEE_FMT_D)
+511:		case FP_NAN:
+512:			if (fmt == IEEE_FMT_D)
+639:			    has its own FP_ZERO arm -- so flush to zero but keep
+679:		case FP_ZERO:
+690:			fatal("ieee_store_float_value(): unimplemented format"
+695:	if (fmt == IEEE_FMT_S || fmt == IEEE_FMT_W)
+703: *  ieee_store_float_value():
+713:uint64_t ieee_store_float_value(double nf, int fmt)
+715:	return ieee_store_float_value_rm(nf, fmt, IEEE_RM_LEGACY);
+1098: *  ieee_interpret_float_value()'s IEEE_FMT_L arm as a plain host cast --
+104:	uint32_t	fr[SH_N_FPRS];
+110:	uint32_t	fpscr;		/*  Floating-point Status/Control  */
+111:	uint32_t	fpul;		/*  Floating-point Communication Reg  */
+197:#define	SH_FPSCR_RM_MASK	0x00000003	/*  Rounding Mode  */
+198:#define	   SH_FPSCR_RM_NEAREST	       0x0	/*  Round to nearest  */
+199:#define	   SH_FPSCR_RM_ZERO	       0x1	/*  Round to zero  */
+200:#define	SH_FPSCR_INEXACT	0x00000004	/*  Inexact exception  */
+201:#define	SH_FPSCR_UNDERFLOW	0x00000008	/*  Underflow exception  */
+202:#define	SH_FPSCR_OVERFLOW	0x00000010	/*  Overflow exception  */
+203:#define	SH_FPSCR_DIV_BY_ZERO	0x00000020	/*  Div by zero exception  */
+204:#define	SH_FPSCR_INVALID	0x00000040	/*  Invalid exception  */
+205:#define	SH_FPSCR_EN_INEXACT	0x00000080	/*  Inexact enable  */
+206:#define	SH_FPSCR_EN_UNDERFLOW	0x00000100	/*  Underflow enable  */
+207:#define	SH_FPSCR_EN_OVERFLOW	0x00000200	/*  Overflow enable  */
+208:#define	SH_FPSCR_EN_DIV_BY_ZERO	0x00000400	/*  Div by zero enable  */
+209:#define	SH_FPSCR_EN_INVALID	0x00000800	/*  Invalid enable  */
+210:#define	SH_FPSCR_CAUSE_INEXACT	0x00001000	/*  Cause Inexact  */
+211:#define	SH_FPSCR_CAUSE_UNDERFLOW 0x00002000	/*  Cause Underflow  */
+212:#define	SH_FPSCR_CAUSE_OVERFLOW	0x00004000	/*  Cause Overflow  */
+213:#define	SH_FPSCR_CAUSE_DIVBY0	0x00008000	/*  Cause Div by 0  */
+214:#define	SH_FPSCR_CAUSE_INVALID	0x00010000	/*  Cause Invalid  */
+215:#define	SH_FPSCR_CAUSE_ERROR	0x00020000	/*  Cause Error  */
+216:#define	SH_FPSCR_DN_ZERO	0x00040000	/*  Denormalization Mode  */
+217:#define	SH_FPSCR_PR		0x00080000	/*  Double-Precision Mode  */
+218:#define	SH_FPSCR_SZ		0x00100000	/*  Double-Precision Size  */
+219:#define	SH_FPSCR_FR		0x00200000	/*  Register Bank Select  */
+38:struct ieee_float_value {
+56:#define	IEEE_RM_RN		0	/*  to nearest, ties to even  */
+57:#define	IEEE_RM_RZ		1	/*  toward zero  */
+58:#define	IEEE_RM_RP		2	/*  toward +Inf  */
+59:#define	IEEE_RM_RM		3	/*  toward -Inf  */
+60:#define	IEEE_RM_LEGACY		4	/*  truncate; overflow to Inf  */
+62:void ieee_interpret_float_value(uint64_t x, struct ieee_float_value *fvp, int fmt);
+66:/*  #326: round a double to an integral value under an IEEE_RM_* mode,
+103:    before the mode is available. NOTE on IEEE_RM_LEGACY: for the STORE
+37:DN = 0x00040000            # FPSCR.DN, set at reset
+38:PR = 0x00080000            # double precision
+39:NODN = 0x80000000          # #303 row marker, NOT an FPSCR bit: the harness strips
+45:#  fmov.s FRm,@Rn  = 1111 nnnn mmmm 1010.  Rn = r1 throughout.
+54:#  name, fpscr extra bits, register seed, packed instruction word, {mode: expected}
+56:#  at CODE+4 (stepped as 3 instructions instead of 2). ftrc needs it: the result lands in
+57:#  FPUL, so the guest runs `ftrc ; sts fpul,r2` then `mov.l r2,@r1`.
+58:VECTORS = [
+61:     {"fr0": 0x3f800000, "fr1": 0x40400000},
+62:     instr(0xf013, 0),                       # fdiv fr1,fr0
+68:     {"fpul": 0x01000003},
+69:     instr(0xf02d, 0),                       # float fpul,fr0
+74:     {"fr0": 0x3f800000, "fr1": 0x33c00000},
+75:     instr(0xf010, 0),                       # fadd fr1,fr0
+80:     {"fr0": 0x3fc00000, "fr1": 0x3f800001, "fr2": 0x00000000},
+81:     instr(0xf21e, 2),                       # fmac fr0,fr1,fr2
+88:     {"fr0": 0x3fc00000, "fr1": 0, "fr2": 0, "fr3": 0,
+95:     dict([("fr0", 0x3f800001), ("fr1", 0), ("fr2", 0), ("fr3", 0),
+103:     {"fr0": 0x7149f2ca, "fr1": 0x7149f2ca},
+104:     instr(0xf012, 0),                       # fmul fr1,fr0
+107:    # ---- D-format directed rounding, FIXED by #300 and now discriminating -----------
+113:    ("Ddiv 1.0/10.0 low", PR,
+114:     {"fr0": 0x3ff00000, "fr1": 0x00000000,
+116:     instr(0xf023, 1),                       # fdiv dr2,dr0 ; store fr1 = low half
+119:    # ---- the double-rounding band, FIXED by #299 and now discriminating -------------
+125:     {"fr0": 0x3f800000, "fr1": 0x21800000},
+126:     instr(0xf011, 0),                       # fsub fr1,fr0
+142:     {"fr0": 0x3fc00003, "fr1": 0x33fffffc, "fr2": 0x3f800000},
+143:     instr(0xf21e, 2),                       # fmac fr0,fr1,fr2
+152:     {"fr0": 0x7f800000, "fr1": 0x3f800000},
+153:     instr(0xf010, 0),                       # fadd fr1,fr0
+161:    #  must agree; if someone ever wires ftrc to RM, the discriminating-count check
+164:    #  sequence: ftrc fr0,fpul (0xf03d) ; sts fpul,r2 (0x025a) ; mov.l r2,@r1 (0x2122)
+165:    ("ftrcS-inf +Inf",   0, {"fr0": 0x7f800000},
+168:    ("ftrcS-ovf +2^40",  0, {"fr0": 0x53800000},
+173:    ("ftrcS-nan qNaN+",  0, {"fr0": 0x7fc00000},
+177:    ("ftrcS-edge 4effffff", 0, {"fr0": 0x4effffff},
+181:    ("ftrcD-2p31 exact", PR, {"fr0": 0x41e00000, "fr1": 0x00000000},
+186:    ("ftrcD-neghalf -2^31-0.5", PR, {"fr0": 0xc1e00000, "fr1": 0x00100000},
+194:    #  silicon flushes to zero, so they carry NODN: the harness STRIPS the DN bit and
+201:    ("subn fmul S-min*2^100", NODN, {"fr0": 0x00000001, "fr1": 0x71800000},
+202:     instr(0xf012, 0),                       # fmul fr1,fr0
+205:    ("subn fdiv 2ulp/1ulp", NODN, {"fr0": 0x00000002, "fr1": 0x00000001},
+206:     instr(0xf013, 0),                       # fdiv fr1,fr0
+211:def run(fpscr, seed, word, word2=None):
+262:    cmds = ["fpscr=0x%08x" % fpscr]
+264:    cmds += ["r1=0x%08x" % DEST,
+270:             "step %d" % (3 if word2 is not None else 2)]
+292:for vec in VECTORS:
+297:        fps = DN | (extra & ~NODN) | mode
+298:        if extra & NODN:
+303:            print("%-28s %-12s %-10s %-10s FAIL(no-readback)"
+308:        print("%-28s %-12s 0x%08x 0x%08x %s"
+312:# count of genuinely discriminating vectors so the gate can assert on it rather than
+315:# for anyone accidentally wiring ftrc to FPSCR.RM.
+317:# mode-independent by architecture; discriminating counts static vector dictionary entries (len(set(v[4].values()))
+320:discriminating = sum(1 for v in VECTORS if len(set(v[4].values())) > 1)
+321:print("SH_ROUND_DISCRIMINATING=%d" % discriminating)
+GXEMUL-SEC/src\cpus\cpu_sh.c:1721:			debug("fcnvsd\tfpul,dr%i\n", r8);
+GXEMUL-SEC/src\cpus\cpu_sh.c:1723:			debug("fcnvds\tdr%i,fpul\n", r8);
+GXEMUL-SEC/src\cpus\cpu_sh_instr.c:3044: *  fcnvsd_fpul_drn:  Convert single-precision to double-precision.
+GXEMUL-SEC/src\cpus\cpu_sh_instr.c:3045: *  fcnvds_drm_fpul:  Convert double-precision to single-precision.
+GXEMUL-SEC/src\cpus\cpu_sh_instr.c:3049:X(fcnvsd_fpul_drn)
+GXEMUL-SEC/src\cpus\cpu_sh_instr.c:3064:X(fcnvds_drm_fpul)
+GXEMUL-SEC/src\cpus\cpu_sh_instr.c:5062:			/*  FCNVSD FPUL,DRn  */
+GXEMUL-SEC/src\cpus\cpu_sh_instr.c:5063:			ic->f = instr(fcnvsd_fpul_drn);
+GXEMUL-SEC/src\cpus\cpu_sh_instr.c:5066:			/*  FCNVDS DRm,FPUL  */
+GXEMUL-SEC/src\cpus\cpu_sh_instr.c:5067:			ic->f = instr(fcnvds_drm_fpul);
+
+ succeeded in 370ms:
+40:		cpu->pc &= ~((SH_IC_ENTRIES_PER_PAGE-1)			\
+41:		    << SH_INSTR_ALIGNMENT_SHIFT);			\
+42:		cpu->pc += (low_pc << SH_INSTR_ALIGNMENT_SHIFT);	\
+43:	}
+44:
+45:#define	ABORT_EXECUTION	  {	SYNCH_PC;				\
+46:				fatal("Execution aborted at: pc = 0x%08x\n", (int)cpu->pc); \
+47:				cpu->cd.sh.next_ic = &nothing_call;	\
+48:				cpu->running = false; }
+49:
+50:#define	RES_INST_IF_NOT_MD						\
+51:	if (!(cpu->cd.sh.sr & SH_SR_MD)) {				\
+52:		SYNCH_PC;						\
+53:		sh_exception(cpu, EXPEVT_RES_INST, 0, 0);		\
+54:		return;							\
+55:	}
+56:
+57:#define	FLOATING_POINT_AVAILABLE_CHECK					\
+58:	if (cpu->cd.sh.sr & SH_SR_FD) {					\
+59:		/*  FPU disabled: Cause exception.  */			\
+60:		SYNCH_PC;						\
+61:		if (cpu->delay_slot)					\
+62:			sh_exception(cpu, EXPEVT_FPU_SLOT_DISABLE, 0, 0);\
+63:		else							\
+64:			sh_exception(cpu, EXPEVT_FPU_DISABLE, 0, 0);	\
+65:		return;							\
+66:	}
+67:
+68:#ifndef	SH_FP_ROUNDING_MODE_INCLUDED
+69:#define	SH_FP_ROUNDING_MODE_INCLUDED
+70:/*
+71: *  #296: the rounding mode for a single-precision store.
+72: *
+73: *  FPSCR.RM was stored, guest-writable, and decoded NOWHERE -- the mask in
+74: *  cpu_sh.h was referenced only by its own #define, so every store
+75: *  truncated. Truncation IS round-toward-zero, which is the mode the SH-4
+76: *  resets into (RM = 01), and that is exactly why #292 left this core on
+77: *  the legacy entry point: under the reset mode there was no wrong answer
+78: *  to reproduce. (Round-toward-zero of the value handed to the store, to be
+79: *  precise -- not of the infinitely-precise result. Every core here
+80: *  evaluates in host double and then narrows, so a cancellation finer than
+125: *  mode, which #292 established is not straightforward.
+126: *
+127: *  The guard is future-proofing, not present necessity, and saying so is
+128: *  the point. tmp_sh_tail.c includes this file at :63 and again at :118,
+129: *  but the second include sits under #ifdef DYNTRANS_DUALMODE_32, which
+130: *  cpu_sh.c does not define (it defines only DYNTRANS_32; MIPS, PPC and
+131: *  RISC-V are the dual-mode cores). So there is exactly ONE live inclusion
+132: *  for SH today and the guard is inert. It is kept because a future
+133: *  dual-mode SH build would otherwise get a duplicate definition, and
+134: *  because this is the idiom cpu_mips_instr.c already uses for its shared
+135: *  helpers, where two inclusions really are live. Both inclusions land in
+136: *  one translation unit, so the first definition stays in scope for the
+137: *  second; were that not so it would be a hard compile error, not silent
+138: *  breakage.
+139: */
+140:static int sh_fp_rm(struct cpu *cpu)
+141:{
+142:	return (cpu->cd.sh.fpscr & SH_FPSCR_RM_MASK) == SH_FPSCR_RM_NEAREST?
+143:	    IEEE_RM_RN : IEEE_RM_RZ;
+144:}
+145:
+146:
+147:/*
+148: *  sh_dn():  #334  --  FPSCR.DN, the denormalization mode.
+149: *
+150: *  SH-4 never delivers a subnormal ARITHMETIC RESULT.  With DN=1 it writes a
+151: *  signed zero; with DN=0 the silicon raises an FPU error instead of computing
+152: *  one.  SH_FPSCR_DN_ZERO has been defined since the port was written and was
+153: *  read by NOTHING -- the flush happened to be correct only because the shared
+154: *  encoder flushed unconditionally, which #331 stopped.  Without this, every
+155: *  SH guest would begin seeing gradual underflow, and FPSCR RESETS TO 0x40001
+156: *  (cpu_sh.c), i.e. DN=1, so that would be the DEFAULT configuration rather
+157: *  than an exotic one.
+158: *
+159: *  DN=0 delivers the IEEE value here rather than raising the FPU error, which
+160: *  is this tree's established modelling depth for SH FP exceptions -- the same
+161: *  choice #303 made on the operand side, and the reason the two committed
+162: *  gate-10 rows deliberately clear DN.  It is a NAMED divergence, recorded in
+163: *  OUTSTANDING_BUGS, not an oversight; the exception model is its own queued
+164: *  round.
+165: *
+166: *  Applied uniformly to every FP result store in this file through the two
+167: *  macros below, rather than hand-edited into twenty-three call sites.  That
+168: *  is the safer construction and not merely the shorter one: a per-site edit
+169: *  can MISS a site silently, whereas this cannot, and the function is a no-op
+170: *  for everything except a value that is subnormal in the destination -- the
+171: *  integer W/L formats and every normal, zero, Inf and NaN result pass through
+172: *  bit-identical.  The parenthesised callee suppresses the macro so the real
+173: *  function is still what gets called.
+174: */
+175:static uint64_t sh_dn(struct cpu *cpu, uint64_t ieee, int fmt)
+176:{
+177:	int n_frac, signofs;
+178:	uint64_t mag;
+179:
+180:	if (fmt != IEEE_FMT_S && fmt != IEEE_FMT_D)
+181:		return ieee;
+182:	if (!(cpu->cd.sh.fpscr & SH_FPSCR_DN_ZERO))
+183:		return ieee;
+184:
+185:	n_frac = fmt == IEEE_FMT_S ? 23 : 52;
+186:	signofs = fmt == IEEE_FMT_S ? 31 : 63;
+187:	mag = ieee & ~((uint64_t)1 << signofs);
+188:
+189:	if (mag == 0 || (mag >> n_frac) != 0)
+190:		return ieee;
+191:
+192:	return ieee & ((uint64_t)1 << signofs);
+193:}
+194:
+195:#define	ieee_store_float_value(v, fmt)					\
+196:	sh_dn(cpu, (ieee_store_float_value)((v), (fmt)), (fmt))
+197:#define	ieee_store_float_value_rm(v, fmt, rm)				\
+198:	sh_dn(cpu, (ieee_store_float_value_rm)((v), (fmt), (rm)), (fmt))
+199:#endif
+200:
+201:/*
+2858:	sh_exception(cpu, EXPEVT_TRAPA, 0, 0);
+2859:}
+2860:
+2861:
+2862:/*
+2863: *  copy_fp_register:   Copy a register into another, with FP avail check.
+2864: *  lds_rm_fpscr:       Copy Rm into FPSCR.
+2865: *
+2866: *  arg[0] = ptr to source
+2867: *  arg[1] = ptr to destination
+2868: */
+2869:X(copy_fp_register)
+2870:{
+2871:	FLOATING_POINT_AVAILABLE_CHECK;
+2872:	reg(ic->arg[1]) = reg(ic->arg[0]);
+2873:}
+2874:X(lds_rm_fpscr)
+2875:{
+2876:	FLOATING_POINT_AVAILABLE_CHECK;
+2877:	sh_update_fpscr(cpu, reg(ic->arg[1]));
+2878:}
+2879:
+2880:
+2881:/*
+2882: *  fmov_frm_frn:  Copy one floating-point register (or pair) to another.
+2883: *
+2884: *  arg[0] = ptr to source float register or pair
+2885: *  arg[1] = ptr to destination float register or pair
+2886: */
+2887:X(fmov_frm_frn)
+2888:{
+2889:	size_t r0, r1;
+2890:	int ofs0, ofs1;
+2891:
+2892:	FLOATING_POINT_AVAILABLE_CHECK;
+2893:
+2894:	/*  Simplest case, single-precision:  */
+2895:	if (!(cpu->cd.sh.fpscr & SH_FPSCR_SZ)) {
+2896:		reg(ic->arg[1]) = reg(ic->arg[0]);
+2897:		return;
+2898:	}
+2899:
+2900:	/*  Double-precision:  */
+2901:	r0 = ic->arg[0]; r1 = ic->arg[1];
+2902:	ofs0 = (r0 - (size_t)&cpu->cd.sh.fr[0]) / sizeof(uint32_t);
+2903:	ofs1 = (r1 - (size_t)&cpu->cd.sh.fr[0]) / sizeof(uint32_t);
+2904:	if (ofs0 & 1)
+2905:		r0 = (size_t)&cpu->cd.sh.xf[ofs0 & ~1];
+2906:	if (ofs1 & 1)
+2907:		r1 = (size_t)&cpu->cd.sh.xf[ofs1 & ~1];
+2908:
+2909:	reg(r1) = reg(r0);
+2910:	reg(r1 + 4) = reg(r0 + 4);
+2911:}
+2912:
+2913:
+2914:/*
+2915: *  float_fpul_frn:  Load FPUL into float register.
+2916: *
+2917: *  arg[0] = ptr to float register, or float register pair
+2918: */
+2919:X(float_fpul_frn)
+2920:{
+2921:	int32_t fpul = cpu->cd.sh.fpul;
+2922:
+2923:	FLOATING_POINT_AVAILABLE_CHECK;
+2924:
+2925:	if (cpu->cd.sh.fpscr & SH_FPSCR_PR) {
+2926:		/*  Double-precision, using a pair of registers:  */
+2927:		uint64_t ieee = ieee_store_float_value(fpul, IEEE_FMT_D);
+2928:		reg(ic->arg[0]) = (uint32_t) (ieee >> 32);
+2929:		reg(ic->arg[0] + sizeof(uint32_t)) = (uint32_t) ieee;
+2930:	} else {
+2931:		/*  Single-precision:  */
+2932:		uint32_t ieee = ieee_store_float_value_rm(fpul, IEEE_FMT_S, sh_fp_rm(cpu));
+2933:		reg(ic->arg[0]) = (uint32_t) ieee;
+2934:	}
+2935:}
+2936:
+2937:
+2938:/*
+2939: *  ftrc_frm_fpul:  Truncate a float register into FPUL.
+2940: *
+2941: *  arg[0] = ptr to float register, or float register pair
+2942: */
+2943:X(ftrc_frm_fpul)
+2944:{
+2945:	struct ieee_float_value op1;
+2946:
+2947:	FLOATING_POINT_AVAILABLE_CHECK;
+2948:
+2949:	/*  #297: the conversion was a raw C cast, `(int32_t) op1.f`.  For NaN,
+2950:	 *  infinity and out-of-range values that cast is UNDEFINED BEHAVIOUR --
+2951:	 *  the guest-visible result depended on the HOST cpu.  On x86 the cast
+2952:	 *  happens to deliver 0x80000000 for every special case; the SH-4
+2953:	 *  manual (E602156 rev 5.0, FTRC pseudocode + special-case table)
+2954:	 *  instead delivers +MAX 0x7fffffff for +Inf and positive overflow.
+2955:	 *  Reproduced on the committed build before this edit: ftrc of +Inf
+2956:	 *  and of 2^40 both stored 0x80000000 where the manual owes 0x7fffffff.
+2957:	 *
+2958:	 *  The ladder below mirrors the manual's ftrc_single_type_of /
+2959:	 *  ftrc_double_type_of on the raw bits, constants included:
+2960:	 *
+2961:	 *    single: NaN if bits > 0x7f800000 (checked FIRST -- a positive NaN
+2962:	 *            also exceeds the range bound, and the manual routes it to
+2963:	 *            NINF, i.e. 0x80000000, NOT to +MAX); positive out-of-range
+2964:	 *            and +Inf if bits > 0x4effffff (P_INT_SINGLE_RANGE,
+2965:	 *            strict); negative side if magnitude > 0x4f000000
+2966:	 *            (N_INT_SINGLE_RANGE), which covers -Inf, negative NaN and
+2967:	 *            negative overflow alike.
+2968:	 *    double: NaN if the high word says so; positive bound is
+2969:	 *            0x41e0000000000000 (2^31) with >=; negative bound is
+2970:	 *            magnitude >= 0x41e0000000200000, i.e. -(2^31+1), also >=,
+2971:	 *            so -2147483648.5 is still NORM and truncates to -2^31.
+2972:	 *
+2973:	 *  ALL NaN deliver 0x80000000 regardless of sign -- the panel seat that
+2974:	 *  claimed +MAX for positive NaN was refuted by the pseudocode itself.
+2975:	 *  Every invalid case delivers the VALUE only.  The manual's
+2976:	 *  ftrc_invalid sets the FPSCR.V cause bit unconditionally before the
+2977:	 *  enable check; this model does not, and the honest reason is
+2978:	 *  internal consistency, not scope hand-waving: NO instruction in this
+2979:	 *  core sets ANY FPSCR cause bit (see the TODO at the fdiv arm), so a
+2980:	 *  lone V here would be the one flag a guest could observe, implying
+2981:	 *  the others work.  The deviation is guest-visible -- STS FPSCR after
+2982:	 *  ftrc(+Inf) reads V=0 where hardware reads 1, and a guest that
+2983:	 *  enables the trap gets a value where hardware traps with FPUL
+2984:	 *  preserved -- and is tracked in OUTSTANDING_BUGS with the rest of
+2985:	 *  the missing SH FPU exception model.  (#273 is precedent only for
+2986:	 *  the values-only SCOPE on MIPS; its all-0x7fffffff result table is
+2987:	 *  MIPS-specific and must not be copied here -- SH documents the
+2988:	 *  A�MAX split this ladder implements.)
+2989:	 *  In the NORM arm the truncated value fits int32 by construction, so
+2990:	 *  the cast there is defined C and byte-identical to the old path.  */
+2991:	if (cpu->cd.sh.fpscr & SH_FPSCR_PR) {
+2992:		/*  Double-precision, using a pair of registers:  */
+2993:		uint64_t r1 = ((uint64_t)reg(ic->arg[0]) << 32) +
+2994:		    reg(ic->arg[0] + sizeof(uint32_t));
+2995:		uint32_t hi = (uint32_t) (r1 >> 32);
+2996:		if (!(r1 & 0x8000000000000000ULL)) {
+2997:			if (hi > 0x7ff00000 ||
+2998:			    (hi == 0x7ff00000 && (uint32_t)r1 != 0)) {
+2999:				cpu->cd.sh.fpul = 0x80000000;	/*  NaN  */
+3000:				return;
+3001:			}
+3002:			if (r1 >= 0x41e0000000000000ULL) {
+3003:				/*  out of range, +Inf:  */
+3004:				cpu->cd.sh.fpul = 0x7fffffff;
+3005:				return;
+3006:			}
+3007:		} else {
+3008:			if ((r1 & 0x7fffffffffffffffULL) >=
+3009:			    0x41e0000000200000ULL) {
+3010:				/*  out of range, -Inf, NaN:  */
+3011:				cpu->cd.sh.fpul = 0x80000000;
+3012:				return;
+3013:			}
+3014:		}
+3015:		ieee_interpret_float_value(r1, &op1, IEEE_FMT_D);
+3016:		cpu->cd.sh.fpul = (int32_t) op1.f;
+3017:	} else {
+3018:		/*  Single-precision:  */
+3019:		uint32_t r1 = reg(ic->arg[0]);
+3020:		if (!(r1 & 0x80000000)) {
+3021:			if (r1 > 0x7f800000) {
+3022:				cpu->cd.sh.fpul = 0x80000000;	/*  NaN  */
+3023:				return;
+3024:			}
+3025:			if (r1 > 0x4effffff) {
+3026:				/*  out of range, +Inf:  */
+3027:				cpu->cd.sh.fpul = 0x7fffffff;
+3028:				return;
+3029:			}
+3030:		} else {
+3031:			if ((r1 & 0x7fffffff) > 0x4f000000) {
+3032:				/*  out of range, -Inf, NaN:  */
+3033:				cpu->cd.sh.fpul = 0x80000000;
+3034:				return;
+3035:			}
+3036:		}
+3037:		ieee_interpret_float_value(r1, &op1, IEEE_FMT_S);
+3038:		cpu->cd.sh.fpul = (int32_t) op1.f;
+3039:	}
+3040:}
+3041:
+3042:
+3043:/*
+3044: *  fcnvsd_fpul_drn:  Convert single-precision to double-precision.
+3045: *  fcnvds_drm_fpul:  Convert double-precision to single-precision.
+3046: *
+3047: *  arg[0] = ptr to destination (double- or single-precision float)
+3048: */
+3049:X(fcnvsd_fpul_drn)
+3050:{
+3051:	struct ieee_float_value op1;
+3052:	int64_t ieee;
+3053:
+3054:	FLOATING_POINT_AVAILABLE_CHECK;
+3055:
+3056:	ieee_interpret_float_value(cpu->cd.sh.fpul, &op1, IEEE_FMT_S);
+3057:	cpu->cd.sh.fpul = (int32_t) op1.f;
+3058:
+3059:	/*  Store double-precision result:  */
+3060:	ieee = ieee_store_float_value(op1.f, IEEE_FMT_D);
+3061:	reg(ic->arg[0]) = (uint32_t) (ieee >> 32);
+3062:	reg(ic->arg[0] + sizeof(uint32_t)) = (uint32_t) ieee;
+3063:}
+3064:X(fcnvds_drm_fpul)
+3065:{
+3066:	struct ieee_float_value op1;
+3067:	int64_t r1;
+3068:
+3069:	FLOATING_POINT_AVAILABLE_CHECK;
+3070:
+3071:	r1 = reg(ic->arg[0] + sizeof(uint32_t)) +
+3072:	    ((uint64_t)reg(ic->arg[0]) << 32);
+3073:	ieee_interpret_float_value(r1, &op1, IEEE_FMT_D);
+3074:
+3075:	cpu->cd.sh.fpul = ieee_store_float_value_rm(op1.f, IEEE_FMT_S, sh_fp_rm(cpu));
+3076:}
+3077:
+3078:
+3079:/*
+3080: *  fsca_fpul_drn:  Sinus/cosinus approximation.
+3081: *
+3082: *  Note: This is an interesting instruction. It is not included in the SH4
+3083: *  manual. Some googling indicated that this might be an SH4X instruction.
+3084: *  On the other hand, it is used by Dreamcast code (and the Dreamcast has an
+3085: *  SH4), and a cvs comment for gdb said that this is an SH4 instruction, not
+3086: *  an SH4A instruction. Well well...
+3087: *
+3088: *  arg[0] = ptr to single-precision float register pair
+3089: */
+3090:X(fsca_fpul_drn)
+3091:{
+3092:	double fpulAngle = ((double)cpu->cd.sh.fpul) * 2.0 * M_PI / 65536.0;
+3093:
+3094:	FLOATING_POINT_AVAILABLE_CHECK;
+3095:
+3096:	reg(ic->arg[0]) = ieee_store_float_value(sin(fpulAngle), IEEE_FMT_S);
+3097:	reg(ic->arg[0] + sizeof(uint32_t)) =
+3098:	    ieee_store_float_value(cos(fpulAngle), IEEE_FMT_S);
+3099:}
+3100:
+3101:
+3102:/*
+3103: *  fipr_fvm_fvn:  Vector * vector  =>  scalar
+3104: *
+3268:	}
+3269:}
+3270:X(fsrra_frn)
+3271:{
+3272:	// I'm guessing that this is 1/sqrt. That's how it is described at
+3273:	// http://yam.20to4.net/dreamcast/hints/index.html at least.
+3274:
+3275:	struct ieee_float_value op1;
+3276:
+3277:	FLOATING_POINT_AVAILABLE_CHECK;
+3278:
+3279:	if (cpu->cd.sh.fpscr & SH_FPSCR_PR) {
+3280:		/*
+3281:		 *  #316: FSRRA is defined for single precision only, so PR=1
+3282:		 *  is a reserved mode combination. It used to run
+3283:		 *  ABORT_EXECUTION, stopping the emulator; it now takes the
+3284:		 *  illegal-instruction exception, or its delay-slot variant if
+3285:		 *  that is where the guest put it -- the same order the
+3286:		 *  FPU-availability macro above uses, and the same shape
+3287:		 *  `trapa` uses. FPU-disabled still wins over both, because
+3288:		 *  FLOATING_POINT_AVAILABLE_CHECK has already returned by here.
+3289:		 */
+3290:		SYNCH_PC;
+3291:		if (cpu->delay_slot)
+3292:			sh_exception(cpu, EXPEVT_SLOT_INST, 0, 0);
+3293:		else
+3294:			sh_exception(cpu, EXPEVT_RES_INST, 0, 0);
+3295:		return;
+3296:	} else {
+3297:		/*  Single-precision:  */
+3298:		int32_t ieee, r1 = reg(ic->arg[0]);
+3299:		ieee_interpret_float_value(r1, &op1, IEEE_FMT_S);
+3300:		/*  #339: this uses the LEGACY store where every neighbour in
+3301:		    this file uses the mode-aware one, and that difference is
+3302:		    deliberate rather than an oversight -- recorded here
+3303:		    because it has been re-filed as a defect more than once.
+3304:		    FSRRA is an APPROXIMATION instruction, so there is no
+3305:		    rounding mode for it to honour and `1.0f / sqrt()` is
+3306:		    already a different approximation from the silicon's
+3307:		    table-driven one.
+3308:
+3309:		    *** THIS COMMENT USED TO CITE "the SH-4 manual" FOR AN
+3310:		    ERROR BOUND, AND THAT CITATION CANNOT BE CHECKED HERE --
+3311:		    corrected 2026-08-22 when real manuals were obtained.
+3312:		    FSRRA APPEARS IN NEITHER OF THEM. *** Zero hits in the
+3313:		    SH-4 Software Manual (Rev. 5.0) and zero in the SH7750
+3314:		    Hardware Manual (Rev. 7.00); the error-bound text those
+3315:		    greps do find belongs to FIPR, a different instruction.
+3316:		    FSRRA is an SH-4A addition, and the SH-4 opcode table has
+3317:		    no entry for 1111nnnn01111101 at all, though its
+3318:		    neighbours FSTS/FNEG/FABS/FSQRT are all listed.
+3319:
+3320:		    *** AND THE FIRST CORRECTION OF THIS COMMENT WAS ITSELF AN
+3321:		    OVERCLAIM, caught by a review seat within the hour. ***  It
+3322:		    said the DECISION still stands because it rests on FSRRA
+3323:		    being an approximation rather than on any page number.  But
+3324:		    that premise is unsupported by the SAME documents, for the
+3325:		    SAME reason: they do not mention FSRRA at all.  Withdrawing
+3326:		    a citation and keeping the belief it was offered to support
+3327:		    is not a correction, it is the same claim with the evidence
+3328:		    removed -- and this project has already recorded that a
+3329:		    records-correction round tends to repeat the error it is
+3330:		    correcting.
+3331:
+3332:		    THE HONEST STATE, then: the CODE is unchanged and has been
+3333:		    unchanged since #339; what is UNSOURCED is the reason given
+3334:		    for it.  Nothing in this tree documents FSRRA's accuracy
+3335:		    either way.  Settling it needs an SH-4A manual, which is
+3336:		    the document that actually defines the instruction.  Until
+3337:		    one is here this comment claims no architectural fact, and
+3338:		    the behaviour is recorded as a choice awaiting a source
+3339:		    rather than as a conclusion drawn from one.  See the filed
+3340:		    row `sh4a4gate` for the separate question of decoding it at
+3341:		    all on a modelled SH7750. Wiring
+3342:		    it to sh_fp_rm() would round a number that was never the
+3343:		    architectural answer to begin with, which buys nothing and
+3344:		    implies a precision the instruction does not have. The
+3345:		    FPSCR.DN policy still applies and is enforced by #334's
+3346:		    macro, which wraps this call like every other.  */
+3347:		ieee = ieee_store_float_value(1.0f / sqrt(op1.f), IEEE_FMT_S);
+3348:		reg(ic->arg[0]) = ieee;
+3349:	}
+3350:}
+3351:
+3352:
+3353:/*
+3354: *  fadd_frm_frn:     Floating point addition.
+3355: *  fsub_frm_frn:     Floating point subtraction.
+3356: *  fmul_frm_frn:     Floating point multiplication.
+4038:
+4039:	addr = cpu->pc & ~((SH_IC_ENTRIES_PER_PAGE-1)
+4040:	    << SH_INSTR_ALIGNMENT_SHIFT);
+4041:	addr += (low_pc << SH_INSTR_ALIGNMENT_SHIFT);
+4042:	cpu->pc = (MODE_int_t)addr;
+4043:	addr &= ~((1 << SH_INSTR_ALIGNMENT_SHIFT) - 1);
+4044:
+4045:	/*  Read the instruction word from memory:  */
+4046:	page = cpu->cd.sh.host_load[(uint32_t)addr >> 12];
+4047:
+4048:	if (page != NULL) {
+4049:		/*  fatal("TRANSLATION HIT!\n");  */
+4050:		memcpy(ib, page + (addr & 0xfff), isize);
+4051:	} else {
+4052:		/*  fatal("TRANSLATION MISS!\n");  */
+4053:		if (!cpu->memory_rw(cpu, cpu->mem, addr, ib,
+4054:		    isize, MEM_READ, CACHE_INSTRUCTION)) {
+4055:			fatal("to_be_translated(): read failed: TODO\n");
+4056:			goto bad;
+4057:		}
+4058:	}
+4059:
+4060:	{
+4061:		uint16_t *p = (uint16_t *) ib;
+4062:		iword = *p;
+4063:	}
+4064:
+4065:	if (cpu->byte_order == EMUL_LITTLE_ENDIAN)
+4066:		iword = LE16_TO_HOST(iword);
+4067:	else
+4068:		iword = BE16_TO_HOST(iword);
+4069:
+4070:	main_opcode = iword >> 12;
+4071:	r8 = (iword >> 8) & 0xf;
+4072:	r4 = (iword >> 4) & 0xf;
+4073:	lo8 = iword & 0xff;
+4074:	lo4 = iword & 0xf;
+4075:
+4076:
+4077:#define DYNTRANS_TO_BE_TRANSLATED_HEAD
+4078:#include "cpu_dyntrans.c"
+4079:#undef  DYNTRANS_TO_BE_TRANSLATED_HEAD
+4080:
+4950:
+4951:	case 0xf:
+4952:		if (lo4 == 0x0) {
+4953:			/*  FADD FRm,FRn  */
+4954:			ic->f = instr(fadd_frm_frn);
+4955:			ic->arg[0] = (size_t)&cpu->cd.sh.fr[r4];
+4956:			ic->arg[1] = (size_t)&cpu->cd.sh.fr[r8];
+4957:		} else if (lo4 == 0x1) {
+4958:			/*  FSUB FRm,FRn  */
+4959:			ic->f = instr(fsub_frm_frn);
+4960:			ic->arg[0] = (size_t)&cpu->cd.sh.fr[r4];
+4961:			ic->arg[1] = (size_t)&cpu->cd.sh.fr[r8];
+4962:		} else if (lo4 == 0x2) {
+4963:			/*  FMUL FRm,FRn  */
+4964:			ic->f = instr(fmul_frm_frn);
+4965:			ic->arg[0] = (size_t)&cpu->cd.sh.fr[r4];
+4966:			ic->arg[1] = (size_t)&cpu->cd.sh.fr[r8];
+4967:		} else if (lo4 == 0x3) {
+4968:			/*  FDIV FRm,FRn  */
+4969:			ic->f = instr(fdiv_frm_frn);
+4970:			ic->arg[0] = (size_t)&cpu->cd.sh.fr[r4];
+4971:			ic->arg[1] = (size_t)&cpu->cd.sh.fr[r8];
+4972:		} else if (lo4 == 0x4) {
+4973:			/*  FCMP/EQ FRm,FRn  */
+4974:			ic->f = instr(fcmp_eq_frm_frn);
+4975:			ic->arg[0] = (size_t)&cpu->cd.sh.fr[r4];
+4976:			ic->arg[1] = (size_t)&cpu->cd.sh.fr[r8];
+4977:		} else if (lo4 == 0x5) {
+4978:			/*  FCMP/GT FRm,FRn  */
+4979:			ic->f = instr(fcmp_gt_frm_frn);
+4980:			ic->arg[0] = (size_t)&cpu->cd.sh.fr[r4];
+4981:			ic->arg[1] = (size_t)&cpu->cd.sh.fr[r8];
+4982:		} else if (lo4 == 0x6) {
+4983:			/*  FMOV @(R0,Rm),FRn  */
+4984:			ic->f = instr(fmov_r0_rm_frn);
+4985:			ic->arg[0] = (size_t)&cpu->cd.sh.r[r4];  /* m */
+4986:			ic->arg[1] = (size_t)&cpu->cd.sh.fr[r8];
+4987:		} else if (lo4 == 0x7) {
+4988:			/*  FMOV FRm,@(R0,Rn)  */
+4989:			ic->f = instr(fmov_frm_r0_rn);
+4990:			ic->arg[0] = (size_t)&cpu->cd.sh.fr[r4];  /* m */
+4991:			ic->arg[1] = (size_t)&cpu->cd.sh.r[r8];
+4992:		} else if (lo4 == 0x8) {
+4993:			/*  FMOV @Rm,FRn  */
+4994:			ic->f = instr(fmov_rm_frn);
+4995:			ic->arg[0] = (size_t)&cpu->cd.sh.r[r4];  /* m */
+4996:			ic->arg[1] = (size_t)&cpu->cd.sh.fr[r8];
+4997:		} else if (lo4 == 0x9) {
+4998:			/*  FMOV @Rm+,FRn  */
+4999:			ic->f = instr(fmov_rm_postinc_frn);
+5000:			ic->arg[0] = (size_t)&cpu->cd.sh.r[r4];  /* m */
+5001:			ic->arg[1] = (size_t)&cpu->cd.sh.fr[r8];
+5002:		} else if (lo4 == 0xa) {
+5003:			/*  FMOV FRm,@Rn  */
+5004:			ic->f = instr(fmov_frm_rn);
+5005:			ic->arg[0] = (size_t)&cpu->cd.sh.fr[r4];  /* m */
+5006:			ic->arg[1] = (size_t)&cpu->cd.sh.r[r8];
+5007:		} else if (lo4 == 0xb) {
+5008:			/*  FMOV FRm,@-Rn  */
+5009:			ic->f = instr(fmov_frm_predec_rn);
+5010:			ic->arg[0] = (size_t)&cpu->cd.sh.fr[r4];  /* m */
+5011:			ic->arg[1] = (size_t)&cpu->cd.sh.r[r8];
+5012:		} else if (lo4 == 0xc) {
+5013:			/*  FMOV FRm,FRn  */
+5014:			ic->f = instr(fmov_frm_frn);
+5015:			ic->arg[0] = (size_t)&cpu->cd.sh.fr[r4];
+5016:			ic->arg[1] = (size_t)&cpu->cd.sh.fr[r8];
+5017:		} else if (lo8 == 0x0d) {
+5018:			/*  FSTS FPUL,FRn  */
+5019:			ic->f = instr(copy_fp_register);
+5020:			ic->arg[0] = (size_t)&cpu->cd.sh.fpul;
+5021:			ic->arg[1] = (size_t)&cpu->cd.sh.fr[r8];
+5022:		} else if (lo8 == 0x1d) {
+5023:			/*  FLDS FRn,FPUL  */
+5024:			ic->f = instr(copy_fp_register);
+5025:			ic->arg[0] = (size_t)&cpu->cd.sh.fr[r8];
+5026:			ic->arg[1] = (size_t)&cpu->cd.sh.fpul;
+5027:		} else if (lo8 == 0x2d) {
+5028:			/*  FLOAT FPUL,FRn  */
+5029:			ic->f = instr(float_fpul_frn);
+5030:			ic->arg[0] = (size_t)&cpu->cd.sh.fr[r8];
+5031:		} else if (lo8 == 0x3d) {
+5032:			/*  FTRC FRm,FPUL  */
+5033:			ic->f = instr(ftrc_frm_fpul);
+5034:			ic->arg[0] = (size_t)&cpu->cd.sh.fr[r8];
+5035:		} else if (lo8 == 0x4d) {
+5036:			/*  FNEG FRn  */
+5037:			ic->f = instr(fneg_frn);
+5038:			ic->arg[0] = (size_t)&cpu->cd.sh.fr[r8];
+5039:		} else if (lo8 == 0x5d) {
+5040:			/*  FABS FRn  */
+5041:			ic->f = instr(fabs_frn);
+5042:			ic->arg[0] = (size_t)&cpu->cd.sh.fr[r8];
+5043:		} else if (lo8 == 0x6d) {
+5044:			/*  FSQRT FRn  */
+5045:			ic->f = instr(fsqrt_frn);
+5046:			ic->arg[0] = (size_t)&cpu->cd.sh.fr[r8];
+5047:		} else if (lo8 == 0x7d) {
+5048:			/*  FSRRA FRn  */
+5049:			ic->f = instr(fsrra_frn);
+5050:			ic->arg[0] = (size_t)&cpu->cd.sh.fr[r8];
+5051:		} else if (lo8 == 0x8d) {
+5052:			/*  FLDI0 FRn  */
+5053:			ic->f = instr(fldi_frn);
+5054:			ic->arg[0] = (size_t)&cpu->cd.sh.fr[r8];
+5055:			ic->arg[1] = 0x00000000;
+5056:		} else if (lo8 == 0x9d) {
+5057:			/*  FLDI1 FRn  */
+5058:			ic->f = instr(fldi_frn);
+5059:			ic->arg[0] = (size_t)&cpu->cd.sh.fr[r8];
+5060:			ic->arg[1] = 0x3f800000;
+5061:		} else if ((iword & 0x01ff) == 0x00ad) {
+5062:			/*  FCNVSD FPUL,DRn  */
+5063:			ic->f = instr(fcnvsd_fpul_drn);
+5064:			ic->arg[0] = (size_t)&cpu->cd.sh.fr[r8];
+5065:		} else if ((iword & 0x01ff) == 0x00bd) {
+5066:			/*  FCNVDS DRm,FPUL  */
+5067:			ic->f = instr(fcnvds_drm_fpul);
+5068:			ic->arg[0] = (size_t)&cpu->cd.sh.fr[r8];
+5069:		} else if (lo8 == 0xed) {
+5070:			/*  FIPR FVm,FVn  */
+5071:			ic->f = instr(fipr_fvm_fvn);
+5072:			ic->arg[0] = (size_t)&cpu->cd.sh.fr[(r8<<2) & 0xc];  /* m */
+5073:			ic->arg[1] = (size_t)&cpu->cd.sh.fr[r8 & 0xc];  /* n */
+5074:		} else if ((iword & 0x01ff) == 0x00fd) {
+5075:			/*  FSCA FPUL,DRn  */
+5076:			ic->f = instr(fsca_fpul_drn);
+5077:			ic->arg[0] = (size_t)&cpu->cd.sh.fr[r8];
+5078:		} else if (iword == 0xf3fd) {
+5079:			/*  FSCHG  */
+5080:			ic->f = instr(fschg);
+5081:		} else if (iword == 0xfbfd) {
+5082:			/*  FRCHG  */
+5083:			ic->f = instr(frchg);
+5084:		} else if ((iword & 0xf3ff) == 0xf1fd) {
+5085:			/*  FTRV XMTRX, FVn  */
+5086:			ic->f = instr(ftrv_xmtrx_fvn);
+5087:			ic->arg[0] = (size_t)&cpu->cd.sh.fr[r8 & 0xc];
+5088:		} else if (lo4 == 0xe) {
+5089:			/*  FMAC FR0,FRm,FRn  */
+5090:			ic->f = instr(fmac_fr0_frm_frn);
+5091:			ic->arg[0] = (size_t)&cpu->cd.sh.fr[r4];
+5092:			ic->arg[1] = (size_t)&cpu->cd.sh.fr[r8];
+5093:		} else {
+5094:			if (!cpu->translation_readahead)
+5095:				fatal("Unimplemented opcode 0x%x,0x%02x\n",
+5096:				    main_opcode, lo8);
+5097:			if (cpu->translation_readahead)
+5098:				goto bad;
+5099:			ic->f = instr(reserved);	/*  #314  */
+5100:			break;
+5101:		}
+5102:		break;
+5103:
+5104:	default:if (!cpu->translation_readahead)
+5105:			fatal("Unimplemented main opcode 0x%x\n", main_opcode);
+5106:		if (cpu->translation_readahead)
+5107:			goto bad;
+5108:		ic->f = instr(reserved);	/*  #314  */
+5109:		break;
+5110:	}
+5111:
+5112:
+5113:#define	DYNTRANS_TO_BE_TRANSLATED_TAIL
+5114:#include "cpu_dyntrans.c"
+5115:#undef	DYNTRANS_TO_BE_TRANSLATED_TAIL
+5116:}
+5117:
+
+ succeeded in 444ms:
+10744:
+10745:            Double-Precision
+10746:            to Single-Precision
+10747:            Conversion
+10748:
+10749:PR Format  Summary of Operation Instruction Code  Execution
+10750:                                                  States T Bit
+10751:
+10752:0--        --                       --            --    --
+10753:
+10754:1 FCNVDS DRm,FPUL (float)DRm  FPUL  1111mmm010111101 2  --
+10755:
+10756:Description
+10757:
+10758:When FPSCR.PR = 1: This instruction converts the double-precision floating-point number in
+10759:DRm to a single-precision floating-point number, and stores the result in FPUL.
+10760:
+10761:When FPSCR.enable.O/U/I is set, an FPU exception trap is generated regardless of whether or not
+10762:an exception has occurred. When an exception occurs, correct exception information is reflected in
+10763:FPSCR.cause and FPSCR.flag, and FPUL is not updated. Appropriate processing should therefore
+10764:be performed by software.
+10765:
+10766:Operation
+10767:
+10768:   void FCNVDS(int m, float *FPUL){
+10769:            case((FPSCR.PR){
+10770:                     0: undefined_operation(); /* reserved */
+10771:                     1: fcnvds(m, *FPUL); break; /* FCNVDS */
+10772:            }
+10773:
+10774:   }
+10775:   void fcnvds(int m, float *FPUL)
+10776:   {
+10777:
+10778:            pc += 2;
+10779:            clear_cause();
+10780:            case(data_type_of(m, *FPUL)){
+10781:
+10782:                     NORM :
+10783:                     PZERO :
+10784:                     NZERO : normal_ fcnvds(m, *FPUL); break;
+10785:                     DENORM : set_E();
+10786:                     PINF : *FPUL = 0x7f800000; break;
+10787:                     NINF : *FPUL = 0xff800000; break;
+10788:
+10789:Rev. 5.0, 04/01, page 238 of 394
+10790:           qNaN : *FPUL = 0x7fbfffff; break;
+10791:
+10792:           sNaN :     set_V();
+10793:
+10794:                      if((FPSCR & ENABLE_V) == 0) *FPUL = 0x7fbfffff;
+10795:
+10796:                      else fpu_exception_trap(); break;
+10797:
+10798:   }
+10799:
+10800:}
+10801:
+10802:void normal_fcnvds(int m, float *FPUL)
+10803:
+10804:{
+10805:
+10806:int sign;
+10807:
+10808:float abs;
+10809:
+10810:union {
+10811:
+10812:   float f;
+10813:
+10814:   int l;
+10815:
+10816:}  dstf,tmpf;
+10817:
+10818:union {
+10819:
+10820:   double d;
+10821:
+10822:   int l[2];
+10823:
+10824:}  dstd;
+10825:
+10851:� Inexact
+10852:
+10853:                                              Rev. 5.0, 04/01, page 239 of 394
+10854:9.29 FCNVSD Floating-point CoNVert
+10855:                           Single to Double precision Floating-Point Instruction
+10856:
+10857:            Single-Precision
+10858:            to Double-Precision
+10859:            Conversion
+10860:
+10861:PR Format             Summary of Operation Instruction Code    Execution
+10862:                                                               States T Bit
+10863:
+10864:0--                   --                       --              --  --
+10865:
+10866:1 FCNVSD FPUL, DRn (double) FPUL  DRn 1111nnn010101101 2           --
+10867:
+10868:Description
+10869:
+10870:When FPSCR.PR = 1: This instruction converts the single-precision floating-point number in
+10871:FPUL to a double-precision floating-point number, and stores the result in DRn.
+10872:
+10873:Operation
+10874:
+10875:void FCNVSD(int n, float *FPUL){
+10876:
+10877:     pc += 2;
+10878:
+10879:     clear_cause();
+10880:
+10881:     case((FPSCR_PR){
+10882:
+10883:             0: undefined_operation(); /* reserved */
+10884:
+10885:             1: fcnvsd (n, *FPUL); break; /* FCNVSD */
+10886:
+10887:     }
+10888:
+10889:}
+10890:
+10891:void fcnvsd(int n, float *FPUL)
+10892:
+10893:{
+10894:
+10895:     case(fpul_type(FPUL)){
+10896:
+10897:             PZERO :
+10898:
+10899:             NZERO :
+10900:
+10901:             PINF :
+10902:
+10903:             NINF :               DR[n>>1] = *FPUL;    break;
+10904:
+10905:             DENORM : set_E();                 break;
+10906:
+10907:             qNaN :               qnan(n);     break;
+10908:
+10909:             sNaN :               invalid(n);          break;
+10910:
+10911:     }
+10912:
+10913:}
+10914:
+10915:int fpul_type(int *FPUL)
+10916:
+10917:Rev. 5.0, 04/01, page 240 of 394
+10918:{
+10919:
+10920:int abs;
+10921:
+10922:   abs = *FPUL & 0x7fffffff;
+10923:
+10924:   if(abs < 0x00800000){
+10925:
+10926:          if((FPSCR_DN == 1) || (abs == 0x00000000)){
+10927:
+10928:             if(sign_of(src) == 0) return(PZERO);
+10929:
+10930:             else                return(NZERO);
+10931:
+10932:          }
+10933:
+10934:          else                   return(DENORM);
+10935:
+10936:   }
+10937:
+10938:   else if(abs < 0x7f800000) return(NORM);
+10939:
+10940:   else if(abs == 0x7f800000) {
+10941:
+10942:             if(sign_of(src) == 0) return(PINF);
+10943:
+10944:             else             return(NINF);
+10945:
+10946:   }
+10947:
+10948:   else if(abs < 0x7fc00000) return(qNaN);
+10949:
+10950:   else                       return(sNaN);
+10951:
+10952:}
+10953:
+10954:FCNVSD Special Cases
+10955:
+10956:   FRn                +NORM -NORM +0 -0 +INF -INF qNaN sNaN
+10957:
+10958:FCNVSD(FPUL FRn) +NORM -NORM +0 -0 +INF -INF qNaN Invalid
+10959:
+10960:Note: When DN = 1, the value of a denormalized number is treated as 0.
+10961:
+10962:Possible Exceptions:
+10963:� FPU error
+10964:� Invalid operation
+10965:
+10966:                                             Rev. 5.0, 04/01, page 241 of 394
+10967:9.30 FDIV             Floating-point DIVide          Floating-Point Instruction
+10968:
+10969:      Floating-Point
+10970:
+16926:
+16927:STS   MACL,Rn          MACL  Rn                       0000nnnn00011010 --   --
+16928:
+16929:STS   PR,Rn            PR  Rn                         0000nnnn00101010 --   --
+16930:
+16931:FSTS FPUL,FRn          FPUL  FRn                      1111nnnn00001101 --   --
+16932:
+16933:FLOAT FPUL,FRn         (float) FPUL  FRn              1111nnnn00101101 --   --
+16934:
+16935:FCNVSD FPUL,DRn        float_to_ double [FPUL]  DRn 1111nnn010101101 --     --
+16936:
+16937:FLOAT FPUL,DRn         (float)FPUL  DRn               1111nnn000101101 --   --
+16938:
+16939:STS   FPSCR,Rn FPSCR  Rn                              0000nnnn01101010 --   --
+16940:
+16941:STS   FPUL,Rn          FPUL  Rn                       0000nnnn01011010 --   --
+16942:
+360:9.29 FCNVSD ..... Floating-point CoNVert
+379:9.44 FSTS ........... Floating-point STore System register ........ Floating-Point Instruction...... 274
+932:    instructions, LDC(.L)/STS(.L) instructions for FPUL/FPSCR)
+6254:FSTS         FPUL,FRn  FPUL  FRn             1111nnnn00001101 --   --
+6301:FCNVSD       FPUL,DRn  double_to_ float[DRm]  FPUL 1111mmm010111101 --        --
+6327:STS FPUL,Rn            FPUL  Rn                 0100mmmm01100110 --           --
+6329:STS.L FPUL,@-Rn        Rn � 4  Rn, FPUL  (Rn)   0100mmmm01010110 --           --
+6469:    LDS to FPUL, STS from FPUL/FPSCR, FLDI0, FLDI1, FMOV, FLDS, FSTS,
+6475:    MOV.[BWL]. FMOV*@, LDS.L to FPUL, LDTLB, PREF, STS.L from FPUL/FPSCR
+6795:     FCNVDS, FCNVSD, FLOAT, FTRC
+6934:FLDI1        FRn           FSTS      FRm,@Rn   MOV.L       @(disp,PC),Rn
+6985:FCNVSD       DRm,DRn              FRCHG  FR0,FRm,FRn FSUB  XMTRX,FVn
+7145:FSUB, or FTRV and a following FMOV, FLDI0, FLDI1, FABS, FNEG, or FSTS. See figure 8.3
+7268:STS FPUL,R1
+7340:STS FPUL,R0
+7345:STS FPUL,R1                              I  D EX NA S
+7933:                181 FSTS    FPUL,FRn     LS        1  0    #1      -- ----
+7998:                206 FCNVSD FPUL,DRn     FE        1  (3, 4)/5 #38   F1 2  2
+8041:              218 STS     FPUL,Rn     LS        1  3     #1       -- ----
+8045:              220 STS.L   FPUL,@-Rn   CO        1  1/1   #2       -- ----
+8108:               FPUL, Rn instruction, or an STS.L FPUL, @-Rn instruction, the latency of the floating-
+8134:          9. When a single-precision FTRC instruction is followed by an STS FPUL, Rn instruction,
+8303:#define FPSCR_PR        FPSCR>>19&1
+8338:   if(FPSCR_PR == 0) { /* Single-precision */
+8415:   if(FPSCR_PR == 1) FR[n+1] = FR[m+1];
+8448:if(FPSCR_PR == 0) {
+8544:         if(FPSCR_PR == 0) {
+8599:         (check_product_invalid(m,n)) ||
+8601:         (check_product_invalid(m+1,n+1)) ||
+8603:         (check_product_invalid(m+2,n+2)) ||
+8605:         (check_product_invalid(m+3,n+3)) ) invalid(n+3);
+8614:qnan(n+3);
+8618:             (check_ negative_infinity())            invalid(n+3);
+8797:int check_product_invalid(int m,n)
+8861:void invalid(int n)
+8865:         if((FPSCR & ENABLE_V) == 0 qnan(n);
+8889:   if (FPSCR_PR==1) FR_HEX [n+1] = 0x00000000;
+8895:   if (FPSCR_PR==0) {
+8914:void qnan(int n)
+8918:   if (FPSCR_PR==0) FR[n] = 0x7fbfffff;
+10451:             (data_type_of(n) == sNaN)) invalid(n);
+10455:                (data_type_of(n) == qNaN)) qnan(n);
+10488:                case NINF:        invalid(n);   break;
+10496:                case PINF:        invalid(n);   break;
+10579:   if(fcmp_chk (m,n) == INVALID) fcmp_invalid();
+10597:             (fcmp_chk (m,n) == UO)) fcmp_invalid();
+10660:   if(FPSCR_PR == 0) {
+10681:void fcmp_invalid()
+10854:9.29 FCNVSD Floating-point CoNVert
+10866:1 FCNVSD FPUL, DRn (double) FPUL  DRn 1111nnn010101101 2           --
+10875:void FCNVSD(int n, float *FPUL){
+10881:     case((FPSCR_PR){
+10885:             1: fcnvsd (n, *FPUL); break; /* FCNVSD */
+10907:             qNaN :               qnan(n);     break;
+10909:             sNaN :               invalid(n);          break;
+10954:FCNVSD Special Cases
+10958:FCNVSD(FPUL FRn) +NORM �NORM +0 �0 +INF �INF qNaN Invalid
+11005:             (data_type_of(n) == sNaN)) invalid(n);
+11009:                (data_type_of(n) == qNaN)) qnan(n);
+11033:            case NZERO: invalid(n);break;
+11047:            case NZERO: invalid(n); break;
+11067:            case NINF: invalid(n);   break;
+11106:       if(FPSCR_PR == 0) {
+11245:            if(FPSCR_PR == 0) {
+11429:            if(FPSCR_PR == 1) undefined_operation();
+11433:                          (data_type_of(n) == sNaN)) invalid(n);
+11435:                          (data_type_of(m) == qNaN)) qnan(n);
+11445:           case qNaN: qnan(n); break;
+11463:        case qNaN: qnan(n); break;
+11467:        case NINF: if(sign_of(0)^ sign_of(m)^sign_of(n)) invalid(n);
+11479:        case qNaN: qnan(n); break;
+11499:        case NINF: invalid(n); break;
+11509:        case qNaN: qnan(n); break;
+11528:         case NZERO:invalid(n); break;
+11534:         case qNaN: qnan(n); break;
+12083:             (data_type_of(n) == sNaN)) invalid(n);
+12087:                (data_type_of(n) == qNaN)) qnan(n);
+12115:               case NINF: invalid(n); break;
+12127:                case NZERO: invalid(n); break;
+12229:            if(FPSCR_PR == 0){
+12265:            if(FPSCR_PR == 0){
+12314:                       else  invalid(n); break;
+12318:                       else  invalid(n); break;
+12326:             case NINF :     invalid(n); break;
+12328:             case qNaN :     qnan(n); break;
+12330:             case sNaN :     invalid(n); break;
+12365:   if(FPSCR_PR == 0) {
+12428:9.44 FSTS        Floating-point STore
+12437:FSTS FPUL,FRn  FPUL  FRn                                 States T Bit
+12447:   void FSTS(int n, float *FPUL)
+12498:             (data_type_of(n) == sNaN)) invalid(n);
+12502:             (data_type_of(n) == qNaN)) qnan(n);
+12535:                case PINF: invalid(n);         break;
+12543:                case NINF: invalid(n);         break;
+12628:           PINF:        ftrc_invalid(0); break;
+12630:           NINF:        ftrc_invalid(1); break;
+12643:      PINF:  ftrc_invalid(0); break;
+12645:      NINF:  ftrc_invalid(1); break;
+12709:void ftrc_invalid(int sign, int *FPUL)
+12816:   if(FPSCR_PR == 0) {
+15969:STS FPUL,Rn                                               States T Bit
+15971:STS.L FPUL,@-Rn   FPUL  Rn              0000nnnn01011010 1                     --
+15985:STS(int n, int *FPUL)        /* STS FPUL,Rn */
+15995:STS_SAVE(int n, int *FPUL)   /* STS.L FPUL,@-Rn */
+16040:    STS FPUL, R13
+16053:    STS.L FPUL, @-R7
+16931:FSTS FPUL,FRn          FPUL  FRn                      1111nnnn00001101 --   --
+16935:FCNVSD FPUL,DRn        float_to_ double [FPUL]  DRn 1111nnn010101101 --     --
+16941:STS   FPUL,Rn          FPUL  Rn                       0000nnnn01011010 --   --
+17116:STS.L FPUL,@-Rn  Rn � 4  Rn, FPUL  (Rn) 0100nnnn01010010 --              --
+15226:FCNVSD       FPUL,DRn  double_to_ float[DRm]  FPUL 1111mmm010111101 --   --
+15828:     FCNVDS, FCNVSD, FLOAT, FTRC
+16022:FCNVSD       DRm,DRn   FRCHG             FR0,FRm,FRn FSUB  XMTRX,FVn
+17062:                206 FCNVSD FPUL,DRn     FE        1  (3, 4)/5 #38   F1 2      2
+18211:        FADD, FSUB, FMUL, FLOAT, FTRC, FDIV, FSQRT, FCNVSD, FCNVDS
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$p='"'GXEMUL-SEC/src/core/float_emul.c'
+"'$c=Get-Content -LiteralPath $p
+$spans=@(@(35,241),@(475,660))
+foreach($s in $spans){for($j=$s[0];$j -le $s[1];$j++){ '"'{0}:{1}' -f "'$j,$c[$j-1] }}
+rg -n '"'ieee_store_float_value|case FP_ZERO|case FP_NAN|case FP_INFINITE|signbit' GXEMUL-SEC/src/core/float_emul.c
+rg -n 'fpul|fr\\[' GXEMUL-SEC/src/include/cpu_sh.h
+rg -n -A 5 'struct ieee_float_value' GXEMUL-SEC/src/include/float_emul.h" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$p='"'GXEMUL-SEC/regress/sh_rounding_probe.py'
+"'$c=Get-Content -LiteralPath $p
+$spans=@(@(1,72),@(105,117),@(155,324))
+foreach($s in $spans){for($j=$s[0];$j -le $s[1];$j++){ '"'{0}:{1}' -f "'$j,$c[$j-1] }}' in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 297ms:
+1:#!/usr/bin/env python3
+2:"""Gate 10's measuring instrument: SuperH floating-point rounding, on real guest code.
+3:
+4:Prints one line per vector:  <name> <mode> <got> <want> ok|FAIL
+5:and a final SH_ROUND_RESULT=<passed>/<total>. gate_sh_rounding.sh does the asserting.
+6:
+7:Why it is built this way
+8:------------------------
+9:Nothing here trusts a debugger convenience. `reg` does not print floating-point registers
+10:on this core, and `dump`/`examine` reads do not route through device handlers -- so every
+11:vector has the GUEST execute the instruction and store the result to memory with its own
+12:fmov.s, and the value is recovered from a memory dump. Dump output is in memory order and
+13:landisk is little-endian, so the four bytes are byte-swapped back.
+14:
+15:No media, no console, no boot. The SuperH serial port drops host->guest writes
+16:non-deterministically (the defect behind #293), so anything typed at a guest shell would be
+17:intermittent; the debugger prompt does not go through it. A real kernel is named on the
+18:command line only because the SH loader rejects hand-made ELFs and `-E landisk` with no
+19:file at all never constructs the machine -- it is never executed.
+20:
+21:Every vector must DISCRIMINATE: its two modes must want different answers, or it must be
+22:explicitly marked a pin. Otherwise reverting #296 would leave the gate green.
+23:"""
+24:import os
+25:import pty
+26:import re
+27:import select
+28:import sys
+29:import time
+30:
+31:BIN = sys.argv[1]
+32:KERNEL = sys.argv[2]
+33:
+34:CODE = 0x8c010000
+35:DEST = 0x8c010100
+36:
+37:DN = 0x00040000            # FPSCR.DN, set at reset
+38:PR = 0x00080000            # double precision
+39:NODN = 0x80000000          # #303 row marker, NOT an FPSCR bit: the harness strips
+40:                           # DN for rows whose operands are denormal (see the #303
+41:                           # rows for why a DN=1 numeric expectation would be wrong)
+42:RN = 0x0                   # round to nearest
+43:RZ = 0x1                   # round to zero
+44:
+45:#  fmov.s FRm,@Rn  = 1111 nnnn mmmm 1010.  Rn = r1 throughout.
+46:ST = {n: (0xf10a | (n << 4)) for n in range(16)}
+47:
+48:
+49:def instr(op, store_reg):
+50:    """Pack the operation and the store into one 32-bit little-endian write."""
+51:    return (ST[store_reg] << 16) | op
+52:
+53:
+54:#  name, fpscr extra bits, register seed, packed instruction word, {mode: expected}
+55:#  A vector may carry an OPTIONAL sixth element: a second 32-bit instruction word placed
+56:#  at CODE+4 (stepped as 3 instructions instead of 2). ftrc needs it: the result lands in
+57:#  FPUL, so the guest runs `ftrc ; sts fpul,r2` then `mov.l r2,@r1`.
+58:VECTORS = [
+59:    # ---- the reported defect: FDIV, cpu_sh_instr.c fdiv single arm -------------------
+60:    ("fdiv 1.0/3.0", 0,
+61:     {"fr0": 0x3f800000, "fr1": 0x40400000},
+62:     instr(0xf013, 0),                       # fdiv fr1,fr0
+63:     {RN: 0x3eaaaaab, RZ: 0x3eaaaaaa}),
+64:
+65:    # ---- FLOAT: int32 -> single, the one case where the SOURCE is the wide one -------
+66:    #  16777219 = 2^24 + 3, exactly between 16777218 and 16777220.
+67:    ("float 2^24+3", 0,
+68:     {"fpul": 0x01000003},
+69:     instr(0xf02d, 0),                       # float fpul,fr0
+70:     {RN: 0x4b800002, RZ: 0x4b800001}),
+71:
+72:    # ---- FADD: 1.0 + 1.5*2^-24, three quarters of the way up one ulp ----------------
+105:     {RN: 0x7f800000, RZ: 0x7f7fffff}),
+106:
+107:    # ---- D-format directed rounding, FIXED by #300 and now discriminating -----------
+108:    #  This row was a PIN from #296 to #299: the D store is a pure re-encode, so wiring
+109:    #  the STORE could never fix it, and both modes measured the host-nearest 9a. #300
+110:    #  corrects the ARITHMETIC instead -- one fma residual recovers which neighbour the
+111:    #  host's nearest result landed on -- so toward-zero now yields the true 99. The pin
+112:    #  flipped exactly as its own comment required, by the only mechanism that could.
+113:    ("Ddiv 1.0/10.0 low", PR,
+114:     {"fr0": 0x3ff00000, "fr1": 0x00000000,
+115:      "fr2": 0x40240000, "fr3": 0x00000000},
+116:     instr(0xf023, 1),                       # fdiv dr2,dr0 ; store fr1 = low half
+117:     {RN: 0x9999999a, RZ: 0x99999999}),
+155:
+156:    # ---- #297: ftrc's value ladder. DELIBERATELY mode-independent -- VERIFIED
+157:    #  2026-08-22 against a real manual: FTRC's own Description section says flatly
+158:    #  "The rounding mode is always truncation."  Another no-manual-era claim that
+159:    #  held.  the manual says
+160:    #  "the rounding mode is always truncation", so these rows run under both modes and
+161:    #  must agree; if someone ever wires ftrc to RM, the discriminating-count check
+162:    #  catches the drift. Before #297 the conversion was a raw C cast (UB on the
+163:    #  specials): +Inf and +2^40 measured 0x80000000 on x86 where the manual owes +MAX.
+164:    #  sequence: ftrc fr0,fpul (0xf03d) ; sts fpul,r2 (0x025a) ; mov.l r2,@r1 (0x2122)
+165:    ("ftrcS-inf +Inf",   0, {"fr0": 0x7f800000},
+166:     (0x025a << 16) | 0xf03d, {RN: 0x7fffffff, RZ: 0x7fffffff},
+167:     (0x0009 << 16) | 0x2122),
+168:    ("ftrcS-ovf +2^40",  0, {"fr0": 0x53800000},
+169:     (0x025a << 16) | 0xf03d, {RN: 0x7fffffff, RZ: 0x7fffffff},
+170:     (0x0009 << 16) | 0x2122),
+171:    #  A positive NaN also exceeds the positive range bound; the manual routes it to
+172:    #  -MAX. This row is what catches a ladder with the checks in the wrong order.
+173:    ("ftrcS-nan qNaN+",  0, {"fr0": 0x7fc00000},
+174:     (0x025a << 16) | 0xf03d, {RN: 0x80000000, RZ: 0x80000000},
+175:     (0x0009 << 16) | 0x2122),
+176:    #  The S bound is STRICT: 0x4effffff itself is NORM and truncates to 2147483520.
+177:    ("ftrcS-edge 4effffff", 0, {"fr0": 0x4effffff},
+178:     (0x025a << 16) | 0xf03d, {RN: 0x7fffff80, RZ: 0x7fffff80},
+179:     (0x0009 << 16) | 0x2122),
+180:    #  The D bound is >=: exactly 2^31 is already Invalid -> +MAX.
+181:    ("ftrcD-2p31 exact", PR, {"fr0": 0x41e00000, "fr1": 0x00000000},
+182:     (0x025a << 16) | 0xf03d, {RN: 0x7fffffff, RZ: 0x7fffffff},
+183:     (0x0009 << 16) | 0x2122),
+184:    #  The NEGATIVE D bound is -(2^31+1): -2147483648.5 is still NORM and truncates to
+185:    #  -2^31 -- a defined cast, not the invalid arm (same stored bits, different route).
+186:    ("ftrcD-neghalf -2^31-0.5", PR, {"fr0": 0xc1e00000, "fr1": 0x00100000},
+187:     (0x025a << 16) | 0xf03d, {RN: 0x80000000, RZ: 0x80000000},
+188:     (0x0009 << 16) | 0x2122),
+189:
+190:    # ---- #303: subnormal OPERANDS decode to their true IEEE value -------------------
+191:    #  Every other row in this table runs under DN=1 (the reset default this probe
+192:    #  ORs in), which is honest for them -- none has a denormal operand. These two DO,
+193:    #  and a numeric true-IEEE expectation under DN=1 would bless a value real
+194:    #  silicon flushes to zero, so they carry NODN: the harness STRIPS the DN bit and
+195:    #  the architectural claim is DN=0-with-kernel-completion (which computes exactly
+196:    #  this decode; the FPU-error trap itself stays unmodelled -- the #296/#297
+197:    #  precedent). RM is pinned by the row's single mode key; SH-4 resets to RZ, so
+198:    #  an unpinned mode would make the fdiv byte ambiguous (panel pass-2).
+199:    #  Committed-build bytes, measured live before the fix: 0x32000001, 0x3f800001.
+200:    #  The results here are NORMAL, so the #287/#292 store flush is never involved.
+201:    ("subn fmul S-min*2^100", NODN, {"fr0": 0x00000001, "fr1": 0x71800000},
+202:     instr(0xf012, 0),                       # fmul fr1,fr0
+203:     {RN: 0x27000000}),
+204:    #  quotient of garbles was ~1.0 (0x3f800001 under RN); true quotient is exactly 2.
+205:    ("subn fdiv 2ulp/1ulp", NODN, {"fr0": 0x00000002, "fr1": 0x00000001},
+206:     instr(0xf013, 0),                       # fdiv fr1,fr0
+207:     {RN: 0x40000000}),
+208:]
+209:
+210:
+211:def run(fpscr, seed, word, word2=None):
+212:    pid, fd = pty.fork()
+213:    if pid == 0:
+214:        os.execvp(BIN, [BIN, "-V", "-E", "landisk", "-M", "64", KERNEL])
+215:        os._exit(127)
+216:    buf = ""
+217:
+218:    def rd(t=0.4):
+219:        nonlocal buf
+220:        r, _, _ = select.select([fd], [], [], t)
+221:        if fd not in r:
+222:            return True
+223:        try:
+224:            d = os.read(fd, 65536)
+225:        except OSError:
+226:            return False
+227:        if not d:
+228:            return False
+229:        buf += d.decode("latin1", "replace")
+230:        return True
+231:
+232:    def wait(timeout=40, mark=0, echo=None):
+233:        t = time.time()
+234:        while time.time() - t < timeout:
+235:            if not rd():
+236:                return False
+237:            resp = buf[mark:]
+238:            #  #392: the ECHO first -- a prompt in the slice proves
+239:            #  nothing until the debugger has taken the command.
+240:            if echo is not None and echo not in resp:
+241:                continue
+242:            if len(buf) > mark and resp.rstrip().endswith("GXemul>"):
+243:                return True
+244:        return False
+245:
+246:    def send(s):
+247:        b = (s + "\n").encode("latin1")
+248:        _mark = len(buf)
+249:        n = 0
+250:        while n < len(b):
+251:            n += os.write(fd, b[n:])
+252:        return wait(mark=_mark, echo=s if s else None)
+253:
+254:    if not wait(90):
+255:        try:
+256:            os.kill(pid, 9)
+257:            os.waitpid(pid, 0)
+258:        except Exception:
+259:            pass
+260:        return None
+261:
+262:    cmds = ["fpscr=0x%08x" % fpscr]
+263:    cmds += ["%s=0x%08x" % (k, v) for k, v in seed.items()]
+264:    cmds += ["r1=0x%08x" % DEST,
+265:             "put w 0x%08x, 0x%08x" % (DEST, 0xdeadbeef)]   # sentinel
+266:    cmds += ["put w 0x%08x, 0x%08x" % (CODE, word)]
+267:    if word2 is not None:
+268:        cmds += ["put w 0x%08x, 0x%08x" % (CODE + 4, word2)]
+269:    cmds += ["pc=0x%08x" % CODE,
+270:             "step %d" % (3 if word2 is not None else 2)]
+271:    for c in cmds:
+272:        send(c)
+273:    mark = len(buf)
+274:    send("dump 0x%08x 0x%08x" % (DEST, DEST + 4))
+275:    tail = buf[mark:]
+276:    try:
+277:        os.write(fd, b"quit\n")
+278:        time.sleep(0.4)
+279:        os.kill(pid, 9)
+280:        os.waitpid(pid, 0)
+281:    except Exception:
+282:        pass
+283:
+284:    m = re.search(r"0x0*%x\s+([0-9a-f]{8})" % DEST, tail)
+285:    if not m:
+286:        return None
+287:    # dump renders bytes in memory order; landisk is little-endian.
+288:    return int.from_bytes(bytes.fromhex(m.group(1)), "little")
+289:
+290:
+291:passed = total = 0
+292:for vec in VECTORS:
+293:    name, extra, seed, word, want = vec[:5]
+294:    word2 = vec[5] if len(vec) > 5 else None
+295:    for mode, expect in sorted(want.items()):
+296:        total += 1
+297:        fps = DN | (extra & ~NODN) | mode
+298:        if extra & NODN:
+299:            fps &= ~DN          # #303 rows: denormal operands, DN must be clear
+300:        got = run(fps, seed, word, word2)
+301:        label = "nearest" if mode == RN else "toward-zero"
+302:        if got is None:
+303:            print("%-28s %-12s %-10s %-10s FAIL(no-readback)"
+304:                  % (name, label, "None", "0x%08x" % expect))
+305:            continue
+306:        ok = (got == expect)
+307:        passed += ok
+308:        print("%-28s %-12s 0x%08x 0x%08x %s"
+309:              % (name, label, got, expect, "ok" if ok else "FAIL"))
+310:
+311:# A vector whose two modes want the SAME answer cannot detect a reverted fix. Report the
+312:# count of genuinely discriminating vectors so the gate can assert on it rather than
+313:# trusting that the table was written correctly. The ftrc rows are REQUIRED to be
+314:# mode-independent (truncation by architecture), so this count doubles as the tripwire
+315:# for anyone accidentally wiring ftrc to FPSCR.RM.
+316:# [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] The ftrc rows are
+317:# mode-independent by architecture; discriminating counts static vector dictionary entries (len(set(v[4].values()))
+318:# > 1) to ensure the table retains mode discriminators, but does not observe emulator execution or tripwire ftrc
+319:# source changes.  (hbundle_regress25:F2: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+320:discriminating = sum(1 for v in VECTORS if len(set(v[4].values())) > 1)
+321:print("SH_ROUND_DISCRIMINATING=%d" % discriminating)
+322:print("SH_ROUND_RESULT=%d/%d" % (passed, total))
+323:
+324:
+
+ succeeded in 338ms:
+35:#include <float.h>
+36:
+37:#include "float_emul.h"
+38:#include "misc.h"
+39:
+40:
+41:/*  #define IEEE_DEBUG  */
+42:
+43:
+44:/*
+45: *  #279: one-shot latches for the two "unimplemented format" diagnostics
+46: *  below.  Both were printed by ungated fatal() from a path a guest repeats at
+47: *  will: on MIPS every fmt outside {S,D,W,L} maps to 0 here (see
+48: *  mips_fmt_to_ieee_fmt[] in cpu_mips_coproc.c) and cpu_mips_instr.c admits PS
+49: *  to the slow COP1 path, so ONE add.ps produced 8 host lines -- 6 from
+50: *  ieee_interpret_float_value() (three sites, two operands) and 2 from
+51: *  ieee_store_float_value() -- measured identically on R3000 and R4000.
+52: *
+53: *  A latch, not a verbosity gate.  The guest is told nothing here: fd is
+54: *  silently written 0, so this line is the only record that the emulator met a
+55: *  format it does not model, and exactly one of them should survive into a -q
+56: *  run, where a VERBOSITY_DEBUG gate would be invisible.  (#276 gates its
+57: *  message instead -- there the guest IS answered, so the line is noise rather
+58: *  than a deficiency tripwire.)  fatal() is kept because neither function has
+59: *  a cpu or a machine pointer in scope, so debugmsg_cpu() is not available.
+60: *
+61: *  These flags are PROCESS-GLOBAL, not per-instance like #269's and #277's:
+62: *  float_emul.c is a stateless helper with no struct to hang state on.  The
+63: *  cost is that with more than one emulated machine only the first one's bad
+64: *  format is reported.  That is a deliberate deviation, stated here rather
+65: *  than left to be discovered.  One flag per distinct message and never one
+66: *  shared flag -- a shared flag would let whichever message fires first mask
+67: *  the other one for good.
+68: */
+69:static int interpret_badfmt_warned = 0;
+70:static int store_badfmt_warned = 0;
+71:
+72:
+73:/*
+74: *  ieee_interpret_float_value():
+75: *
+76: *  Interprets a float value from binary IEEE format into an ieee_float_value
+77: *  struct.
+78: */
+79:void ieee_interpret_float_value(uint64_t x, struct ieee_float_value *fvp,
+80:	int fmt)
+81:{
+82:	memset(fvp, 0, sizeof(struct ieee_float_value));
+83:
+84:	int n_frac = 0, n_exp = 0;
+85:	int i, nan, sign = 0, exponent;
+86:	int exp_biased = 1;	/*  #303: biased exponent, saved so the S/D
+87:				    fraction arm can tell a subnormal (0) from
+88:				    a normal.  1 is a safe "normal" sentinel
+89:				    for the W/L formats, which have none.  */
+90:	double fraction;
+91:
+92:	/*  n_frac and n_exp:  */
+93:	switch (fmt) {
+94:	case IEEE_FMT_S:	n_frac = 23; n_exp = 8; break;
+95:	case IEEE_FMT_W:	n_frac = 31; n_exp = 0; break;
+96:	case IEEE_FMT_D:	n_frac = 52; n_exp = 11; break;
+97:	case IEEE_FMT_L:	n_frac = 63; n_exp = 0; break;
+98:	default:/*  #279  */
+99:		if (!interpret_badfmt_warned) {
+100:			interpret_badfmt_warned = 1;
+101:			fatal("ieee_interpret_float_value(): "
+102:			    "unimplemented format %i\n", fmt);
+103:		}
+104:	}
+105:
+106:	/*  Get the Exponent:  */
+107:	exponent = 0;
+108:	switch (fmt) {
+109:	case IEEE_FMT_W:
+110:		x &= 0xffffffffULL;
+111:	case IEEE_FMT_L:
+112:		break;
+113:	case IEEE_FMT_S:
+114:		x &= 0xffffffffULL;
+115:		// fall through
+116:	case IEEE_FMT_D:
+117:		exp_biased = (x >> n_frac) & ((1 << n_exp) - 1);  /*  #303  */
+118:		exponent = exp_biased - ((1 << (n_exp-1)) - 1);
+119:		break;
+120:	default:/*  #279  */
+121:		if (!interpret_badfmt_warned) {
+122:			interpret_badfmt_warned = 1;
+123:			fatal("ieee_interpret_float_value(): unimplemented "
+124:			    "format %i\n", fmt);
+125:		}
+126:	}
+127:
+128:	/*  Is this a Not-A-Number?  */
+129:	nan = 0;
+130:	switch (fmt) {
+131:	case IEEE_FMT_S:
+132:		sign = (x >> 31) & 1;
+133:		if ((x & ~0x80000000ULL) == 0x7f800000ULL) {
+134:			fvp->f = INFINITY;
+135:			goto zero_or_no_reasonable_result;
+136:		}
+137:		if ((x & 0x7f800000ULL) == 0x7f800000ULL)
+138:			nan = 1;
+139:		break;
+140:	case IEEE_FMT_D:
+141:		sign = (x >> 63) & 1;
+142:		if ((x & ~0x8000000000000000ULL) == 0x7ff0000000000000ULL) {
+143:			fvp->f = INFINITY;
+144:			goto zero_or_no_reasonable_result;
+145:		}
+146:		if ((x & 0x7ff0000000000000ULL) == 0x7ff0000000000000ULL)
+147:			nan = 1;
+148:		break;
+149:	}
+150:
+151:	if (nan) {
+152:		fvp->f = NAN;
+153:		goto no_reasonable_result;
+154:	}
+155:
+156:	/*  Calculate the fraction:  */
+157:	fraction = 0.0;
+158:
+159:	switch (fmt) {
+160:
+161:	case IEEE_FMT_W:
+162:		{
+163:			int32_t r_int = x;
+164:			fraction = r_int;
+165:		}
+166:		break;
+167:
+168:	case IEEE_FMT_L:
+169:		{
+170:			int64_t r_int = x;
+171:			fraction = r_int;
+172:		}
+173:		break;
+174:
+175:	case IEEE_FMT_S:
+176:	case IEEE_FMT_D:
+177:		if (x == 0 ||
+178:		    (fmt == IEEE_FMT_D && x == 0x8000000000000000ULL) ||
+179:		    (fmt == IEEE_FMT_S && x == 0x80000000ULL)) {
+180:			fvp->f = 0.0;
+181:			goto zero_or_no_reasonable_result;
+182:		}
+183:
+184:		fraction = 0.0;
+185:		for (i=0; i<n_frac; i++) {
+186:			int bit = (x >> i) & 1;
+187:			fraction /= 2.0;
+188:			if (bit)
+189:				fraction += 1.0;
+190:		}
+191:
+192:		/*  #303: biased exponent 0 with a nonzero mantissa is a
+193:		    SUBNORMAL: no implicit 1, and the true exponent is
+194:		    (1 - bias) -- one above what the unbiasing above gave.
+195:		    Before this, EVERY subnormal decoded with the implicit 1
+196:		    added and the exponent one too low: S 0x00000001 read as
+197:		    (1+2^-23)*2^-127, 4.19e6 times its real 1.4e-45 (measured
+198:		    2x8,388,607/2x8,388,607 S patterns wrong; worst D ratio
+199:		    2.25e15; the max D subnormal decoded as DBL_MIN, a NORMAL,
+200:		    and D m=3/m=4 COLLIDED onto one host double).  The halving
+201:		    loop below is exact for the fixed decode -- the fraction
+202:		    has <= n_frac significant bits, halving never widens that
+203:		    span, and below 2^-1022 the value sits exactly on the
+204:		    host's own subnormal grid -- a property the OLD decode did
+205:		    not have (its D targets needed 53 bits below 2^-1022, so
+206:		    its last halving rounded; the DBL_MIN artifact above IS
+207:		    that rounding).  True zeros never reach here (the x==0
+208:		    test above exits first).
+209:		    Who consumed the wrong value (all measured live): m88k
+210:		    (every FP operand; OpenBSD/luna88k boots on this rig),
+211:		    SH, Alpha, PPC (lfs alone puts the garbled widening
+212:		    straight into the FPR), and MIPS R3000 -- #246's denormal
+213:		    gate only delivers on EXC4K+ machines; on EXC3K
+214:		    fpu_unimpl_trap() returns 0 (the R3010's external
+215:		    interrupt line is not wired) and execution falls through
+216:		    to the decoded value, measured on pmax.  arc/R4000 keeps
+217:		    the trap and is the no-change control.  SH-4's FPSCR.DN
+218:		    (denormals-as-zero, set at reset) stays NOT modelled --
+219:		    with DN clear real silicon traps to the kernel, whose
+220:		    softfloat completion equals this decode; DN set would
+221:		    flush operands to zero.  After #303 the SH contract is
+222:		    MIXED and stated: operands decode per DN=0-with-
+223:		    completion while subnormal RESULTS still flush (#287/#292
+224:		    store policy, coinciding with DN=1 silicon) -- one gap,
+225:		    named, so nobody fixes half of it.  */
+226:		if (exp_biased == 0) {
+227:			fraction = fraction / 2.0;	/*  m / 2^n_frac  */
+228:			exponent ++;			/*  1 - bias  */
+229:		} else {
+230:			/*  Add implicit bit 0:  */
+231:			fraction = (fraction / 2.0) + 1.0;
+232:		}
+233:		break;
+234:
+235:	default:/*  #279  */
+236:		if (!interpret_badfmt_warned) {
+237:			interpret_badfmt_warned = 1;
+238:			fatal("ieee_interpret_float_value(): "
+239:			    "unimplemented format %i\n", fmt);
+240:		}
+241:	}
+475:		    trunc(-2147483648.5) is -2147483648, which IS
+476:		    representable; L's is strict, because -2^63 is exactly
+477:		    representable. 2^63 is spelled as a literal on purpose:
+478:		    (double)INT64_MAX rounds UP to 2^63, which would let
+479:		    equality through to the cast.  */
+480:		if (fmt == IEEE_FMT_W) {
+481:			if (isnan(nf) || nf >= 2147483648.0 ||
+482:			    nf <= -2147483649.0)
+483:				r3 = 0x7fffffff;
+484:			else
+485:				r3 = (int64_t) nf;
+486:		} else {
+487:			if (isnan(nf) || nf >= 9223372036854775808.0 ||
+488:			    nf < -9223372036854775808.0)
+489:				r3 = 0x7fffffffffffffffLL;
+490:			else
+491:				r3 = (int64_t) nf;
+492:		}
+493:		r2 = r3;
+494:		r |= r2;
+495:		break;
+496:	case IEEE_FMT_S:
+497:	case IEEE_FMT_D:
+498:		/*  sign bit:  */
+499:		if (signbit(nf)) {
+500:			r |= ((uint64_t)1 << signofs);
+501:		}
+502:
+503:		// printf("fpclassify(nf) = %i\n", fpclassify(nf));
+504:		switch (fpclassify(nf)) {
+505:		case FP_INFINITE:
+506:			if (fmt == IEEE_FMT_D)
+507:				r |= 0x7ff0000000000000ULL;
+508:			else
+509:				r |= 0x7f800000ULL;
+510:			break;
+511:		case FP_NAN:
+512:			if (fmt == IEEE_FMT_D)
+513:				r |= 0x7fffffffffffffffULL;
+514:			else
+515:				r |= 0x7fffffffULL;
+516:			break;
+517:		case FP_NORMAL:
+518:			if (signbit(nf))
+519:				nf = -nf;
+520:
+521:			/*
+522:			 *  How to convert back from double to exponent + fraction:
+523:			 *  The fraction should be 1.xxx, that is
+524:			 *  1.0 <= fraction < 2.0
+525:			 *
+526:			 *  This method is very slow but should work:
+527:			 *  (TODO: Fix the performance problem!)
+528:			 */
+529:			exponent = 0;
+530:			while (nf < 1.0 && exponent > -1023) {
+531:				nf *= 2.0;
+532:				exponent --;
+533:			}
+534:			while (nf >= 2.0 && exponent < 1023) {
+535:				nf /= 2.0;
+536:				exponent ++;
+537:			}
+538:
+539:			/*  Here:   1.0 <= nf < 2.0  */
+540:			nf -= 1.0;	/*  remove implicit first bit  */
+541:			for (i=n_frac-1; i>=0; i--) {
+542:				nf *= 2.0;
+543:				if (nf >= 1.0) {
+544:					r |= ((uint64_t)1 << i);
+545:					nf -= 1.0;
+546:				}
+547:			}
+548:
+549:			/*  #292: what remains in nf after the loop is the exact
+550:			    remainder, in units of one ulp of the destination:
+551:			    every step is a multiply by 2 (exact) or a subtraction
+552:			    of 1 from a value in [1,2) (exact by Sterbenz), so
+553:			    nf == 0.5 is a true half-way tie, exactly.  Round the
+554:			    assembled word as a UNIT -- the carry must be allowed
+555:			    to run out of the fraction into the exponent, or
+556:			    2 - 2^-24 would wrap to 1.0 instead of rounding to
+557:			    2.0.  For D the remainder is always exactly 0 (a host
+558:			    double has exactly the 52 bits D wants), so every mode
+559:			    is a no-op there and D results cannot change.  */
+560:			if (rm != IEEE_RM_LEGACY && rm != IEEE_RM_RZ &&
+561:			    nf > 0.0) {
+562:				int negative = (r >> signofs) & 1;
+563:				int round_up = 0;
+564:				switch (rm) {
+565:				case IEEE_RM_RN:
+566:					round_up = nf > 0.5 ||
+567:					    (nf == 0.5 && (r & 1));
+568:					break;
+569:				case IEEE_RM_RP:
+570:					round_up = !negative;
+571:					break;
+572:				case IEEE_RM_RM:
+573:					round_up = negative;
+574:					break;
+575:				}
+576:				if (round_up) {
+577:					uint64_t fracmask =
+578:					    (((uint64_t)1 << n_frac) - 1);
+579:					uint64_t frac = (r & fracmask) + 1;
+580:					if (frac >> n_frac) {
+581:						frac = 0;
+582:						exponent ++;
+583:					}
+584:					r = (r & ~fracmask) | frac;
+585:				}
+586:			}
+587:
+588:			/*  Insert the exponent into the resulting word:  */
+589:			/*  (First bias, then make sure it's within range)  */
+590:			exponent += (((uint64_t)1 << (n_exp-1)) - 1);
+591:			if (exponent < 0)
+592:				exponent = 0;
+593:			if (exponent >= ((int64_t)1 << n_exp))
+594:				exponent = ((int64_t)1 << n_exp) - 1;
+595:
+596:			/*  #287: an all-ones exponent means the value overflowed
+597:			    the DESTINATION format, and the fraction assembled
+598:			    above has to go: exponent-max with a nonzero fraction
+599:			    is a NaN, and mostly a SIGNALING one, where hardware
+600:			    gives +/-Inf (1e300 stored as 0x7fbf21e4). #255 cannot
+601:			    catch it because that gates on the class of the host
+602:			    double, which is merely FP_NORMAL. Test the biased
+603:			    exponent and NOT the clamp above: |x| in [2^128, 2^129)
+604:			    reaches 255 with no clamping at all, so a clamp-scoped
+605:			    fix would leave that whole binade storing NaNs.
+606:
+607:			    #292: overflow is MODE-DEPENDENT (IEEE 754 s7.4).
+608:			    Nearest carries to Infinity; toward-zero stops at the
+609:			    largest finite value; the directed modes give Infinity
+610:			    on the side they round toward and the largest finite
+611:			    value on the other.  IEEE_RM_LEGACY keeps #287's
+612:			    unconditional Infinity so the historical entry point
+613:			    is bit-identical.  */
+614:			if (exponent == ((int64_t)1 << n_exp) - 1) {
+615:				int to_inf = 1;
+616:				int negative = (r >> signofs) & 1;
+617:				switch (rm) {
+618:				case IEEE_RM_RZ:
+619:					to_inf = 0;
+620:					break;
+621:				case IEEE_RM_RP:
+622:					to_inf = !negative;
+623:					break;
+624:				case IEEE_RM_RM:
+625:					to_inf = negative;
+626:					break;
+627:				}
+628:				if (to_inf)
+629:					r &= (uint64_t)1 << signofs;
+630:				else {
+631:					exponent = ((int64_t)1 << n_exp) - 2;
+632:					r = (r & ((uint64_t)1 << signofs)) |
+633:					    (((uint64_t)1 << n_frac) - 1);
+634:				}
+635:			}
+636:			r |= (uint64_t)exponent << n_frac;
+637:
+638:			/*  #287: exponent 0 here is UNDERFLOW, never 0.0 -- that
+639:			    has its own FP_ZERO arm -- so flush to zero but keep
+640:			    the sign set at the top of this arm, as the
+641:			    FP_SUBNORMAL arm below already does (-1e-40 stored as
+642:			    +0). Both arms are unreachable for D, whose finite
+643:			    exponents bias into 1..2046.
+644:
+645:			    #331: the flush is GONE, and both of the reasons #292
+646:			    gave for it were wrong.  "MIPS routes non-flush
+647:			    denormal results away (#246)" holds only for EXC4K+
+648:			    with FCSR.FS clear -- fpu_unimpl_trap() returns 0 on
+649:			    EXC3K so R3000 fell through to here, and the FS=1 arm
+650:			    deliberately SKIPS the routing, so R4000 was getting
+651:			    its flush-to-zero from this bug rather than from any
+652:			    code that meant it.  "SH FPSCR.DN flushes in hardware"
+653:			    is true only for DN=1 (DN=0 raises an FPU error), and
+654:			    SH_FPSCR_DN_ZERO was never read by anything at all.
+655:			    Both architectures now state their policy at their own
+656:			    store sites, where the control bit is visible; this
+657:			    function's job is the IEEE answer.
+658:
+659:			    The fraction carry noted below still works and is now
+660:			    load-bearing in a second place: see
+51: *  ieee_store_float_value() -- measured identically on R3000 and R4000.
+289: *  ieee_store_float_value_rm() so the PowerPC integer converts can share it;
+393: *  ieee_store_float_value_rm():
+422:uint64_t ieee_store_float_value_rm(double nf, int fmt, int rm)
+444:			fatal("ieee_store_float_value(): unimplemented format"
+499:		if (signbit(nf)) {
+505:		case FP_INFINITE:
+511:		case FP_NAN:
+518:			if (signbit(nf))
+679:		case FP_ZERO:
+690:			fatal("ieee_store_float_value(): unimplemented format"
+703: *  ieee_store_float_value():
+713:uint64_t ieee_store_float_value(double nf, int fmt)
+715:	return ieee_store_float_value_rm(nf, fmt, IEEE_RM_LEGACY);
+859:	/*  signbit, not < 0.0: a zero result still steps (a positive-tiny
+863:	int qneg = signbit(q) != 0;
+983:	return ieee_force_odd(p, (r > 0.0) == (signbit(p) != 0));
+1081:		if (s == 0.0 && rm == IEEE_RM_RM && !signbit(s) &&
+1082:		    !(a == 0.0 && b == 0.0 && !signbit(a) && !signbit(b)))
+1247:	} else if (s == 0.0 && rm == IEEE_RM_RM && !signbit(s) &&
+1248:	    !(a == 0.0 && b == 0.0 && !signbit(a) && !signbit(b))) {
+104:	uint32_t	fr[SH_N_FPRS];
+111:	uint32_t	fpul;		/*  Floating-point Communication Reg  */
+38:struct ieee_float_value {
+39-	double		f;
+40-	int		nan;
+41-};
+42-
+43-#define	IEEE_FMT_S		1	/*  single, 32-bit float  */
+--
+62:void ieee_interpret_float_value(uint64_t x, struct ieee_float_value *fvp, int fmt);
+63-uint64_t ieee_store_float_value(double nf, int fmt);
+64-uint64_t ieee_store_float_value_rm(double nf, int fmt, int rm);
+65-
+66-/*  #326: round a double to an integral value under an IEEE_RM_* mode,
+67-    without disturbing the host's rounding mode. Shared by the MIPS integer
+
+ERROR: Selected model is at capacity. Please try a different model.
+ERROR: Selected model is at capacity. Please try a different model.
+tokens used
+41,846

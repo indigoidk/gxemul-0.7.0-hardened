@@ -1,0 +1,37 @@
+PRETABLE -- #576 shfcnvsdfpul, written 2026-11-02 before table 1 (the HEAD base leg) runs; HEAD 987cb596; detector = the 8 rows
+appended to regress/sh_rounding_probe.py (file w576/sh_rounding_probe.NEW.py), gate pin 36 -> 52, disc 9 unchanged.
+
+SIBLING PARITY: the de-fatalised-arm form does not apply (no arm is de-fatalised; the edit deletes a store).  The sibling handler
+  X(fcnvds_drm_fpul) writes FPUL by design (manual 9.28 :10759) and the witness's `fcnvds ctl' row measured that channel live on
+  HEAD (0x3fc00000).  No asymmetry owed; the control is recorded in the witness artifact, not in the detector (scope: Fable Q4,
+  Grok Q4 -- an FCNVDS row here would be scope growth).
+CLAIM -> ROW: the added comment claims "FCNVSD reads FPUL and writes DRn only".  Reads: the six FPUL rows (1.5, -1.5, 0.1, -0,
+  inf, snan).  Writes: `fcnvsd dr hi' / `fcnvsd dr lo'.  No other sentence in the diff asserts an observable.
+GUARD FIELD vs BODY FIELD: the only predicate dominating the edited line is FLOATING_POINT_AVAILABLE_CHECK (sr.FD, cpu_sh_instr.c:57-66);
+  the body reads cd.sh.fpul and writes fr[r8], fr[r8+1]; the predicate reads sr only, so no field disagreement state is owed.
+  Partition the body induces on its lvalues: NONE (the body tests nothing; sh_dn()'s DN test and fpclassify live in callees, outside
+  the DEPENDS-ON bound).  Clause (d) for a pure deletion = the removed store re-introduced under a DIFFERENT predicate: forms (f) DN
+  and (g) destination are clause-(e) material by the rule's letter; both are caught anyway at zero cost (one NODN row, one DR0 row).
+CHANNEL, per row (mutant it kills -> observable that differs):
+  fcnvsd fpul 1.5    M_b verbatim, M_g (DR2 form), M_h low-half, M_e(RZ-only, toward-zero leg) -> FPUL readback word 0x3fc00000 vs 0x00000001 / 0x00000000
+  fcnvsd fpul -1.5   M_b, M_g, M_h -> 0xbfc00000 vs 0xffffffff / low half
+  fcnvsd fpul 0.1    M_b, M_h (0xa0000000), M_c? no (FPUL unchanged on identity), M_g-mirror (== DR0 form) -> 0x3dcccccd vs 0 / 0xa0000000
+  fcnvsd fpul -0     M_b, M_z (store 0 on zero), M_f (DN-clear form; this row runs DN=0) -> 0x80000000 vs 0x00000000
+  fcnvsd fpul inf    M_b, M_d (specials -> 0x80000000) -> 0x7f800000 vs 0x80000000 (host indefinite; the pre-fix value is a measurement)
+  fcnvsd fpul snan   M_b, M_d -> 0x7fc00000 vs 0x80000000 (same caveat)
+  fcnvsd dr hi       M_c identity body, M_i halves exchanged -> 0x3fb99999 vs 0xdeadbeef / 0xa0000000
+  fcnvsd dr lo       M_c identity body, M_i -> 0xa0000000 vs 0xdeadbeef / 0x3fb99999
+  Vacuous-by-construction check: no row's channel is invariant under its named mutant.  The identity medium (clause (c)) is carried
+  by the two DRn rows ONLY; every FPUL row is green on it by construction (stated in the probe comment and the contract).
+PREDICTIONS (to be compared with the table, per the frozen-number rule these are predictions, not scores):
+  base (HEAD): 40/52 -- the six FPUL rows red in both modes (12 red lines), everything else ok.  `inf'/`snan' pre-fix values are
+               the host's indefinite 0x80000000 by reading (Fable unsettled premise; this leg settles it).
+  fixed:       52/52.
+  M_b 40/52; M_c 48/52 (dr hi/lo both modes); M_f 50/52 (`-0' both modes); M_g 50/52 (`0.1' both modes, the DR0 row); M_h 40/52;
+  M_i 48/52; M_z 50/52; M_d 48/52 (inf, snan).
+
+CORRECTION 2026-11-02 17:2x, after the table (left in place, quoting what it refutes): the prediction line above said
+"M_g 50/52 (`0.1' both modes, the DR0 row)".  MEASURED M_g = 42/52 with the FIVE DR2 rows red and the DR0 row GREEN: under
+`!= &fr[0]' the store happens for every destination except DR0, so the DR0 row is the one that stays green.  The prediction
+had the direction inverted.  The MIRROR (`== &fr[0]', built as M_gm after the table) measured 50/52 with ONLY the DR0 row
+red -- which is the cell the DR0 row was added for (Fable pass 1, change 3).  Every other prediction matched.

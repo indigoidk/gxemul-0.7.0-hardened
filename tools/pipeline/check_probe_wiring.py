@@ -2862,7 +2862,25 @@ MANIFEST = {
     "asic_badaddr_probe.py":       (CLASS_DETECTOR, "#463 dreamcast_asic: one guest LOAD ended the host"),
     "wdc_flood_probe.py":          (CLASS_DETECTOR, "wdcflood dev_wdc.c: six unlatched fatal(), guest-drivable without bound"),
     "sh_iprbcd_probe.py":          (CLASS_DETECTOR, "#458 SH IPRB/IPRC/IPRA-RTC priority table"),
-    "sh_rounding_probe.py":        (CLASS_DETECTOR, "SH FP rounding"),
+    "sh_rounding_probe.py":
+        (CLASS_DETECTOR, "SH FP rounding (#296-#303); #576 (2026-11-03) appends eight FCNVSD rows -- six FPUL readbacks and the two DRn "
+                         "halves, every row under PR at two rounding modes -- pinning that FCNVSD reads FPUL and writes DRn only.  "
+                         "gate_sh_rounding.sh pins 52 vector-mode pairs by EQUALITY (36 before #576), 9 discriminating.  Witness "
+                         "artifacts/shfcnvsdfpul/witness_20261102/ (3/6 -> 6/6); kill table artifacts/shfcnvsdfpul/killtable_20261102/ "
+                         "(11 legs, every re-keyed re-introduction red)."),
+    #  #576 shfcnvsdfpul artifacts: the applier, the variant builder and the instrument copies are kill-table evidence; the witness is ungated.
+    "artifacts/shfcnvsdfpul/witness_20261102/sh_fcnvsd_witness.py":
+        (CLASS_WITNESS, "#576: the rung-3 witness (6 rows, gxprobe-based, unmodified -E landisk -M 64), 3/6 on HEAD and 6/6 on the fix with "
+                        "the same script; its HEAD column asserts the truncation, so it is ungated."),
+    "artifacts/shfcnvsdfpul/killtable_20261102/apply_fix576.py":
+        (CLASS_TOOL, "#576: the shipped fix applier (the FPUL store deleted, the #576 comment in its place), preserved as run."),
+    "artifacts/shfcnvsdfpul/killtable_20261102/mutate576.py":
+        (CLASS_TOOL, "#576: the table's variant builder (the repaired copy: the first M_gm application failed on a malformed string, KILLTABLE.log)."),
+    "artifacts/shfcnvsdfpul/killtable_20261102/sh_rounding_probe.ASRUN_1716.py":
+        (CLASS_RESEARCH, "#576: the instrument the table ran, RECONSTRUCTED (HEAD plus the hunk the pass-2 packet inlined; ASRUN_NOTE.txt) -- the "
+                         "eight row tuples byte-identical to the shipped probe's."),
+    "artifacts/shfcnvsdfpul/killtable_20261102/sh_rounding_probe.NEW.py":
+        (CLASS_RESEARCH, "#576: the shipped probe's staged copy (identical to regress/sh_rounding_probe.py at the landing)."),
 
     # -- detectors that NOTHING RAN when this group was written.  *** #548: NONE OF THE FOUR
     #    IS UNRUN NOW -- pit8253 and sh4_bsc_width (2026-08-30), hpcmips (#536) and

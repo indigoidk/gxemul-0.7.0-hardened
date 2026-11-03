@@ -1,0 +1,136 @@
+VERDICT: PROCEED WITH CHANGES (3)
+
+Q1. The one-line deletion is correct. The three changes concern the claims, detector specification, and outstanding validation—not additional product edits. I read the permitted tree; the handler and decoder line numbers agree with the packet.
+
+**(a) DRn preservation needs a defined-behavior qualification.** The assignment at [cpu_sh_instr.c:3057](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh_instr.c:3057) does not feed either DRn store. Removing it preserves the conversion’s dataflow. However, “byte-identical for every FPUL value” cannot be guaranteed against HEAD when HEAD executes an undefined cast. The table’s DRn entries for those inputs describe the subsequent conversion code, not a portable guarantee about the entire HEAD execution. Likewise, absence of `fatal()` or `exit()` does not establish that undefined behavior can only corrupt guest data.
+
+**(b) I found no implementation dependency on the erroneous write.** The relevant source references are the handler, decoder, and disassembler. Other instructions read FPUL as architectural state; they do not require FCNVSD to corrupt it. Whether existing guest software deliberately relies on the bug remains unknown.
+
+**(c) “Guarded” is correct.** FTRC retains the casts at lines 3016 and 3038, behind raw-bit classification and range checks. Correct the quoted “removed from FTRC” wording.
+
+**(d) +0 is the only unchanged input in the defined-cast domain.** The producer supplies decoded **binary32 bit patterns**, not arbitrary doubles. Compare the original bits with `(uint32_t)(int32_t)value`, including the unsigned assignment.
+
+I did not execute an exhaustive sweep. The manual enumeration reduces as follows, with `e` the unbiased normal exponent:
+
+| Input band | Equality check |
+|---|---|
+| +0 | Cast produces the original zero bits |
+| Nonzero values with magnitude below 1, and −0 | Cast produces zero; original bits differ |
+| Positive normals, `e=0…28` | Integer result is below the original bit-pattern integer |
+| Positive normals, `e=29` | Maximum result `0x3fffffc0` is below minimum encoding `0x4e000000` |
+| Positive normals, `e=30` | Only crossing band; adjacent candidates below |
+| Negative normals, `e=0…28` | Unsigned cast result is above the original encoding |
+| Negative normals, `e=29` | Only crossing band; adjacent candidates below |
+| Negative normals, `e=30` | Unsigned cast result is below the original encoding |
+| −2³¹ | `cf000000 → 80000000`, unequal |
+| Remaining magnitudes and specials | Outside the defined-cast domain |
+
+Walking the adjacent candidates at both crossings:
+
+| FPUL input | Stored integer bits |
+|---|---|
+| `4e9d3a74` | `4e9d3a00` |
+| `4e9d3a75` | `4e9d3a80` |
+| `ce46e46e` | `ce46e480` |
+| `ce46e46f` | `ce46e440` |
+
+Neither crossing contains a fixed point.
+
+**(e) The seed/readback path checks out.** `"fpul"` is registered directly against `cpu->cd.sh.fpul` at [cpu_sh.c:141](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh.c:141). STS uses that same field. The optional second instruction word makes the [probe issue `step 3`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sh_rounding_probe.py:262):
+
+1. `0xf2ad`: FCNVSD FPUL,DR2.
+2. `0x025a`: STS FPUL,R2.
+3. `0x2122`: MOV.L R2,@R1.
+
+The following NOP is not executed. Cold CPU initialization leaves FD clear.
+
+Other premise corrections and confirmations:
+
+- **The decoder bounds are correct.** The admitted FCNVSD opcodes are `f0ad, f2ad, f4ad, f6ad, f8ad, faad, fcad, fead`, selecting pairs `(0,1), (2,3), …, (14,15)` in the 16-register array.
+- **“Every single-precision value is normal as a double” needs “nonzero finite.”** Single subnormals widen to double exponent fields `0x36a…0x380`; single normals widen to `0x381…0x47e`. Zeros have zero magnitude, and infinities/NaNs have exponent `0x7ff`. Every category passes `sh_dn()` unchanged.
+- For `3dcccccd`, the masks give exponent `0x7b`, fraction `0x4ccccd`, double exponent `0x3fb`, high fraction `0x4ccccd >> 3 = 0x99999`, and low word `(0x4ccccd & 7) << 29 = 0xa0000000`. Thus `3fb99999 a0000000` is correct.
+- The `FP_ZERO` arm preserves the previously installed sign bit: the predicted −0 result is supported by the source.
+- The smallest subnormal widens to **`36a00000 00000000`**.
+- **0.1 is not the table’s only nonzero-low-word row:** the NaN row has low word `ffffffff`.
+- NaNs lose their input payload and sign during decoding. The precise positive canonical encoding shown additionally assumes a positive host `NAN`.
+
+Q2. With FD clear, the partition is:
+
+| FPUL input class | Effect of deletion | Proposed FPUL coverage |
+|---|---|---|
+| +0 | Defined behavior unchanged | None |
+| −0 | Preserves `80000000` instead of zero | Yes |
+| Nonzero subnormals, either sign | Preserves input instead of zero | None |
+| Nonzero finite normals whose truncation fits `int32_t` | Preserves input instead of a different integer encoding | 1.5, −1.5, 0.1 |
+| Finite values whose truncation does not fit | Removes undefined conversion; preserves input | None |
+| Infinities | Removes undefined conversion; preserves input | +Inf only |
+| NaNs | Removes undefined conversion; preserves input | One positive pattern |
+
+The exact defined-cast raw-bit intervals are:
+
+- `00000000…4effffff`
+- `80000000…cf000000`
+
+Only `00000000` is unchanged within those intervals. Outside them, avoid claiming a particular before/after value difference: HEAD has no portable result.
+
+Thus the proposed table covers defined corruption and the special-value UB cases, but **does not represent every partition**, notably unchanged +0, subnormals, and finite overflow. Under the stated floor, these omissions can be disclosed rather than filled automatically.
+
+With FD set, both versions return through the existing exception path before conversion. PR=0 remains a separate architectural defect.
+
+Q3. **None of (a)–(i) is globally equivalent to the fixed handler.** To make “first” precise, the table below orders FPUL inputs as unsigned 32-bit integers, with FD clear and PR set. The minimum-subnormal examples compare these implementations; they do not propose new architectural subnormal expectations.
+
+| Form | First difference, with relevant state | Proposed rows guaranteed to fail |
+|---|---|---|
+| (a) Original cast | `00000001`: writes zero | Four finite FPUL rows: 1.5, −1.5, 0.1, −0 |
+| (b) Magnitude ≥1 | `3f800000`: writes integer 1 | 1.5 and −1.5 |
+| (c) Magnitude <1, write zero | `00000001`: writes zero | 0.1 and −0 |
+| (d) Specials, write `80000000` | `7f800000`: overwrites +Inf bits | Inf and NaN |
+| (e) RZ only | Under RZ, `00000001`; under RN, no difference | Four finite FPUL rows under RZ |
+| (f) DN clear only | With DN=0, `00000001`; with DN=1, no difference | None as proposed |
+| (g) Destination other than DR0 | With DR2, `00000001`; with DR0, no difference | Four finite FPUL rows **if they use DR2** |
+| (h) Write result’s low half to FPUL | `00000001`: double low word is zero | All six FPUL rows |
+| (i) Exchange destination halves | `00000001`: exchanges `36a00000` and zero | Both DRn rows |
+
+For forms containing the raw cast, specials may also fail on the chosen build, but they are not portable witnesses. The finite rows suffice.
+
+**Form (g) is already covered by the witnessed DR2 choice.** It is not an uncovered mutation merely because only one destination is tested. General coverage of all destination registers remains absent.
+
+For the stated structural floor, the edit is reached only with FD clear. The delay-slot test lies on the returning FD-set branch. There are no body predicates on magnitude, specials, RM, DN, or destination. Consequently, none of the added predicates in (b)–(g) independently requires another partition row.
+
+The literal different-predicate requirement still needs a recorded challenge. **Choose (c):** it restores the removed behavior for magnitudes below one, has defined behavior throughout, and the existing 0.1 and −0 rows detect it. That does not make every other invented predicate mandatory.
+
+DN=0 coverage is therefore optional. If desired, mark one existing finite FPUL row `PR | NODN`; this catches (f) without adding sessions.
+
+Q4. The sibling search supports deletion. The exact FPUL cast idiom occurs in the two guarded FTRC arms and this handler. FLOAT provides the appropriate analogous behavior: read FPUL and write FRn/DRn without writing FPUL. Importing FTRC’s guards would still corrupt FPUL for 1.5.
+
+The neighboring issues should remain separate:
+
+- **PR=0:** FCNVDS shares the missing check. FLOAT and FTRC support both precision modes, so they are not examples of PR=1-only enforcement. FSRRA does enforce its opposite restriction—PR=1 is rejected—at [cpu_sh_instr.c:3279](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh_instr.c:3279). File the conversion-mode issue separately; whether it is already recorded is unsettled within this reading scope.
+- **FCNVDS control:** useful, but an additional permanent row is not required here. The supplied witness already includes one, and existing FTRC rows independently exercise FPUL writes followed by STS/readback. Keeping FCNVDS in the witness while retaining eight permanent rows is reasonable.
+- **DN=1 subnormals:** the source explicitly names the operand-decoding gap. That supports disclosure, not architectural correctness. Do not add a passing row that blesses the current nonzero DRn result under DN=1.
+
+**An additional finding:** [the manual’s `qnan(n)`](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/sh4_programming.txt:8914) specifies `7ff7ffff ffffffff` for double precision. The helper’s positive canonical result `7fffffff ffffffff` differs in SH’s quiet/signaling discriminator, not merely its payload. Record that separately; omitting a NaN DRn oracle here is appropriate. Also, `7fc00000` is signaling under this manual’s classification—the existing probe label `ftrcS-nan qNaN+` is misleading.
+
+Q5. **Eight rows are proportionate; I would drop none.** The finite FPUL rows give reliable witnesses, the special rows check raw source preservation, and the two DRn rows verify useful execution and both output halves.
+
+The required construction should be explicit:
+
+- Use DR2 for the FPUL rows, preserving coverage of (g).
+- Seed **both FR2 and FR3**, as well as the memory readback word, to values unequal to the expected halves.
+- Set PR, leave SZ clear, and use the existing three-instruction FPUL readback shape.
+
+For an identity handler, the six FPUL rows pass in both modes and the two DRn rows fail in both modes: **12/16 new sessions pass**, or **48/52 overall** assuming existing rows pass. The memory sentinel alone does not establish that identity-body result; the DR register seeds matter.
+
+The arithmetic for the gate is **36 + 8×2 = 52**. The discriminator count stays **9** because all eight new dictionaries have equal RN/RZ expectations. This remains a table-property check, not an observation of emulator behavior. The proposed names fit the column and do not collide with each other.
+
+The three changes behind my verdict are:
+
+1. **Correct the record:** “guarded” FTRC casts; qualify all-input DRn equivalence and harm claims around UB; correct the normal-double and nonzero-low-word statements.
+2. **Make the detector contract explicit:** DR2, both DR sentinels, the chosen different-predicate challenge, and disclosure of omitted PR/FD, DN, destination, subnormal, overflow, and NaN-result coverage.
+3. **Complete the owed validation before shipping:** fixed witness 6/6, full fixed gate 52/52, verbatim reinstatement, the chosen predicate mutation, and the measured identity-body leg. The supplied pre-fix finite failures are already suitable witnesses for the reported defect.
+
+The quoted HEAD-based staging procedure is appropriate for excluding the unrelated gate hunks.
+
+Not independently settled: guest reliance; HEAD/history/shipment and stray-copy assertions; artifact provenance, binary freshness, and reported runtime results; working-tree cleanliness and gate hunks; the `.sh`-wide absence claim; and whether the PR/NaN issues already have records. Those require material outside the permitted reading scope or execution. I performed no builds, tests, mutations, or writes.
+
+VERDICT: PROCEED WITH CHANGES (3)

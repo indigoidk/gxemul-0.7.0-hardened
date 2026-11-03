@@ -1,0 +1,73 @@
+VERDICT: PROCEED WITH CHANGES (4)
+
+## Q1, premise audit
+
+**(a) DRn byte-identical after deletion — REASONED, confirmed.** From the inlined handler: the line writes only `cpu->cd.sh.fpul`; `op1` is a local and `op1.f` is unassigned afterward; the DRn store reads only `op1.f`/`ieee`. `fpul` and `fr[]` are distinct struct members (READ), so the two `reg(ic->arg[0]...)` writes cannot alias `fpul`. The NaN/Inf store arms quoted in section 4 don't read `fpul` either. DRn is unchanged for every input class, so the witness's liveness rows must also pass on the fixed build.
+
+**(b) other tree consumers — NOT SETTLEABLE from the packet.** No other `fpul` reader is inlined. Settling fact: a `grep -n fpul` across `GXEMUL-SEC/src/` listing every reader/writer. REASONED: any code relying on post-FCNVSD FPUL content would be relying on the bug itself, since the manual assigns only `DR[n>>1]`.
+
+**(c) #297 — "guarded", and "removed" is refutable from the packet alone.** REASONED: FTRC DRm,FPUL architecturally *must* write FPUL (the section-5 contrast at 10758–10759 shows the writing pattern the manual uses; FCNVSD's pseudocode lacks it). A true "removal" of the cast from FTRC would itself be a defect, not a fix. The author's inline statement (cast retained on both arms behind a range-check ladder) is the only self-consistent reading. The scoping-note/bug-row wording owes a correction: FTRC = guard the *required* write; FCNVSD = delete the *forbidden* write. NOT independently checkable: `X(ftrc_frm_fpul)` is not inlined (author-asserted).
+
+**(d) +0 as the unique fixed point — REASONED, enumerated, confirmed.**
+- e=0 (subnormals, sign 0): trunc = 0, so b must be 0 — but b = f ≥ 1. Only f=0 (= +0) qualifies; that is the answer.
+- E ∈ [0, 29] (e ≤ 156): trunc(v) < 2^(E+1) ≤ 2^30 = 1,073,741,824, while b ≥ (E+127)·2^23 ≥ 127·2^23 = 1,065,353,216, and for E ≥ 1 b ≥ 128·2^23 > 2^(E+1) − 1 ≥ trunc(v). One check at the tight end, E=29, f=max: trunc(v) = 2^29 + (2^23−1)·64 = 1,073,741,760 < b = 1,308,622,848. Never equal.
+- E=30, sign 0 (all such v in int32 range, so defined): equality ⇔ 2^30 + 128f = 157·2^23 + f ⇔ 127f = 243,269,632 ⇔ f = 1,915,508.91 (127·1,915,508 = 243,269,516, remainder 116). No integer f. No solution.
+- E=30, sign 1: equality ⇔ 2^32 − (2^30 + 128f) = 2^31 + 157·2^23 + f ⇔ 129f = −243,269,632 — impossible for f ≥ 0.
+- E=31, sign 1, f=0: v = −2^31 is the one defined outlier; pattern 0x80000000 ≠ b = 0xCF000000. All E ≥ 31 otherwise: UB / |trunc| ≥ 2^31 cannot be represented. NaN/Inf: UB.
+So 0x00000000 is the only defined-behavior input HEAD leaves unchanged. The brief's hand derivation holds; the only exponent band where value and bit pattern are "of similar size" is E ∈ {30, 31}, and both fail.
+
+**(e) seeds and readback — mostly settled by the witness, one link not.** READ: the three red FPUL rows *are* guest `sts fpul,r2; mov.l r2,@r1` readbacks of debugger-seeded values, and the correct DRn rows prove the seed reached the register the handler reads. That demonstrates seed→`cd.sh.fpul`→`sts`→memory for the *witness* harness. NOT SETTLEABLE: that `sh_rounding_probe.py` single-steps far enough for a three-instruction row. It rests on the brief's statement that `ftrcS-*` rows already do sts+store readback; no such row is inlined. Settling fact: one ftrcS VECTORS entry with its step count.
+
+**No false premise found in sections 2, 4, 6, 7.** Spot-enumerations: `sh_dn` no-op for singles (2^-149 ≫ 2^-1022, REASONED); the 0.1 double (mantissa 0x4ccccd << 29, exp 0x3fb → `3fb99999 a0000000`, REASONED, matches the MEASURED row); NaN payload collapsed to `0x7fffffffffffffff` (READ of the quoted FP_NAN arm); 2^31 → `41e00000` (REASONED); the decoder's bit-8-clear/even-pair claim (READ). The one prediction I cannot upgrade is the −0 DRn row (FP_ZERO store arm not inlined — the author already flags this).
+
+## Q2, the partition
+
+The fix changes the FPUL answer for **every input except 0x00000000** (per Q1(d)). Parts and coverage:
+
+| part | members | HEAD behavior | probe row |
+|---|---|---|---|
+| P1: {+0} | 0x00000000 | unchanged — green on both builds | none — correct: it cannot be red on HEAD and catches none of the Q3 forms (even (c) writes 0 there, the same bits) |
+| P2: defined truncation, bits change | ±normals, ±subnormals, −0 | `(int32_t)v` | 1.5 (≥1), −1.5 (negative), 0.1 (<1), −0 (sign-of-zero). Subnormal input shares 0.1's output class (→0); no separate row owed |
+| P3: UB, bits change in practice | \|v\| ≥ 2^31 finite, ±Inf, NaNs | C-cast UB | inf, nan. The finite-≥2^31 subclass is unrowed; acceptable, no Q3 form needs it |
+
+Every part with red-on-HEAD behavior has a member.
+
+## Q3, candidate weakenings
+
+"First differs" given by smallest input class; none of (a)–(i) is equivalent to the fixed form.
+
+| form | first differs at | red rows | placement |
+|---|---|---|---|
+| (a) verbatim | everything but +0 | all six FPUL rows | **floor (b) — satisfied** |
+| (b) \|v\| ≥ 1 | 1.0 / −1.0 | **1.5, −1.5 only** (inf, nan also red via UB). NOTE: **0.1 and −0 stay green under (b)** — coverage of (b) rests entirely on the two ≥1 rows; neither is droppable | floor (d) |
+| (c) \|v\| < 1 | −0 / smallest subnormal | 0.1, −0 | floor (d) |
+| (d) specials | ±Inf/NaN | inf, nan | floor (d) |
+| (e) RM=RZ only | any non-+0 input **in the RZ leg only** | RZ legs of 1.5/−1.5/0.1/−0 — *only if the probe's two modes are the RM pair* (implied by "rounding probe" and "the conversion to double does not use RM", not inlined — named as P3 below) | floor (d), conditional |
+| (f) DN clear | any non-+0 input with DN=0 | **none — the table ORs DN into every non-NODN row. Uncovered as tabled.** | the only genuinely uncovered re-introduction |
+| (g) dest ≠ DR0 | any input, non-DR0 destination | all FPUL rows **if the rows use DR2** — the witness used dr2 (READ: 0xf2ad → fr[2],fr[3]); section 7's table does not state its destination. On DR0, (g) is invisible | floor (d), conditional |
+| (h) low-half store | any input whose DR low half ≠ seed (1.5: low=0 vs 0x3fc00000) | all FPUL rows; DR rows stay green | covered |
+| (i) halves swapped | first input with hi ≠ lo | **fcnvsd dr hi, fcnvsd dr lo** (0.1: 0x3fb99999 ↔ 0xa0000000); FPUL rows green | covered — this is the DR rows' discriminating job beyond liveness |
+
+On (f): strictly it is clause-(e) disclosure, not floor, since the body tests nothing and DN does not dominate the edit — but one `NODN`-marked copy of `fcnvsd fpul 1.5` (2 sessions) closes it, and I recommend that. **Trap, found while checking: the new family name must not extend a listed one** — `grep -c "^fcnvsd fpul 1.5.*ok$"` would also match a `fcnvsd fpul 1.5 dn0` line, counting 4 ≠ 2 and breaking the equality pin. Use a non-extending base (e.g., `fcnvsd0 fpul 1.5`).
+
+## Q4, option-set completeness
+
+One member is **not named: keep the line and document it as a named divergence.** REJECT: the line is upstream residue, not a chosen divergence (READ: `git log -L` shows only the import commit); it demonstrably corrupts a guest-visible register (witness); the project reserves named divergences for deliberate gaps. Guard-the-cast (#297-style) is also wrong — it preserves an unarchitected write for in-range values. Compat-flag retention has no supporting guest evidence (author states none known; that absence is not settleable from the packet — settling fact: any guest binary read of post-FCNVSD FPUL expecting truncation). Delete is the only manual-consistent disposition. The three neighbors are correctly FILED, not ridden: PR=0-executes-anyway is a decoder-level question (the decoder quotes support it) touching both FCNVSD and FCNVDS; the FCNVDS row is scope growth for zero discriminating value here; the DN=1 subnormal operand gap is already carried by `#303`'s comment (READ as stated). Cannot execute from this packet: "grep the fork for the idiom in sibling converts" — settling fact: the list of every `cpu->cd.sh.fpul =` site in `cpu_sh_instr.c`; the packet shows exactly three writers (FCNVSD = the bug, FCNVDS = architected, FTRC = guarded per author).
+
+## Q5, the vehicle
+
+Proportionate, REASONED: 8 rows / 16 sessions against the gate's equality pin (36 → 52) and +8 list entries, for a fix whose harm is silent guest corruption with a UB flavor. The pinned-by-equality and both-modes arithmetic is internally consistent, and the discriminating count staying 9 follows (fixed behavior is RM-independent; so is HEAD's cast). **Row I would drop: `fcnvsd fpul -0`.** Everything it catches among (a)–(i) — (a) via the others, (c) via 0.1 — stays red without it, and no inventoriable form needs the sign-of-zero case. Keep both DR rows: the identity medium needs *both* red (they are clause (c)), and (i) is caught by either. Process items not verifiable from the packet: the working-copy hunk locations in `gate_sh_rounding.sh` (the #548 HEAD-based staging recipe is sound in principle) and the claim that `sh_rounding_probe.py` is clean. The owed runs — clause (i) 6/6 on the fixed build and the measured identity run for clause (c) — are correctly stated as pre-ship gates, not optional.
+
+**Something else found:** (1) the grep-prefix trap for any future dn0 row (concrete gate failure mode, above); (2) under form (b), 0.1 and −0 go green — so the table's (b)-coverage is exactly two rows thick; protect 1.5 and −1.5 from any trimming; (3) section-7's table should state the witness's `dr2` destination explicitly, since (g)-coverage silently depends on it.
+
+**Premises not settleable from this packet:**
+- **P1 (Q1b):** no other tree consumer of post-FCNVSD FPUL. Settle: `grep -n fpul` over `src/`.
+- **P2 (Q1e):** the probe's step budget for a three-instruction row. Settle: one inlined ftrcS VECTORS entry + step count.
+- **P3 (Q3e):** the probe's two modes are RM=RN/RM=RZ. Settle: the probe's mode definition.
+- **P4 (Q3g):** the probe rows' destination pair (witness used dr2; section 7 silent). Settle: the row definitions.
+- **P5 (Q1c):** `X(ftrc_frm_fpul)` at HEAD retains the cast behind a range ladder (author-asserted, not inlined). Settle: read that function.
+- **P6:** `qnan(n)`'s body (does it ever write `*FPUL`?) — the signature carries no FPUL argument, so unlikely (REASONED), but the "FCNVSD never writes FPUL" claim rests on the shown arms plus this unread body.
+- **P7:** −0 DRn sign emission (FP_ZERO store arm unread — author-flagged prediction).
+- **P8:** working-copy state of the gate file (process-only; mitigated by #548 recipe).
+
+VERDICT: PROCEED WITH CHANGES (4)

@@ -56,14 +56,17 @@ res=$(grep -o "SH_ROUND_RESULT=[0-9]*/[0-9]*" "$LOG" | tail -1 | cut -d= -f2)
 got=${res%/*}; want=${res#*/}
 disc=$(grep -o "SH_ROUND_DISCRIMINATING=[0-9]*" "$LOG" | tail -1 | cut -d= -f2)
 
-# 36 vector-mode pairs: 17 vectors x 2 modes (9 from #296, 6 ftrc rows from #297, and
+# 52 vector-mode pairs since #576 = 25 two-mode vectors x 2 + #303's two single-mode rows (27 vectors in all; the eight
+# two-mode FCNVSD rows were added to the 36 below).  The 36: 17 vectors x 2 modes (9 from #296, 6 ftrc rows from #297, and
 # #299 turned the double-rounding PIN into a discriminating row and added the fmac
 # tie-band witness) + #303's two single-mode subnormal-operand rows (RN pinned; DN
 # STRIPPED by their NODN marker -- a DN=1 numeric expectation would bless a value
 # real silicon flushes; committed bytes 0x32000001 / 0x3f800001 measured live).
-check     "vector-mode pairs run"                  "$want" 36
+#  #576: 36 -> 52.  Eight FCNVSD rows (six FPUL readbacks + the two DRn halves) at two modes each; see the
+#  probe's #576 block.  EQUALITY on purpose: a row that silently vanishes reds here instead of passing a floor.
+check     "vector-mode pairs run"                  "$want" 52
 check     "vector-mode pairs correct"              "$got"  "$want"
-# EXACTLY 9 of the 17 vectors discriminate between the two modes: the 7 from #296 plus
+# EXACTLY 9 of the 25 two-mode vectors (17 until #576 added the eight two-mode FCNVSD rows; a single-mode row cannot discriminate) discriminate between the two modes: the 7 from #296 plus
 # the #299-fixed fsub band row and the #300-fixed D-division row (each a PIN until its
 # fix landed; each flip was that fix's acceptance test). If this number drops, someone weakened the table; if it RISES,
 # someone made a mode-independent row (an ftrc row, or the fmac tie whose two modes
@@ -77,7 +80,9 @@ check     "vectors that discriminate the two modes" "$disc" 9
 # and the tie's RN arm).
 for v in "fdiv" "float" "fadd " "fmac " "fmactie" "fipr" "ftrv" "fmul" \
          "fsub band" "faddinf" "Ddiv" "ftrcS-inf" "ftrcS-ovf" "ftrcS-nan" "ftrcS-edge" \
-         "ftrcD-2p31" "ftrcD-neghalf"; do
+         "ftrcD-2p31" "ftrcD-neghalf" \
+         "fcnvsd fpul 1.5" "fcnvsd fpul -1.5" "fcnvsd fpul 0.1" "fcnvsd fpul -0" \
+         "fcnvsd fpul inf" "fcnvsd fpul snan" "fcnvsd dr hi" "fcnvsd dr lo"; do
     n=$(grep -c "^$v.*ok$" "$LOG")
     check "  $v: both modes correct" "$n" 2
 done

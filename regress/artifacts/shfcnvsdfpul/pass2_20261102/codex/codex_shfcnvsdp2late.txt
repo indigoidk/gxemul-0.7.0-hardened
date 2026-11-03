@@ -1,0 +1,54 @@
+VERDICT: SHIP WITH CHANGES (4)
+
+The executable fix is correct. My four changes concern comments, coverage disclosures, and records; I do not require additional detector sessions.
+
+I reviewed the pinned `987cb596`, since current HEAD has advanced. I independently recounted all 11 raw logs: every score and red-row list matches the packet. The detector has 27 vectors, 52 sessions, and nine mode discriminators. I checked the artifacts and code; I did not rebuild or rerun the emulator.
+
+**Q1. The deletion is right and complete for #576.** `op1.f` is already decoded before the removed assignment. The same value reaches the same encoder and DRn stores afterward. No modeled FPSCR update changes, and the FD exception path—including its delay-slot variant—remains intact. Removing the cast also removes its undefined behavior for exceptional and out-of-range inputs; portable equivalence to that undefined behavior is not a meaningful promise.
+
+**Change 1: tighten the product comment.** “Mis-copied” is an inference about provenance. Use “the same store FTRC makes, apparently copied,” or simply “an erroneous FTRC-style store.” Also prefer “FCNVSD preserves FPUL and writes its conversion result to DRn” over “writes DRn only”: architectural FCNVSD also has FPSCR cause/exception effects, which this patch does not implement. [SH-4 Software Manual, §9.29](https://www.renesas.com/en/document/mas/sh-4-software-manual)
+
+**Q2. I find no open mandatory mutation cell under the stated DEPENDS-ON bound.** The base, verbatim reinstatement, and null-medium legs are demonstrably red. The body introduces no tested partition requiring additional destination or operand combinations. The measured conditional reinstatements provide useful additional coverage.
+
+An escaping reinstatement nevertheless exists:
+
+```c
+if (ic->arg[0] == (size_t)&cpu->cd.sh.fr[4])
+	cpu->cd.sh.fpul = (int32_t)op1.f;
+```
+
+At `FPUL=0x3fc00000`, PR=1, FD=0, executing `FCNVSD FPUL,DR4` changes FPUL to `1`. No existing FCNVSD row targets DR4. Its predicted 52/52 follows from the row destinations; this is not a newly measured score.
+
+**Change 2: make the contract’s limits explicit.** The packet covers the FPUL channel across **{DR0, other than DR0}**, using DR2 as the second representative. It does not cover every destination. Converted values are read only at DR2; even DR0’s converted result is unchecked. Disclose that, the untested FD/PR and FPSCR state axes, and delay-slot behavior. Also include **exactly −2³¹** among unrowed FCNVSD inputs: its cast is defined, but that does not make it covered. Several newer scratch comments already make these corrections.
+
+**Q3. A single-statement deletion suffices:** remove `FLOATING_POINT_AVAILABLE_CHECK;`.
+
+All detector executions reach this handler with FD clear, so their results remain unchanged. With FD set, `FPUL=0x3fc00000`, and DR2 seeded with sentinels, the mutant converts and writes DR2 where the fixed handler raises the FPU-disable exception.
+
+An FD=1 exception/readback row would catch this. The packet’s contract does **not** already disclose that omission; include it in change 2. This is outside the reachable body of the deleted FPUL store and does not establish an additional mandatory repair cell.
+
+**Q4. The principal numerical records hold, but not every documentary assertion is established.**
+
+**Change 3: qualify the timing and instrument provenance.** The scratch metadata shows:
+
+- `PRETABLE.out` created at **17:17:41.526**.
+- `base_head.raw` created at **17:17:43.651**, last modified at **17:18:13.244**.
+- `PRETABLE.out` last modified at **17:29:21.600**.
+
+That supports existence before the base invocation, but does not establish the pre-run contents of the subsequently edited file. Replace the imprecise “written 17:18 before base” claim with this evidence and its limit. Preserve the quoted correction; do not describe the present mtime as proving the original order.
+
+Also retain the explicit reconstruction status of [ASRUN_NOTE.txt](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/shfcnvsdfpul/killtable_20261102/ASRUN_NOTE.txt). I verified that its eight FCNVSD tuples match the newer probe. Record that `M_e` was proposed but unbuilt, and that the first M_gm application failed before the successful measured run, as [KILLTABLE.log](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/shfcnvsdfpul/killtable_20261102/KILLTABLE.log:21) shows.
+
+**Change 4: finish the record corrections consistently.**
+
+- F1’s replacement is correct: the FTRC casts remain at **3016 and 3038**, guarded by the range ladder.
+- **Another error remains in that same prose row:** “destroys FPUL on every FCNVSD” is false for +0, independently of the unchanged FD-disabled path. Replace it with “spuriously overwrites FPUL, corrupting inputs such as ±1.5.”
+- Update the gate prose to **27 vectors total: 25 two-mode vectors plus two single-mode vectors**. Nine discriminate.
+- Relabel the inherited `ftrcS-nan qNaN+` as `sNaN+`, preserving its oracle.
+- Give the PR-reserved class an actual filing reference. I found no such class entry in the pinned bug file or ledger; a pass-1 recommendation is not itself a filing.
+
+FCNVDS’s write to FPUL is intentional. The DN operand gap and F9 remain separate issues. **Keep `inf`**: it retains the sole +Inf-class input for two sessions, even though its listed mutant kills overlap with `snan`.
+
+**Q5. No additional technical hold is warranted beyond these corrections and the standing roster requirement.** Four substantive pass-2 answers plus Astra’s later substantive answer suffice once their findings are adjudicated. An absent or walled response cannot count as agreement.
+
+VERDICT: SHIP WITH CHANGES (4)

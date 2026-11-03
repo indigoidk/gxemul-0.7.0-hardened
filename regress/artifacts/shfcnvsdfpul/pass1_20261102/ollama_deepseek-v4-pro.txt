@@ -1,0 +1,39 @@
+VERDICT: PROCEED WITH CHANGES (2)
+
+**Q1**  
+(a) REASONED: yes. Deleting `cpu->cd.sh.fpul = (int32_t) op1.f;` cannot change DRn. The handler does not assign `op1.f` between that line and `ieee_store_float_value(op1.f, IEEE_FMT_D)`. Also READ from section 4: every single value, including the smallest single subnormal 2^-149, is normal as a double, so `sh_dn()` cannot flush it.  
+(b) Cannot settle from this packet. No inlined code or guest source shows another reader depending on FCNVSD having modified FPUL. Settling fact: a grep of product and guest code for reads of `cd.sh.fpul` after FCNVSD.  
+(c) REASONED from the packet: “guarded” is the right word, not “removed.” The brief itself says HEAD still has `cpu->cd.sh.fpul = (int32_t) op1.f;` on both FTRC arms, and #297 added range checks ahead of the cast. The wording owes a correction.  
+(d) REASONED: the claim is true for finite in-range values. Enumerating normal positive values with exponent field E, sign 0: equality of original FPUL bits and stored cast would require  
+`F = 2^23*(E*2^23 - 2^(E-127))/(2^(E-127) - 2^23)`.  
+The only k=E-127 giving a positive in-range F is k=30, where F=(29/127)*2^23, which is not an integer. All other k give F negative or ≥2^23. So no positive normal fixed point; negative normals similarly do not satisfy it. +0 is the only in-range finite input left unchanged.  
+(e) READ from the quoted witness output: yes, the seeds reached `cd.sh.fpul` and the guest’s `sts` exposed the truncation. I cannot independently verify the run; the inlined output is consistent.
+
+**Q2**  
+Fixed leaves FPUL unchanged for every input. HEAD equals fixed only for +0 among defined in-range finite inputs; all other finite in-range values differ. NaN, Inf and out-of-range values have undefined C cast behavior on HEAD, while fixed removes that undefined behavior.  
+The proposed row table has no `+0` FPUL row, so it does not have a member in the unchanged partition. It has members in the changed partitions: 1.5, -1.5, 0.1, -0, inf, nan. That is acceptable for a red-detector, but the partition is not fully sampled.
+
+**Q3**  
+(a) Not equivalent; all six proposed FPUL rows turn red.  
+(b) Not equivalent; `fcnvsd fpul 1.5`, `fcnvsd fpul -1.5`, and `fcnvsd fpul inf` turn red; NaN does not because the comparison is false.  
+(c) Not equivalent; `fcnvsd fpul 0.1` and `fcnvsd fpul -0` turn red.  
+(d) Not equivalent; `fcnvsd fpul inf` and `fcnvsd fpul nan` turn red.  
+(e) Not equivalent assuming the two probe modes include RZ; all FPUL rows turn red only in that mode.  
+(f) Not equivalent; no proposed row turns red because the probe ORs DN into every row except those marked `NODN`, and none is proposed. A DN=0 row or explicit disclosure is needed.  
+(g) Not equivalent if the proposed rows use DR2; then FPUL rows turn red. If they use DR0, none does. The packet does not settle the proposed destination register.  
+(h) Not equivalent; all six FPUL rows turn red because the low half of DRn differs from the original FPUL value.  
+(i) Not equivalent for DRn; no FPUL row turns red, but `fcnvsd dr hi` and `fcnvsd dr lo` do.
+
+Floor: only (a) is clearly inside the floor as verbatim reinstatement. Forms (b)-(g) are non-verbatim predicates not present in the original handler body; under the stated rule they are disclosure unless the project chooses to add rows. Forms (h) and (i) are separate mutations, not weakenings of the deleted line; the DRn rows catch them, but they are not clause (d) floor requirements for this deletion.
+
+**Q4**  
+From the packet, deletion is the complete minimal option. No unnamed member is inlined. FCNVDS writes FPUL by specification, so it is not a counterexample. FTRC still has the cast but guarded. PR=0, the missing FCNVDS row, and DN=1 subnormal behavior are separate and should stay filed separately.
+
+**Q5**  
+The row count is proportionate for a one-line deletion that also removes undefined C casts and must prove DRn liveness. I would not drop any row. If forced, `-0` is the most droppable because `0.1` still catches a sub-1 weakening, but dropping it loses the sign-zero path. Both DRn rows are needed: dropping `dr hi` loses high-half correctness, and dropping `dr lo` loses the nonzero low-half/unwritten-register check.
+
+One inconsistency: section 7’s proposed table says both `fcnvsd dr hi` and `fcnvsd dr lo` use ~0.1, but the quoted witness output shows `dr hi 1.5`. Reconcile that before shipping the detector.
+
+Premises I could not settle from this packet: Q1(b) other code reliance; Q3(g) proposed destination register; the final intended DRn row inputs; and independent verification of the witness run.
+
+VERDICT: PROCEED WITH CHANGES (2)

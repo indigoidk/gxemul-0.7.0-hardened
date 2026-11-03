@@ -1,0 +1,86 @@
+The brief's premises need to be re-derived from the handler, the float producer, and the manuals before any verdict. I'll read those in `GXEMUL-SEC/src/` and the two scratchpad manuals, and enumerate the cast's actual domain.VERDICT: PROCEED WITH CHANGES (4)
+
+The deletion is the right product change. `X(fcnvsd_fpul_drn)` is at line 3049 (the comment above it starts at 3043); the quoted body matches, and the decoder match is at 5061. Four items below have to be true of the round that ships it.
+
+**Q1.** One stated premise is false, and one is stronger than the language allows.
+
+(a) For every input where `(int32_t)op1.f` is defined, deleting line 3057 leaves DRn byte-identical. The cast's result is stored only to `fpul`. Nothing assigns `op1.f` between that line and the store. `ieee_store_float_value` is the `sh_dn` macro; `sh_dn` reads the encoded double and `fpscr`, and the store reads `op1.f`. Neither reads `fpul`. For NaN, infinity, and out-of-range values the cast is undefined behaviour, so the C abstract machine does not promise that the pre-fix DRn store still happens. The DRn expression itself does not use the cast.
+
+`sh_dn` never rewrites an FCNVSD result. The producer emits only values whose double encoding has a nonzero exponent field, or a zero magnitude. The smallest positive single subnormal is 2^-149. The smallest positive normal double is 2^-1022. 2^-149 = 2^873 × 2^-1022, so its double exponent field is 874 (0x36a), not 0. The largest finite single is below 2^128. The double biased exponent of 2^127 is 1023+127 = 1150, against a maximum finite field of 2046. Zeros take the `mag == 0` return. Inf and NaN take exponent field 0x7ff. The flush predicate (exponent field 0 and fraction nonzero) does not fire.
+
+The -0 DRn cell is what the source does. `0x80000000` becomes `-0.0` (sign applied at `zero_or_no_reasonable_result`), `signbit` sets bit 63, and the `FP_ZERO` arm leaves it. DRn is `80000000 00000000`.
+
+`0x3dcccccd` widens as claimed. Unbiased exponent 123-127 = -4, double biased exponent 1023-4 = 0x3fb. Mantissa `0x4ccccd` shifted left 29 is fraction `0x99999a0000000`. High word `(0x3fb << 20) | 0x99999` = `0x3fb99999`. Low word `0xa0000000`.
+
+(b) Nothing in `GXEMUL-SEC/src` consumes a post-FCNVSD FPUL. The only mentions are the handler, the decoder at 5063, and the disassembler string in `cpu_sh.c`. `git log -L 3049,3063:src/cpus/cpu_sh_instr.c` in `GXEMUL-SEC` is one commit, `39748e3c` (the unmodified import), and that hunk already contains the cast. Guest binaries are unsettled; none were in the reading scope.
+
+(c) Guarded. Both arms of `X(ftrc_frm_fpul)` still execute `cpu->cd.sh.fpul = (int32_t) op1.f`, at 3016 and 3038, and only after the range ladder the comment at 2949 describes. Any round text that says `#297` removed that cast owes a correction.
+
+(d) Over the defined domain, +0 is the only unchanged input. The producer for `IEEE_FMT_S` emits the exact binary32 value, with two exceptions: an all-ones exponent and a zero fraction becomes signed infinity, and any other all-ones exponent becomes the host `NAN` with `nan = 1` and the sign step jumped over. The cast is defined when that value is finite and the truncated integer fits in `int32_t`. Every pattern with biased exponent 0..157 fits: the largest, exponent 157 and mantissa `0x7fffff`, is 2^31 − 128 = 2147483520. The one further defined pattern is `0xcf000000`, exactly −2^31. `0x4f000000` (+2^31) and every larger finite magnitude are undefined, as are Inf and NaN.
+
+Stored result is `(uint32_t)(int32_t)trunc(v)`. It equals the original pattern only for `0x00000000`:
+
+- `|v| < 1` truncates to 0. The stored word is 0. The only such pattern is +0. `-0` (`0x80000000`) becomes 0.
+- Positive normals with exponent `E <= 149` have `trunc(v) <= 8388607`. Their patterns are at least `1 << 23` = 8388608. No match. For `E` from 150 to 157 the value is the integer `(2^23+M)·2^(E-150)`. Setting that equal to `E·2^23+M` gives a mantissa outside `0..0x7fffff`, or a non-integer. The in-range candidate is `E=157`: `M = 2^23·29/127`. `2^23·29 = 243269632`, and `243269632 = 127·1915508 + 116`.
+- Negative finite patterns need `trunc(|v|) = 2^31 − pos`. For `E <= 149`, `trunc(|v|) <= 8388607` while `2^31 − pos >= 8388609`. For `E` from 150 to 157 the same closed form misses. The in-range candidate is `E=156`: `M = 2^23·36/65`. `2^23·36 = 301989888 = 65·4645998 + 18`. Exactly −2^31 stores `0x80000000`, and the pattern is `0xcf000000`.
+
+(e) The seeds reach `cd.sh.fpul`, and a three-instruction row shows the truncation. `CPU_SETTINGS_ADD_REGISTER32("fpul", …)` binds a writable `uint32_t` setting to the register, and `settings_write` stores through that pointer. Reset `sr` is `SH_SR_MD | SH_SR_IMASK`, so `SH_SR_FD` is clear and the availability macro falls through. A row with a second word is stepped three times, which is the existing `ftrc` shape: the operation, `sts fpul,r2` (`0x025a`), `mov.l r2,@r1` (`0x2122`). The inlined witness is that path, and its three red FPUL words are the truncated integers. I did not re-run it.
+
+**Q2.** The fix leaves FPUL alone for every pattern. HEAD writes FPUL for every defined pattern except +0, and the write for Inf, NaN, and finite out-of-range values is undefined.
+
+| Part | Patterns | Row in section 7 |
+|---|---|---|
+| Defined, HEAD already leaves FPUL | `0x00000000` only | none |
+| Defined, HEAD changes FPUL | every other defined pattern | `1.5`, `-1.5`, `0.1`, `-0` |
+| Undefined cast | Inf, NaN, `0x4f000000` and every larger finite magnitude, both signs, except the single defined pattern `0xcf000000` | `inf`, `nan`. No finite out-of-range row |
+
+The unchanged part has no row. A +0 row is green on HEAD, so it cannot show this defect. The changed part has a row in each of these subclasses: magnitude at least 1, magnitude below 1, negative, and signed zero. Subnormals, −2^31, and large in-range integers are the same defined cast and have no row of their own.
+
+**Q3.** None of (a)–(i) is equivalent to the deletion. The first differing input is the first pattern in the producer domain, then the first proposed row.
+
+(a) The verbatim line. Differs on every defined pattern except +0. First pattern: `0x00000001` stores 0. First row: `fcnvsd fpul 1.5` stores 1. All six FPUL rows go red. DRn rows stay green. This is floor: it is the removed line put back.
+
+(b) The line only when `|v| >= 1`. First pattern: `0x3f800000` stores 1. Red: `1.5`, `-1.5`. Also `inf`, because `+Inf >= 1.0` is true and the cast then runs. Green: `0.1`, `-0`, `nan` (both relational tests on a NaN are false). Disclosure. Caught.
+
+(c) Store 0 when `|v| < 1`. `−0.0` satisfies `-1 < x < 1`, so the store is 0. Red: `0.1`, `-0`. The other four FPUL rows stay green. Disclosure. Caught.
+
+(d) Store `0x80000000` for `op1.nan` or an infinity. Interpret sets `nan` for every all-ones exponent with a nonzero fraction, and sets a real infinity otherwise. Red: `inf`, `nan`. The finite rows stay green. Disclosure. Caught.
+
+(e) The line only when `sh_fp_rm` returns `IEEE_RM_RZ`. The probe's toward-zero mode ORs RM = 1, and `sh_fp_rm` returns RZ for every RM other than nearest. Red: all six FPUL rows in toward-zero only, so the gate's `n == 2` check fails. Disclosure. Caught by the two modes already required. No new row.
+
+(f) The line only when DN is clear. Every proposed row gets DN set, because none carries `NODN`. The condition is false and all eight rows stay green. Disclosure. Not caught.
+
+(g) The line only when the destination is not DR0. Red on all six FPUL rows if the encoding is DR2 (`0xf2ad`), which is what the witness runs. Green on all of them if the row uses DR0. Disclosure, and which one it is depends on the encoding.
+
+(h) After the DRn store, FPUL gets the low 32 bits of the double. First pattern: `0x00000001` widens to a double whose low word is 0. Red: all six FPUL rows (`1.5` and `-1.5` and `-0` and `+Inf` have a zero low word; `0.1` has `0xa0000000`; the model NaN has `0xffffffff`). Disclosure. Caught.
+
+(i) The two `reg()` stores swapped. FPUL rows stay green. For `0x3dcccccd` the halves are `0x3fb99999` and `0xa0000000`, so both `fcnvsd dr hi` and `fcnvsd dr lo` go red. `+0` would hide a swap. Disclosure. Caught by the two rows clause (c) already owes.
+
+Inside the floor: (a), plus the two DRn rows because an identity body leaves every FPUL row green. The only predicate that dominates the deleted line is the FD test in `FLOATING_POINT_AVAILABLE_CHECK`. The body tests nothing. FD set returns before the line, on both the old and the new handler, so an FD=1 row does not discriminate the edit. (b), (c), (d), (e), (h), and (i) are caught coverage debt. (f) is coverage debt the table does not catch. (g) is caught only for a destination other than DR0.
+
+A control of the device-signature kind is not owed. The memory word starts at `0xdeadbeef`, and the two DRn rows are the liveness control for a register instruction.
+
+**Q4.** The product option set is complete. The only other `(int32_t)op1.f` stores to FPUL are the two guarded FTRC arms. FLOAT reads FPUL and writes FRn. FCNVDS writes FPUL with `ieee_store_float_value_rm`. FSCA reads FPUL as an angle. A guarded cast would still write FPUL for every in-range value, which is the defect.
+
+PR = 0 stays a separate filing. The manual marks it reserved at 10883 (`undefined_operation`). FCNVDS is the same. FSRRA is the handler that already raises `EXPEVT_RES_INST` on its reserved PR side (3279–3294). FMAC, FIPR, FTRV, FRCHG, and FSCHG, like FCNVSD, do not test PR. A row in this round would pin the reserved execution, or it would implement the trap, which is a second change and applies to FCNVDS equally.
+
+An FCNVDS gate row is scope growth. The witness already used that sibling as a one-shot control. This deletion does not edit `X(fcnvds_drm_fpul)`.
+
+The DN = 1 subnormal stays with `#303`. `fpul_type` returns a zero when DN is set and `abs < 0x00800000` (10926), and line 10960 says the denormal is treated as 0. HEAD widens it to its true value. A row expecting the true double would record the gap as intended. A row expecting zero fails on the current handler and on the deleted-line handler. The comment in `float_emul.c` already names it.
+
+**Q5.** Sixteen sessions is proportionate. The probe already pays twelve sessions for the six `ftrc` rows, which are the same three-instruction shape. I counted the current table: 17 two-mode rows and 2 one-mode rows is 36, and 9 rows have different per-mode expectations. Eight same-value rows move the equality pin from 36 to 52 and leave the discriminating count at 9. FCNVSD calls `ieee_store_float_value`, which passes `IEEE_RM_LEGACY`, and `sh_fp_rm` is not consulted.
+
+I would not drop a row. Dropping `fcnvsd fpul 0.1` leaves a store-zero that applies only on `(0, 1)` green. Dropping `fcnvsd fpul -0` leaves `if (op1.f == 0.0) fpul = 0` green. Dropping either half of the `0.1` DRn pair leaves a handler that writes only the other half green. The names fit the 28-column field and none is a prefix of another or of an existing row. `sh_rounding_probe.py` is the right vehicle. The three uncommitted gate hunks described in the brief must stay out of this commit; I did not re-diff that working file.
+
+The four changes:
+
+1. Every new row sets `PR`. The manual's defined operation is the `PR = 1` arm. The section 7 table does not say this, and the FPUL readback shape in the probe is the `ftrcS` shape, whose extra bits are 0. DRn expectations at PR = 0 would pin the reserved encoding.
+2. Encode DR2, and put `0xdeadbeef` in both `fr` halves in the row seed. The harness sentinel covers the memory word only. Registers the seed omits stay at reset. DR0 makes form (g) green.
+3. Describe `#297` as a guard. The casts at 3016 and 3038 are still there.
+4. In the probe header, disclose the uncaught weakenings: DN clear, a finite-only out-of-range guard (first pattern `0x4f000000`), and a single destination. Do not add those rows here.
+
+While checking the NaN path I read `qnan` and `invalid`. Neither writes FPUL. `invalid` sets V and then calls `qnan` or the trap. `qnan` at PR = 1 writes `0x7ff7ffff`, `0xffffffff`, which is the canonical double qNaN at line 5008 of the programming manual. The model's `FP_NAN` arm ORs `0x7fffffffffffffff` onto the sign of the host `NAN` macro, and interpret has already discarded FPUL's sign. Section 6's NaN DRn cell is that model value, and only when `signbit(NAN)` is 0. Leaving it out of the detector is right. Figure 6.3 of the same manual calls fraction-MSB 1 an sNaN, so `0x7fc00000` is an sNaN there (`fpul_type` uses `abs < 0x7fc00000` for qNaN). The FPUL row is still the right special: that pattern must survive in FPUL.
+
+Unsettled from this packet, because this pass does not run anything: whether any guest reads FPUL after FCNVSD; the host result of the undefined cast for Inf, NaN, and finite out-of-range on this handler; the sign of the host `NAN` macro; the clause (c) identity-body receipt, which the brief already marks not run.
+
+VERDICT: PROCEED WITH CHANGES (4)

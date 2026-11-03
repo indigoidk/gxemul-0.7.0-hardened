@@ -1,3 +1,145 @@
+# `#576` (2026-11-02, landed 2026-11-03) -- `shfcnvsdfpul`: the SuperH FCNVSD handler stored a truncated integer into FPUL, a register the instruction only reads
+
+**The defect.**  `src/cpus/cpu_sh_instr.c`, `X(fcnvsd_fpul_drn)` (HEAD `987cb596` :3049-3063): after interpreting the single-precision
+value in FPUL the handler executed `cpu->cd.sh.fpul = (int32_t) op1.f;` before storing the widened double into DRn.  FCNVSD FPUL,DRn
+is defined as "(double) FPUL -> DRn" (`_scratchpad/sh4_programming.txt` 9.29, :10866-10871; the pseudocode `fcnvsd(int n, float *FPUL)`
+at :10891-10909 assigns only `DR[n>>1]`), so FPUL is read and never written.  Upstream residue: `git log -L3049,3063` returns only the
+0.7.0 import.  Guest-visible consequence: any guest that reads FPUL after an FCNVSD (STS FPUL,Rn; a following FLOAT or FSCA) saw the
+truncated integer of the single -- MEASURED 0x00000001 for 1.5, 0xffffffff for -1.5, 0x00000000 for anything below 1 in size and for
+-0, and the host's indefinite 0x80000000 for +Inf and a NaN, where the C cast is undefined; for finite values of 2^31 or more the same
+indefinite is expected BY READING, not by a row (exactly -2^31, 0xcf000000, is a defined cast and also gives 0x80000000).  The stored
+line was the same store FTRC makes, apparently copied; `#297` had GUARDED the FTRC casts behind a range ladder (they remain at :3016
+and :3038), it did not remove them -- the bug file's prose row said "removed" and is corrected in place in this commit.  WRONG-RESULT,
+MED; no host failure path in the handler.
+
+**The witness (rung 3).**  `regress/artifacts/shfcnvsdfpul/witness_20261102/sh_fcnvsd_witness.py` on the unmodified in-tree `-E landisk
+-M 64` (the rig kernel loaded for construction only), the cold debugger seeding `fpscr` (DN|PR|RN), `fpul` and the DR2 pair with the
+sentinel 0xdeadbeef, the guest executing `fcnvsd fpul,dr2` then `sts fpul,r2 ; mov.l r2,@r1` into a sentinel word (or `fmov.s fr2/fr3,@r1`
+for the DRn halves), read back with `dump`.  On a fresh clone of HEAD built in WSL (`/tmp/gxdivw`, binary newer than source):
+`witness_head.out` RESULT=3/6 -- the three FPUL rows FAILED-FOR-THE-REASON-UNDER-TEST (got exactly the truncation), the two DRn
+liveness rows ok, the FCNVDS control ok (the sibling writes FPUL by design, so the FPUL write channel was live).  The same script on the
+fixed clone: `witness_fixed.out` RESULT=6/6.
+
+**The fix.**  Delete the one line; a five-line `#576` comment stands where it was.  Nothing else in the handler, its sibling
+`X(fcnvds_drm_fpul)` or the decoder (:5061-5068) changes.  Option set: DELETE -- there is no value to ACCEPT or storage to BACK (the
+architecture defines no FPUL write), nothing to DECLINE or FAULT (the instruction is legal), and a guarded cast would keep the defect
+(pass 1, Fable Q4; Grok Q4).  Diff: `src/cpus/cpu_sh_instr.c` +5 -1 (`killtable_20261102/product.diff`, the final wording; the scratch
+clones that were measured carried the pre-adjudication wording "the FTRC store, mis-copied" -- comment-only, and the build does not see
+comment text: HEAD and the verbatim-reinstatement mutant, which differ by exactly that comment, share one binary md5), byte-identical in
+`GXEMUL-SEC` and `est/`.
+
+**The detector.**  Eight rows appended to `regress/sh_rounding_probe.py`'s VECTORS, every row under PR (the manual's defined arm),
+each run in both rounding modes: six FPUL readbacks -- `fcnvsd fpul 1.5` / `-1.5` / `0.1` / `-0` / `inf` / `snan` -- and the two DRn halves
+`fcnvsd dr hi` / `fcnvsd dr lo` (0x3dcccccd -> 3fb99999 a0000000, the one FINITE input with a nonzero low word; the sNaN widens to the
+encoder's all-ones double whose low word is 0xffffffff, measured in `M_h.raw`).  `-0` carries NODN so the table has a DN=0 leg; `0.1`
+targets DR0 (0xf0ad) while the others target DR2 (0xf2ad), both halves of the destination seeded with the sentinel; 0x7fc00000 is a
+signaling NaN under the SH-4 convention (fraction MSB = 1, manual :4980-4989), hence `snan`, and the existing `ftrcS-nan` row is relabelled
+`sNaN+` by the same convention (its oracle unchanged).  Contract (the probe's `#576` comment): disclosed and not rowed -- finite |v| >=
+2^31 (except exactly -2^31, defined), -Inf, a quiet NaN, a subnormal input, +0 (the fixed point); the destination axis is measured only
+as the split {DR0, not DR0} on the FPUL channel, the DRn VALUE is read at DR2 only, so a store keyed on DR4..DR14 or a DRn store
+suppressed at DR0 escapes; the state axes FPSCR.SZ, FPSCR.FR, the reserved RM encodings 10/11, the FPSCR cause/enable/flag bits and a
+delay slot are not varied; every row runs with FD clear, PR set and SZ clear ([SZ,PR] = 11 is reserved, manual :5148).
+`regress/gate_sh_rounding.sh`: `vector-mode pairs run` 36 -> 52 (EQUALITY), the eight names in the per-row `both modes correct` loop,
+`vectors that discriminate the two modes` unchanged at 9, the two prose counts corrected.
+
+**The pre-table check and the kill table** (`regress/artifacts/shfcnvsdfpul/killtable_20261102/`; scratch clones only, a `.MUTANT`
+sentinel per mutant; each `<leg>.raw` names its binary, md5 and freshness):
+
+    base_head (HEAD)                              40/52   the six FPUL rows red in both modes
+    fixed                                         52/52
+    M_b   the store reinstated verbatim (b)       40/52   the six FPUL rows   (binary md5 == HEAD's: the reinstatement IS the pre-fix build)
+    M_c   identity body, writes nothing (c)       48/52   dr hi, dr lo
+    M_d   store 0x80000000 for Inf/NaN only       48/52   inf, snan
+    M_f   store only when FPSCR.DN is clear        50/52   -0 (the NODN row alone)
+    M_g   store for every destination but DR0     42/52   the five DR2 rows
+    M_gm  store for DR0 only (M_g's mirror)        50/52   0.1 (the DR0 row alone)
+    M_h   the result's low half stored into FPUL  40/52   the six FPUL rows
+    M_i   the two DRn halves exchanged             48/52   dr hi, dr lo
+    M_z   store 0 on a zero operand                50/52   -0
+
+Floor: (a) 40/52; (b) 40/52; (c): measured at `killtable_20261102/M_c.raw`, carried by the two DRn rows only, as the contract says;
+(d) the fix is a pure deletion, so (d) is the removed store re-introduced under a different predicate -- DN (M_f), destination in both
+directions (M_g, M_gm) and zero-operand (M_z), all red; (e) the contract above; (f) not applicable.  Provenance of the predictions:
+`PRETABLE.out` was written before the base leg BY THE AUTHOR'S ACCOUNT; its own mtime no longer proves the order because the M_g
+correction was written into it in place at 17:29 (future rounds: write corrections to a sibling file).  The EVIDENCED pre-leg record is
+`IMPLEMENTATION_PLAN_20261102_1715.md` (mtime 17:15:08), which predicts the base, fixed, M_b, M_c, M_h, M_i and M_z scores as measured,
+predicts M_f conditionally ("green unless the NODN row exists") and M_g only for the all-DR2 shape it describes, and is silent on M_d and
+the mirror; the M_g prediction for the DR0 instrument exists only in `PRETABLE.out`, inverted (it named the DR0 row as the red one; the
+five DR2 rows are), and M_gm was built after the table to measure the mirror the DR0 row exists for.  `PRETABLE.out`'s CHANNEL line
+names a mutant `M_e` (an RZ-only store) that was not built: PREDICTED caught, not measured -- M_b's toward-zero legs showed the FPUL channel red under a store in that mode.  The base
+leg ran under its own invocation (17:17:4x-17:18:13) that `KILLTABLE.log` does not record; the first M_gm apply failed on a malformed
+string in the mutator and was repaired before the leg ran (`KILLTABLE.log` carries both lines; the preserved `mutate576.py` is the
+repaired copy -- the first preserved copy did not parse, caught at pass 2).  The instrument the table ran is preserved as the
+reconstruction `sh_rounding_probe.ASRUN_1716.py` (HEAD plus the hunk the pass-2 packet inlined; `ASRUN_NOTE.txt`); the raw logs print the
+as-run label `ftrcS-nan qNaN+`, the shipped probe prints `sNaN+` and carries the post-table contract comments; the eight row tuples are
+byte-identical in both.  No dead session in any leg.
+
+**The panel** (owner roster 2026-11-02: GPT-6 Astra, Fable 5.1, glm-5.3, Argon = Gemini web, Grok 4.7).  Pass 1
+(`regress/artifacts/shfcnvsdfpul/pass1_20261102/`, copied at the landing from `_scratchpad/w576/pass1_20261102/`; the brief from the 2026-10-30 scoping draft with the measured witness inlined): Argon PROCEED, glm-5.3
+PROCEED WITH CHANGES (4), Grok 4.7 PROCEED WITH CHANGES (4), Fable 5.1 PROCEED WITH CHANGES (4), Astra PROCEED WITH CHANGES (3) on its
+third attempt (two earlier attempts: a wall, then an empty answer with no wall text).  Findings F1-F9 and their dispositions are in the
+pass-2 packet's section 0: PR on every row (Grok); DR2 encoded with both halves seeded (Grok); one row on DR0 (Fable); one FPUL row
+DN-clear via NODN at zero cost (Fable; glm had asked for a row, Grok for a disclosure); `nan` -> `snan` (Fable); the disclosed classes
+(Fable, Grok); `#297` "guarded" not "removed" (all); `inf` kept against Fable's drop (Grok: 16 sessions proportionate; Fable withdrew on
+the measured cost); Astra's three: the record wording, an explicit contract, the validation completed before shipping.  Pass 2
+(`pass2_20261102/`, the diff, the handler after the edit, the detector diff, PRETABLE and the table inlined): Argon SHIP; glm-5.3 SHIP
+WITH CHANGES (2); Grok 4.7 SHIP WITH CHANGES (3); Fable 5.1 SHIP WITH CHANGES (3); Astra SEAT WALLED (the hotmail login's weekly limit,
+"try again at Nov 8th").  Every seat: the code is right; the changes were to artifacts and records -- the preserved mutator (above), the
+destination-axis overclaim and the undisclosed state axes (now in the contract), the `ftrcS-nan` relabel, the gate prose, the PRETABLE
+timing sentence, "the one FINITE input", "apparently copied", the indefinite "by reading", the PR-reserved class never filed, the M_b/HEAD
+md5 equality, `M_e` not built.  The adjudication pass (`f2_20261102/`): Fable 5.1 adjudicating, F2 VERDICT: RATIFY WITH CHANGES (5) --
+P1-P13 upheld or refined, D1 ruled DISCLOSE (no re-target, no added rows: the body tests nothing on the destination, every destination
+cell is clause (e), and a row change after pass 2 would owe its own pass and a re-stamped table), D2 ruled withdraw-the-literal-and-cite-
+the-plan; Grok 4.7 RATIFY WITH CHANGES (5), agreeing on D1 and D2 and adding the [SZ,PR] reservation and the wider PR class; Argon
+upheld D1 and refined "numeric" to "finite"; glm-5.3 SEAT DOWN (the Ollama cloud endpoint answered `403 Forbidden, error code 1010` to
+every model); Astra's F2 RATIFY WITH CHANGES (5) arrived at 20:3x after its first reset.  **The owner ruled (17:4x) that this commit HOLDS until Astra
+answers**; Astra's PASS 2 arrived at 01:50 on 2026-11-03 after the 01:10 reset, SHIP WITH CHANGES (4): the product comment's "writes DRn
+only" (architectural FCNVSD also has FPSCR cause/flag effects the model does not implement -- recorded here, the comment left as written:
+it names the registers the handler touches), the contract's destination and state disclosures and exactly -2^31 (present), the PRETABLE
+mtime wording (the paragraph above already says the mtime no longer proves the order), and four record corrections -- the FTRC casts at
+:3016/:3038 GUARDED (done), "destroys FPUL on every FCNVSD" false for +0 (the bug file's prose row now says "spuriously overwrites"),
+the gate prose's vector count (27 vectors: 25 two-mode plus two single-mode, nine discriminating -- corrected in the staged gate), the
+PR-reserved class given its filing (`shfpprreserved`, below).  It also named two escapes the contract discloses: an FD=1 reinstatement
+(every row runs with FD clear) and a store keyed to DR4 (the destination axis).  The owner lifted the hold at 02:1x ("Land it now").
+**Late seats under the owner's 21:3x roster** (agy, Grok, GLM 5.3, Codex): agy (file-reading) pass 1 PROCEED WITH CHANGES (5) and F2 RATIFY WITH CHANGES (5); GLM 5.3 F2 RWC (6) (its 17:53
+firing was the 403/1010 transport failure); DeepSeek pass 1 PWC (2) and F2 RWC (1); minimax pass 1 PWC (5) and F2 RWC (4); kimi pass 1 PWC (4)
+and F2 RWC (3) -- every late seat holds the one-line deletion right and complete.  **Their findings are NOT adjudicated here**: at 09:1x
+the owner moved the main loop to Opus 5.5 and held any Fable adjudication, so they are the row's hold question.  The main loop applied
+only three corrections that make the record state what was measured or what the diff does: the staged gate's vector-count prose now
+reads "25 two-mode vectors x 2 + #303's two single-mode rows = 52" (the disposition Fable wrote before the switch; comment-only, made
+AFTER the gate-10 run, which ran the same checks); the Records paragraph below describes the bug-file edit as the diff makes it; and the
+unbuilt `M_e`'s sentence says predicted, not caught.  A sweep GLM asked for, run as a fact: `cpu_sh_instr.c` writes `cd.sh.fpul` only in
+FTRC's two arms (the guarded casts at :3016/:3038 and their 0x80000000/0x7fffffff ladders) and in FCNVDS (:3079).  The Opus seat was on none of this round's
+rosters and is held with its question (the row's hold question).
+
+**Not changed (assessed, intentionally left).**  FCNVDS writes FPUL by design and keeps its arm.  The DN=1 subnormal input widens to
+its true value where the manual treats it as zero: `#303`'s named gap, untouched.  The reserved precision combinations (below) and the
+DRn NaN pattern (`shnanquiet`) are filed class rows, not this round's.
+
+**Records.**  `OUTSTANDING_BUGS.md`: the `shfcnvsdfpul` id entry (:24099) marked fixed by this commit; the prose row (:8241) keeps its
+text and gains a dated bracket that marks it fixed and corrects two of its claims in place -- "the same UB `(int32_t)` cast `#297` removed
+from FTRC" (`#297` GUARDED the FTRC casts behind a range ladder; they remain at :3016 and :3038) and "destroys FPUL on every FCNVSD" (false
+for +0: the store spuriously overwrites FPUL, corrupting inputs such as -1.5); two filings -- `shfpprreserved` (LOW: the manual's pseudocode calls `undefined_operation()` at SEVEN sites,
+`grep -n undefined_operation _scratchpad/sh4_programming.txt` -- FCNVDS :10770 and FCNVSD :10883 at PR=0, FIPR :11251, FMAC :11429, FRCHG
+:12234, FSCHG :12270 and FTRV :12852 at PR=1 -- and never defines it; the manuals call the combination "undefined", not an exception; the
+model performs the operation; `#316`'s FSRRA (`cpu_sh_instr.c:3279-3295`) is the fork's one precedent for a reserved precision
+combination; a POLICY is owed, not a wrong-result fix) and `shnanquiet` (LOW: SH NaN RESULTS use the shared encoder's all-ones pattern,
+which SH-4 classes as signaling where hardware emits the quiet 0x7fbfffff / 0x7ff7ffff...; the MIPS model canonicalises, `#255`; the SH
+tree does not).  Ledger: `shfcnvsdfpul` set `held` (the Opus-seat question; the Fable-only regress review precedes closing), witness
+`probe:regress/artifacts/shfcnvsdfpul/witness_20261102/sh_fcnvsd_witness.py`, detector rows named, seat entries per pass naming their dirs
+(`regress/artifacts/shfcnvsdfpul/pass1_20261102/`, `pass2_20261102/`, `f2_20261102/`); the two rows opened.  `_scratchpad/scope_sh_20261030/SCOPING.md`'s "removed" wording is the
+same correction (scratch, not committed).  The gate file's working copy holds three unrelated uncommitted hunks (the peer's; old :530/:590/:822);
+the commit stages the gate from a HEAD-based copy carrying only this round's two hunks (#548 recipe; HEAD already carries `#577`'s), and the
+peer's hunks are merged back into the working tree.  **Landing** (`regress/artifacts/shfcnvsdfpul/landing_20261103/PREP_GATE.out`): two-part
+clearance on `build/`, `build-asan/` and WSL `/tmp/gxsec-build` (cmp CLEAN against SEC, binary newer than `cpu_sh_instr.c`; `est/`: source
+tree, part 2 N/A); gate 10 run end to end on the applied tree with the staged gate in place: 416 of 417 checks ok (`landing_20261103/GATE10_RUN.txt`) --
+`vector-mode pairs run` 52 and `vector-mode pairs correct` 52, all six FPUL rows correct in both modes; the one red, `gdrom_default rows run`
+got=62 want=60, is the peer's uncommitted 62-row `gdrom_default_probe.py` in the working tree against HEAD's pin of 60, a file this commit
+leaves at HEAD's copy (the same red `#572`'s run recorded at `wdclbaaddr/pass2_20261024/GATE10_RUN.txt:362`).  The gate as run was HEAD
+plus the round's hunk; the committed copy differs from it in two comment lines only, the vector-count prose corrected after the run
+started (`landing_20261103/GATE_ASRUN_NOTE.txt`: comment-stripped compare identical).  Process notes carried to the carrier's PRETABLE rule: write corrections to a sibling file so the original's mtime keeps
+proving the order; preserve the as-run instrument beside the table at run time, not afterwards.
+
 # Records, 2026-11-03: GPT-6 Astra's three late reviews after its 01:10 reset -- `#578` F2, `#577` pass 1, `#576` pass 2
 
 The hotmail login's wall lifted at 01:10 and the session's scheduled job fired the three owed readings in sequence (`_scratchpad/w578/fire_astra_late.log`): `#578` F2 RATIFY WITH CHANGES (2) (`regress/artifacts/jazzvecdeassert/f2_20261102/codex/codex_jazzvecf2late.txt`: zero floor escapes over the six cells and the 63 cell subsets; D3's 'unbounded' premise wrong; two single-value escapes predicted at 26/26 inside the disclosed debt), `#577` pass 1 PROCEED WITH CHANGES (3) (`regress/artifacts/shblreset/pass1_20261102/codex/codex_shblresetp1late.txt`: the brief's three explanations corrected, the row names, the second general code and the BL-clear control -- all already shipped; its mutant predictions match the measured table), and `#576` pass 2 SHIP WITH CHANGES (4) (`regress/artifacts/shfcnvsdfpul/pass2_20261102/codex/codex_shfcnvsdp2late.txt`, preserved for that round's landing: the product comment's 'mis-copied' and 'writes DRn only' wording, the contract's destination and state disclosures, the PRETABLE mtime wording, four record corrections).  Ledger: `jazzvecdeassert`'s codex marker discharged (its hold question keeps the deletion-ruling item); `shblreset`'s codex marker discharged; the row stays `held` only for the Fable-only regress review that precedes closing.  `#576`'s row is written at its landing; `matrix.html` and `fable_queue.md` re-rendered.

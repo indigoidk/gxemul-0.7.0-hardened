@@ -1,0 +1,31 @@
+VERDICT: PROCEED
+
+**Q1, premise audit.** 
+(a) Yes, removing the line leaves DRn byte-identical for every FPUL value. The variable `op1.f` is modified only by `ieee_interpret_float_value` and read by `ieee_store_float_value`; the deleted cast to `int32_t` assigns into `cpu->cd.sh.fpul` but does not modify `op1.f` itself (Section 4).
+(b) No evidence suggests anything else relies on this behavior. The architecture specifies FCNVSD as reading FPUL, not writing it.
+(c) The term "removed" for `#297` in the scoping note is incorrect; as you noted, `X(ftrc_frm_fpul)` still contains the cast. It was "guarded" by range checks, so the terminology owes a correction. 
+(d) Yes, +0 (`0x00000000`) is the only in-range unchanged input. `(int32_t)0.0 == 0`, which matches the `0x00000000` bit pattern. Any other value's float bit pattern diverges from its integer cast (e.g. `1.0` is `0x3f800000`, not `0x00000001`). 
+(e) The cold-debugger seeds definitely reach `cd.sh.fpul`. The step count of 3 accurately spans the `fcnvsd`, `sts`, and `mov.l` execution sequence needed to read back the truncated value.
+
+**Q2, the partition.**
+The proposed fix leaves FPUL alone for *all* inputs. The HEAD behavior alters FPUL for all inputs except +0. The proposed row table perfectly represents this partition: it tests inputs that truncate to 1 (`1.5`), truncate to -1 (`-1.5`), truncate to 0 (`0.1`, `-0`), and those that trigger undefined casts (`+Inf`, `NaN`). Every part is covered by the table.
+
+**Q3, candidate weakenings.**
+*   (a) Verbatim: Equivalent to HEAD. Fails `1.5`, `-1.5`, `0.1` rows. 
+*   (b) Size >= 1: Fails the `1.5` and `-1.5` rows.
+*   (c) Size < 1: Fails the `0.1` and `-0` rows.
+*   (d) Specials: Fails the `+Inf` and `NaN` rows. 
+*   (e) RZ mode: Fails the FPUL rows when run under the RZ mode leg.
+*   (f) DN clear: The probe sets DN (runs with DN=1). If the weakened code only overwrites FPUL when DN is clear, it will leave FPUL alone during the test, going GREEN and evading the detector. However, because the handler body does not actually test the DN bit, this is a disclosure (clause e), not owed a row.
+*   (g) Not DR0: The witness uses `dr2` (which is not DR0). It will execute the store and fail the `1.5` row.
+*   (h) Low half: Fails the `0.1` row, which would write `0xa0000000` instead of `0`.
+*   (i) Swapped halves: Leaves FPUL alone but fails the `dr lo` liveness row for `0.1`, writing `0x3fb99999` instead of `0xa0000000`.
+
+**Q4, option-set completeness.**
+The sibling instruction `FCNVDS` *does* specify a write to FPUL ("stores the result in FPUL" at `:10759`), so its handler properly uses the assignment and does not suffer from this defect. FCNVSD is correctly isolated. Testing PR=0 or adding FCNVDS rows would be scope growth and should not ride with this one-line deletion fix. The DN=1 subnormal input is already documented by the `#303` gap.
+
+**Q5, the vehicle.**
+The gate script strategy (staging a clean HEAD-based copy to avoid committing unrelated hunks) is correct and safe. Adding 8 rows * 2 modes = 16 sessions is quite heavy for a single-line deletion that only targets an erroneous cast. You could safely drop the `-0`, `-1.5`, and `NaN` rows, as `1.5` and `0.1` alone perfectly discriminate the truncation defect from the fix, and `+Inf` covers the undefined cast.
+
+P-GWEBP1SHFCNVSD-67f7
+GWEBP1SHFCNVSD: 14 ATTACKS 0 BROKEN 14 HOLDS 0 UNSETTLED DRAFTABLE:YES

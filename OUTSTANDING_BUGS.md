@@ -8238,7 +8238,7 @@ before anyone cites those constants as architectural.
 | `cpu_sh.c:312-316` | priority 0 → `fatal()` + **`exit(1)`**, commented *"Interrupt not implemented? Hm."* | Priority 0 is **legal and documented** — *"When level 0 is set, the interrupt is masked and interrupt requests are ignored"* — and IPRA/IPRB/IPRC **reset to `H'0000`**, so everything is priority 0 out of reset. A guest-reachable host kill, latent only because landisk kernels program IPRA before starting the timer. |
 | `cpu_sh.c:653` | BL already set → `EXPEVT_RESET_POWER` (`0x000`) | *"a manual reset is executed. The value in EXPEVT at this time is **H'0000 0020**"* → `EXPEVT_RESET_MANUAL`. Found independently by two sweeps. **[`#577`, 2026-11-02: FIXED (the block is at `:910-918` of 987cb596, not `:653` -- a stale cite, as two F2 seats noted); the manual-reset code is stored and the multiple-hit code H'140 exempted; see the `#577` section at the end of this file.]** |
 | `memory_sh.c:328-333` | user access ≥ `0x80000000` → `EXPEVT_TLB_MISS_LD/ST` | Listed under **Data Address Error**: *"Exception code H'0E0 (for a read access) or H'100"*. Guest kernels dispatch on EXPEVT. |
-| `cpu_sh_instr.c:3057` | `X(fcnvsd_fpul_drn)` does `cpu->cd.sh.fpul = (int32_t) op1.f;` | FCNVSD reads FPUL and never writes it. **The emulator destroys FPUL on every FCNVSD**, with the same UB `(int32_t)` cast `#297` removed from FTRC. New, unfiled, and the smallest fix in the list. |
+| `cpu_sh_instr.c:3057` | `X(fcnvsd_fpul_drn)` does `cpu->cd.sh.fpul = (int32_t) op1.f;` | FCNVSD reads FPUL and never writes it. **The emulator destroys FPUL on every FCNVSD**, with the same UB `(int32_t)` cast `#297` removed from FTRC. New, unfiled, and the smallest fix in the list. **[`#576`, 2026-11-03: FIXED -- the store is deleted; the handler reads FPUL and writes DRn.  Corrected in place: `#297` GUARDED the FTRC casts behind a range ladder (they remain at :3016 and :3038), it did not remove them; and "destroys FPUL on every FCNVSD" overstated -- the store spuriously overwrites FPUL with the truncated integer, which is the right value only for +0 and corrupts inputs such as -1.5 (Astra, late pass 2).  Rung-3 witness 3/6 -> 6/6 on unmodified `-E landisk`; eight detector rows in gate 10 (36 -> 52 vector-mode pairs).  See the `#576` section at the end of this file.]** |
 | `memory_sh.c:358-364` | kernel access to `0xe4000000..0xefffffff` → `fatal()` + `exit(1)` | *"Reserved area"*, and *"Operation is not guaranteed"*. Undefined is not process death. |
 | `dev_sh4.c:2899` | BSC reset `WCR3 = 0x77777777` | *"WCR3 is initialized to **H'07777777**"*. BCR2/WCR1/WCR2 on the same lines are correct. |
 | `dev_sh4.c:2023` | TCR write stores UNF verbatim | *"Writing 1 does not change the value."* A guest can fabricate an underflow and a spurious interrupt. |
@@ -24098,6 +24098,7 @@ the prose: 8146 (line numbers of this file as of commit `db8b1a33`) -- `regress/
 
 #### `shfcnvsdfpul` (MED, an id for an entry this file already carries in prose) -- FCNVSD writes FPUL, which the instruction only reads
 the prose: 8147 (line numbers of this file as of commit `db8b1a33`) -- `regress/artifacts/idless_20261002/IDLESS_DISPOSITIONS.md`  [the governing line's quoted title (grok)]
+**[`#576`, 2026-11-03: FIXED -- `X(fcnvsd_fpul_drn)` no longer stores `(int32_t) op1.f` into FPUL; witness 3/6 -> 6/6, detector eight rows at two modes each in gate 10.  See the `#576` section at the end of this file.]**
 
 #### `shwcrreset` (MED, an id for an entry this file already carries in prose) -- WCR3 resets to 0x77777777 instead of H'07777777
 the prose: 8149 (line numbers of this file as of commit `db8b1a33`) -- `regress/artifacts/idless_20261002/IDLESS_DISPOSITIONS.md`  [the governing line's quoted title (grok)]
@@ -26453,3 +26454,43 @@ src/devices/dev_dec5800.c:359-367 at 987cb596: The DEC 5800 CPU-mask registers a
   product comment cites the multiple hit's instruction-side line `:12461` where `:12499` (the data side, the tree's only raiser) is the
   sharper cite -- both carry H'140, left as written and recorded here.
 * **Landed** as `bb672a16` (2026-11-03 00:2x); the pass-2 receipt keyed to it in `regress/pass2_ledger.tsv`; the row stays `held` for Astra's walled pass 1 (its hold question).  **[2026-11-03 01:4x: Astra's late pass 1 answered PROCEED WITH CHANGES (3), all three already shipped; every stage complete, the row held only for the Fable-only regress review.]**
+
+## 2026-11-03 -- `#576` shfcnvsdfpul: the SuperH FCNVSD handler no longer stores a truncated integer into FPUL
+
+* **FIXED** -- `shfcnvsdfpul` (MED, WRONG-RESULT): `src/cpus/cpu_sh_instr.c`, `X(fcnvsd_fpul_drn)` (987cb596 :3049-3063) executed
+  `cpu->cd.sh.fpul = (int32_t) op1.f;` before storing the widened double into DRn -- the same store FTRC makes, apparently copied -- so a
+  guest reading FPUL after an FCNVSD (STS FPUL,Rn; a following FLOAT or FSCA) saw the truncated integer of the single (measured 1 for
+  1.5, -1 for -1.5, 0 below 1 in size and for -0, the host's indefinite 0x80000000 for +Inf and a NaN, where the C cast is undefined).
+  FCNVSD FPUL,DRn is "(double) FPUL -> DRn" (`_scratchpad/sh4_programming.txt` 9.29, :10866-10871; its pseudocode :10891-10909 assigns only
+  `DR[n>>1]`).  The line is DELETED; a five-line `#576` comment stands where it was; nothing else in the handler, its sibling FCNVDS (which
+  writes FPUL by design) or the decoder changes.  Byte-identical in `GXEMUL-SEC` and `est/`.  Witness (rung 3, unmodified `-E landisk -M 64`):
+  `regress/artifacts/shfcnvsdfpul/witness_20261102/` 3/6 on HEAD (the three FPUL rows red for the reason under test; the two DRn liveness
+  rows and the FCNVDS control green) -> 6/6 fixed, same script.  Detector: eight rows appended to `regress/sh_rounding_probe.py` (six FPUL
+  readbacks `fcnvsd fpul 1.5` / `-1.5` / `0.1` / `-0` / `inf` / `snan`, the two DRn halves `fcnvsd dr hi` / `dr lo`; every row under PR, each
+  at two rounding modes; `-0` with a DN=0 leg; `0.1` on DR0, the others on DR2), gate 10's `vector-mode pairs run` 36 -> 52 (EQUALITY), the
+  discriminating count unchanged at 9; kill table `killtable_20261102/` -- base 40/52, fixed 52/52, the reinstated store 40/52 (HEAD's binary
+  byte for byte), the identity body 48/52, and six re-keyed re-introductions (Inf/NaN only, DN clear, every destination but DR0, DR0 only,
+  the low half, the halves exchanged, zero operand) 40-50/52, all red.  Contract (the probe's `#576` comment): finite inputs of 2^31 or
+  more, exactly -2^31, -Inf, a quiet NaN, a subnormal and +0 are disclosed, not rowed; the destination axis is measured as {DR0, not DR0}
+  on the FPUL channel and the DRn value read at DR2 only; FPSCR.SZ/FR, the reserved RM encodings, the cause/enable/flag bits and a delay
+  slot are not varied; every row runs with FD clear.  Panel (owner rosters 2026-11-02): pass 1 Fable 5.1 PWC (4), Grok 4.7 PWC (4), GLM 5.3
+  PWC (4), Astra PWC (3) on its third attempt, Argon (Gemini web) PROCEED; pass 2 Fable SWC (3), Grok SWC (3), GLM SWC (2), Argon SHIP, Astra
+  WALLED then LATE (01:50, after its reset) SWC (4) -- the product comment's "writes DRn only" (architectural FCNVSD also has FPSCR
+  cause/flag effects the model does not implement; recorded, comment left as written), the contract's destination and state disclosures
+  (present), the PRETABLE timing sentence (recorded), four record corrections (the FTRC casts at :3016/:3038 GUARDED not removed; "destroys
+  FPUL on every FCNVSD" false for +0 -- both corrected in the prose row above; the gate prose "27 vectors: 25 two-mode plus two
+  single-mode, nine discriminate" -- corrected in the staged gate; `ftrcS-nan` relabelled `sNaN+`); F2 Fable RWC (5), Grok RWC (5), Astra
+  RWC (5), Argon upheld; late (2026-11-03 08:5x-09:1x, owner roster 21:3x) agy PWC (5) / RWC (5), GLM 5.3 RWC (6), DeepSeek PWC (2) / RWC (1), minimax PWC (5) / RWC (4), kimi PWC (4) / RWC (3), every one holding the product diff right; their findings await Fable's adjudication (owner 09:1x: the main loop is Opus 5.5, hold any Fable adjudication).  Gate 10 end to end before the commit: 416 of 417 checks ok, the #576
+  block 52 of 52; the one red, `gdrom_default rows run` 62 vs 60, is the peer's uncommitted gdrom probe against HEAD's pin
+  (`regress/artifacts/shfcnvsdfpul/landing_20261103/GATE_ASRUN_NOTE.txt`).  State `held` for the hold question (the Opus seat is off the 21:3x roster; the
+  Fable-only regress review and the late findings wait for Fable).
+* **`shfpprreserved` (LOW, policy owed) -- new.**  The SH-4 manual's pseudocode calls `undefined_operation()` at SEVEN sites and never
+  defines it (`grep -n undefined_operation _scratchpad/sh4_programming.txt`: FCNVDS :10770 and FCNVSD :10883 at PR=0; FIPR :11251, FMAC
+  :11429, FRCHG :12234, FSCHG :12270 and FTRV :12852 at PR=1); the manuals call the combination "undefined", not an exception; the model
+  performs the operation.  `#316`'s FSRRA (`cpu_sh_instr.c:3279-3295`) is the fork's one precedent for a reserved precision combination.
+  A POLICY is owed, not a wrong-result fix (pass 1, Fable/Grok; Astra asked for a filing reference at its late pass 2 -- this is it).
+* **`shnanquiet` (LOW, WRONG-RESULT) -- new.**  SH NaN RESULTS use the shared encoder's all-ones pattern, which SH-4 classes as signaling
+  (fraction MSB set, manual :4980-4989) where hardware emits the quiet 0x7fbfffff / 0x7ff7ffff...; the MIPS model canonicalises (`#255`),
+  the SH tree does not.  Measured incidentally by `#576`'s `snan` row (the sNaN widens to the all-ones double).
+* **Not changed (assessed):** FCNVDS writes FPUL by design; the DN=1 subnormal input widens to its true value where the manual treats it
+  as zero (`#303`'s named gap); the reserved precision combinations and the NaN pattern are the two filings above.

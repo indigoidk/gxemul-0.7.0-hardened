@@ -1,0 +1,74 @@
+I'll review the #576 packet against HEAD `987cb596` in `GXEMUL-SEC`, starting with the FCNVSD handler, the #297 casts, and the probe machinery the kill table depends on.VERDICT: SHIP WITH CHANGES (3)
+
+The deletion is the right fix and the measured table matches the raw logs. Three changes are text and one preserved script. None of them touch the handler.
+
+## Q1. The diff
+
+The edit is right and complete. At HEAD `987cb596`, `X(fcnvsd_fpul_drn)` is `cpu_sh_instr.c:3049-3063`, and line 3057 is `cpu->cd.sh.fpul = (int32_t) op1.f`. Removing that line leaves the interpret at :3056 and the two `reg()` stores at :3060-3062. `est/src/cpus/cpu_sh_instr.c:3049-3063` is the same function, so a byte-identical apply has a real twin.
+
+The deleted assignment reads `op1.f` and does not write it. `op1.f` is a `double` (`float_emul.h:38-40`). The double store consumes that same `double`. The witness shows the DRn halves unchanged across the two builds: `dr hi 1.5` is `0x3ff80000` and `dr lo 0.1` is `0xa0000000` on both. FPSCR is not written on either side of the diff. The only early exit is still `FLOATING_POINT_AVAILABLE_CHECK` (`:57-66`).
+
+The comment's citation is the right passage. `sh4_programming.txt:10866` is the encoding row `1111nnn010101101`, and `:10870-10871` is the description: convert the single in FPUL and store the double in DRn. The sibling description at `:10759` does say the result is stored in FPUL. `clear_cause()` at `:10879` is outside that citation. This handler never cleared cause bits, and the round's "not changed" paragraph is where that stays.
+
+The FTRC casts are still there, behind the ladders, at `:3016` and `:3038`. "Mis-copied" is an inference from the identical assignment. "The same store the FTRC handler makes" is the accurate wording.
+
+## Q2. The floor
+
+No floor cell is open. The only predicate that dominates the edited line is `sr.FD`. FD set returns inside the macro, so the body is reached only with FD clear, and every row runs there. The body tests nothing. `sh_dn` is in the callee: `ieee_store_float_value` is the macro at `:195-196`. DN, destination and zero are clause (e) by that letter. They were built anyway, and the raw logs redden them.
+
+I checked every `<leg>.raw` under `regress/artifacts/shfcnvsdfpul/killtable_20261102/`. Scores and red sets match section 5, including the corrected M_g direction (42/52, five DR2 rows red, `0.1` green) and M_gm (50/52, only `0.1` red, got `0x00000000`). `base_head.raw` has `inf` and `snan` at `0x80000000`. No `FAIL(no-readback)`. `M_b.raw` and `base_head.raw` carry the same md5 prefix `b76a7799a3ea`. Witness files are 3/6 and 6/6, with the three HEAD failures equal to the truncated integers.
+
+An escape, and the one Q3 names: suppress the two DRn stores when the destination is DR0.
+
+```c
+if (ic->arg[0] != (size_t)&cpu->cd.sh.fr[0]) {
+    reg(ic->arg[0]) = (uint32_t) (ieee >> 32);
+    reg(ic->arg[0] + sizeof(uint32_t)) = (uint32_t) ieee;
+}
+```
+
+All 52 rows stay green. It first differs on the table's own `fcnvsd fpul 0.1` input (`0xf0ad`, FPUL `0x3dcccccd`): DR0 stays `0xdeadbeef`/`0xdeadbeef`. That row reads FPUL only. `dr hi` / `dr lo` both use DR2 (`0xf2ad`; `r8 = (iword >> 8) & 0xf` at `:4071`). A second escape, also outside the floor: `if (ic->arg[0] == (size_t)&cpu->cd.sh.fr[4])` restore the FPUL store. First difference is FCNVSD FPUL,DR4 with FPUL `0x3fc00000`, which becomes `0x00000001`. The rows only name DR0 and DR2.
+
+## Q3. The ask-again
+
+The DR0-write edit above is the smallest one that keeps all 52 green and changes guest-visible behaviour on an input the table already runs. No current row catches it. It is not in the packet's disclosure list. The packet's "seen from both sides" sentence is true of the FPUL-store split `{DR0, not DR0}` that M_g and M_gm measured. It is not true of the DRn write, and it is not true of DR4, DR6, DR8, DR10, DR12 or DR14.
+
+The row that would catch the DR0 write is a `dr0 hi` / `dr0 lo` pair (fmov `0xf10a` / `0xf11a`, same `0x3fb99999` / `0xa0000000` wants). Clause (e) allows a sentence instead of those four sessions. Write the sentence. Also name, in that same sentence, the state the rows never vary: `SH_FPSCR_SZ` (`0x00100000`), `SH_FPSCR_FR` (`0x00200000`), RM encodings 2 and 3, and a delay slot. The harness ORs only DN, PR and RM 0 or 1.
+
+Exactly `-2^31` (`0xcf000000`) belongs in that sentence too. The cast of that value is defined and yields `0x80000000`, which differs from the encoding, so it is not a fixed point. The current words "finite `|v| >= 2^31` other than `-2^31`" drop that one point out of the not-rowed list. `+0` is the defined fixed point: for every other in-range encoding the truncated integer's bits differ from the float's bits.
+
+## Q4. The records
+
+The F1 replacement is right: `#297` guarded the casts, and they remain at `:3016` and `:3038`. The prose to correct is `OUTSTANDING_BUGS.md:8240`. The id entry is at `:24069`. Keep "UB" on the FCNVSD cast. The FTRC casts sit in the normal arm after the ladders (`:2989-2990`).
+
+F8: keep `fcnvsd fpul inf`. `+Inf` is its own arm in `fpul_type` (`:10940-10943`). `snan` still kills M_d if `inf` is dropped, so `inf` is not the sole carrier of any measured mutant. It is the only `+Inf` row. Two sessions on a 52-pin is the right cost. A later edit that stores the FTRC `+Inf` result `0x7fffffff` into FPUL for infinities only goes red on this row and stays green on `snan`.
+
+Section 6 is not all true of the tree:
+
+- "Filed once as a class" for the PR-reserved encodings is false. Pass 1's order was "FILE once as a class". No such row is in `OUTSTANDING_BUGS.md` or `CHANGELOG.md`. Open it here: FCNVSD and FCNVDS at PR=0 (`:10883`, `:10770`), and FIPR and FTRV at PR=1 (`:11251`). FSRRA already raises `EXPEVT_RES_INST` on its reserved PR side (`:3279-3294`).
+- The CHANGELOG draft's "one input with a nonzero low word" is false. `M_h.raw:50-51` shows `snan` read back `0xffffffff`, the low half of the all-ones double NaN (`float_emul.c:511-515`). Say "the one numeric input".
+- "0x80000000 for finite values of 2^31 or more" was not run. `base_head.raw` shows that indefinite for `inf` and `snan` only.
+- The F9 filing has to own the existing label `ftrcS-nan qNaN+` (`sh_rounding_probe.py:173`, input `0x7fc00000`). Manual `:4980-4989` makes fraction MSB 1 a signaling NaN, and `:10948-10950` classifies `0x7fc00000` as sNaN. The ftrc value `0x80000000` is still what the ladder stores. Relabel in this commit, and keep the gate's grep string in step with the name, or have the new LOW row say it owns that label.
+- `gate_sh_rounding.sh:59` and `:66` still say 36 pairs and "9 of the 17 vectors". After this commit the dictionary has 25 entries, 52 pairs, and 9 discriminators. The eight new wants are mode-independent because the widening is exact. Add the correction beside the 52 pin.
+
+`0x7fc00000` is an sNaN under the manual, and the row name `snan` matches. Hardware's generated qNaN is `0x7fbfffff` / `0x7ff7fffffff` (`:5006-5008`). That is F9, and it stays a separate LOW row.
+
+## Q5. Astra
+
+Nothing here should hold the commit past the standing rule. The three changes are a contract sentence, a script copy, and record sentences. Astra's later answer can still dissent. The product diff does not wait on it.
+
+## The three changes
+
+1. One sentence in the probe's `#576` comment, zero new sessions. DRn's value is read only at DR2. "Both sides" means the measured `{DR0, not DR0}` FPUL-store split. Destinations other than DR0 and DR2 are unrowed. So are SZ, FR, RM 2 and 3, a delay slot, and exactly `-2^31` (`0xcf000000`, defined cast to `0x80000000`).
+2. Replace `regress/artifacts/shfcnvsdfpul/killtable_20261102/mutate576.py`. Lines 25-26 split the M_gm string across a real newline, so the preserved script does not parse and cannot apply any leg. `_scratchpad/w576/mutate576.py` is the one-line form that produced `M_gm.raw` (binary `17:25:53`, only `0.1` red). `KILLTABLE.log` already shows `M_gm APPLY-FAILED` and then the successful leg. Say that in the round block.
+3. The records corrections in Q4: open the PR-reserved class row, fix the low-word sentence, mark the out-of-range indefinite as unread, point F9 at the `ftrcS-nan qNaN+` label, and correct the gate's "17" and "36" prose.
+
+## Found while checking
+
+`_scratchpad/w576/sh_rounding_probe.NEW.py:224-229` is longer than the diff in section 3. Those lines disclose the DR0 value, FR and RM 2/3, and they attribute the FD/PR sentence to "Astra, pass 1". Astra's pass 1 produced no answer. Ship the packet diff plus change 1. Leave that attribution out.
+
+The manual pseudocode at `:10891-10912` never assigns through `*FPUL`. The normal arm is missing from the extracted text. The special-case table at `:10958` still maps normal to normal. That is enough for "FPUL is not a destination".
+
+Encodings check against the decoder. `(iword & 0x01ff) == 0x00ad` is FCNVSD (`:5061-5064`), so `0xf0ad` is DR0 and `0xf2ad` is DR2, and bit 8 clear forces an even field. `0x025a` then `0x2122` is the committed ftrc readback shape. `0xf12a` / `0xf13a` are `fmov.s` FR2 and FR3 to `@r1`. The 0.1 double is `0x3fb99999a0000000`, and `fixed.raw` measured both halves.
+
+VERDICT: SHIP WITH CHANGES (3)
