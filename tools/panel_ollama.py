@@ -67,10 +67,16 @@ brief = PACKET_PREAMBLE + brief
 
 
 def _ask(payload):
+    #  2026-11-02: the daemon forwards the CLIENT's User-Agent to ollama.com for a `:cloud` model, and
+    #  Cloudflare there bans urllib's default one ("Python-urllib/3.x") with `HTTP 403 ... error code: 1010`.
+    #  Measured in both directions the same minute: curl -A "Python-urllib/3.12" -> 403 (the 1010 HTML);
+    #  the same request with any other agent, or urllib with this header -> 200 and the liveness token.
+    #  Every "glm SEAT DOWN -- Ollama cloud 403/1010" record from ~2026-10-2x to 11-02 was THIS, not the
+    #  account: `ollama run glm-5.3:cloud` from the CLI answered throughout.
     req = urllib.request.Request(
         "http://localhost:11434/api/generate",
         data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"})
+        headers={"Content-Type": "application/json", "User-Agent": "gxemul-panel/1.0"})
     return json.load(urllib.request.urlopen(req, timeout=1500))
 
 
