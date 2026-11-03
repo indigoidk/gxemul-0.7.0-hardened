@@ -1,0 +1,57 @@
+VERDICT: PROCEED WITH CHANGES (2) — the defect derivation holds from the inlined code alone; the two changes are (1) the committed probe must compare Cause's IP3 *bit*, not raw Cause equality, and (2) the floor's "EQUIVALENT" verdicts for `M_del`/`M_nomask` must be scoped as table-equivalent plus an unmeasured invariance premise, with option (1) shipped (it is the form that does not depend on that premise).
+
+## The core derivation — audited, holds
+
+READ: the tail at `:696-697` sits outside the switch; the verbatim function has no early return, so every access path (offset 0, offset 2, `default:`) reaches it. READ: the only re-assert mechanisms in the inlined code are `jazz_interrupt_assert` (device edge) and the `EXT_IMASK` arm (mask write); `jazz_interrupt_deassert` never asserts. REASONED: after a jazzio access with a line pending and IP3 enabled, IRQ3 is low while the predicate says high, and stays low until a new edge or mask write. READ: the inlined witness table co-varies exactly as this predicts (0x800 at every point the predicate holds; 0x0 exactly after HEAD's blanket deasserts; both red rows green on the fixed build, same script). The fix's predicate is character-for-character the deassert handler's `:148-157` condition. No premise in this chain needs a file.
+
+## Q1 — premise audit
+
+**(a) The census.** Partially re-derivable, and weaker than the summary sentence states. READ: on pica the local-bus lines are held by ns16550×2, sn, asc, fdc; census sn 0/0, fdc 0/0 — those two can never be pending in this tree, so the storm surface reduces to **asc + ns16550**. REASONED: ns16550's pairing is *proven from the packet* — the inlined tick's two branches are mutually exclusive and recompute the same condition. asc's is **not settleable**: "1/2" is a call-site count, not a path pairing, and the arms are not inlined. The section-2 sentence "Every device that asserts a Jazz local-bus line also deasserts it" states as fact what is only count-consistent. What settles it: dev_asc.c's assert arm and the reachability of its deassert arms from every state the assert creates — plus one fact worth a line in the record: which device gate 4's root disk hangs from (if asc-attached, the boot is itself the asc measurement). pckbc/mc146818/ne2000 census entries are not on the pica local bus at all; harmless noise.
+
+**(b)** REASONED: 0x800 = Cause bit 11 = IP3 requires STATUS_IM_SHIFT = 8 — standard MIPS, consistent with the packet's formula and values; the constant is not inlined (low-risk unsettleable). `print cause` as a live read is not checkable as an implementation, but the row-to-row co-variation in both builds corroborates it.
+
+**(c)** READ: proven synchronous — the IER arm sets IIR_TXRDY on the ETXRDY 0→1 transition and calls `dev_ns16550_tick` inside the same store; the tick asserts when MCR.IENABLE is set. Gap: no row shows the MCR.IENABLE setup; green `jz ip one` on both builds implies it. Minor.
+
+**(d)** All re-derived and consistent: IER 0x2 = IER_ETXRDY; IMASK 0x2 = R4030_EXT_IP3; (8+1)<<2 = 0x24, (9+1)<<2 = 0x28; the i<15 loop matches the 0x7fff predicate. REASONED: the 0x800 wants are *model* wants (CPU line mirrors the file's own predicate), not hardware measurements — the packet is honest about this. The row names all fit ≤13 chars.
+
+**(e) Not settleable.** The C0 output (file's last commit = a DMA round) and OB-22's "pre-existing, not #69" do not pin 0.7.0 provenance. Also "the two deassert lines" is ambiguous — the packet elsewhere counts *three* deassert sites, so it must mean the tail's comment-plus-call pair. Settles with: `git log -L` on the tail or a 0.7.0 vendor-drop diff.
+
+## Q2 — the partition
+
+REASONED: the fix changes exactly {≥1 line pending, IP3 enabled} at jazzio-access time — covered twice ((two, enabled) at `jz vec`→`jz ip after`; (one, enabled) at `jz vec com1`→`jz ip com1`). One precision: `jz ip com1` does not *localize* — on HEAD, IP3 is already low from the earlier access, so that row demonstrates the missed state persists, not that the (one,enabled) access itself dropped it. Sufficient for killing; note it in the record. (none, enabled) is covered green. **The {disabled} column has no row** (the mask is written once, never cleared).
+
+On the refutation invitation: I cannot refute the substance, but the word is wrong. The (pending, mask-disabled) cell is perfectly *observable* — Cause.IP3 reads 0 there on both builds and the deassert fires on both. It is **non-discriminating**: fixed and HEAD perform the identical action there (IRQ3 was already low — the mask arm deasserted at the IMASK write and the assert handler mask-checks). No Cause-based oracle can separate fixed from `M_nomask` while the invariance "IRQ3 high ⟹ predicate true" holds; that is structural, not a detector weakness. A green-on-both row *can* pin the cell (line pending, store EXT_IMASK=0, vector read, want 0) — recommend as an optional 14th row.
+
+The invariance itself rests on premises the packet asserts but does not establish. It enumerates the three DEASSERT sites with line numbers; for ASSERT sites it gives only the prose "drives ... in [the three mechanisms]" over a ~780-line file of which ~100 lines are inlined. A fourth assert site (a mirror of the tail's own unconditional deassert), a second writer of `int_enable_mask`, or a reset arm that zeroes `int_asserted` without touching IRQ3 would each break it — and would break `M_del`/`M_nomask` but **not** option (1), whose retained deassert self-corrects. That asymmetry decides Q3.
+
+## Q3 — the mutants and the ship
+
+All floor predictions re-derive correctly (REASONED): `M_b` = HEAD, reds both IP rows, 11/13. `M_lowbits`: bits 8/9 outside 0xff → blanket-equivalent on this table, 11/13. `M_ip6`: mask carries only 0x2 → blanket-equivalent here; in general the defect returns for IP3-only masks. `M_timer`: same-as-blanket here (timer bit never pending), contingent on PICA_TIMER_IRQ_MASK = 1<<15, value not inlined (low risk). `M_inv`: reds both IP rows; `jz ip nt` green one-sided, as disclosed. `M_del`: 13/13 on the table — `jz ip none`/`jz ip nt` go green because the handlers deassert when the lines clear. `M_nomask`: 13/13; differs from fixed only in {(pending, disabled)}, where both sides are no-ops *under the invariance*.
+
+**Ship (1).** (i) (1) is self-correcting: a spurious-high IRQ3 from an invariant violation (stray assert site, reset corner) is cleared on the next jazzio access; (2) freezes the error. (ii) (1) preserves the nothing-pending behaviour at zero cost. (iii) The comment documents OB-22 at the site. (2)'s advantages — smaller diff, and *exact* parity with the ISA sibling — are real but lose to (i). Note the section-2 parity sentence is loose: the *fixed* read still deasserts in the nothing-pending case; only (2) touches no CPU line ever. The honest record: `M_del` measured table-equivalent (that kill leg is the evidence), everywhere-equivalence unproven and premise-dependent, not shipped.
+
+## Q4 — the vehicle
+
+REASONED: gate 4 is the right home — only gate holding the arc binary; the probe needs exactly that machine; 40 s is marginal against an OpenBSD boot (the gate's current wall time is not in the packet, but the probe cannot plausibly double it). Load-sensitivity: the guest side is synchronous, but the *observable* has a host-side exposure the brief does not address — **change 1**: if the probe compares raw Cause equality (the witnessed values are whole registers), any other Cause bit that moves mid-probe reds rows spuriously — IP2 from the mc146818 (wired direct to irq 2), IP6 from the jazz timer (masked by 0x2, but its arm-at-reset is not shown), ExcCode if any access ever faults. Each is implausible; together they are why one clean witnessed run cannot prove a committed gate's determinism. Compare `cause & 0x800`, or record the device-silence argument in the probe header.
+
+## Q5 — the twins
+
+REASONED with an unsettled premise. The function is byte-identical today; landing SEC-only creates a divergence inside a currently-shared function. If the protocol permits an identical hunk in both in one round, do that. If est changes must ride a separate est round, SEC-only now with the twin-landing recorded as owed. The packet states only the comparison *direction* (build/ compares against est), never the landing *rule* — settles with the divergence rule's text or the #69 precedent (how the ENABLE-mask change in this same file was landed). build/ owes compile-only: pmax never instantiates Jazz ("no jazzio"), so est's copy must build and build/'s gates stay green; no behavioural owe exists.
+
+## Q6 — the missing member
+
+**Clear-on-read / EOI**: treat the vector read as an acknowledge that clears the reported pending bit from `int_asserted`. Excluded — and the exclusion is already pinned: `jz vec again` wants 0x24 *again*, which an EOI-clears-lowest would turn into 0x28. It also contradicts the level model, and structurally: the tail deasserts irq3 but never irq6 — a principled acknowledge would handle the timer line too; the asymmetry marks the tail as an NT hack, evidence for conditionalizing rather than EOI-izing. The cross-controller idiom grep (8259 ISR/IRR, footbridge IRQStatus, i80321, gc) is **not checkable from the packet** — those arms are not inlined; settles with those read arms. The inlined sibling (`R4030_SYS_ISA_VECTOR`, no CPU-line touch) is sufficient in-file precedent.
+
+## Premises not settleable from this packet
+
+1. asc's assert→deassert path pairing, and which device gate 4's root uses (Q1a's storm premise — proven only for ns16550).
+2. Exhaustive ASSERT-site enumeration for `mips_irq_3`; `int_enable_mask`'s single-writer status; dev_jazz's init/reset IRQ3 state — the three facts the section-5 "EQUIVALENT" predictions silently rest on.
+3. 0.7.0 provenance of the tail's two lines (Q1e).
+4. STATUS_IM_SHIFT = 8 and PICA_TIMER_IRQ_MASK = 1<<15 (un-inlined, low risk).
+5. The witness's MCR.IENABLE setup step (implied, not shown).
+6. Gate 4's current wall time; the debugger's `print cause` implementation (corroborated by co-variation only).
+7. The twins' landing protocol and the #69 precedent.
+
+No premise I could check is false; the core defect, the fix form, and every floor prediction re-derive cleanly from the inlined code. The two binding changes are the probe's Cause masking and the scoping of the equivalence verdicts; optional: the 14th {disabled}-column row and a record note that `jz ip com1` does not localize the (one, enabled) drop.
+
+VERDICT: PROCEED WITH CHANGES (2)

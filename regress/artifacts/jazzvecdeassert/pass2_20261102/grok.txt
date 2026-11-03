@@ -1,0 +1,55 @@
+I'll review the deletion, the 22-row detector, the gate section, and both kill tables against `GXEMUL-SEC` at HEAD, and check the premises before scoring the ruling.The brief says the review tree is `GXEMUL-SEC` and the deletion lives only in the scratch clone. I'll read the Jazz device, the probe artifacts, and the gate helpers before scoring any claim.The Jazz I/O function matches in both trees, but the interrupt predicates do not. Next I’ll check the tick path, the probe, and the measured tables against that split.VERDICT: SHIP WITH CHANGES (3)
+
+The deletion is the right text for both twins, and both kill tables match the raws. Three things in the package are false as written: the comment's healing sentence, the probe's claim that every access label is rowed, and the "three carriers" count.
+
+## Q1. The deletion is right. The comment is not.
+
+The tail at `GXEMUL-SEC/src/devices/dev_jazz.c:696-697` is the only `INTERRUPT_DEASSERT(d->mips_irq_3)` that ignores the pending lines. `int_asserted` is written only at `:141` and `:151`, `int_enable_mask` only at `:459`, and `INTERRUPT_ASSERT(d->mips_irq_3)` only at `:144` and `:469`, plus the init `memset`. Deleting the tail leaves IRQ3 entirely to those writers. `est/src/devices/dev_jazz.c:661-662` is the same function body, and est has no `R4030_EXT_IP3`, so the same deletion is the text that can land in both.
+
+Widen the healing clause. "Until some line was asserted anew" is not the recovery the code implements. IRQ3 comes back when `jazz_interrupt_assert()` runs again:
+
+- a new line assert
+- `DEVICE_TICK(ns16550)` re-asserting a UART whose IER and `MCR.IENABLE` are still set (`dev_ns16550.c:92-97`), which re-enters `jazz_interrupt_assert` and raises IRQ3 if any local line is pending and IP3 is enabled
+- `DEVICE_TICK(jazz)` asserting `jazz_timer_irq` (`dev_jazz.c:294-308`) under the same condition, once `interval_start > 0` or `jazz_timer_value != 0`
+
+An `EXT_IMASK` transition into the pending-and-enabled state also re-raises it (`:466-469`). A same-value mask rewrite does not: both sides of that compare are computed from `int_asserted` and the mask, so a dropped Cause bit is invisible to them. The probe header's sentence (lines 8-9) names the mask transition and still omits both ticks. Same fix there.
+
+Drop "as in the tree's other interrupt controllers." `dev_algor.c` `P5064_PCIINT` deasserts `mips_irq_3` on a read.
+
+## Q2. The conditional does not survive (iii) and (v).
+
+I held the conditional in pass 1. I do not hold it now.
+
+Invariant I is real for the writers above: after the tail is gone, IRQ3 high means `(int_asserted & 0x7fff) && (int_enable_mask & R4030_EXT_IP3)`. A conditional deassert with that predicate fires only when the consequent is already false. On states those writers produce, Cause is already low there, and `mips_cpu_interrupt_deassert` is `Cause &= ~line`. That is a guard for a state this file cannot reach. M_cond scoring 22/22 and M_del scoring 13/13 is that fact, measured.
+
+Est's arm is a different predicate, `int_asserted & int_enable_mask & 0x7fff` (`est/src/devices/dev_jazz.c:120-121`, `:430-440`). Inlining `0x02` into that file would deassert IRQ3 while a per-line mask bit was set. There is no conditional that is correct in both twins. The deletion is.
+
+## Q3. The five (d) mutants are red. The enumeration is not complete.
+
+I checked the table-2 raws. M_offs0 reds `jz ip after`, `jz ip vecw`, `jz ip com1`, `jz ip onevec` (18/22). M_offsne0 reds `jz ip lbie`, `jz ip lbiew`, `jz ip dflt`, and `jz ip com1` (18/22; com1 inherits the dflt drop, and the correction file is right). M_rd reds those five reads (17/22). M_wr reds `jz ip vecw` and `jz ip lbiew` (20/22). M_offs2 reds `jz ip lbie` and `jz ip lbiew` (20/22). M_b reds the seven HEAD rows (15/22). M_cond and M_uart are 22/22. Table 1's red legs are exactly `jz ip after` and `jz ip com1`; M_del and M_nomask have no FAIL line; M_b's md5 is `2a8177908925` against HEAD `b76a7799a3ea`.
+
+What the rows miss:
+
+- `if (idata) INTERRUPT_DEASSERT(d->mips_irq_3);` stays 22/22. Every jazzio store in the probe writes 0, and reads leave `idata` at 0. OpenBSD's `pica_intr_establish` does `out16(PICA_SYS_LB_IE, local_int_mask)` (`picabus.c:254`), a nonzero store, and that drops IRQ3.
+- `if (relative_addr == 0 && len == 1) INTERRUPT_DEASSERT(d->mips_irq_3);` stays 22/22 and restores the named defect. `pica_iointr` reads the vector with `inb(PVIS)` (`picabus.c:297`). Every offset-0 row is `lw`/`sw`, len 4. `if (len == 1)` alone would red `jz ip lbie`, `jz ip lbiew`, and `jz ip dflt`; the conjunction with `relative_addr == 0` does not.
+- `if (writeflag == MEM_WRITE && relative_addr != 0 && relative_addr != 2)` stays 22/22. The default arm is rowed only as `ld8(VEC+1)`. The contract's "default arm, read and write" is false. `if (relative_addr == 3)` is the same hole for the other byte of that arm; the page is registered as 4 bytes.
+
+M_uart remains the disclosed line-keyed escape. These three are keyed to `idata`, to `len`, and to `writeflag`/`relative_addr`.
+
+## Q4. The gate pin holds. The parser is on the fallback, and it matches the transcripts.
+
+`%-14s` plus the format's separating space leaves two spaces after a 13-character name. `jz ip maskoff` and `jz vec masked` are 13 characters, and `probe2_head.out` shows those two spaces, so `^name  .*ok$` matches. `jz vec` does not match `jz vec again`. `count()` in `regress/lib.sh:326-330` is the single-echo form. The 22 names in `gate_mips.NEW.sh` are the 22 `row()` calls. A missing `JAZZVEC_RESULT=` fails closed. The probe's pty is its own; the arc boot log path is an argument to `drive_arc.py`, and this section runs before that log is published.
+
+`print cause` prints a bare `0x800` (`debugger_cmds.c` `PARSE_NUMBER`). The primary `cause\s*=\s*0x` regex does not match. The fallback takes the first `0x` after the echoed name, and the fixedb transcript is `print cause` / `0x800` / `GXemul>`. The value is in the buffer before the prompt. A 20-second miss returns None and fails the row, so a slow host can false-fail the gate. It cannot false-pass.
+
+## Q5. One sentence in section 5 is false. The 22 dispositions stand.
+
+The witness scores, the two tables, the refused run 1 (presence pin count 2, because `:153-154` repeats the predicate), both corrections, F9's ns16550 path (`:92-98` has no deassert when the IIR condition is true and `MCR.IENABLE` is clear), and the LB_IE / "Linux?" notes match the code. `pica.h:117` is `PICA_SYS_LB_IE`. The vector loop ignores `int_enable_mask`. `pica_iointr` loops until the byte reads 0, so this guest drains pending lines inside one entry.
+
+"OB-22's three carriers" undercounts. The same open claim is also at `:2605-2606`, `:2869`, and `:2926`. The table at `:2965` says the IRQ stays dropped "until next edge/mask write"; that is the F11 wording, and a same-value mask write does not heal. The close-out has to cover all six sites and describe the heal paths from Q1.
+
+None of F1-F22 is reversed. F5's "any booted OS" is only true once a heal path is armed (interval timer, a nonzero offset-2 write, or a UART that is still ticking). OpenBSD does arm those. Severity LOW stands for that guest.
+
+The brief's HEAD `37b04798` is one records commit behind the tree I read (`c7f86d4a`). The jazzio tail is still the unconditional deassert at `:696-697`. The probe header's `3cb8bdc1` is an earlier records commit in that same range; the line numbers match the file.
+
+VERDICT: SHIP WITH CHANGES (3)

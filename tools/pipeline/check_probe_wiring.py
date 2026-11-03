@@ -3228,6 +3228,45 @@ MANIFEST = {
     #  is CLASS_WITNESS: its as-run base leg asserts the PRE-FIX symptom (HEAD column) and
     #  would go RED on a repaired base, so it is ungated by design.  The detector_20261024/
     #  frozen instrument and the mutant applicator are CLASS_TOOL (kill-table evidence).
+    #  #578 jazzvecdeassert (OB-22).  The gated detector is the self-contained 26-row probe; the pass-1 rung-3
+    #  witness (13 rows, built on _scratchpad/gxprobe.py) is CLASS_WITNESS and ungated by design: its base
+    #  leg asserts HEAD's drop.  The as-run instrument copies, the mutators and the fix appliers are the
+    #  kill-table evidence (CLASS_TOOL / CLASS_RESEARCH), one line per file as the pcc2 block above does.
+    "jazz_vector_probe.py":
+        (CLASS_DETECTOR, "#578 jazzvecdeassert: the Jazz/R4030 interrupt-source register (pica_jazzio) no longer "
+                         "deasserts the CPU's IRQ3 on every access (the deleted tail dropped a level interrupt while "
+                         "JAZZ lines were still pending, OB-22).  26 rows on the unmodified arc rig binary (-V -e pica, "
+                         "the rig kernel for construction only), self-contained pty driver with a failure flag; wired "
+                         "in gate_mips.sh (#578 block: 26 named rows, rows run by EQUALITY, the driver flag, the "
+                         "completion sentinel).  Witness: artifacts/jazzvecdeassert/witness_20261102/ (11/13 on HEAD, "
+                         "13/13 fixed, same script); kill tables killtable_20261102/ (13-row witness), "
+                         "killtable2_20261102/ (22 rows) and killtable3_20261102/ (the shipped 26 rows: 15 forms, "
+                         "every prediction of PRETABLE3.out matched)."),
+    "artifacts/jazzvecdeassert/witness_20261102/jazz_vector_witness.py":
+        (CLASS_WITNESS, "#578: the pass-1 rung-3 witness (13 rows, gxprobe-based, unmodified -V -e pica), 11/13 on HEAD "
+                        "and 13/13 on the fix with the same script; its HEAD column asserts the drop, so it is ungated."),
+    "artifacts/jazzvecdeassert/witness_20261102/jazz_vector_probe.py":
+        (CLASS_RESEARCH, "#578: the 22-row detector as measured at pass 2 (table 2's instrument), superseded by the shipped 26-row probe."),
+    "artifacts/jazzvecdeassert/witness_20261102/apply_fix578.py":
+        (CLASS_TOOL, "#578: the pass-1 CONDITIONAL form's applier (not shipped; the equivalent form's text), preserved as run."),
+    "artifacts/jazzvecdeassert/witness_20261102/apply_fix578b.py":
+        (CLASS_TOOL, "#578: the deletion applier with the pass-2 comment text (table 2's fix clone), preserved as run."),
+    "artifacts/jazzvecdeassert/killtable_20261102/jazz_vector_witness.ASRUN.py":
+        (CLASS_RESEARCH, "#578: table 1's instrument (the 13-row witness as run), preserved as evidence."),
+    "artifacts/jazzvecdeassert/killtable_20261102/apply_fix578.py":
+        (CLASS_TOOL, "#578: table 1's fix applier (the conditional form), preserved as run."),
+    "artifacts/jazzvecdeassert/killtable_20261102/mutate578.py":
+        (CLASS_TOOL, "#578: table 1's variant builder (anchored on the fix's comment line after the presence pin refused run 1)."),
+    "artifacts/jazzvecdeassert/killtable2_20261102/jazz_vector_probe.ASRUN.py":
+        (CLASS_RESEARCH, "#578: table 2's instrument (22 rows) as run, md5 a1fbbc576ce0."),
+    "artifacts/jazzvecdeassert/killtable2_20261102/mutate578b.py":
+        (CLASS_TOOL, "#578: table 2's variant builder -- the deleted deassert re-introduced under eight predicates after the #578 comment."),
+    "artifacts/jazzvecdeassert/killtable3_20261102/jazz_vector_probe.ASRUN.py":
+        (CLASS_RESEARCH, "#578: table 3's instrument (the shipped 26 rows) as run, md5 7b3e17e7d3f0."),
+    "artifacts/jazzvecdeassert/killtable3_20261102/mutate578c.py":
+        (CLASS_TOOL, "#578: table 3's variant builder -- fifteen predicates, the pass-2 seats' escapes among them."),
+    "artifacts/jazzvecdeassert/killtable3_20261102/apply_fix578c.py":
+        (CLASS_TOOL, "#578: the SHIPPED applier (deletion, the twin-neutral comment), run on SEC's and est's dev_jazz.c at the landing."),
     "i8259_eoi_probe.py":
         (CLASS_DETECTOR, "#574 i8259eoiirr: the 8259 model's interrupt acknowledge (ISR set, IRR cleared, the 8253's event "
                          "retired) at the OCW3 poll read and the GT64120 IACK read; the specific EOI resets ISR when the line "

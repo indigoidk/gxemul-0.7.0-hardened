@@ -1,0 +1,57 @@
+I will check the premises against the tree and the repair diff before judging any disposition. The load-bearing question is which accepted finding is wrong.F2 VERDICT: RATIFY WITH CHANGES (1)
+
+The wrong one is **D3**, including the same clause in the **F5** acceptance ("the one conjunction the real guest exercises"). The byte-read row is right. The uniqueness claim is not. Floor of the shipped enumeration is clean, so this is a record correction plus a filing, not a new detector round.
+
+## Q1 — D3 (and F5's uniqueness clause)
+
+OpenBSD's own jazzio accesses are three shapes, not one. READ (source), not from the packet:
+
+- `inb` is `*(volatile unsigned char *)` (`sys/arch/arc/include/pio.h:43`). `pica_iointr` does `inb(PVIS)` (`picabus.c:297`). That is `(relative_addr == 0 && len == 1)`, and `jz ip vecb` rows it. F5's row stands.
+- `out16` is a halfword store (`pio.h:39-40`). `initcpu` does `out16(PICA_SYS_LB_IE, 0x000)` (`machdep.c:1270`). `PICA_SYS_LB_IE` is `PVIS+2` (`pica.h:103`). The only `len == 2` row stores `0x0f`, not `0`.
+- `pica_intr_establish` does `out16(PICA_SYS_LB_IE, local_int_mask)` (`picabus.c:254`). The COM enables are `0x0100` and `0x0200` (`pica.h:112-113`). `0x0f` has neither bit.
+
+So "the one conjunction the real guest exercises is rowed, and the rest stay disclosed by name" is false. The contract's named examples are `len == 2 && relative_addr == 0` and `idata != 0 && relative_addr == 2 && len == 1`. Neither is the guest's zero halfword, and neither is `idata & 0x0100`.
+
+The right line is the finite set of accesses this guest actually performs on this register, not the cross product of driven values, and not only the byte read. Rowing every abstract pair is unbounded. Stopping at `inb(PVIS)` leaves two guest stores unnamed.
+
+Everything else in section 0 that I could check holds. The tail is still the unconditional `INTERRUPT_DEASSERT` at `dev_jazz.c:696-697` (READ, source). `fatal()` prints and returns (`debugmsg.c:384-391`), so the tail runs on the default arm (S6). The only `mips_irq_3` writers in that file are assert `:144`, deassert `:154`, the mask arm `:467/:469`, the tail, and the connect; `mtc0` Cause writes IP0/IP1 only (`cpu_mips_coproc.c:949-954`) (S2). `INTERRUPT_ASSERT` always calls the handler (`interrupt.h:74`); there is no edge filter. `est`'s `jazz_jazzio` body matches, and `est` has no `R4030_EXT_IP3` (S4). `dev_algor.c:118-126` does deassert `mips_irq_3` on a `P5064_PCIINT` read, and the shipped comment does not mention other controllers (F7). Table scores below are READ from the packet; I did not re-run the emulator.
+
+F12 stays open as a binary fact: not checkable from the packet, and I did not hash the binaries. REASONED from source: `CHECK_ALLOCATION` (`misc.h:190-193`) expands to `FAILURE`, which formats `__LINE__` (`misc.h:183-185`) at `dev_jazz.c:712`, after the comment. M_b keeps the seven-line comment and puts the same deassert instruction back, so the integer in that failure block moves. That is the cause. `strings` on HEAD against a rebuilt M_b would only confirm it.
+
+F16's judgment is right (six prose carriers, all about this fork's `dev_jazz.c`; `:2965` still says "until next edge/mask write"). The file at `50f9c601` is not marked. That matches F23: the landing commit has not happened. Not a wrong judgment.
+
+## Q2 — filed, not a floor cell
+
+```c
+if (writeflag == MEM_WRITE && relative_addr == 2 && (idata & 0x0100))
+    INTERRUPT_DEASSERT(d->mips_irq_3);
+```
+
+Predicted score: **26/26**. REASONED. `lbiew` stores `0x0f` (bit 8 clear). `dfltw` stores `0x5a` at offset 3. No other jazzio write has bit 8 set, so nothing drops and `com1` has nothing to inherit. OpenBSD's establish path performs that store while another line can already be pending. Guest-visible IRQ3 changes. The probe stays green.
+
+This is not a cell of `{0, 2, other} × {R, W}` and not a single-input family. `(2, W)` is rowed (`M_offs2`, `M_wr`, `M_len2`). `idata != 0` is rowed (`M_idnz` 23/26, READ). The guest's bit is a conjunction inside the nonzero side. Per S8 it is **FILED** (clause (e)), not L2. Same filing for `relative_addr == 2 && len == 2 && idata == 0` (the `initcpu` store), also 26/26, also unnamed.
+
+## Q3 — the product comment is not wrong
+
+READ (source) against `dev_jazz.c`. "On every access" is true: every arm falls through, and `fatal()` returns. "Kept equal to a line 0-14 pending and EXT_IMASK.IP3 set" matches `(int_asserted & 0x7fff) && (int_enable_mask & R4030_EXT_IP3)` with `R4030_EXT_IP3 == 0x02` (`:78`), maintained by the three writers from the zeroed initial state. "Re-enabled IP3" is the mask arm's false-to-true edge only (`:466-469`); a same-value rewrite does not heal. "A line asserted anew" covers a tick: `DEVICE_TICK(ns16550)` and `DEVICE_TICK(jazz)` call `INTERRUPT_ASSERT`, which re-enters `jazz_interrupt_assert` even if the bit is already set. D1 holds. The timer arm still asserts only when `pending_timer_interrupts > 0` (`:294-308`); S5's "once `interval_start > 0` or `jazz_timer_value != 0`" omits that guard. F4 is the accurate version: `debugger()` stops the host timer and `step` returns before `timer_start()` (`debugger.c:799-836`).
+
+The probe docstring is the inaccurate sentence, not comment 1a. Assert raises whenever the predicate is true, not only when it becomes true; deassert lowers whenever it is false. Only the mask arm is transition-only. FILE that wording. It does not change a row.
+
+## Q4 — zero floor breaches
+
+Denominator: the six cells of the body's own tests, plus the seven single-input values the contract names. Six cells, all rowed with lines pending and an IP3 read on that access:
+
+| Cell | Row | Caught by (READ, table 3) |
+|---|---|---|
+| (0, R) | `jz ip after`, `jz ip vecb`, `jz ip onevec` | `M_offs0`, `M_rd`, `M_vecb` |
+| (0, W) | `jz ip vecw` | `M_wr` |
+| (2, R) | `jz ip lbie` | `M_offs2`, `M_rd` |
+| (2, W) | `jz ip lbiew` | `M_offs2`, `M_wr`, `M_len2` 25/26 |
+| (default, R) | `jz ip dflt` | `M_rd`, `M_offsne0` |
+| (default, W) | `jz ip dfltw` | `M_dfltw` 24/26, `M_off3` 24/26, `M_wr` |
+
+Single-input: `idata == 0` (`M_id0` 19/26), `idata != 0` (`M_idnz` 23/26), `len == 2` (`M_len2` 25/26), `jazz_timer_value != 0` (`M_lbnz` 21/26), all READ. `len == 1`, `len == 4`, and `jazz_timer_value == 0` have no table-3 leg; REASONED, each hits a pending-lines IP3 row (byte rows `vecb`/`lbie`/`dflt`/`dfltw`; word rows `after`/`vecw`; the pre-`lbiew` IP3 rows). `M_b` 17/26 restores the deleted statement. `M_cond` 26/26 is the equivalence S3 already entails. `M_uart` 26/26 is the disclosed line family.
+
+`jz lbie rb` is a blind access: a later byte read of offset 2 checks the data, then `reheal()` runs. A conjunction aimed only at that access stays 26/26. It is not one of the six cells. Filed with the two guest stores above.
+
+The repair chain closes. The one required change is the D3/F5 sentence and the contract paragraph that repeats it: name the two `out16` shapes as disclosed debt, and stop calling the byte read the guest's only conjunction.

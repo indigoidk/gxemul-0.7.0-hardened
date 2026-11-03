@@ -1,0 +1,141 @@
+F2 VERDICT: RATIFY WITH CHANGES (5)
+
+---
+
+### Q1. Which of the 23 Dispositions (Section 0) and 3 Rulings (Section 3) Is Wrong?
+
+Five items across the dispositions, rulings, and the inlined repair diff (Section 1b) contain false claims or an invalid settling test (note: we verified by reading [`_scratchpad/w578/jazz_vector_probe.py`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/w578/jazz_vector_probe.py#L11-L90) and [`ASRUN_NOTE3.txt`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/jazzvecdeassert/killtable3_20261102/ASRUN_NOTE3.txt#L8-L25) that items 1–3 below have already been patched in the on-disk probe docstring since [`jazz_vector_probe.ASRUN.py`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/jazzvecdeassert/killtable3_20261102/jazz_vector_probe.ASRUN.py#L11-L78) ran):
+
+1. **D3 (and F2 / F3 / F5 / Section 1b contract `:182-183`): "the one CONJUNCTION the real guest exercises, offset 0 read as a byte (`relative_addr == 0 && len == 1`, the inb(PVIS) path)" is FALSE.**
+   * **Fact [READ from packet F2/F3 `:57-61`; READ from [`dev_jazz.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_jazz.c#L677-L684) and [`jazz_vector_probe.py`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/w578/jazz_vector_probe.py#L79-L84); REASONED]:**
+     `pica_jazzio` (`0xf0000000`, 4 bytes) houses both `PVIS` (offset 0) and `PICA_SYS_LB_IE` (offset 2, 16-bit local-bus interrupt-enable register). As F2 and F3 in the same packet acknowledge, OpenBSD/arc (`picabus.c`) also exercises `out16(PICA_SYS_LB_IE, ...)` (`relative_addr == 2 && len == 2 && writeflag == MEM_WRITE`) in two shapes that are **unrowed** by the 26-row probe:
+     * `out16(PICA_SYS_LB_IE, 0)` at `initcpu` (`relative_addr == 2, len == 2, writeflag == MEM_WRITE, idata == 0`): unrowed because `jz ip lbiew` stores `0x0f` (`st16(VEC + 2, 0x0f)`) and `jz ip vecw` stores `0` at offset 0 (`len == 4`).
+     * `out16(PICA_SYS_LB_IE, local_int_mask)` at `intr_establish`: unrowed at the UART enable bits because COM0 (`jazz.8`) and COM1 (`jazz.9`) set bits `0x0100` and `0x0200` in `local_int_mask`, whereas `jz ip lbiew` stores `0x0f` (bits 8–15 clear).
+   * **On D3's question [REASONED]:** The rule does *not* require rowing every two-input conjunction over driven values of non-tested inputs (which is clause-(e) debt), **Change 1:** drop the false claim that `inb(PVIS)` is the *only* conjunction the real guest exercises, disclose both unrowed `out16(PICA_SYS_LB_IE, ...)` shapes by name in the contract, and file them (`jazzvecrowsowed`).
+
+2. **F1 / F6 (as carried into Section 1b's contract `:175-184` / [`jazz_vector_probe.ASRUN.py`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/jazzvecdeassert/killtable3_20261102/jazz_vector_probe.ASRUN.py#L65-L75)): Three overclaims in the repaired contract paragraph:**
+   * **(a) "so a re-introduction keyed to `relative_addr` and/or `writeflag` reds" (`:178-179`) is FALSE for `and` [READ from [`dev_jazz.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_jazz.c#L666-L694); REASONED]:**
+     `relative_addr` on the 4-byte device takes values in `{0, 1, 2, 3}`, while `switch (relative_addr)` merges `1` and `3` into `default:`. Because the probe only reads offset 1 (`ld8(VEC + 1)` at `jz ip dflt`) and only writes offset 3 (`st8(VEC + 3, 0x5a)` at `jz ip dfltw`), `if (relative_addr == 1 && writeflag == MEM_WRITE)` and `if (relative_addr == 3 && writeflag == MEM_READ)` are keyed solely to `relative_addr` and `writeflag` yet score **26/26 green**.
+   * **(b) "so a re-introduction keyed to any ONE of them reds" (`:180-182`) is FALSE [READ from [`dev_jazz.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_jazz.c#L660-L684) and [`jazz_vector_probe.ASRUN.py`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/jazzvecdeassert/killtable3_20261102/jazz_vector_probe.ASRUN.py#L259-L301); REASONED]:**
+     `len` (`{1, 2, 4}`), `idata` (`{0, 0x0f, 0x5a}`), and `d->jazz_timer_value` (`{0, 0x0f}`) are multi-valued integers sampled at 2–3 values, not booleans. Single-input predicates that split values *within* a driven side (e.g. `if (idata & 0xff00)`, `if (d->jazz_timer_value & 0xff00)`) or select an undriven value (`if (len == 3)`, `if (idata == 0x5b)`, `if (d->jazz_timer_value == 0x10)`) are keyed to a **single** input and score **26/26 green**. Also in `:181`, "`jazz_timer_value` 0 (rows before lbiew) and 0x0f (rows after)" misplaces `lbiew` itself: `d->jazz_timer_value = idata` ([`dev_jazz.c:681`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_jazz.c#L681)) runs before the tail, so `d->jazz_timer_value` is already `0x0f` on `jz ip lbiew` (confirmed by Table 3's `M_lbnz` redding `lbiew`, 21/26 [READ]).
+   * **(c) `(0-7, 10-14: if (!(int_asserted & 0x0300)) ...)` (`:176`) mislabels the example [READ / REASONED]:**
+     `0x0300` is `(1 << 8) | (1 << 9)` (the driven pair); `!(int_asserted & 0x0300)` tests the complement of the driven lines, whereas a direct test of undriven lines 0–7, 10–14 is `int_asserted & 0x7cff`.
+   * **Change 2:** Narrow the contract wording to single-axis tests / the 6 label-cell keys, qualify single-input kills as holding *at the values the rows drive*, disclose the unrowed default sub-cells `(1, W)` and `(3, R)` and undriven values/bit-ranges as clause-(e) debt, fix "from lbiew on", and distinguish `int_asserted & 0x7cff` from `!(int_asserted & 0x0300)`.
+
+3. **F7 / F21 (as carried into Section 1b's mechanism sentence `:188-190` / [`jazz_vector_probe.ASRUN.py:11-12`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/jazzvecdeassert/killtable3_20261102/jazz_vector_probe.ASRUN.py#L11-L12)): "the assert handler raises it when that predicate becomes true" is FALSE (conflates level with edge).**
+   * **Fact [READ from [`dev_jazz.c:138-157`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_jazz.c#L138-L157) and [`:451-470`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_jazz.c#L451-L470); REASONED]:**
+     Only the `EXT_IMASK` arm (`:466-469`) tests transitions (`!old_assert_3 && new_assert_3`). [`jazz_interrupt_assert()`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_jazz.c#L138-L147) calls `INTERRUPT_ASSERT(d->mips_irq_3)` on **every** call made while `(d->int_asserted & 0x7fff) && (d->int_enable_mask & R4030_EXT_IP3)` holds, even when the predicate was *already* true before the call. That level behaviour is what makes S5's tick healing work (`d->int_asserted` was never cleared by the buggy tail, so the predicate did not "become true" on the healing tick — it was already true).
+   * **Change 3:** State in the probe docstring that `jazz_interrupt_assert()` raises on every call made *while* the predicate holds (level, not edge) and `jazz_interrupt_deassert()` lowers on every call made while the predicate is false.
+
+4. **F12 (`:97-100`): "the settling check is `strings` on HEAD's binary against a rebuilt M_b, not run" is WRONG — and the cause is already establishable from the source tree.**
+   * **Fact [READ from [`GXEMUL-SEC/src/include/misc.h:181-193`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/misc.h#L181-L193), [`GXEMUL-SEC/src/devices/dev_jazz.c:696-718`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_jazz.c#L696-L718), and [`GXEMUL-SEC/src/cpus/cpu_sh.c:910-1747`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh.c#L910-L1747); REASONED]:**
+     In [`misc.h:181-193`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/misc.h#L181-L193), `CHECK_ALLOCATION` expands `FAILURE("Out of memory")`, which calls:
+     ```c
+     snprintf(where_msg, sizeof(where_msg),
+         "%s, line %i, function %s().\n",
+         __FILE__, __LINE__, __func__);
+     ```
+     `__LINE__` is passed as an **`int` argument** for `%i`, **not** stringified into `.rodata`! In [`DEVINIT(jazz)`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_jazz.c#L711-L718), `CHECK_ALLOCATION` sits *below* `DEVICE_ACCESS(jazz_jazzio)` (line 712 on HEAD vs line 718 in `M_b` because `M_b` keeps the 7-line `#578` comment plus the 1-line deassert), so the immediate integer operand in `.text` changes from `712` (`0x2c8`) to `718` (`0x2ce`). Meanwhile, in `#577` ([`cpu_sh.c:910-1747`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh.c#L910-L1747)), there is **no** `CHECK_ALLOCATION` or `__LINE__` after `sh_exception()` (`:910-918`), which is why `#577`'s `M_b` had HEAD's exact md5!
+   * **Change 4:** Correct the F12 record: `strings` cannot see an integer immediate in `.text` and would falsely show no difference; the settling check is `cmp -l` or `objdump -d` on `dev_jazz_init` in `dev_jazz.o` / `gxemul`.
+
+5. **F10 / S4 (`:31-33, :88-93`): Accepting F10 only "as a record" while [`apply_fix578c.py`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/w578/apply_fix578c.py#L7-L24) writes the SEC-specific comment verbatim into `est/src/devices/dev_jazz.c`.**
+   * **Fact [READ from [`apply_fix578c.py:7-24`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/w578/apply_fix578c.py#L7-L24); REASONED from packet S4/F10]:**
+     Per S4 and F10, `est/src/devices/dev_jazz.c` has no `R4030_EXT_IP3` (`EXT_IMASK.IP3`) and keeps `mips_irq_3` equal to `(d->int_asserted & d->int_enable_mask & 0x7fff) != 0`. In `GXEMUL-SEC/src/devices/dev_jazz.c` (the tree under review), the shipped comment (1a) is completely true; in `est/src/devices/dev_jazz.c`, the same applier writes `"EXT_IMASK re-enabled IP3"` and `"kept equal to 'a line 0-14 pending and EXT_IMASK.IP3 set'"`, which is false of `est`'s code.
+   * **Change 5:** Either note in the F10 record that `est` carries SEC's comment text by applier parity despite using the pre-#69 predicate, or adjust `est`'s comment text to name `est`'s predicate.
+
+*(All other dispositions in Section 0 — F8, F9, F11, F13–F20, F22, F23 — and rulings D1 and D2 hold [READ / REASONED]. On F18, note as a minor completeness point that [`DEVICE_ACCESS(jazz_led)`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_jazz.c#L528-L537) has the same unlatched `default:` `fatal()` shape as `jazz_jazzio`, `jazz_20`, and `jazz_a0` [READ].)*
+
+---
+
+### Q2. The Floor Question on the Shipped Composite
+
+* **Over the enclosing function's own tests (`relative_addr` `{0, 2, other}` $\times$ `writeflag` `{MEM_READ, MEM_WRITE}`, 6 joint cells, plus single-axis tests on `relative_addr` $\in \{0,1,2,3\}$ and `writeflag` $\in \{\text{R},\text{W}\}$):**
+  * **No mutant keeps all 26 rows green [REASONED / MEASURED in Table 3].** Every one of the 6 switch-label $\times$ direction cells and every single offset $\{0, 1, 2, 3\}$ is driven with lines 8 and 9 pending (`int_asserted == 0x0300`, `EXT_IMASK == 0x2`) and checked by an `ip3()` row (`want == 0x800`) before the next `reheal()` (see Q4 denominator).
+  * If `other` (`default:`) is refined by concrete offset $\times$ direction (`{1, 3} x {R, W}` — an axis the function body does **not** test), two two-input predicates stay green:
+    * **One-line predicate:** `if (relative_addr == 1 && writeflag == MEM_WRITE) INTERRUPT_DEASSERT(d->mips_irq_3);` (or `relative_addr == 3 && writeflag == MEM_READ`)
+    * **Predicted score:** **26/26** [REASONED: offset 1 is only read at `jz ip dflt`; offset 3 is only written at `jz ip dfltw`].
+    * **Classification per S8:** **FILED / disclosed clause-(e) debt (NOT a floor cell)**, because `switch (relative_addr)` in [`DEVICE_ACCESS(jazz_jazzio)`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_jazz.c#L666-L694) does not branch between offsets 1 and 3 [READ / REASONED].
+
+* **Over the single-input families the contract names (`idata`, `d->jazz_timer_value`, `len`):**
+  * **Yes — single-input predicates that separate values inside the driven nonzero side (or name an undriven value) keep all 26 rows green and drop a guest-visible IRQ3 on OpenBSD/arc:**
+    1. **Single-input on `idata` (guest-visible on OpenBSD `out16(PICA_SYS_LB_IE, local_int_mask)`):**
+       * **One-line predicate:** `if (idata & 0xff00) INTERRUPT_DEASSERT(d->mips_irq_3);`
+       * **Predicted score:** **26/26** [REASONED: `idata` is `0` on all reads (`uint64_t idata = 0` at [`:660`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_jazz.c#L660)) and takes only `0` (`vecw`), `0x0f` (`lbiew`), and `0x5a` (`dfltw`) on writes, so `idata & 0xff00` is `0` on all 26 rows; in OpenBSD/arc, enabling COM0 (`jazz.8`) or COM1 (`jazz.9`) in `PICA_SYS_LB_IE` sets bits `0x0100`/`0x0200`, firing this deassert].
+    2. **Single-input on `d->jazz_timer_value` (guest-visible on every OpenBSD `inb(PVIS)` vector read once COM0/COM1 is unmasked in `LB_IE`):**
+       * **One-line predicate:** `if (d->jazz_timer_value & 0xff00) INTERRUPT_DEASSERT(d->mips_irq_3);`
+       * **Predicted score:** **26/26** [REASONED: `d->jazz_timer_value` is `0` before `lbiew` and `0x0f` from `lbiew` onward; in OpenBSD/arc after `out16(PICA_SYS_LB_IE, local_int_mask)` enables COM0/COM1, `d->jazz_timer_value & 0xff00` is nonzero for the rest of uptime, dropping IRQ3 on every `pica_jazzio` access].
+    3. **Single-input on `len`:**
+       * **One-line predicate:** `if (len == 3) INTERRUPT_DEASSERT(d->mips_irq_3);`
+       * **Predicted score:** **26/26** [REASONED: the probe drives `len` $\in \{1, 2, 4\}$ only; a guest 3-byte `lwl`/`lwr`/`swl`/`swr` access to `pica_jazzio` passes `len == 3`].
+    4. **Two-input conjunction on OpenBSD's `out16(PICA_SYS_LB_IE, 0)` (at `initcpu`):**
+       * **One-line predicate:** `if (len == 2 && idata == 0) INTERRUPT_DEASSERT(d->mips_irq_3);`
+       * **Predicted score:** **26/26** [REASONED: the only `len == 2` access in the probe is `st16(VEC + 2, 0x0f)` at `jz ip lbiew`, where `idata == 0x0f`].
+  * **Classification per S8:** **FILED as clause-(e) debt (`jazzvecrowsowed`), NOT a floor breach [REASONED].**
+    Per D2 and `PRETABLE3.out`, the floor is the body-tested partition (`{0, 2, default} x {R, W}`) plus two-sided sampling (`0` vs `nonzero`, width `1` vs `2` vs `4`) of the body's non-case inputs (`idata`, `d->jazz_timer_value`, `len`) and the live defect's guest vector-read conjunction (`relative_addr == 0 && len == 1`). Because `DEVICE_ACCESS(jazz_jazzio)` never branches on `idata`, `d->jazz_timer_value`, or `len`, sub-partitioning their nonzero values (`& 0xff00`) is clause-(e) sampling debt to disclose and file (`jazzvecrowsowed`), not a floor cell.
+
+---
+
+### Q3. Is the Shipped Comment (1a) Wrong Anywhere?
+
+* **In [`GXEMUL-SEC/src/devices/dev_jazz.c:696-702`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_jazz.c#L696-L702) (the tree under review): NO [READ / REASONED].**
+  Every claim in 1a is verified true of `GXEMUL-SEC/src/`:
+  1. *"This tail used to deassert the CPU's IRQ3 on every access ("needed by Windows NT during startup"), dropping a level interrupt while JAZZ lines were still pending"*: [`DEVICE_ACCESS(jazz_jazzio)`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_jazz.c#L657-L708) previously ran `INTERRUPT_DEASSERT(d->mips_irq_3)` unconditionally after the `switch` on every read and write without modifying `d->int_asserted` [READ].
+  2. *"until a line was asserted anew or EXT_IMASK re-enabled IP3 (OB-22)"*: [`jazz_interrupt_assert()`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_jazz.c#L138-L147) re-asserts `d->mips_irq_3` whenever `(d->int_asserted & 0x7fff) && (d->int_enable_mask & R4030_EXT_IP3)` holds (including from `DEVICE_TICK(ns16550)` at [`dev_ns16550.c:96`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_ns16550.c#L96) and `DEVICE_TICK(jazz)` at [`dev_jazz.c:295, 308`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_jazz.c#L295-L308)); [`jazz_interrupt_deassert()`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_jazz.c#L148-L157) never asserts; and [`case R4030_SYS_EXT_IMASK:`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_jazz.c#L451-L470) asserts `d->mips_irq_3` iff `!old_assert_3 && new_assert_3`, which with `d->int_asserted & 0x7fff` already nonzero requires `EXT_IMASK.IP3` to transition `0 -> 1` ("re-enabled IP3") [READ / REASONED].
+  3. *"The CPU line is kept equal to 'a line 0-14 pending and EXT_IMASK.IP3 set' by jazz_interrupt_assert()/_deassert() and the EXT_IMASK arm; an access to this register no longer touches it"*: Those three sites ([`:144`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_jazz.c#L144), [`:154`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_jazz.c#L154), [`:467-469`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_jazz.c#L467-L469)) are the sole writers of `d->mips_irq_3` (`mtc0 Cause` at [`cpu_mips_coproc.c:949-954`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips_coproc.c#L949-L954) writes IP0/IP1 only), and `DEVICE_ACCESS(jazz_jazzio)` no longer touches `d->mips_irq_3` [READ / REASONED].
+* *(Note on `est` per S4/F10: as stated in Q1 Change 5, in `est/src/devices/dev_jazz.c` the `EXT_IMASK.IP3` wording is not true of `est`'s pre-#69 code [READ].)*
+
+---
+
+### Q4. Does the Repair Chain Close on This Pass? (With Denominator)
+
+* **YES — 0 floor breaches across 32 swept cells/shapes (0/32) [READ / REASONED].**
+* **Denominator of the sweep:**
+  1. **Floor (a), (b), (c) — 3 baseline/medium legs [READ from `killtable3_20261102/*.raw`; REASONED]:**
+     * `base_head` (a): **17/26** (reds: `after, vecb, vecw, lbie, lbiew, dflt, dfltw, com1, onevec`).
+     * `M_b` (b, removed statement reinstated): **17/26** (same 9 red rows).
+     * `M_c_absent` (c, `/bin/true`): **0/26** (`JAZZVEC_DRIVER=bad`, all 26 rows `None`).
+  2. **Floor (d), Family 1 — 6 joint access-label cells of `DEVICE_ACCESS(jazz_jazzio)` (`{0, 2, default} x {MEM_READ, MEM_WRITE}`) [READ / REASONED]:**
+     * `(0, MEM_READ)`: `if (relative_addr == 0 && writeflag == MEM_READ)` $\rightarrow$ **22/26** (reds `after, vecb, com1, onevec`) [REASONED].
+     * `(0, MEM_WRITE)`: `if (relative_addr == 0 && writeflag == MEM_WRITE)` $\rightarrow$ **25/26** (reds `vecw`) [REASONED].
+     * `(2, MEM_READ)`: `if (relative_addr == 2 && writeflag == MEM_READ)` $\rightarrow$ **25/26** (reds `lbie`) [REASONED].
+     * `(2, MEM_WRITE)`: `if (relative_addr == 2 && writeflag == MEM_WRITE)` $\rightarrow$ **25/26** (reds `lbiew`) [REASONED].
+     * `(default, MEM_READ)`: `if (relative_addr != 0 && relative_addr != 2 && writeflag == MEM_READ)` $\rightarrow$ **25/26** (reds `dflt`) [REASONED].
+     * `(default, MEM_WRITE)`: `M_dfltw` (`if (relative_addr != 0 && relative_addr != 2 && writeflag == MEM_WRITE)`) $\rightarrow$ **24/26** (reds `dfltw, com1`) [READ from Table 3 / REASONED].
+  3. **Floor (d), Family 2 — 10 single-axis shapes on `relative_addr` $\in \{0, 1, 2, 3\}$ and `writeflag` $\in \{\text{R}, \text{W}\}$:**
+     * `relative_addr == 0` (`M_offs0`): **21/26** (`after, vecb, vecw, com1, onevec`) [READ / REASONED].
+     * `relative_addr != 0` (`M_offsne0`): **21/26** (`lbie, lbiew, dflt, dfltw, com1`) [READ / REASONED].
+     * `relative_addr == 1`: **25/26** (`dflt`) [REASONED].
+     * `relative_addr != 1`: **18/26** (`after, vecb, vecw, lbie, lbiew, dfltw, com1, onevec`) [REASONED].
+     * `relative_addr == 2` (`M_offs2`): **24/26** (`lbie, lbiew`) [READ / REASONED].
+     * `relative_addr != 2`: **19/26** (`after, vecb, vecw, dflt, dfltw, com1, onevec`) [REASONED].
+     * `relative_addr == 3` (`M_off3`): **24/26** (`dfltw, com1`) [READ / REASONED].
+     * `relative_addr != 3`: **19/26** (`after, vecb, vecw, lbie, lbiew, dflt, onevec`) [REASONED].
+     * `writeflag == MEM_READ` (`M_rd`): **20/26** (`after, vecb, lbie, dflt, com1, onevec`) [READ / REASONED].
+     * `writeflag == MEM_WRITE` (`M_wr`): **22/26** (`vecw, lbiew, dfltw, com1`) [READ / REASONED].
+  4. **Floor (d), Family 3 — 10 single-input shapes across the driven values of `len` ($\{1, 2, 4\}$), `idata` ($\{0, \neq 0\}$), and `d->jazz_timer_value` ($\{0, \neq 0\}$):**
+     * `len == 1`: **20/26** (`vecb, lbie, dflt, dfltw, com1`) [REASONED].
+     * `len != 1`: **21/26** (`after, vecw, lbiew, com1, onevec`) [REASONED].
+     * `len == 2` (`M_len2`): **25/26** (`lbiew`) [READ / REASONED].
+     * `len != 2`: **18/26** (`after, vecb, vecw, lbie, dflt, dfltw, com1, onevec`) [REASONED].
+     * `len == 4`: **22/26** (`after, vecw, com1, onevec`) [REASONED].
+     * `len != 4`: **20/26** (`vecb, lbie, lbiew, dflt, dfltw, com1`) [REASONED].
+     * `idata == 0` (`M_id0`): **19/26** (`after, vecb, vecw, lbie, dflt, com1, onevec`) [READ / REASONED].
+     * `idata != 0` (`M_idnz`): **23/26** (`lbiew, dfltw, com1`) [READ / REASONED].
+     * `d->jazz_timer_value == 0`: **22/26** (`after, vecb, vecw, lbie`) [REASONED].
+     * `d->jazz_timer_value != 0` (`M_lbnz`): **21/26** (`lbiew, dflt, dfltw, com1, onevec`) [READ / REASONED].
+  5. **Floor (d), Family 4 — 3 guest-path and local-output shapes (`relative_addr == 0 && len == 1`, `odata != 0`, `odata == 0`):**
+     * `relative_addr == 0 && len == 1` (`M_vecb`): **25/26** (`vecb`) [READ / REASONED].
+     * `odata != 0`: **21/26** (`after, vecb, vecw, com1, onevec`) [REASONED].
+     * `odata == 0`: **21/26** (`lbie, lbiew, dflt, dfltw, com1`) [REASONED].
+  6. **Driver & Gate section ([`gate_mips.NEW2.sh:84-101`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/w578/gate_mips.NEW2.sh#L84-L101)) — 2 invariants [READ]:**
+     * `JAZZVEC_DONE`, `JAZZVEC_DRIVER=ok`, and `JAZZVEC_RESULT=26/26` checked; `close()` preserves `self.bad` across `quit`.
+     * All 26 row names in `gate_mips.NEW2.sh` match [`jazz_vector_probe.py`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/w578/jazz_vector_probe.py#L272-L313) 1-to-1, each $\le 13$ chars, anchored with `^$v  .*ok$` via [`count()`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lib.sh#L326-L331).
+
+---
+
+### What Could Not Be Settled (Read-Only Seat, Nothing Run)
+
+1. **No measurements were executed by this seat (`MEASURED` = 0 claims):** Per seat constraints (write nothing, build nothing, run nothing), all table scores cited above are either **READ** from `killtable3_20261102/` or **REASONED** from the C and Python source.
+2. **Binary-byte identity of `M_b` vs HEAD outside `DEVINIT(jazz)`'s `__LINE__` immediate (F12):** While source inspection of [`misc.h:181-193`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/misc.h#L181-L193) and [`dev_jazz.c:712`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_jazz.c#L712) proves that `__LINE__` shifts from `712` to `718` as an integer operand to `snprintf` in `DEVINIT(jazz)`, confirming that no *other* bytes differ between HEAD's binary and `M_b` requires `cmp -l` or `objdump -d` on a rebuilt `M_b` against HEAD.
+3. **End-to-end Gate 4 run (`gate_mips.NEW2.sh`) on the propagated tree (F23) and live execution of the predicted 26/26 clause-(e) mutants (`idata & 0xff00`, `d->jazz_timer_value & 0xff00`, `len == 2 && idata == 0`, `len == 3`, `relative_addr == 1 && writeflag == MEM_WRITE`, `relative_addr == 3 && writeflag == MEM_READ`):** Settling fact is running Gate 4 and the mutant builds.
+4. **Windows NT startup behaviour on `-e pica` without the deleted deassert (S5, F13, F15) and whether any guest issues 16-bit reads `in16(PICA_SYS_LB_IE)` (`relative_addr == 2 && len == 2 && writeflag == MEM_READ`):** Not checkable from the packet or `GXEMUL-SEC/src/`; settling facts are a Windows NT MIPS boot test and a search of the guest kernel sources (`sys/arch/arc/`).

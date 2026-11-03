@@ -385,7 +385,7 @@ check "readiness: no unrecognised endswith spelling" "$unknown" "$EXPECT_UNKNOWN
 #  and reds THREE rows -- this one, the promptless count and the promptless-names row -- because all three are
 #  grandfathered names that exist only in the working tree (measured on a copy with them removed: 70/73, 40/43,
 #  names gone=the three).  Written by `tools/derive_hygiene_pins.sh --write`, never by hand. ***
-EXPECT_PTY_PROBES=80
+EXPECT_PTY_PROBES=81
 #  *** AND THE SAME PROBE BROKE A SECOND CENSUS IN THIS FILE, WHICH pass 11's OWN
 #  REPAIR DID NOT FIX.  Found by the codex seat reviewing that repair. ***
 #

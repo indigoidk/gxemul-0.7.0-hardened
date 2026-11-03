@@ -1,0 +1,201 @@
+# PANEL PASS 2 -- `jazzvecdeassert` (#578): the real diff (a DELETION, not pass 1's conditional), the 22-row self-contained detector, its gate section, and TWO measured kill tables
+
+Fired 2026-11-02 20:5x.  HEAD `37b04798` (records and harness commits only since `987cb596`; `src/` and `regress/` unchanged).  Roster
+(owner 20:5x): Grok 4.7, the Ollama seats (glm-5.3, deepseek-v4-pro, minimax-m3, kimi-k3), Opus 5.5, GPT-6 Astra.  Fable 5.1 adjudicates
+the final results in the main loop.  Reading only; nothing is to be built or run -- every score below is measured and inlined.
+
+## READ THIS FIRST -- PLEASE DO NOT SIMPLY RATIFY
+
+Check the premises, not just the derivations.  **THE TREE UNDER REVIEW IS `GXEMUL-SEC/src/` at HEAD; the diff is applied only in the
+scratch clone `/tmp/gxfix578b`.**  Ignore `./src/` (pristine 2021 upstream).  If you cannot read files that is expected: everything is
+inlined.  **VERDICT LINE FIRST** (`VERDICT: SHIP / SHIP WITH CHANGES (<n>) / DO NOT SHIP`), repeated last.  File-reading seats: scope to
+`GXEMUL-SEC/src/devices/dev_jazz.c`, `src/devices/dev_ns16550.c`, `regress/gate_mips.sh`, `regress/lib.sh`, `regress/footbridge_sites_probe.py`,
+and the artifacts under `GXEMUL-SEC/regress/artifacts/jazzvecdeassert/` (witness_20261102, killtable_20261102, killtable2_20261102).
+
+## 0. Pass 1 and what changed (F1..F22, with dispositions)
+
+Pass 1 (`_scratchpad/w578/pass1_20261102/`): Opus 5.5 PROCEED WITH CHANGES (6); Grok 4.7 PWC (2); GPT-6 Astra PWC (2); glm-5.3 PWC (2);
+kimi-k3 PWC (2); minimax-m3 PWC (3); deepseek PROCEED.  Seven answers, no seat failure.
+
+| # | finding | raised by | disposition |
+|---|---|---|---|
+| F1 | SHIP THE DELETION, not the conditional: invariant I -- "IRQ3 high implies `(int_asserted & 0x7fff) && (int_enable_mask & R4030_EXT_IP3)`" -- holds because its lvalues have exactly the enumerated writers (`int_asserted` :141/:151, `int_enable_mask` :459, `INTERRUPT_ASSERT(mips_irq_3)` :144/:469 only, `memset` at init), so a conditional deassert at the tail can never fire with an effect | Opus | **D1 -- ruled DELETION** (section 4).  The writer census was re-run by the main loop at HEAD and in est: exactly those sites, no others |
+| F2 | the conditional text does not COMPILE in est (`est/src/devices/dev_jazz.c` keeps the pre-#69 predicate, no `R4030_EXT_IP3`) | Opus; Grok (SEC-only for that reason) | checked: est has no `R4030_EXT_IP3`.  **D2 -- both twins get the DELETION** (section 4) |
+| F3 | re-introductions keyed to the access LABEL escape the 13-row instrument: `if (relative_addr != 0)`, `if (writeflag == MEM_WRITE)`, `if (relative_addr == 2)` predicted 13/13 | Opus; Grok, kimi, Astra asked for an offset-2 row | **ACCEPTED, DONE**: rows `jz ip vecw`, `jz ip lbie`, `jz ip lbiew`, `jz ip dflt`; table 2 MEASURED the three escapes killed at 18, 20, 20 of 22 |
+| F4 | offset 2 of the jazzio page is `PICA_SYS_LB_IE` (the guest's local-bus interrupt-enable word; `pica.h:117`), not a timer register -- the model stores it in `jazz_timer_value`; the blanket deassert most plausibly stood in for "an LB_IE write masks lines while one is pending", so the brief's "the fix preserves the NT case" must be withdrawn; `jz ip nt` is not an NT control | Opus; Astra ("invents evidence") | **ACCEPTED**: the record says NT behaviour CHANGES in the pending case and is unmeasurable here; `jz ip nt` is labelled a NO-REGRESSION row in the probe header (name kept under the 13-char cap) |
+| F5 | HEAD self-heals: `DEVICE_TICK(ns16550)` re-asserts a pending UART line every tick (TICK_SHIFT 14 = 16384 steps), and `DEVICE_TICK(jazz)`'s timer assert goes through `jazz_interrupt_assert`, which re-raises IRQ3 whenever lines are pending and IP3 is enabled -- so once a guest programs the interval timer a dropped IRQ3 returns within one tick | Opus; Grok | **ACCEPTED**: severity LOW (a delay of at most one timer tick, not a lost interrupt, on any booted OS; the cold witness is stable only because the timer is unprogrammed); the probe header states the step budget |
+| F6 | `jz ip com1` stacks on the earlier drop and does not localise the one-pending cell | Opus, glm, minimax, Astra | **ACCEPTED, DONE**: `jz ip onevec` added (com1 re-raised alone, one vector read); `jz ip com1` kept and so described |
+| F7 | the witness imports `_scratchpad/gxprobe.py`; the committed probe must be self-contained; copy the transcripts to the durable dir | Opus, Grok | **DONE**: `jazz_vector_probe.py` carries its own prompt-detected pty driver (footbridge shape, stdlib only); transcripts preserved |
+| F8 | the pica wiring premise omitted pckbc on `jazz.6`/`jazz.7` (`machine_arc.c:143-152`) | Grok | **ACCEPTED** (records); no stuck-line device added |
+| F9 | ns16550: clearing `MCR.IENABLE` with the IER/IIR condition still true takes the assert branch's outer test and neither asserts nor deasserts, so the Jazz line stays held until IER is cleared -- a device-model wart, not a reason to keep the blanket deassert (OpenBSD clears IER before MCR) | Opus, Astra, Grok | **FILE** `ns16550out2hold` (LOW) |
+| F10 | make the UART's MCR.IENABLE setup explicit and checked | minimax, Astra | **DONE**: `jz com0 mcr` readback row |
+| F11 | "nothing re-asserts it until a fresh line assert or mask write" is too strong: a same-value mask rewrite heals nothing; a mask TRANSITION, a new assert, or the timer tick heals | kimi, minimax, Grok | **ACCEPTED**: wording in the probe header and the record |
+| F12 | the offset-0 vector scan ignores `int_enable_mask`: a funnel-masked pending line is still named by the vector | kimi | **RECORDED**: `jz vec masked` pins it as current behaviour; noted under `jazzlbmask` |
+| F13 | OpenBSD's boot writes LB_IE (`pica_intr_establish`, offset 2) with other lines possibly pending -- the tail runs on that store; HEAD drops IRQ3 there, the fix keeps it; gate 4's boot is what shows whether the guest cares | Grok | **ACCEPTED**: the landing runs gate 4 end to end (and `pica_iointr` loops on the vector until 0, so the fix is expected invisible to that guest) |
+| F14 | option-set members not named: `if (P) ASSERT else DEASSERT` (recompute, no pulse -- the footbridge/gc/i80321 shape; also repairs I=0,P=1); clear-on-read (rejected by all: `jz vec again` pins against it) | Grok, Astra, kimi, minimax | **RECORDED**; the recompute form is valid and unnecessary once the tail stops creating I=0,P=1 |
+| F15 | the committed probe must compare `cause & 0x800`, not raw Cause | glm, kimi | **DONE** (it always did; now stated) |
+| F16 | the (pending, mask off) cell is reachable and observable but non-discriminating through Cause; "unobservable" was the wrong word | glm, minimax, Astra, Grok | **ACCEPTED**: rows `jz ip maskoff` / `jz vec masked` / `jz ip maskon` pin the cell (green on both builds); `M_nomask` and the deletion's mask-term relatives stay equivalent there, as stated |
+| F17 | `DEVICE_TICK(jazz)`'s "Linux?" branch is armed by ANY nonzero write to offset 2, i.e. by OpenBSD's own LB_IE writes | Opus | **RECORDED** under `jazzlbmask`; untouched here |
+| F18 | the per-file assert/deassert COUNT is a correlate of "has a deassert path"; ne2000's 2/1 includes a comment | glm, minimax, Astra | **ACCEPTED**: the record carries Opus's per-device READING (asc edge + INTR-read/reset deassert; pckbc edge-tracked; ns16550 paired except F9) |
+| F19 | scope every "EQUIVALENT" as "under invariant I on reachable states" | glm, kimi, minimax, Astra | **ACCEPTED** wording |
+| F20 | the 0x2 readbacks are configuration checks, not device signatures (RAM can echo 0x2); the computed vectors are the signature | Astra | **ACCEPTED**: header wording |
+| F21 | "the two reads behave alike" overstates: the ISA read masks by its enable word and never touches a CPU line | deepseek, minimax, Grok | **ACCEPTED** wording: after the deletion the jazzio access touches no CPU line either (full parity) |
+| F22 | provenance "0.7.0 import's" holds (`git log -L` = `39748e3c` only) but that commit is not pristine upstream | Opus, Grok, Astra | **ACCEPTED**: "unchanged since the import" |
+
+## 1. THE PRODUCT DIFF (final; `/tmp/gxfix578b` vs the HEAD clone; `apply_fix578b.py`; the same text lands in SEC and est)
+
+```diff
+@@ -693,8 +693,14 @@
+ 		}
+ 	}
+ 
+-	/*  This is needed by Windows NT during startup:  */
+-	INTERRUPT_DEASSERT(d->mips_irq_3);
++	/*  #578: no deassert here.  This tail used to deassert the CPU's IRQ3
++	    unconditionally ("needed by Windows NT during startup"), so a
++	    vector read taken with a second JAZZ line still pending dropped a
++	    level interrupt until some line was asserted anew (OB-22).  The
++	    CPU line follows jazz_interrupt_assert()/_deassert() and the
++	    EXT_IMASK arm, which recompute it from the pending lines and the
++	    enable mask on every change; a read has no side effect, as in the
++	    tree's other interrupt controllers.  */
+ 
+ 	if (writeflag == MEM_READ)
+ 		memory_writemax64(cpu, data, len, odata);
+```
+
+The tail after the edit is the comment, a blank line, the unchanged `if (writeflag == MEM_READ) memory_writemax64(...)` and `return 1;`.
+Nothing else in `jazz_jazzio` or the file changes.  Diff +8 -2.  `est/src/devices/dev_jazz.c` has the byte-identical function (its tail
+at `:661-662`), so the same applier lands the same hunk there; SEC and est are a declared divergence pair for this file, so `build/`
+(pmax; compiles est's copy) is compared against est, never SEC, and is rebuilt.
+
+**Comment claims and their rows:** "dropped a level interrupt until some line was asserted anew" -> `jz ip after`, `jz ip com1`,
+`jz ip reheal` (and F5/F11: the timer tick and a mask TRANSITION also heal; the comment's "until some line was asserted anew" is the
+witness's mechanism, not the only one -- **Q1 asks whether to widen that clause**); "recompute it ... on every change" -> `jz ip none`,
+`jz ip maskoff`, `jz ip maskon`; "a read has no side effect" -> `jz vec again`, `jz vec masked`.
+
+## 2. THE DETECTOR -- `regress/jazz_vector_probe.py` (new, self-contained; 22 rows; `_scratchpad/w578/jazz_vector_probe.py`)
+
+Driver: `pty.fork` of `<binary> -V -e pica <kernel>`; every command waits for the `GXemul>` prompt (bounded, 20 s); four one-instruction
+stubs (`sb/lbu/sw/lw v0,0(at)`) at KSEG0 scratch 0xffffffff80010000 written with `put w`, executed by setting `at`/`v0`/`pc` and `step`;
+`print cause` masked `& 0x800`.  Constants: EXT_IMASK = XKPHYS|0x800000e8, com0 = XKPHYS|0x80006000 (jazz.8), com1 = XKPHYS|0x80007000
+(jazz.9), the jazzio page XKPHYS|0xf0000000, IER offset 1, MCR offset 4.  The row sequence (want on the fixed build; HEAD in brackets):
+
+```
+st32(EXT_IMASK, 2);                 jz imask      ld32(EXT_IMASK) == 0x2
+st8(COM0+MCR, 8);                   jz com0 mcr   ld8(COM0+MCR) == 0x8
+st8(COM0+IER, 2);                   jz com0 ier   ld8(COM0+IER) == 0x2
+                                    jz ip one     ip3 == 0x800
+st8(COM1+MCR, 8); st8(COM1+IER, 2); jz ip both    ip3 == 0x800
+                                    jz vec        ld32(VEC) == 0x24
+                                    jz ip after   ip3 == 0x800      [HEAD 0]
+                                    jz vec again  ld32(VEC) == 0x24
+reheal(); st32(VEC, 0);             jz ip vecw    ip3 == 0x800      [HEAD 0]   reheal() = st8(COM0+IER,0); st8(COM0+IER,2)
+reheal(); ld8(VEC+2);               jz ip lbie    ip3 == 0x800      [HEAD 0]
+reheal(); st8(VEC+2, 0);            jz ip lbiew   ip3 == 0x800      [HEAD 0]
+reheal(); ld8(VEC+1);               jz ip dflt    ip3 == 0x800      [HEAD 0]   (the default: arm; one unlatched fatal() print)
+st8(COM0+IER, 0);                   jz vec com1   ld32(VEC) == 0x28
+                                    jz ip com1    ip3 == 0x800      [HEAD 0]   (stacked on the earlier drop)
+st8(COM1+IER,0); st8(COM1+IER,2); ld32(VEC);  jz ip onevec  ip3 == 0x800  [HEAD 0]  (the clean one-pending cell)
+st8(COM0+IER, 2);                   jz ip reheal  ip3 == 0x800
+st32(EXT_IMASK, 0);                 jz ip maskoff ip3 == 0
+                                    jz vec masked ld32(VEC) == 0x24
+st32(EXT_IMASK, 2);                 jz ip maskon  ip3 == 0x800
+st8(COM0+IER,0); st8(COM1+IER,0);   jz ip none    ip3 == 0
+                                    jz vec none   ld32(VEC) == 0
+                                    jz ip nt      ip3 == 0          (NO-REGRESSION row: IP3 is already 0 here on every build)
+```
+
+Header CONTRACT (clause (e)): the rows drive lines 8 and 9 only and the mask value 0x2 only; a re-introduction of the removed deassert
+keyed to a line this table does not drive (0-7, 10-14: `if (!(int_asserted & 0x0300))`), to the timer line, or to a state the rows hold
+constant is disclosed, not rowed; every access label of the enclosing function -- offsets 0 and 2 and the default arm, read and write --
+is rowed with lines pending.  Step budget stated (well under one 16384-step UART tick).  Names at 13 characters or fewer.  Output ends
+`JAZZVEC_RESULT=n/22`, `JAZZVEC_DONE`.
+
+**Gate section** (`regress/gate_mips.sh`, HEAD-based copy `_scratchpad/w578/gate_mips.NEW.sh`; inserted before the pty-log publish):
+runs `python3 -u "$HERE/jazz_vector_probe.py" "$ARC_RIG/gxsec-gxemul" "$ARC_RIG/bsd" > "$JVLOG"`, then `check "jazz_vector probe completed"`
+on a missing result line, `check "jazz_vector rows run" "${jvres#*/}" 22` (EQUALITY), `check "jazz_vector rows correct" "${jvres%/*}"
+"${jvres#*/}"`, and the 22-name loop `n=$(count "$JVLOG" "^$v  .*ok$"); check "  $v" "$n" 1`.  Gate 4 already requires the arc rig
+binary; the section adds about 40 s and no load-sensitive oracle.
+
+## 3. MEASURED: witness and two tables (`regress/artifacts/jazzvecdeassert/`; every raw names its binary, md5, freshness, sentinel and
+## the instrument's md5; scratch clones only)
+
+Witness (13-row script, `witness_20261102/`): HEAD `witness_head.out` 11/13 (`jz ip after`, `jz ip com1` 0x0 for 0x800); the conditional
+form `witness_fixed.out` 13/13; the deletion `witness_fixedb.out` 13/13.  The 22-row probe: HEAD `probe2_head.out` 15/22 (after, vecw,
+lbie, lbiew, dflt, com1, onevec); conditional 22/22; deletion 22/22.
+
+Table 1 (`killtable_20261102/`, the conditional form, 13-row instrument; `PRETABLE.out` 20:26:00 < `base_head.raw` 20:26:53):
+
+    base_head 11/13   fixed 13/13   M_c_absent (non-emulator binary) 0/13
+    M_b (unconditional deassert reinstated) 11/13   M_lowbits (& 0x00ff) 11/13   M_ip6 11/13   M_timer 11/13   M_inv 11/13
+    M_del (the deassert deleted) 13/13 EQUIVALENT    M_nomask (mask term dropped) 13/13 EQUIVALENT
+    every red leg reds exactly `jz ip after` and `jz ip com1`.  Run 1 was REFUSED by the mutator's presence pin (the fixed predicate's two
+    lines occur verbatim in jazz_interrupt_deassert() too, count 2); re-anchored on the fix's comment; run 2 scored all seven as predicted
+    (`PRETABLE_CORRECTION.out`).  ONE prediction refuted: M_b's binary md5 is not HEAD's (cause not established; the seven-line comment
+    shifts every later line and the build carries debug line info -- plausible, unchecked); its score and rows equal base_head's.
+
+Table 2 (`killtable2_20261102/`, the DELETION form, 22-row instrument; `PRETABLE2.out` 20:40:35 < `base_head.raw` 20:41:03):
+
+    base_head 15/22   fixedb 22/22   M_c_absent 0/22
+    M_b (unconditional) 15/22 -- the seven HEAD rows
+    M_offs0  `if (relative_addr == 0)`     18/22  after, vecw, com1, onevec
+    M_offsne0 `if (relative_addr != 0)`    18/22  lbie, lbiew, dflt, com1  (predicted 19: com1 inherits the dflt drop -- the stacked row; PRETABLE2_CORRECTION.out)
+    M_rd     `if (writeflag == MEM_READ)`   17/22  after, lbie, dflt, com1, onevec
+    M_wr     `if (writeflag == MEM_WRITE)`  20/22  vecw, lbiew
+    M_offs2  `if (relative_addr == 2)`      20/22  lbie, lbiew
+    M_cond   the pass-1 conditional form    22/22  EQUIVALENT (invariant I)
+    M_uart   `if (!(int_asserted & 0x0300))` 22/22 the DISCLOSED clause-(e) escape (keyed to the two lines the table drives)
+
+Floor for the shipped diff (a pure deletion): (a) 15/22; (b) M_b 15/22; (c) `M_c_absent.raw` 0/22; (d) for a pure deletion the clause is
+"the removed behaviour re-introduced under a DIFFERENT predicate", enumerated over the enclosing function's own tests (relative_addr,
+writeflag) -- M_offs0, M_offsne0, M_rd, M_wr, M_offs2 all red; (e) the contract, with M_uart as its measured member and the SR/mask-state
+family disclosed; (f) N/A (no address decode under test).  De-escalation N/A.  The two equivalents (M_cond, M_nomask/M_del) are recorded
+as measured equivalences under invariant I, not as escapes.
+
+## 4. THE TWO RULINGS
+
+**D1 -- the form.**  Opus: delete (invariant I, writers enumerated; the conditional is a guard that can never fire with an effect, "cannot
+hurt" in the addition licence's sense; house idiom).  Grok, Astra, glm, kimi, minimax: keep the conditional, because it self-corrects a
+CPU-line state (IRQ3 high while nothing enabled is pending) that no enumerated writer produces but a future bug or a debugger could.
+**Ruling: DELETION.**  Warrants: (i) invariant I is CHECKED, not assumed -- the writer census at HEAD and in est is exactly the enumerated
+set; (ii) equivalence is MEASURED (M_del 13/13, M_cond 22/22); (iii) the conditional text cannot land in est (no `R4030_EXT_IP3`), so it
+would break the byte-identity of a function that is identical today or leave the defect in the twin; (iv) every controller in the tree
+recomputes its line on a source or mask change and gives a status read no side effect (Grok's and Astra's own greps); (v) the robustness
+argument guards a state the code cannot reach, which is the addition licence's "cannot hurt".  The dissent is recorded verbatim in the
+round block.  **Q2 asks the five to be harder on their own position with (iii) and (v) in front of them.**
+
+**D2 -- the twins.**  Opus, Astra, kimi, glm: both; Grok, minimax: SEC only (Grok's reason was the conditional's predicate text, which the
+deletion has none of).  **Ruling: the deletion lands in both twins**; `build/` (pmax, compiles est's copy, no jazzio at runtime) is
+compared against est and rebuilt; `build-asan/` and `/tmp/gxsec-build` against SEC; `est/` is a source tree (part 2 N/A).
+
+## 5. RECORDS THAT SHIP (drafts; correct them)
+
+CHANGELOG round block `#578 jazzvecdeassert`: defect (OB-22's wording "without clearing int_asserted" corrected: the defect is the CPU-line
+drop; clearing would be the wrong remedy), severity LOW (F5), witness 11/13 -> 13/13 and 15/22 -> 22/22, the two forms and the ruling with
+the dissent, detector (22 rows, gate 4 section), both tables with the refused run 1 and the two prediction corrections, F1-F22, "assessed,
+not changed": LB_IE semantics and the "Linux?" tick arm (`jazzlbmask`), the vector's mask-blindness (F12), the ns16550 OUT2 wart (filed),
+NT unmeasurable.  `OUTSTANDING_BUGS.md`: OB-22's three carriers (`:2037`, `:2509-2512`, `:2965`) marked fixed by this commit; filings
+`ns16550out2hold` (LOW).  Ledger: row `jazzvecdeassert` OPENED and closed in one commit, witness
+`probe:regress/artifacts/jazzvecdeassert/witness_20261102/jazz_vector_witness.py` (rung 3, unmodified pica, 11/13 -> 13/13 same script,
+liveness `jz ip one` and signature `jz vec` present), seat entries for pass 1 and pass 2 naming their dirs.
+
+## 6. QUESTIONS
+
+**Q1, the diff.**  Is the deletion right and complete?  Does the comment state anything the code does not do -- in particular "until some
+line was asserted anew" (F5/F11: the timer tick and a mask transition also healed it): widen the clause, or leave the witness's mechanism?
+
+**Q2, the ruling.**  D1: with the est-compile fact and invariant I's checked census in front of you, is there an argument for the conditional
+that does not reduce to guarding an unreachable state?  If you held the conditional in pass 1, say whether you still do and why.
+
+**Q3, the floor.**  For a pure deletion, is the (d) enumeration above complete over the enclosing function's own tests?  Name the smallest
+re-introduction that keeps all 22 rows green and changes a guest-visible IRQ3 (M_uart is one; is there one keyed to `writeflag` or
+`relative_addr` that the rows miss, or to `idata`?).
+
+**Q4, the vehicle.**  The probe, the gate section and the EQUALITY pin at 22: anything load-sensitive, any padded-column hazard, any
+command the driver sends that the debugger could answer late enough to misparse?
+
+**Q5, the records.**  Is each sentence of section 5 true of the artifacts and the code?  Which of the 22 dispositions in section 0 is
+wrong?
+
+**If, while verifying a claim, you found something ELSE -- say so.**  End with `VERDICT: SHIP / SHIP WITH CHANGES (<n>) / DO NOT SHIP`.

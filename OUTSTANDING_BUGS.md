@@ -2036,6 +2036,7 @@
 >   VGA's accepted mode paths.
 > - **OB-22** (`dev_jazz.c:613` jazzio vector-read blanket deassert) — self-healing, and
 >   a change there would touch the verified arc boot.
+>  **[`#578`, 2026-11-02: FIXED -- the jazzio tail's unconditional `INTERRUPT_DEASSERT(d->mips_irq_3)` is DELETED; the CPU line is kept equal to the pending-and-enabled predicate by its three remaining writers.  Rung-3 witness 11/13 -> 13/13 and the 26-row detector 17/26 -> 26/26 on unmodified `-V -e pica`; the arc boot verified unchanged.  The text above is kept as it was written; its remedy wording ("without clearing int_asserted") named the wrong repair -- the defect was the CPU-line drop.]**
 
 > ## ✅ 2026-07-30 — RESOLVED as #294: cvt.w honours the rounding mode (item 2 of the rounds 41–46 block)
 > `cvt.w` of 3.5 under the default mode now yields 4 (nearest-even); `trunc.w` still
@@ -2506,7 +2507,7 @@
 >   on a hostile partition table) — needs a crafted large-LBA partition image to exercise. Both remain genuine
 >   pre-existing candidates; deferred until a test fixture exists.
 > **[`#555`, 2026-10-02 -- the id-less review: THIS IS NO LONGER OPEN]** `ieee_store_float_value_rm`'s `IEEE_RM_RN` case is nearest-even; `ieee_store_float_value` still selects `IEEE_RM_LEGACY` truncation. The ARC partition LBA is still multiplied by 512 through a signed `int`; that remainder is filed as `arcpartlba`.  (ruled by the grok seat, confirmed by GPT-6 Astra: `regress/artifacts/idless_20261002/`)
-> - **LEFT UNTRIAGED this pass** (low value, deferred): **OB-22** (`dev_jazz.c:613` jazzio vector-read blanket
+> - **LEFT UNTRIAGED this pass** (low value, deferred): **OB-22** (`dev_jazz.c:613` jazzio vector-read blanket  **[`#578`, 2026-11-02: OB-22 FIXED -- see the `#578` section at the end of this file]**
 >   `mips_irq_3` deassert without clearing `int_asserted` → possible stuck/missed non-timer JAZZ IRQ) — latent
 >   (the arc boot reaches 13/13 without hitting it, so a repro needs a crafted multi-IRQ sequence and the fix
 >   would touch the verified arc boot); **NE2000 invalid-TX log-flood** (`dev_ne2000.c`, SEC-only) — cosmetic log
@@ -2603,7 +2604,7 @@
 >   (ANDs CPU-IP funnel enables directly against Jazz device-line bits, arc-only). **SEC's `dev_jazz.c` already
 >   carries the corrected split** (the SEC-only jazz boot-enablement layer the arc rig runs), and pmax has no
 >   jazzio — so it affects neither rig and is not the L5 hang. Companion **OB-22** (`dev_jazz.c` vector-read
->   blanket deassert) stays deferred (self-healing; would touch the verified arc boot).
+>   blanket deassert) stays deferred (self-healing; would touch the verified arc boot).  **[`#578`, 2026-11-02: OB-22 FIXED -- the deletion did not touch the arc boot (gate 4 run before the landing)]**
 > - Minor `console/console.c` residual (not applied, low value): `d_avail()` retries *all* `select()` errors as if
 >   `EINTR` (incl. `EBADF`); could tighten to `errno==EINTR` only. #252's `break` already resolves the reachable
 >   (EOF) freeze.
@@ -2867,7 +2868,7 @@
 >   device length before the handler runs, and these three are registered with length == backing size
 >   and have no direct callers, so the "end-span" is unreachable.
 > - **1 deferred** — OB-22 (jazz jazzio vector-ack): emulation correctness, not host-OOB;
->   medium-confidence; in the #69 arc interrupt path — deferred to avoid regressing the verified arc boot.
+>   medium-confidence; in the #69 arc interrupt path — deferred to avoid regressing the verified arc boot.  **[`#578`, 2026-11-02: FIXED, severity LOW as measured (the drop heals on the next line assert, tick or mask transition)]**
 > - **1 skipped** — OB-24 (signed `byte<<24` in CPU instruction cores): UBSan-only, hottest path, no
 >   reachability path; consistent with the pre-existing "intentionally left" decision (shared decoder fixed in #27).
 >
@@ -2923,7 +2924,7 @@ corruption without a clear host-OOB path.
 > a device registering a window bigger than its buffer satisfies the clamp and overruns
 > anyway. Those three carry fix markers and are believed done — but that is the shape
 > that genuinely needs a per-device check.
-> - **OB-22** — left as recorded: self-healing, correctness-only.
+> - **OB-22** — left as recorded: self-healing, correctness-only.  **[`#578`, 2026-11-02: FIXED -- see the `#578` section at the end of this file]**
 > - **OB-24** — the residual signed `byte<<24` UB; real C UB that never reaches a host
 >   pointer, size or index. Deliberately not chased (see the "Not changed" note).
 >
@@ -2962,7 +2963,7 @@ corruption without a clear host-OOB path.
 | OB-19 | `file/file_elf.c:94` (loop `:450`–`:482`) | PT_LOAD copy cursor `ofs` is `int` vs file-controlled `p_filesz` → signed overflow/UB on huge segments (chunk buffer itself is bounded) |
 | OB-20 | `devices/dev_dreamcast_gdrom.c:183` (`:90`) | `READ_SECTORS` with `cnt==0` derives `cnt = 2048*sector_count` from guest bytes, then allocates it → guest-triggered host OOM/hard-exit |
 | OB-21 | `devices/dev_dreamcast_g2.c:94` | EXTDMA maps `0x100` but `extdma_reg[]` is 0x80; offsets `0x90..0xbc` index `extdma_reg[>=36]` → C subobject OOB into adjacent `misc_reg` (device-state corruption) |
-| OB-22 | `devices/dev_jazz.c:613` (`jazz_jazzio`) | **pre-existing, correctness only** (NOT a #69 regression): after reporting a vector it deasserts `mips_irq_3` without clearing `int_asserted` → possible stuck/missed non-timer JAZZ IRQs until next edge/mask write |
+| OB-22 | `devices/dev_jazz.c:613` (`jazz_jazzio`) | **pre-existing, correctness only** (NOT a #69 regression): after reporting a vector it deasserts `mips_irq_3` without clearing `int_asserted` → possible stuck/missed non-timer JAZZ IRQs until next edge/mask write |  **[`#578`, 2026-11-02: FIXED.  Corrected in place: the drop healed on a fresh line assert (a UART or timer tick re-asserting a line) or an EXT_IMASK TRANSITION into the enabled state -- a same-value mask write healed nothing; and "without clearing int_asserted" named the wrong repair: nothing should be cleared, the deassert should not happen.]**
 
 ## Low / reviewed
 
@@ -26352,3 +26353,63 @@ src/devices/dev_px.c:351,396,426-434 at 987cb596: The 0x411 fill (NetBSD and Ult
 
 #### `dec5800ncpushift` (LOW, WRONG-RESULT) -- (1 << ncpus) - 1 is undefined for 31 or more CPUs, which -n allows (up to 256)
 src/devices/dev_dec5800.c:359-367 at 987cb596: The DEC 5800 CPU-mask registers at offsets 20 and 28 answer (1 << ncpus) - 1 (:359-367), a signed int shift that is undefined at 31 CPUs (the result does not fit in int) and at 32 or more (the shift count reaches the width of int), and -n accepts up to 256 (src/core/main.c:427). The guest reads a wrong mask. Host command-line option. Source: _scratchpad/fanout_20261030/ARGON_FILE_AUDITS_2.md section 1B R8. Witness: none (research filing).
+
+## 2026-11-02 -- `#578` jazzvecdeassert (OB-22, the oldest open entry): a Jazz interrupt-source access no longer drops the CPU's pending IRQ3
+
+* **FIXED** -- `jazzvecdeassert` (OB-22; LOW, WRONG-RESULT -- a dropped level interrupt that heals on the next line assert, tick or
+  mask transition): `src/devices/dev_jazz.c`, `DEVICE_ACCESS(jazz_jazzio)`, ended EVERY access to the pica_jazzio register (physical
+  0xf0000000: offset 0 the local-bus interrupt-source vector, offset 2 PICA_SYS_LB_IE stored as `jazz_timer_value`) with an unconditional
+  `INTERRUPT_DEASSERT(d->mips_irq_3)` under "This is needed by Windows NT during startup".  With a second JAZZ line still pending, the
+  guest's vector read for the first dropped IRQ3 while a level interrupt was outstanding.  The statement is DELETED (both twins; the
+  function is byte-identical in `est/`) and a `#578` comment stands where it was.  Warrant: the CPU line is kept EQUAL to
+  `(int_asserted & 0x7fff) && (int_enable_mask & R4030_EXT_IP3)` by its only three writers -- `jazz_interrupt_assert()`,
+  `jazz_interrupt_deassert()` and the EXT_IMASK arm (transitions only) -- so a conditional deassert at the tail (pass 1's form) could never
+  fire with an effect: measured EQUIVALENT (M_del 13/13 on the witness, M_cond 22/22 and 26/26 on tables 2 and 3) and entailed by the
+  invariant; est keeps its pre-#69 per-line predicate and the same induction holds over it (est UNMEASURED: no binary).  Witness (rung 3,
+  unmodified `-V -e pica`, the rig kernel for construction only): `regress/artifacts/jazzvecdeassert/witness_20261102/` 11/13 on HEAD
+  (`jz ip after`, `jz ip com1` red) and 13/13 on the fix with the same script.  Detector `regress/jazz_vector_probe.py` (26 rows,
+  self-contained pty driver with a failure flag; gate 4's `#578` block, rows run by EQUALITY): 17/26 on HEAD, 26/26 on the fix, 0/26 on
+  the null medium; kill tables `killtable_20261102/` (13-row witness, 7 forms), `killtable2_20261102/` (22 rows, 8 forms) and
+  `killtable3_20261102/` (the shipped 26 rows, 15 forms: every prediction of `PRETABLE3.out` matched in score and red set; the two
+  equivalent/disclosed forms 26/26 by construction).  Heal paths on HEAD, so the severity is LOW: a fresh line assert (a still-enabled
+  UART's tick, the interval timer's tick -- the "Linux?" arm that a nonzero LB_IE write arms is the same timer line -- or a new device
+  assert) or an EXT_IMASK transition into the enabled state re-raised the line (the assert handler raises on every call made while the
+  predicate holds, so a tick re-asserting a still-pending line heals);
+  OpenBSD's `pica_iointr` loops on the vector until it reads 0 and arms its timer, so the fix is expected invisible to that guest (gate 4's
+  boot, run with the fix before the landing, says so for the rig's kernel); NT unmeasured (no image).  Six carriers of OB-22 above
+  (:2037, :2509, :2605, :2869, :2926, :2965 at 50f9c601) are marked in place; the :2965 remedy wording is corrected there.  Panel
+  (owner roster 2026-11-02 20:5x: Grok 4.7, the four Ollama cloud seats, Opus 5.5, GPT-6 Astra; Fable 5.1 adjudicating in the main loop):
+  pass 1 seven answers, all PROCEED or PROCEED WITH CHANGES, five seats preferring the conditional and the Opus seat the deletion -- ruled
+  DELETION on the checked writer census; pass 2 (the deletion, the 22-row detector, both tables) six answers, all SHIP WITH CHANGES, and
+  every seat found the detector's contract false -- the (default, write) label cell was unrowed -- which was repaired in-round as a floor
+  cell (L2/L4) with five more families closed for free (`idata`, `len`, `jazz_timer_value`, the guest's own BYTE vector read, the page's
+  other default byte); the repair's own pass (F2): Opus RWC (4), Grok RWC (1), GLM 5.3 RWC (2), agy RWC (5), kimi RWC (2), minimax RWC (2) -- zero floor
+  breaches on every answering seat, so the repair chain closes; their records corrections are applied (the contract's guest-access, level-
+  handler and value-disclosure wording; the product comment made twin-neutral because est's enable predicate is per-line).  Astra was WALLED through pass 2 and F2 (hotmail login, "try again at
+  Nov 3rd 01:10"); its pass-1 answer stands.  Agy and the Gemini web route were not fired (roster).
+* **NOT CHANGED (assessed)**: LB_IE (offset 2) is still stored as `jazz_timer_value` and consulted only by the "Linux?" tick arm -- the
+  enable BITS are unmodelled (`jazzlbmask`), and that is where the Windows-NT startup risk now lives: if NT relied on the blanket deassert
+  as a stand-in for LB_IE masking, neither the deletion nor pass 1's conditional keeps that case (noted under `jazzlbmask`); the vector
+  scan at offset 0 ignores `int_enable_mask` (`jz vec masked` pins it as current behaviour; noted under `jazzlbmask`); the default arm's
+  `fatal()` stays unlatched (filed below); `DEVICE_TICK(jazz)`'s "Linux?" arm is inert under single-step (its count is produced by a
+  `timer_add` callback the debugger stops) and unchanged.
+* **`jazziodfltflood` (LOW, floodclass) -- new.**  `dev_jazz.c` `jazz_jazzio`'s `default:` arm prints an unlatched `fatal()` on every
+  byte access to offsets 1 and 3 of the 4-byte page (guest-drivable; the detector itself prints two per run); `jazz_20`, `jazz_a0` and
+  `jazz_led` carry the same shape (agy, F2).  House idiom `(once)` per device instance.  Named by the kimi and Opus seats at pass 2.
+* **`ns16550out2hold` (LOW, device-model wart) -- new.**  `dev_ns16550.c:92-100`: clearing `MCR.IENABLE` while the IER/IIR condition is
+  still true takes the assert branch's outer test and neither asserts nor deasserts, so a Jazz line stays held until IER is cleared
+  (OpenBSD clears IER before MCR, so unobserved there).  Named at pass 1 (F9); not a reason to keep the blanket deassert.
+* **`jazzvecrowsowed` (LOW, coverage debt + harness) -- new.**  Three one-line strengthenings of `regress/jazz_vector_probe.py`
+  named by the F2 pass and FILED because that pass closed the repair chain with zero floor breaches and the shipped instrument is the one
+  table 3 measured: (1) OpenBSD/arc's two LB_IE halfword stores are not rowed -- `out16(PICA_SYS_LB_IE, 0)` at initcpu (a zero halfword
+  store; lbiew stores 0x0f) and `out16(PICA_SYS_LB_IE, local_int_mask)` at intr_establish (COM enable bits 0x0100 and 0x0200; lbiew's
+  0x0f has neither), so a re-introduction keyed to `writeflag == MEM_WRITE && relative_addr == 2 && (idata & 0x0100)` is predicted to keep
+  every row green and is guest-visible (Grok F2, from the guest's source; the rows: a zero halfword store with an IP3 check, and lbiew at
+  0x0300, which also closes Opus's `idata & 0xff00` slice); (2) the 30 s startup prompt wait's result is not checked, so a late first
+  prompt could shift every later command by one without setting `JAZZVEC_DRIVER=bad` (Opus F2; the 26-row EQUALITY pin would almost
+  certainly red).  Each owes a table-3 re-run (about two minutes) and its own pass.
+* **Harness, in this commit:** `tools/precommit_check.sh` section B now compares a divergence-set `src/` file (`tools/est_divergence.txt`)
+  against est/, which build/ compiles, instead of SEC -- the first edit to such a file since the section existed would otherwise have been
+  refused on a clean tree (the carrier's 2026-08-31 note predicted exactly this); `SCORE_CLAIMS_MANIFEST` 42 -> 43; `gate_hygiene.sh`
+  `EXPECT_PTY_PROBES` 80 -> 81 (`derive_hygiene_pins.sh --write`; the probe is prompt-detecting, not promptless); `check_probe_wiring.py`
+  gains the detector's MANIFEST key and one entry per artifact script.

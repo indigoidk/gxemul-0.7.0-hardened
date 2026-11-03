@@ -1,0 +1,129 @@
+VERDICT: PROCEED WITH CHANGES (2)
+
+The defect is real, and the conditional fix is consistent with this controller’s level-interrupt model. My two requested changes are:
+
+1. Correct the compatibility rationale and comment: neither the Windows NT “nothing-pending case” nor freedom from device clearing bugs has been established.
+2. Add explicit masked-state coverage to the probe, including preservation of pending sources across masking and immediate assertion on unmasking. Update the gate’s exact row count accordingly.
+
+I performed a read-only review; no builds, emulator runs, or edits. HEAD is `3cb8bdc1`, the product diff from `987cb596` is empty, and the cited Jazz line numbers match. The reported 11/13 → 13/13 result remains supplied measurement, not my measurement.
+
+**Q1. Several premises need correction, although the central diagnosis holds.**
+
+The narrow device census is substantially correct: the local-bus devices have active assert/deassert call counts of `sn 0/0`, `fdc 0/0`, `asc 1/2`, `pckbc 2/2`, and `ns16550 1/1`. ASC deasserts on its interrupt-register read and reset; pckbc has matching clearing branches for both ports; the UART clears when its enabled interrupt conditions disappear.
+
+**Having a deassert call does not prove that every relevant transition reaches it.** There is a concrete counterexample in [dev_ns16550.c:92](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_ns16550.c:92):
+
+- Enable `MCR.IENABLE` and enable the TX-ready interrupt, asserting the UART line.
+- Clear `MCR.IENABLE` while TX-ready and its IER enable remain set.
+- The tick function still enters the outer pending-condition branch. The inner MCR test now fails, but neither the interrupt nor `d->int_asserted` is cleared.
+
+The MCR write calls that tick function synchronously. Thus this UART has a reachable sequence that leaves its output asserted after its output-enable gate is cleared. This is a separate UART issue; it does **not** establish that OpenBSD’s boot exercises that sequence or will storm. It does invalidate using the call-count census as proof against that risk.
+
+The other checks:
+
+- **CPU observable:** `0x800` is the correct Cause.IP3 bit. [cpu_mips.c:250](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips.c:250) supplies the line mask, and the callbacks OR/AND-NOT that mask directly into Cause without testing Status.IE. CP0 registers are exposed through named settings at line 314. I did not independently audit the debugger’s `print` parser or the witness’s response parser.
+- **UART synchronization:** confirmed for the witness’s setup: DLAB clear, `MCR.IENABLE` set, and IER’s TX-enable bit changing from clear to set. That transition sets `IIR_TXRDY`, stores IER, and calls the tick function before returning. “An IER write sets TXRDY” is too broad; rewriting an already-set enable does not necessarily do so.
+- **Encodings:** line 8 produces `(8+1)<<2 = 0x24`; line 9 produces `0x28`; `R4030_EXT_IP3` is `0x02`. The vector scan excludes timer bit 15 and does not clear a source.
+- **Readback controls:** the two `0x2` readbacks are configuration checks, not independently distinctive device signatures—RAM can echo a stored `0x2`. The nonzero IRQ liveness and computed vectors supply the stronger discrimination.
+- **Provenance:** confirmed. Both tail lines blame to root commit `39748e3c`, whose subject is “Import GXemul 0.7.0 (unmodified upstream baseline).”
+
+Two additional wording corrections matter:
+
+- `jazz_interrupt_deassert()` does **not** fully synchronize IRQ3. When another enabled source remains, it leaves the CPU bit alone. Likewise, the mask arm acts on predicate transitions; rewriting the same enabled mask does not repair HEAD’s dropped IRQ3.
+- The old NT comment does not identify the pending state. Calling `jz ip nt` “the Windows NT case” invents evidence. It measures an already-clear, no-pending control. Rename it accordingly.
+
+Also, the proposed change affects **every jazzio access with an enabled pending source**, including a single source, writes, offset 2, and default cases—not only the two-source vector-read scenario measured here.
+
+**Q2. The disabled-mask cells are reachable and observable, but they do not distinguish `M_nomask`.**
+
+Let `N` count pending local-bus sources, excluding the timer, and `E` mean EXT_IMASK.IP3 is enabled. For an otherwise consistent controller/CPU state:
+
+| N | E | IRQ3 after access: HEAD → fixed | Explicit coverage in the 13 rows |
+|---:|:---:|:---:|---|
+| 0 | Disabled | 0 → 0 | None |
+| 1 | Disabled | 0 → 0 | None |
+| 2 | Disabled | 0 → 0 | None |
+| 0 | Enabled | 0 → 0 | `jz vec none`, `jz ip nt` |
+| 1 | Enabled | 0 → `0x800` | `jz vec com1`, `jz ip com1` |
+| 2 | Enabled | 0 → `0x800` | `jz vec`, `jz ip after` |
+
+Cold initialization visits the first cell, but that is not an explicit detector observation.
+
+A straightforward counterexample to “masked pending is unobservable” is:
+
+1. Assert a UART source, then disable EXT_IMASK.IP3.
+2. Read its nonzero vector and observe Cause.IP3 clear.
+3. Re-enable IP3 without another UART write; observe Cause.IP3 set immediately.
+
+Repeat with two sources and verify that masking/vector reads preserve them.
+
+However, the narrower equivalence claim survives: while masked, IRQ3 is already clear. Conditional deassert clears it again; `M_nomask` leaves it clear. These tests validate masking and pending-state preservation; they cannot legitimately kill that equivalent mutant.
+
+**Q3. Equivalence needs an explicit state domain.**
+
+Write `P = local_pending && IP3_enabled`, and `I` for the actual CPU IRQ3 state. Starting consistently, the reviewed Jazz source/mask transitions preserve `I=P` once the offending tail is fixed. Under that invariant:
+
+| Candidate | Equivalent to conditional? | Distinguishing input | Original witness rows expected red |
+|---|---|---|---|
+| `M_b` | No | Enabled pending local source; jazzio access | `jz ip after`, `jz ip com1` |
+| `M_del` | Yes, under `I=P` | None under that invariant | None |
+| `M_nomask` | Yes, under `I=P` | None under that invariant | None |
+| `M_lowbits` | No | Line 8 pending, no lines 0–7, mask `0x02` | Both IRQ rows above |
+| `M_ip6` | No | Local source pending, mask `0x02` | Both IRQ rows above |
+| `M_timer` | No | Local source pending, timer absent, mask `0x02` | Both IRQ rows above |
+| `M_inv` | No | Any enabled pending local source | Both IRQ rows above |
+
+For each non-equivalent candidate, a single pending UART followed by a vector read is already sufficient. In the supplied sequence, the first distinguishing access occurs with both UARTs pending. The predicted scores are therefore consistent with the packet.
+
+These are **not unrestricted state equivalences**:
+
+- At `I=1, P=0`, conditional deassert clears IRQ3; deletion does not.
+- At `I=1, local_pending=1, E=0`, conditional deassert clears IRQ3; `M_nomask` does not.
+
+Those inconsistent states are outside the normal Jazz invariant. Arbitrary debugger/state manipulation must not silently be included in an “every path” proof.
+
+**I would retain the conditional form for this round**, with a short comment explaining that a jazzio access must not drop an enabled pending level interrupt. It preserves the existing cleanup when `P=0`, including inconsistent CPU state. That is a concrete behavioral distinction; it is not evidence of NT compatibility.
+
+If the accepted contract explicitly excludes such inconsistent states, deletion is the smaller, equally correct implementation. Record it as equivalent **under that contract**. A 13/13 mutant run establishes agreement on those observations, not universal equivalence.
+
+**Q4. Gate 4 is the appropriate home, given the stated binary ownership.**
+
+A roughly 40-second probe is reasonable there. The UART transitions used by these rows occur inside the guest accesses, so no expected value needs a wall-clock race or a free-running interval.
+
+Host startup and debugger deadlines can still fail under load; “synchronous oracle” should not become “the harness cannot time out.” Follow [footbridge_sites_probe.py:330](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py:330): fresh response boundaries, command-echo synchronization, bounded waits, and missing observations represented as failures rather than zero.
+
+Keep the existing ARC boot as a required landing check. The cold probe establishes controller behavior; it does not establish that guest drivers service every retained interrupt correctly. The final probe implementation, gate wiring, and expanded row count still need review.
+
+**Q5. Land the same functional hunk in both twins.**
+
+On the supplied premise that these functions are identical, they contain the same defect. File-level divergence elsewhere does not justify retaining it in one copy.
+
+`build/src/devices/dev_jazz.c` should then satisfy its existing equality obligation against **est’s** version. Do not replace it wholesale from SEC and import unrelated ARC differences. A pmax run provides no runtime coverage of this Jazz change; the ARC binary and gate remain necessary.
+
+I did not independently compare est/build, in accordance with the requested review-tree restriction.
+
+**Q6. One missing option is direct output synchronization without a preliminary pulse.**
+
+```c
+if (pending_and_enabled)
+        INTERRUPT_ASSERT(d->mips_irq_3);
+else
+        INTERRUPT_DEASSERT(d->mips_irq_3);
+```
+
+Unlike option 5, this does not first drop an asserted line. It additionally repairs `I=0, P=1`, which conditional deassert and deletion leave untouched. It is a valid option, but that repair is unnecessary for the demonstrated defect once the invariant is maintained.
+
+The named controller examples distinguish observation from acknowledgment:
+
+- [dev_8259.c:188](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_8259.c:188): ordinary IRR/ISR reads return state. An OCW3 poll is a genuine acknowledge; its helper transfers the selected request into ISR and sets the output according to remaining unmasked requests.
+- [dev_footbridge.c:570](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:570): IRQStatus/RawStatus reads return state without blanket deassertion.
+- [dev_gc.c:105](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_gc.c:105): status reads return masked pending state; enable/clear writes update the output.
+- [dev_i80321.c:83](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_i80321.c:83): assert/deassert helpers maintain the pending-and-enabled relationship. Its interrupt registers reside in CPU state; this device file alone does not establish their CPU-side read semantics.
+
+Thus sibling parity supports the fix, but “acknowledge reads never have side effects” would be false.
+
+Two smaller findings: the NE2000 census’s `2/1` includes an `INTERRUPT_ASSERT` occurrence in a comment; executable sites are `1/1`. Also, `footbridge_isa`’s comment claims acknowledgment, while the inspected function merely returns a vector derived from `last_int`.
+
+Still unsettled independently: actual R4030 hardware semantics and NT startup requirements; OpenBSD’s handler behavior and the final boot result; original witness code, parsing, binary provenance, mutant executions and timing; twin identity and build-policy records; the oldest/unshipped/ledger claims; repository-wide absence claims about other probes, scratchpad imports, datasheets and NT images. None should be promoted from packet assertions to independently verified findings.
+
+VERDICT: PROCEED WITH CHANGES (2)

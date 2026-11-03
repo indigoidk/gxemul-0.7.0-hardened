@@ -1,0 +1,194 @@
+VERDICT: PROCEED WITH CHANGES (3) [REASONED]
+
+[REASONED] The core hunk correctly fixes the missed level interrupt: it stops `jazz_jazzio` from clearing IRQ3 while an enabled local-bus source is still pending. The required changes are to the detector, the mutation record, and the landing evidence—not to the proposed conditional expression itself.
+
+[REASONED] Required changes:
+
+1. Extend the detector to cover the partition cleanly, including an isolated one-source/vector-read case and the mask-disabled cells. Make the UART `MCR.IENABLE` setup explicit and checked rather than relying on reset state.
+2. Correct the mutation/equivalence record: `M_inv` reds both `jz ip after` and `jz ip com1`; `M_nomask` is observationally equivalent only on valid states; “unobservable” is not the correct description of the mask-disabled cell.
+3. Attach source-backed evidence that every Jazz local-bus source has a reachable deassert path and that OpenBSD services such sources. Record that Windows NT remains unverified; if NT startup support is a release requirement, pause rather than infer compatibility.
+
+## Q1 — Premise audit
+
+[READ] The central mechanism follows directly from the inlined code:
+
+- The vector read computes a vector but does not clear `int_asserted`.
+- The common tail unconditionally deasserts `mips_irq_3`.
+- Both source handlers and the mask-write arm derive IRQ3 from  
+  `P = (int_asserted & 0x7fff) && (int_enable_mask & R4030_EXT_IP3)`.
+- The proposed hunk changes the tail to deassert only when `!P`.
+
+[REASONED] Therefore, with at least one enabled local source pending, the hunk preserves IRQ3; with no enabled local source pending, it retains the old deassert. The packet’s reported 11/13 versus 13/13 witness results are consistent with that derivation.
+
+### Q1(a): No source without a deassert path
+
+[REASONED] This is **not fully settleable from the packet**. The call counts establish that an assert and a deassert call exist, but not that every assertion path can later reach the matching deassert under all relevant device states.
+
+[REASONED] For the two witness UARTs, the shown `dev_ns16550_tick()` does provide a paired transition: it asserts when the UART condition is true and deasserts when that condition becomes false. The other devices’ call counts alone do not prove the corresponding control flow.
+
+[REASONED] The single fact that would settle the remaining risk is: the per-device control flow showing that every local-bus assertion has a reachable matching deassert. A boot-level check is useful, but does not replace that proof.
+
+### Q1(b): Cause `0x800`
+
+[READ] The packet gives `templ.line = 1 << (STATUS_IM_SHIFT + 3)`, with `STATUS_IM_SHIFT == 8`, so IRQ3 is `1 << 11 == 0x800`.
+
+[READ] `mips_cpu_interrupt_assert()` ORs that bit into COP0 Cause, and `_deassert()` AND-NOTs it out. The supplied `print cause` rows show the same transition.
+
+[REASONED] `Status.IE` controls delivery, not whether the CPU-side Cause IP input is reflected. Using Cause.IP3 is therefore a valid line-state oracle, though it is not an end-to-end interrupt-delivery test.
+
+### Q1(c): Synchronous ns16550 assertion
+
+[READ] On a cold UART, writing IER with `IER_ETXRDY` sets `IIR_TXRDY`, stores the IER, and calls `dev_ns16550_tick()`.
+
+[REASONED] `dev_ns16550_tick()` then asserts synchronously when:
+
+- IER has `IER_ETXRDY`,
+- IIR has `IIR_TXRDY`, and
+- MCR has `MCR_IENABLE`.
+
+[REASONED] The packet does not show whether the witness explicitly programmed MCR or inherited an enabled reset value. The committed probe should explicitly set and read back MCR so the result does not depend on an implicit device default.
+
+### Q1(d): Row encodings
+
+[READ] For line 8, the code computes `v = 8 + 1`, then `v << 2`, yielding `0x24`. For line 9 it yields `0x28`. `EXT_IMASK == 0x2` and UART IER `0x2` are also correct.
+
+[REASONED] Those encodings are consistent with the supplied rows.
+
+### Q1(e): “The two deassert lines are the 0.7.0 import’s”
+
+[REASONED] This is **not established by the packet**. A path-level `git log -1` naming a later DMA-related commit does not prove when these particular lines entered the file.
+
+[REASONED] The single fact that would settle it is `git blame`/historical `git show` output for the two tail lines and the original import commit.
+
+### Other premise corrections
+
+[REASONED] “The sibling reads behave alike” is overstated. The ISA vector read reports only `isa_int_asserted & isa_int_enable_mask`, whereas the Jazz vector read reports an unmasked local pending bit. The conditional hunk makes their CPU-line side effects more similar; it does not make their source-selection semantics identical.
+
+[REASONED] “Nothing reasserts until a fresh line assertion” is too absolute. A later `EXT_IMASK` transition can also reassert IRQ3. The witness specifically confirms reassertion by a fresh UART assertion, not the absence of every other possible reassertion path.
+
+## Q2 — Partition
+
+[REASONED] Let:
+
+- `A = int_asserted & 0x7fff` — pending local-bus lines;
+- `E = int_enable_mask & R4030_EXT_IP3`;
+- `P = A && E`.
+
+The table below concerns local lines 0–14. A timer-only pending state has bit 15 set, does not make `P` true, and affects IRQ6 separately.
+
+| Pending local lines | IP3 enabled | HEAD tail | Conditional tail | Changed? | Detector coverage |
+|---|---:|---|---|---:|---|
+| 0 | 0 | Deassert | Deassert | No | No |
+| 0 | 1 | Deassert | Deassert | No | Yes |
+| 1 | 0 | Deassert | Deassert | No | No |
+| 1 | 1 | Deassert | Leave asserted | Yes | Not cleanly |
+| 2 | 0 | Deassert | Deassert | No | No |
+| 2 | 1 | Deassert | Leave asserted | Yes | Yes |
+
+[REASONED] The mask-disabled cells are reachable: the `EXT_IMASK` write arm can disable IP3 while one or more sources remain pending.
+
+[REASONED] The current 13 rows do **not** have a member in each reachable cell:
+
+- No row explicitly drives IP3 disabled.
+- `jz ip one` observes the one-source state before a vector read.
+- `jz ip com1` is reached after an earlier two-source vector read, so it is confounded by that earlier event rather than independently exercising a clean one-source vector read.
+
+[REASONED] The literal claim that the line-pending/mask-disabled cell is “unobservable through the tail’s predicate” is false:
+
+- In the fixed form, the predicate is false because `E == 0`.
+- In `M_nomask`, the corresponding predicate is true because `A != 0`.
+- The branches therefore differ syntactically.
+
+[REASONED] The narrower conclusion is correct: on a valid state, the CPU IRQ is already clear when IP3 is disabled, so fixed and `M_nomask` have the same externally visible result there. Adding a mask-disabled row can verify `Cause.IP3 == 0`, but it cannot kill `M_nomask`.
+
+## Q3 — Weakenings and equivalence
+
+[REASONED] The following analysis assumes the valid-state invariant:
+
+`IRQ3 is asserted exactly when P is true`.
+
+That invariant follows from the supplied handlers and mask arm, but its global application requires initialization and a complete caller census.
+
+| Mutant | Equivalent on valid states? | First valid-state difference | Red row(s) | Score |
+|---|---|---|---|---:|
+| `M_b` | No | Any tail access with `P == true` | `jz ip after`, `jz ip com1` | 11/13 |
+| `M_del` | Yes, subject to the invariant | No valid-state difference | None | 13/13 |
+| `M_nomask` | Yes, subject to the invariant | No observable difference; syntactic difference at `A != 0 && E == 0` | None | 13/13 |
+| `M_lowbits` | No | Pending source is outside bits 0–7 | `jz ip after`, `jz ip com1` | 11/13 |
+| `M_ip6` | No | IP3 is enabled but IP6 is not | `jz ip after`, `jz ip com1` | 11/13 |
+| `M_timer` | No | No timer bit is pending | `jz ip after`, `jz ip com1` | 11/13 |
+| `M_inv` | No | Any tail access with `P == true` | `jz ip after`, `jz ip com1` | 11/13 |
+
+[REASONED] `M_inv` has two red rows, not one. Its first vector read clears IRQ3 under the mutant; the later one-source row remains clear because no fresh source assertion intervenes. `jz ip nt` stays green because IRQ3 is already clear there.
+
+[REASONED] `M_del` and `M_nomask` are not algebraically identical to the fixed form. They differ if the CPU line is spuriously high while `P` is false. On valid states, the invariant makes that unreachable. The record should say “equivalent on reachable/valid states under the IRQ3 invariant,” not “equivalent on every path” without qualification.
+
+[REASONED] Ship the **conditional** form:
+
+- It expresses the intended aggregate-level rule directly.
+- It remains robust if the CPU line is stale-high while no enabled source is pending.
+- It retains an explicit deassert for the no-enabled-source state named by the old Windows NT comment.
+
+[REASONED] Deletion is smaller and is a valid alternative under the invariant, but it removes the explicit fallback entirely. Record it as a valid equivalent implementation under the stated invariant rather than silently calling it universally identical.
+
+[REASONED] If Windows NT actually depends on the unconditional deassert while a source is pending, neither option 1 nor option 2 preserves that behavior. The packet cannot distinguish that possibility from the no-pending case.
+
+## Q4 — Vehicle
+
+[REASONED] Gate 4 is the technically appropriate home: it already owns the ARC binary, while the pmax build has no Jazz path. A cold probe avoids another guest boot and its oracle is deterministic.
+
+[REASONED] None of the asserted values is load-sensitive if the probe:
+
+- explicitly configures MCR and IER;
+- performs each guest access synchronously;
+- checks exact CPU/device state rather than elapsed time.
+
+[REASONED] The roughly 40-second duration is still a wall-clock risk to the gate timeout, even if the output oracle itself is insensitive to load.
+
+[READ] The packet gives “about 40 s” but no gate-duration budget.
+
+[REASONED] The single fact that would settle acceptability is the current gate timeout/budget and its normal duration margin. If there is insufficient margin, the probe should be optimized or moved to a dedicated gate.
+
+[REASONED] The witness proves the line-state defect, not actual interrupt delivery and re-entry. That is sufficient for this regression, with the existing OpenBSD boot remaining the higher-level gate.
+
+## Q5 — Twins
+
+[REASONED] Land the hunk in **SEC only**.
+
+[REASONED] Under the packet’s stated rules:
+
+- `dev_jazz.c` is already a divergence-set path;
+- textual identity of one function today is not a synchronization contract;
+- the pmax `build/` tree has no Jazz device to fix.
+
+Therefore `build/` owes no source hunk for this issue, and `est/` should not be edited merely to preserve incidental textual identity.
+
+[REASONED] If EST has a shipping Jazz configuration, its remaining defect is a separate EST-side issue. If the exact build mechanics actually compile EST’s copy into an ARC artifact, EST must receive the equivalent hunk; that dependency is not fully shown in the packet.
+
+## Q6 — Option-set completeness
+
+[REASONED] One semantic member is missing: **deassert only when fewer than two enabled sources are pending**. This would fix the supplied two-source witness while retaining the old behavior for a single pending source. It is distinguishable from the proposed fix by adding a clean one-source/vector-read row.
+
+[REASONED] It is nevertheless inferior to the conditional form: the “two or more” threshold is arbitrary and still departs from ordinary aggregate level semantics.
+
+[READ] The packet names the other interrupt-controller files but inlines none of their vector/acknowledge behavior.
+
+[REASONED] Their actual idiom cannot be settled from the packet. The single fact needed is the relevant ISR/IRR, IRQStatus, acknowledge, and interrupt-deassert code from `dev_8259.c`, `dev_footbridge.c`, `dev_i80321.c`, and `dev_gc.c`.
+
+## Premises not settleable from this packet
+
+| Unsettled premise | Single fact that would settle it |
+|---|---|
+| Every local source has a reachable deassert path | Per-device control-flow proof for each Jazz local source |
+| Actual Jazz vector/level semantics | Authoritative R4030/Jazz documentation or the referenced NetBSD implementation |
+| Windows NT reliance | NT driver/startup behavior or a startup trace showing what the read must do |
+| OpenBSD services and drops pending sources | OpenBSD/arc interrupt-handler and driver source, or a boot trace |
+| Tail-line provenance | `git blame`/historical `git show` for those lines |
+| Global fixed/deleted equivalence | IRQ3 initialization plus a complete direct-assert/direct-deassert caller census |
+| Committed probe’s MCR determinism | Probe source showing explicit MCR programming and readback |
+| Gate-time acceptance | Current gate timeout and duration distribution |
+| Exact EST/build dependency | Build dependency and divergence-rule implementation for `dev_jazz.c` |
+| Other-controller acknowledge idiom | Relevant source excerpts from the four named controllers |
+| Administrative “oldest open/unshipped” status | Current bug ledger and release/tag history |
+
+VERDICT: PROCEED WITH CHANGES (3) [REASONED]

@@ -1,0 +1,61 @@
+VERDICT: SHIP WITH CHANGES (3)
+
+**READ — Q1/Q2: the deletion is the right product form.** The packet reports that the only removed operation is the unconditional `INTERRUPT_DEASSERT(d->mips_irq_3)`, while the interrupt helpers recompute IRQ3 from pending lines and masks. Under invariant I, deleting that tail deassert is preferable to retaining a guarded deassert.
+
+**REASONED — F1/Q2: the conditional argument is incomplete as presented.** The packet never gives the proposed conditional predicate. F1 follows only if it is effectively:
+
+```c
+if (!(int_asserted & 0x7fff) &&
+    !(int_enable_mask & R4030_EXT_IP3))
+        INTERRUPT_DEASSERT(...);
+```
+
+Under invariant I, that guard can only deassert an already-low line. A future bug or debugger-created state is speculative, not a present-state argument for additional code. I therefore still choose deletion.
+
+**REASONED — D1 warrant (iii) is overstated.** The absence of `R4030_EXT_IP3` from `est/` rejects that exact conditional text, not the concept of a conditional: a shared definition, a twin-specific definition, or an equivalent numeric mask would work. The conclusion still favors deletion because the conditional has no demonstrated present benefit, but the ruling should not claim that est makes every conditional impossible.
+
+**REASONED — Q1: the product comment is false as written.** “Until some line was asserted anew” is contradicted by the packet’s own F5/F11 findings: a mask transition or device tick can heal IRQ3 before any new assertion. Use wording such as “until a later interrupt-path event recomputed the line,” or explicitly list reassertion, mask transition, and tick.
+
+**REASONED — Q3: the floor enumeration is not complete, and the detector contract is false.** The sequence has no default-arm **write**: the default case is exercised only by `ld8(VEC+1)`. Thus the claim that the default arm is rowed “read and write” does not follow from the packet.
+
+More importantly, testing the atomic predicates separately does not cover their conjunctions. For example, all 22 rows would stay green with:
+
+```c
+if (writeflag == MEM_WRITE && idata != 0 &&
+    (int_asserted & 0x0300))
+        INTERRUPT_DEASSERT(d->mips_irq_3);
+```
+
+The only jazzio writes in the rows write zero (`st32(VEC, 0)` and `st8(VEC+2, 0)`); the other writes address the UART or EXT_IMASK and do not enter `jazz_jazzio`. Nevertheless, a guest with a pending UART line that writes nonzero data to a jazzio register would lose IRQ3.
+
+Likewise, this compound of already-enumerated tests escapes every listed mutant:
+
+```c
+if (relative_addr != 0 && relative_addr != 2 &&
+    writeflag == MEM_WRITE &&
+    (int_asserted & 0x0300))
+        INTERRUPT_DEASSERT(d->mips_irq_3);
+```
+
+It selects default-register writes, for which there is no row. Therefore the detector must gain a pending-line default/nonzero-write row, the kill table must gain corresponding compound and data-dependent mutants, and the floor language must say “these enumerated mutants” rather than claim completeness.
+
+**REASONED — Q4: no load-sensitive oracle is apparent.** The proposed checks are exact machine-state comparisons rather than timing measurements. The quoted name regex tolerates additional padding after the exact name because `.*` can consume it; it would fail only if the name were left-padded, the separator differed, or `ok` were not the terminal token.
+
+**REASONED — Q4: late debugger output is not checkable from the packet.** Waiting for `GXemul>` is a plausible synchronization barrier, but the packet does not specify the response framing or show whether output can arrive after that prompt. One complete raw JVLOG transcript, including the literal rendered row lines and prompt boundaries, would settle both the padding and late-response questions.
+
+**READ — Q5: the scores, raw-file freshness, refused run, and correction artifacts are only inlined assertions.** Without the artifacts, they cannot be independently authenticated from this packet.
+
+**REASONED — Q5: F5’s universal wording is unsupported.** The packet establishes healing paths after suitable ticks/transitions; it does not establish that every booted OS arms one before the missing IRQ matters, and it explicitly leaves NT behavior unmeasured. LOW severity may remain a reasonable bounded assessment for the observed case, but “on any booted OS” and any implication that NT compatibility is preserved should be withdrawn.
+
+**REASONED — Q5: F7 is at most partially discharged.** The packet says the new 22-row gate probe is self-contained. It does not say that the durable 13-row witness named in the ledger stopped importing `_scratchpad/gxprobe.py`. The committed script contents/import graph would settle that.
+
+**REASONED — Q5: the OB-22 record needs a path mapping before approval.** “Three carriers marked fixed” cannot be accepted until `:2037`, `:2509-2512`, and `:2965` are mapped to files and trees. If one is in the explicitly untouched pristine `./src/`, marking it fixed is false.
+
+**REASONED — Q5: the est identity claim remains ambiguous.** F2’s reference to est retaining a “pre-#69 predicate” is not reconciled explicitly with section 1’s claim that the target function is byte-identical and receives the same hunk. The exact current `jazz_jazzio` text in est would settle whether those statements are compatible.
+
+**REASONED — required changes.**
+1. Correct the product comment’s healing clause.
+2. Add the missing write/data coverage and compound mutants, then withdraw the false completeness and “read and write” claims.
+3. Correct the records: narrow F5, distinguish F7’s probe from its witness, quote the exact conditional predicate, narrow D1’s est rationale, and map the OB-22 carriers before marking them fixed.
+
+VERDICT: SHIP WITH CHANGES (3)

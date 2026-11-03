@@ -1,0 +1,51 @@
+PRE-TABLE CHECK -- #578 jazzvecdeassert (OB-22), written BEFORE any table leg runs (this file's mtime against base_head.raw's is the
+order proof; corrections and post-table predictions go to the SIBLING file PRETABLE_CORRECTION.out, one file per prediction if more
+than one is owed -- the #577 lesson of the same day).  Instrument: _scratchpad/w578/jazz_vector_witness.py (13 rows), frozen as the
+as-run copy killtable_20261102/jazz_vector_witness.ASRUN.py before leg 1.  Baseline: /tmp/gxfix578 = HEAD product tree + apply_fix578.py
+(the CONDITIONAL deassert), binary d1882f5650a6 newer than source; HEAD = /tmp/gxdivw b76a7799a3ea.
+
+SIBLING PARITY.  The edited arm is the jazzio common tail.  Its sibling is the ISA vector read (R4030_SYS_ISA_VECTOR, :398-416), which
+reports the lowest pending ISA line and touches NO CPU line; after the fix the two vector reads agree (neither drops a line that is
+still pending).  Asymmetry owed as a sentence, not a row: the jazzio read still deasserts in the nothing-pending case (a no-op there,
+since jazz_interrupt_deassert() already did it) while the ISA read never calls INTERRUPT_DEASSERT at all; the fix keeps that call
+deliberately for the Windows NT comment's case.
+
+CLAIM -> ROW.  The added comment asserts: "with a second JAZZ line still pending, the vector read for the first dropped a level interrupt"
+-> rows `jz ip after`, `jz ip com1`; "until some line was asserted anew" -> row `jz ip reheal`; "the nothing-pending case ... behaves as
+before" -> rows `jz ip none`, `jz vec none`, `jz ip nt`.  Every observable claim in the comment has a row.
+
+GUARD FIELD vs BODY FIELD.  The added predicate reads d->int_asserted (masked 0x7fff) and d->int_enable_mask (masked R4030_EXT_IP3); the
+guarded body reads nothing (INTERRUPT_DEASSERT takes the connected interrupt only).  Writers: int_asserted at jazz_interrupt_assert
+(:141) / _deassert (:151); int_enable_mask at the EXT_IMASK write arm (:459).  Partition the predicate induces: int_asserted & 0x7fff in
+{0, nonzero}; int_enable_mask & IP3 in {0, nonzero}.  Rows hold (nonzero, nonzero) [after, com1, both, one] and (0, nonzero) [none,
+nt]; the (nonzero, 0) and (0, 0) cells are NOT rowed: with IP3 masked the EXT_IMASK write arm has already deasserted IRQ3 (:466-467),
+so the tail's deassert is a no-op there whatever the predicate says -- the cell is unobservable THROUGH THIS PREDICATE.  Disclosed under
+(e); the pass-1 brief's Q2 asks the seats to refute it.  EXHAUSTED on the first lvalue's partition; SAMPLED on the second (the 0 cell
+unobservable).
+
+CHANNEL (the mutant each row kills and the observable that differs):
+  jz ip after    kills M_b (unconditional deassert), M_lowbits (& 0x00ff: bits 8/9 outside), M_ip6 (mask has only 0x02), M_timer, M_inv:
+                 Cause.IP3 reads 0x0 instead of 0x800 after the vector read with two lines pending
+  jz ip com1     same five mutants, with one line pending (the second line alone): 0x0 instead of 0x800
+  jz ip nt       one-sided control: IP3 already 0 with nothing pending, so no mutant of the deassert can red it (it pins the NT case,
+                 not a kill); M_inv leaves it green for that reason -- disclosed
+  jz ip reheal   control for the self-heal mechanism; no mutant above changes jazz_interrupt_assert, so it stays green on all: disclosed
+  jz vec / again / com1 / none, jz imask, jz com0 ier, jz ip one, jz ip both: liveness and device-signature controls; green on every
+                 mutant of the tail by construction (they read state the tail does not write)
+  So the detector's whole discriminating power is the pair {jz ip after, jz ip com1}: 11/13 is the kill signature of every non-equivalent
+  mutant.  Honest statement: two carrying rows, both reading the same channel (Cause.IP3) at two pending-counts.
+
+PREDICTIONS (score = rows ok of 13):
+  base_head  (a)  11/13  measured already: witness_head.out
+  fixed           13/13  measured already: witness_fixed.out
+  M_b        (b)  11/13  the unconditional deassert reinstated verbatim -- the binary should equal HEAD's (md5 b76a7799a3ea)
+  M_c_absent (c)  0/13   the probe pointed at a non-emulator binary: every session dies, every row None
+  M_del      (e)  13/13  the deassert deleted: predicted EQUIVALENT to the conditional form on every row (jazz_interrupt_deassert and the
+                        mask arm already keep the CPU line in step); this leg MEASURES the equivalence the brief's Q3 asks about
+  M_nomask   (d)  13/13  the int_enable_mask term dropped: predicted EQUIVALENT (the (nonzero, 0) cell is unobservable through the tail)
+  M_lowbits  (d)  11/13  & 0x7fff -> & 0x00ff
+  M_ip6      (d)  11/13  R4030_EXT_IP3 -> R4030_EXT_IP6
+  M_timer    (d)  11/13  & 0x7fff -> & PICA_TIMER_IRQ_MASK
+  M_inv      (d)  11/13  the predicate inverted (deassert only while a line is pending)
+Clause (f): N/A -- no address decode is under test (jz vec pins the vector encoding, which the fix does not touch).
+De-escalation: N/A -- no host-stopping check is removed.

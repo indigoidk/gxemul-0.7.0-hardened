@@ -365,7 +365,9 @@ elif out=$(python "$SCORECHK" 2>&1); then
 	#  (#571, pinned UNQUOTED in gate_ppc.sh at 39 rows under the stem ppc_dsform; its docstring is checked).
 	#  RAISED 39 -> 40 ON 2026-10-24, DELIBERATELY.  One newly gated probe: wdc_lba_probe.py
 	#  (#572, pinned UNQUOTED in gate_sh_rounding.sh at 33 rows under the stem wdc_lba; its docstring is checked).
-	SCORE_CLAIMS_MANIFEST=42
+	#  RAISED 42 -> 43 ON 2026-11-02, DELIBERATELY.  One newly gated probe: jazz_vector_probe.py
+	#  (#578, pinned UNQUOTED in gate_mips.sh at 26 rows under the stem jazz_vector; its docstring is checked).
+	SCORE_CLAIMS_MANIFEST=43
 	_spinned=$(printf '%s\n' "$out" | sed -n 's/^SCORE_CLAIMS_PINNED=//p')
 	if [ -z "$_spinned" ]; then
 		bad "check_score_claims printed no SCORE_CLAIMS_PINNED line -- the count cannot be pinned"
@@ -1098,11 +1100,17 @@ if [ -f "$BLD/.MUTANT" ]; then
 else
 	good "no .MUTANT sentinel"
 fi
+#  [#578, 2026-11-02] build/ is compiled from est/ (gate_build.sh:4), so for a path in tools/est_divergence.txt the
+#  reference copy is est's, not SEC's: comparing SEC's dev_jazz.c against build/ reads DIVERGENT on a clean tree and
+#  prescribes the corruption it exists to prevent (the carrier's 2026-08-31 note; section A already derives the set).
+#  Measured on the #578 landing, the first edit to a divergence-set file since this section existed.
 for f in $CHANGED; do
 	case "$f" in src/*) ;; *) continue ;; esac
 	[ -f "$BLD/$f" ] || continue
-	if cmp -s "$SEC/$f" "$BLD/$f"; then good "$f == build/"
-	else bad "$f DIFFERS from build/ -- the measured binary is not this source"; fi
+	ref=$SEC; refname=SEC
+	for d in $DIVERGENT_OK; do [ "$f" = "$d" ] && { ref=$EST; refname="est (known-divergent: build/ compiles est's copy)"; }; done
+	if cmp -s "$ref/$f" "$BLD/$f"; then good "$f == build/ (reference: $refname)"
+	else bad "$f DIFFERS from build/ (reference: $refname) -- the measured binary is not this source"; fi
 done
 
 #  *** build-asan/ JOINED THE PROPAGATION SET BY OWNER RULING, 2026-08-27. ***

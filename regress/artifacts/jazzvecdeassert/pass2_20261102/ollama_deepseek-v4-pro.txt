@@ -1,0 +1,33 @@
+VERDICT: SHIP WITH CHANGES (3)
+
+**Q1 — diff comment**  
+READ: The diff comment says the removed deassert “dropped a level interrupt until some line was asserted anew.”  
+READ: F5/F11 state the timer tick and a mask transition also heal the dropped line.  
+REASONED: The comment is narrower than the accepted mechanism. Widen it to “until some line was asserted anew, a mask transition, or the next timer tick” or a neutral “until one of the healing events occurs.”
+
+**Q2 — D1 conditional vs deletion**  
+REASONED: No. The conditional’s robustness argument guards a state that invariant I’s checked writer census says is unreachable, and est lacks `R4030_EXT_IP3`, so the conditional would break byte-identity or leave the defect. The deletion is the correct form. A pass-1 holder of the conditional should switch to deletion on these facts.
+
+**Q3 — detector floor completeness**  
+READ: The contract claims every access label, including default read and default write, is rowed.  
+READ: The row list has `ld8(VEC+1)` for the default read but no `st8(VEC+1, ...)` default write.  
+REASONED: The (d) enumeration is incomplete over `relative_addr`/`writeflag`. A smallest escape is:
+
+```c
+if (writeflag == MEM_WRITE && relative_addr != 0 && relative_addr != 2)
+    INTERRUPT_DEASSERT(...);
+```
+
+All 22 rows stay green because no default write is driven, but a guest write to offset 1 while another line is pending would drop IRQ3.  
+Also, `idata` is outside the claimed enumeration: `if (writeflag == MEM_WRITE && idata == 1)` escapes because the rows never write `1`.
+
+Fix: add a default-write row, or explicitly disclose that default write is not rowed and narrow the contract. The `idata` gap should be disclosed as out of floor.
+
+**Q4 — vehicle**  
+READ: The gate section waits for the `GXemul>` prompt with a bounded 20 s timeout.  
+REASONED: A fixed 20 s prompt wait can be load-sensitive and false-fail under a busy runner. Use a larger bound, retry, or a load-tolerant handshake. The 13-character name cap avoids padded-column hazards; the equality pin at 22 is acceptable if the result line is parsed from the driver’s own `JAZZVEC_RESULT`.
+
+**Q5 — records**  
+Not checkable from packet: exact writer census at HEAD/est, artifact hashes, and the actual gate-section text. From the inlined text, the section-5 records are internally consistent. The one concrete defect is the missing default-write row noted in Q3, which affects the detector contract and the floor claim.
+
+VERDICT: SHIP WITH CHANGES (3)

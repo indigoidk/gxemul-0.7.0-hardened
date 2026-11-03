@@ -1,0 +1,45 @@
+PRETABLE3.out -- #578 jazzvecdeassert, TABLE 3: the pass-2 repair of the detector (22 -> 26 rows), written BEFORE table 3 runs.
+Pass-2 findings this table answers (pass2_20261102/: opus5.md C1/C2, grok.txt Q3, ollama_glm Q3 change 2, ollama_deepseek Q3,
+ollama_minimax Q3, ollama_kimi Q3): the (default, write) label cell was unrowed while the contract claimed every label rowed (L4 wrong
+record; a floor cell under the joint-cell reading -- L2, repaired here); `idata`, `len` and `jazz_timer_value` were each driven at ONE
+value only; the guest's own vector access is a BYTE read (OpenBSD pica_iointr: inb(PVIS)) and no row read the vector as a byte.
+
+THE REPAIR (jazz_vector_probe.py, 26 rows; the as-run copy for this table is jazz_vector_probe.ASRUN.py beside this file):
+  + jz vec byte   ld8(VEC) == 0x24                    the vector at the guest's own width (device signature at len 1)
+  + jz ip vecb    IP3 after that byte read            label (0, read) at len 1 -- the real guest's cell
+  ~ jz ip lbiew   now st16(VEC+2, 0x0f)               was st8(VEC+2, 0): the only len-2 access; idata nonzero; jazz_timer_value 0x0f from here on
+  + jz lbie rb    ld8(VEC+2) == 0x0f                  the halfword store landed (control for the lbiew kill)
+  ~ jz ip dfltw   st8(VEC+3, 0x5a)                    NEW: label (default, write), at the page's other default offset (dflt reads +1)
+  driver flag: any None from set_reg/step/send sets emu.bad -> JAZZVEC_DRIVER=bad (a skipped store must not read as a fixed build)
+
+SIBLING PARITY: offsets {0, 2, default} x {read, write}: (0,R) vec/vecb/after/onevec/com1; (0,W) vecw; (2,R) lbie; (2,W) lbiew;
+(default,R) dflt (+1); (default,W) dfltw (+3).  All six cells now carry a pending-lines IP3 row.  Widths: 1 (vec byte, lbie, dflt,
+dfltw), 2 (lbiew), 4 (vec, vecw).  idata: 0 (vecw), nonzero (lbiew 0x0f, dfltw 0x5a).  jazz_timer_value: 0 until lbiew, 0x0f after.
+GUARD FIELD vs BODY FIELD: the deleted statement had no guard; the body's own tests are the switch on relative_addr and writeflag.
+Partition the body induces: relative_addr {0, 2, other}; writeflag {R, W}.  Inputs the body does not test as a case but reads/stores:
+idata (stored at offset 2), len (readmax/writemax).  jazz_timer_value: written at offset 2, read at offset 2 and by the tick.
+CLAIM -> ROW: the probe header's contract sentence (six label cells rowed; each other input driven on both sides; the (0, len 1)
+conjunction rowed; other conjunctions disclosed) is the claim this table measures, mutant by mutant below.
+
+CHANNEL and PREDICTIONS (26 rows; a row is red when IP3 reads 0 where 0x800 is wanted; "com1 inherits" = a drop just before
+`st8(COM0+IER,0)` is not healed by lowering line 8 while line 9 stays pending, the stacked-drop mechanism of HEAD and table 2):
+  base_head  (HEAD)             17/26  red: after, vecb, vecw, lbie, lbiew, dflt, dfltw, com1, onevec
+  fixedc     (final comment)    26/26  JAZZVEC_DRIVER=ok
+  M_c_absent (/bin/true)         0/26  every row None (the null medium: no emulator)
+  M_b   statement reinstated    17/26  the same nine as HEAD (the fix's comment stays, so the md5 differs from HEAD's; see table 1/2 notes)
+  M_offs0   (relative_addr==0)  21/26  after, vecb, vecw, com1 (via `jz vec com1`'s read), onevec
+  M_offsne0 (!=0)               21/26  lbie, lbiew, dflt, dfltw, com1 inherits dfltw's drop
+  M_rd      (MEM_READ)          20/26  after, vecb, lbie, dflt, com1, onevec
+  M_wr      (MEM_WRITE)         22/26  vecw, lbiew, dfltw, com1 inherits
+  M_offs2   (==2)               24/26  lbie, lbiew
+  M_cond    (the pass-1 guard)  26/26  EQUIVALENT by invariant I (measured, not asserted)
+  M_uart    (!(asserted&0x300)) 26/26  DISCLOSED: keyed to lines the rows do not drive
+  M_dfltw   (default && write)  24/26  dfltw, com1 inherits          -- the pass-2 escape, closed by the new row
+  M_idnz    (idata != 0)        23/26  lbiew, dfltw, com1 inherits    -- the kimi/Opus/Grok idata escape, closed
+  M_id0     (idata == 0)        19/26  after, vecb, vecw, lbie, dflt, com1, onevec
+  M_lbnz    (jazz_timer_value)  21/26  lbiew, dflt, dfltw, com1, onevec (0x0f from lbiew on; masked/maskon/none/nt already 0 or re-raised)
+  M_len2    (len == 2)          25/26  lbiew
+  M_vecb    (==0 && len==1)     25/26  vecb                           -- Grok's guest-path conjunction, closed by the new row
+  M_off3    (relative_addr==3)  24/26  dfltw, com1 inherits           -- Grok's other default byte
+Floor: (a) base_head red; (b) M_b; (c) M_c_absent; (d) the label cells and the single-input families above; (e) the contract.
+Any prediction that misses is corrected in a SIBLING file (PRETABLE3_CORRECTION.out), never here.

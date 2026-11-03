@@ -72,6 +72,34 @@ else
     note "(raw pty log MISSED it -- differential repaint, exactly as expected)"
 fi
 
+# ---- #578 jazzvecdeassert: a Jazz interrupt-source access must not drop a pending IRQ3 -----
+# Cold-debugger probe on the arc rig binary the boot above ran (-V -e pica, the rig kernel for
+# construction only), 26 rows, self-contained (its own pty driver, prompt-detected), about 45 s.
+# -u: stdout is a file here, so unbuffered or a killed run loses every row it had measured.
+# The rows drive two UART lines through genuine guest stores and read COP0 Cause.IP3; nothing
+# free-runs, so no oracle is wall-clock.  Names stay at 13 characters or fewer: the probe prints
+# `%-14s` and the loop below anchors `^name  .*ok$` with TWO spaces (the padded-column trap).
+# JAZZVEC_LOG keeps the pty transcript with the run; JAZZVEC_DRIVER=bad means a debugger command
+# timed out or died, after which a skipped guest store would read exactly like a fixed build.
+JVLOG=$LOGDIR/gate_jazz_vector.log
+JAZZVEC_LOG="$LOGDIR/gate_jazz_vector.pty" python3 -u "$HERE/jazz_vector_probe.py" "$ARC_RIG/gxsec-gxemul" "$ARC_RIG/bsd" > "$JVLOG" 2>&1 || true
+if ! grep -q "JAZZVEC_DONE" "$JVLOG"; then
+    note "jazz_vector probe produced no completion sentinel; last lines follow"
+    tail -5 "$JVLOG" | sed 's/^/       /'
+    check "jazz_vector probe completed" "no" "yes"
+else
+    grep -E " ok$| FAIL$" "$JVLOG" | sed 's/^/       /'
+    jvdrv=$(grep -o "JAZZVEC_DRIVER=[a-z]*" "$JVLOG" | tail -1 | cut -d= -f2)
+    check "jazz_vector driver completed every command" "${jvdrv:-missing}" "ok"
+    jvres=$(grep -o "JAZZVEC_RESULT=[0-9]*/[0-9]*" "$JVLOG" | tail -1 | cut -d= -f2)
+    check "jazz_vector rows run"     "${jvres#*/}" 26
+    check "jazz_vector rows correct" "${jvres%/*}" "${jvres#*/}"
+    for v in "jz imask" "jz com0 mcr" "jz com0 ier" "jz ip one" "jz ip both" "jz vec" "jz ip after" "jz vec again" "jz vec byte" "jz ip vecb" "jz ip vecw" "jz ip lbie" "jz ip lbiew" "jz lbie rb" "jz ip dflt" "jz ip dfltw" "jz vec com1" "jz ip com1" "jz ip onevec" "jz ip reheal" "jz ip maskoff" "jz vec masked" "jz ip maskon" "jz ip none" "jz vec none" "jz ip nt"; do
+        n=$(count "$JVLOG" "^$v  .*ok$")
+        check "  $v" "$n" 1
+    done
+fi
+
 # Publish the raw pty logs for gate 6. It reads THESE copies rather than /tmp, so that a
 # run in which this gate skipped or died cannot leave gate 6 grading stale output from a
 # binary that no longer exists.

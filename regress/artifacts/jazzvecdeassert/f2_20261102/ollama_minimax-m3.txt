@@ -1,0 +1,48 @@
+F2 VERDICT: RATIFY WITH CHANGES (2)
+
+Everything below is READ (from the packet) or REASONED (my inference). I ran nothing; the scores in §2 are the packet's claims, not my measurements.
+
+## Q1 — the wrong accepted item: F6's closure inference (and the contract sentence that carries it)
+
+**READ:** the default cell is driven at exactly two points: `ld8(VEC+1)` (row `jz ip dflt`) and `st8(VEC+3,0x5a)` (row `jz ip dfltw`). **READ:** M_wr's complete red set is {vecw, lbiew, dfltw, com1} — there is no write at relative_addr 1; M_off3's complete red set is {dfltw, com1} — there is no read at relative_addr 3. **REASONED:** no row performs a default-arm write at offset 1, nor a default-arm read at offset 3, with an IRQ3 check.
+
+**READ:** S6 — the default arm's `fatal()` prints and returns, the tail runs after it, and "every byte access to offsets 1 and 3" reaches it. **REASONED:** therefore both of these never fire inside the table (all 26 rows stay green) yet reintroduce OB‑22 on guest-drivable accesses while a JAZZ line is pending and EXT_IMASK.IP3 is set:
+
+- `if (relative_addr == 1 && writeflag == MEM_WRITE) INTERRUPT_DEASSERT(d->mips_irq_3);`
+- `if (relative_addr == 3 && writeflag == MEM_READ) INTERRUPT_DEASSERT(d->mips_irq_3);`
+
+So F6's "dfltw writes offset 3 while dflt reads offset 1, so both default offsets … are driven … this is the unrowed-slot class closed" is **wrong in the direction that matters**: F1's own reachability witness for the default-write cell is "sb to VEC+1/VEC+3", and only VEC+3 is driven. The fact that settles it is already in the packet (the row list plus M_wr's and M_off3's red sets) — no file needed. The contract sentence built on it is false as written: "a re-introduction keyed to `relative_addr` and/or `writeflag` reds" — these two shapes *are* keyed to relative_addr and writeflag.
+
+D3's ruling is right in substance (the guest's own conjunction is rowed; the rest is debt); the wrongness is in the contract's implementation, which now contradicts itself (that blanket sentence vs "Any other conjunction … is clause-(e) debt").
+
+**Not checkable from the packet (secondary):** F13 adds "a nonzero LB_IE write" to the heal list; S5's enumeration of SEC's heal paths (fresh assert, incl. the UART/timer ticks; EXT_IMASK transition) contains no LB_IE write. Settling fact: does SEC's relative_addr==2 (LB_IE) write path call `jazz_interrupt_assert()/_deassert()` (i.e. re-evaluate the predicate)? If not, F13 and the records wording it feeds must be narrowed to S5. OpenBSD's LOW severity does not depend on it (S5's timer/UART ticks), so this is a records-wording item only. Likewise F4 ("asserts only on `pending_timer_interrupts > 0`") and S5 (":294‑308, once `interval_start > 0` or `jazz_timer_value != 0`") describe the same arm differently; settling fact: the condition at :294‑308. It affects only how tightly the comment's heal clause is worded.
+
+## Q2 — yes, one escape; predicted 26/26; filed as debt, not a floor cell
+
+One-line predicate and score: `if (relative_addr == 3 && writeflag == MEM_READ) INTERRUPT_DEASSERT(d->mips_irq_3);` → **26/26** (REASONED: the shape never fires in any row; DRIVER stays ok; the gate passes — a false pass). Mirror: `if (relative_addr == 1 && writeflag == MEM_WRITE) …` → 26/26.
+
+Classification: **not a floor cell of the enumeration**, so FILED under S8. The six cells are the joint cells of the body's own partition; these shapes are strict sub-cell refinements by an offset the body does not branch on inside the default arm — the same class as the contract's already-disclosed `len == 2 && relative_addr == 0`. The one conjunction the guest actually exercises (`relative_addr == 0 && len == 1`, F5) is rowed, so no live guest path escapes. But F5's lesson applies to the disclosure: these shapes must be named, not swallowed by a sentence that says they are killed.
+
+Also inside the scope Q2 names, all 26/26, all debt, and not all named in the contract's examples: `relative_addr == 2 && len == 4` (32-bit access to the 16-bit LB_IE), `relative_addr == 0 && len == 2`, `relative_addr == 0 && len == 1 && writeflag == MEM_WRITE`, `relative_addr == 2 && len == 1 && writeflag == MEM_WRITE`. (Whether a guest performs any of these is not checkable from the packet; the settling fact is the guest's own access trace.) If the project instead adopts the stricter branch-coverage reading of F1's joint cell — every guest-reachable access in a cell must be covered — then the two default-cell shapes become floor breaches, the chain does not close, and the repair is two rows (default write at VEC+1, default read at VEC+3), denominator 26→28, with a table‑3 re-run. My ruling is debt; the cost of the other reading is stated so the owner can choose.
+
+## Q3 — the shipped comment (1a): nothing the packet contradicts; one load-bearing premise not checkable
+
+**READ:** S1/S6 support "used to deassert … on every access" and the tail running after the default arm's `fatal()`. **READ:** S2 supports "kept equal to 'a line 0‑14 pending and EXT_IMASK.IP3 set'" *provided* SEC's `int_enable_mask` holds the EXT_IMASK value — S2 writes the predicate as `(int_asserted & 0x7fff) && (int_enable_mask & R4030_EXT_IP3)` while naming the mask arm the EXT_IMASK arm, and S4/F10 use `int_enable_mask` in est for the per-line mask. **REASONED:** if SEC's `int_enable_mask` is instead LB_IE, the comment's predicate is wrong ("EXT_IMASK.IP3 set" would be "LB_IE bit 1 set") and F15's note (SEC does not model LB_IE as a mask) would contradict S2's formula. Settling fact: SEC's declaration/assignment of `int_enable_mask` and the body of the mask arm at :466‑469. The heal clause ("until a line was asserted anew or EXT_IMASK re-enabled IP3") matches S5's enumeration, since a tick's re-assert is "a line asserted anew"; no change demanded, though "or EXT_IMASK transitioned into the pending-and-enabled state" is the exact wording.
+
+## Q4 — zero floor breaches; the chain can close once the two wording changes are made
+
+Denominator carried:
+
+- **Cells (6):** {0,2,other} × {R,W}. **Key shapes per cell (3):** relative_addr-only, writeflag-only, exact-cell conjunction = 18 shapes. Each is killed by the row carrying that cell's IRQ3 check: (0,R) `jz ip after`/`jz ip vecb`/`jz ip onevec`; (0,W) `jz ip vecw`; (2,R) `jz ip lbie`; (2,W) `jz ip lbiew`; (other,R) `jz ip dflt`; (other,W) `jz ip dfltw` — red sets READ from §2, cell intersections REASONED. All six cells' exact-cell mutants red (they are subsets of M_offs0/M_offs2/M_offsne0/M_rd/M_wr's measured red sets).
+- **Single-input families (7 value shapes):** len {1,2,4}, idata {0,nonzero}, jazz_timer_value {0,nonzero}. Four are packet-measured (M_len2, M_id0, M_idnz, M_lbnz); len==1, len==4, jazz_timer_value==0 are killed by rows carrying IRQ3 checks at those values (REASONED).
+- **Disclosed non-covered categories (3):** lines outside {8,9}, the timer line, mask values other than 0/0x2 — disclosures, not rows.
+- **Newly named uncovered sub-cell shapes (2):** default write at offset 1; default read at offset 3 — filed, not floor, under the ruling above.
+
+⇒ **0 floor breaches.** No disposition among F1–F23 other than F6's closure inference is demonstrably wrong on the packet; S2/S3/S4 are self-consistent as stated (the conditional's equivalence is entailed by I; est's argument is the same induction over est's own predicate, and est remains unmeasured).
+
+## Required changes (2)
+
+1. **Contract (§1b):** delete or narrow "so a re-introduction keyed to `relative_addr` and/or `writeflag` reds" to the true scope ("keyed to a single input, or to one of the six cell keys"), and name the uncovered cell-axis conjunctions in the debt clause: `relative_addr == 1 && writeflag == MEM_WRITE` and `relative_addr == 3 && writeflag == MEM_READ` (ideally also `relative_addr == 2 && len == 4`). As written, the contract both claims these shapes red and classifies them as debt.
+2. **Contract (§1b):** fix the `jazz_timer_value` boundary — F4 and M_lbnz's red set (which includes `lbiew`) require "0x0f **from lbiew on**", not "0 (rows before lbiew) and 0x0f (rows after)".
+
+**Records note (not counted as a change; not checkable from the packet):** F13's "nonzero LB_IE write" heal path, settled by whether SEC's LB_IE write path re-runs the predicate.

@@ -1,0 +1,78 @@
+VERDICT: PROCEED WITH CHANGES (2)
+
+The defect derivation is sound from the inlined code alone; the fix's predicate textually matches `jazz_interrupt_deassert()`'s IRQ3 gate; the witness rows are internally consistent and both clauses of the witness rule are satisfied as presented. Two changes requested, both small: (1) the filing says "EVERY access" but the witness measures only offset 0 — add one offset-2 access row with two lines pending; (2) the filing quote "until next edge/mask write" is wrong about mask writes per the inlined mask arm — a same-value EXT_IMASK rewrite does NOT re-assert (old==new → neither branch fires); only a mask *value transition* or a fresh line-assert heals. Neither touches the fix hunk.
+
+## Q1 — premise audit
+
+(a) Census (no device asserts a local line without a deassert path): **READ as claimed, not re-derivable from the packet** — the grep counts are stated, not inlined. Note the risk direction even if the census failed: HEAD's blanket deassert makes a stuck line *silently lost*; the fix makes it *storm*, which is the correct level-semantics surface for a device-model bug (REASONED). Settle with the stated grep. Also: counts >1 on one side (asc 1/2, mc146818 1/2, ne2000 2/1) don't by themselves prove per-line pairing — but the wiring list gives each device a single jazz.N line, so pairing follows if each handler pair covers that one handle (REASONED from packet).
+
+(b) Cause 0x800 for mips_irq_3: consistent (REASONED) — `1 << (STATUS_IM_SHIFT + 3)` = 0x800 iff STATUS_IM_SHIFT = 8, and that literal is *not* inlined. However the measured rows show exactly 0x800 appearing/disappearing on UART assert/deassert, so the mapping is corroborated end-to-end by the witness itself. `print cause` reading the same `coproc[0]->reg[COP0_CAUSE]` the handler writes: asserted in the brief, corroborated by the same rows.
+
+(c) Synchronous ns16550 assert: **READ + REASONED, confirmed.** Inlined IER arm sets `IIR_TXRDY` on the rising enable edge, stores IER, then calls `dev_ns16550_tick` inline; tick asserts if `MCR_IENABLE`. Requires a prior MCR store setting OUT2 — not shown in packet, but proven by row `jz ip one` = 0x800.
+
+(d) Encodings verified against inlined code: lowest set bit i → v=i+1 → v<<2: i=8 → 0x24 ✓, i=9 → 0x28 ✓. Mask 0x2 = R4030_EXT_IP3 ✓; IER 0x2 = ETXRDY consistent with the inlined tick condition ✓.
+
+(e) "0.7.0 import" provenance: **not checkable from packet**; `git blame` settles it; immaterial to the mechanism (OB-22 itself says "NOT a #69 regression").
+
+## Q2 — the partition
+
+REASONED from inlined code. HEAD's tail forces IRQ3=0 in every cell. Fix's cells:
+
+| pending \ mask | IP3 on | IP3 off |
+|---|---|---|
+| none | unchanged (deassert is a no-op: IRQ3 already low — see below) | unchanged |
+| one | **changed: IRQ3 held** | unchanged (predicate false → deassert; IRQ3 already low) |
+| two | **changed: IRQ3 held** | unchanged |
+
+Key sub-premise: nothing-pending ⇒ IRQ3 already low on HEAD itself, because both inlined *assert* sites (line-assert handler, mask arm) are predicate-gated — so the NT-case blanket deassert has always been a no-op in today's tree (REASONED). Caveat: the packet enumerates only *de*assert sites (:154/:467/:697); the **assert-site enumeration is not given**, and the nothing-pending invariant depends on it. That is premise P2 below, not a refutation.
+
+I cannot refute the `(pending, mask-off)` unobservability claim: the only entries to that cell are (i) mask arm clearing IP3, which deasserts IRQ3 inline, and (ii) line-assert while masked, which never raises IRQ3. So IRQ3=0 on entry and exit in all of HEAD/fix/M_nomask; the tail's deassert is a no-op regardless of its condition. Claim stands (REASONED).
+
+Detector coverage (REASONED): rows hit (none,on), (one,on), (two,on); **no row sits in any mask-off cell** (mask is 0x2 throughout). That is defensible because the fix is a no-op in every mask-off cell — but it is also exactly where M_nomask lives, so the packet's disclosure is accurate and complete.
+
+## Q3 — mutants and (1) vs (2)
+
+REASONED; first-differing input and red rows:
+
+* `M_b` — not equivalent; first diff: first vector read with lines 8+9 pending. Reds `jz ip after`, `jz ip com1`. (Also note: observationally it *is* leg (a); a free duplicate.)
+* `M_lowbits` — not equivalent (lines 8–14 escape the condition): same first diff, same reds.
+* `M_ip6` — not equivalent (mask never carries 0x10 → unconditional deassert ≡ HEAD): same reds.
+* `M_timer` — not equivalent (local lines 8,9 outside bit 15): same reds.
+* `M_inv` — not equivalent; deasserts exactly when pending: same reds; `jz ip nt` one-sided as disclosed (IP3 already 0, no deassert needed).
+* `M_nomask` — EQUIVALENT (observationally): its condition differs from the fix only in (pending, mask-off), where the deassert is a no-op. No row can red; not an escape, correctly classified.
+* `M_del` — EQUIVALENT *contingently*: for every input, the nothing-pending state has IRQ3 already low (Q2 argument), so the deleted deassert is a no-op on every path — **if** no unenumerated `INTERRUPT_ASSERT(d->mips_irq_3)` site exists. The M_del leg measures this.
+
+Ship (1), the conditional. The argument that settles it for me (REASONED): under *every possible* assert-site census, (1) is HEAD-minus-pending-cells; (2) is HEAD-minus-pending-cells only if the census holds. The conditional is also robust to future drift a deletion is not, and it preserves — in code — the one behavior the unmeasurable NT comment names. Record for (2): measured 13/13 ≡ (1); not shipped, because deletion asserts "the NT-era deassert was dead," which is true today only given P2.
+
+## Q4 — vehicle
+
+READ + REASONED: gate 4 is the only gate holding `$ARC_RIG/gxsec-gxemul` (per packet); a cold 40 s single-step probe beside a full OpenBSD boot is proportionate. No row free-runs; every stimulus is a synchronous guest store; Cause state is latched before each `print`. One robustness note, not a change: rows should test `(cause & 0x800) != 0` rather than full-word equality, so an unrelated line (RTC on irq2, interval timer on IP6) can never flake them — the measured all-zero `jz ip none` shows today's environment is quiet, so this is hygiene for the committed probe, not a defect in the witness.
+
+## Q5 — twins
+
+REASONED: land the hunk in **both**. The divergence declaration *permits* jazz_jazzio to differ; nothing requires it, and today's byte-identity (47 lines, consistent with :657–703 — arithmetic checks, READ) is the cheap state to keep: a known-measured defect left in an identical function is a future re-divergence trap. What `build/` owes at landing: per the stated rule, `build/` compares this path against **est**, never SEC — so the est copy is build/'s reference and must carry the hunk, and whatever snapshot/baseline of est's tree build/ uses must be re-baselined. The *mechanism* of that comparison (live vs snapshot) is not in the packet (P5). Since build/ is pmax with no jazzio registered, est's defect is unobservable there — hygiene, not gate-critical.
+
+## Q6 — option-set completeness
+
+Unnamed member (REASONED): **acknowledge-on-read** — vector read clears the reported `int_asserted` bit and recomputes IRQ3 (a real interrupt-ack style). Correctly not chosen: no datasheet in tree, and the NetBSD-derived handler contract is that drivers clear at the device. A second micro-member: "drive IRQ3 to the predicate" (`if (pred) ASSERT else DEASSERT`) ≡ (1) since the assert is idempotent — trivially equivalent, ignorable.
+
+Grep-the-fork idiom: **cannot be settled from the packet.** Only the ISA sibling is inlined, and it supports the fix's parity direction (vector read reports, touches nothing). What settles the rest: whether `dev_8259.c`, `dev_footbridge.c`, `dev_i80321.c`, `dev_gc.c` ever clear pending state or CPU lines on status/vector reads.
+
+## Something else found
+
+* S1 (REASONED, premises-level): the filing's "next edge/mask write" self-heal clause is half-wrong — same-value mask rewrite heals nothing (old==new → no action in the inlined arm). The brief's own section-1 text is already the accurate version; the landing record should not propagate the filing's wording.
+* S2 (READ, pre-existing, untouched): the offset-0 vector computation scans `int_asserted` **without** `int_enable_mask` — a funnel-masked pending line would still be named by the vector while IRQ3 stays low. Orthogonal to this fix; arguably belongs beside `jazzlbmask`. One sentence in the landing record suffices.
+* S3: the probe measures only offset 0 of an "every access" claim — change (1) above.
+
+## Premises not settleable from this packet
+
+* P1: the assert/deassert grep census (Q1a). Settled by the stated grep.
+* P2: completeness of `INTERRUPT_ASSERT(d->mips_irq_3)` site enumeration — underwrites the nothing-pending invariant and hence the M_del/NT equivalence. Settled by one grep; otherwise by the M_del leg.
+* P3: STATUS_IM_SHIFT = 8 (corroborated by measured 0x800 rows).
+* P4: 0.7.0-import provenance of the tail lines (`git blame`; immaterial).
+* P5: est byte-identity and build/'s comparison/snapshot mechanism (`diff`; Q5 landing mechanics).
+* P6: other controllers' read semantics (Q6 files).
+* P7: that `/tmp/gxdivw`'s binary is unmodified HEAD (md5 trust chain stated; a clean rebuild settles it).
+* P8: bookkeeping claims ("oldest," all other July items resolved, no ledger row) — the named files settle them; none bears on the diff.
+
+VERDICT: PROCEED WITH CHANGES (2) — add an offset-2 access-with-pending-lines row to the probe to back the "every access" claim; correct the "mask write heals" wording (mask *transition* or new edge only) wherever the landing record quotes OB-22.

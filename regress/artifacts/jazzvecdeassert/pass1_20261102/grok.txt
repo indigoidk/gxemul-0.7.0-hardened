@@ -1,0 +1,82 @@
+I'll audit the premises in the packet against `GXEMUL-SEC/src/` at HEAD, starting with the Jazz interrupt path and the devices that drive it. The verdict comes after that reading, not from the brief's own claims.VERDICT: PROCEED WITH CHANGES (2)
+
+The defect is real, the SEC hunk is the right fix, and the witness procedure matches the code. Two landing changes are required: do not apply this hunk to `est/` or `build/`, and add a jazzio offset-2 row to the probe. Line numbers in `GXEMUL-SEC/src/devices/dev_jazz.c` agree with the packet (tail at 696-697, handlers at 138-157, `EXT_IMASK` at 451-483, ISA vector at 398-416, `pica_jazzio` at 780-782).
+
+## Q1 — premises
+
+The tail at 696-697 is an unconditional `INTERRUPT_DEASSERT(d->mips_irq_3)` on every access, and it does not clear `int_asserted`. `jazz_interrupt_deassert()` (153-154) and the mask arm (466-469) are the only other IRQ3 deasserts, and both are predicate-gated. Blame of 696-697 is `39748e3c` (the 0.7.0 import) and nothing since, so (e) holds and #69 did not touch this tail.
+
+(a) Call-site census is right: `dev_sn.c` and `dev_fdc.c` have no assert, and `dev_asc.c`, `dev_pckbc.c`, and `dev_ns16550.c` each have both an assert and a deassert. The pica wiring list is incomplete. `machine_arc.c:143-152` puts `pckbc` on `jazz.6` and `jazz.7`, above the cited range 154-222. That does not add a stuck-line device. One path is weaker than the census: `dev_ns16550.c:92-104` does not deassert when the IER/IIR condition is still true and `MCR.IENABLE` is clear, so a guest that drops OUT2 and leaves IER set holds the Jazz line. OpenBSD's `comclose` writes IER 0 first, which takes the else branch and deasserts.
+
+A stuck Jazz line does not become a new storm on the OpenBSD/arc boot. `pica_iointr` (`picabus.c:297-299`) is `while ((vector = inb(PVIS) >> 2) != 0)`. The vector read does not clear `int_asserted`, so a line that never drops already spins inside that loop on HEAD. The CPU-line deassert is not what lets that handler return.
+
+(b) Holds. `STATUS_IM_SHIFT` is 8 (`cop0.h:118`); CPU line 3 is `1 << 11` = 0x800 (`cpu_mips.c:250`). `mips_cpu_interrupt_assert` / `_deassert` (`cpu_mips.c:1884-1892`) OR / AND-NOT that bit into `coproc[0]->reg[COP0_CAUSE]`. `print cause` reads that same word (`cpu_mips.c:314`, `COP0_NAMES`). The witness then masks with `& 0x800` (`jazz_vector_witness.py:69-71`), so the table's `0x800` is the masked bit. Cold Cause is 0 (`mips_coproc_new` memsets the coprocessor). Delivery is suppressed while stepping (`cpu_dyntrans.c:204-206`, `if (!single_step)`), and cold Status has IE clear (`cpu_mips_coproc.c:370-374`).
+
+(c) Holds. `com_ier` is offset 1, `com_mcr` is offset 4, `IER_ETXRDY` is 0x2, `MCR_IENABLE` is 0x08, and `addr_mult` defaults to 1. The IER write sets `IIR_TXRDY` and calls `dev_ns16550_tick` in the store (`dev_ns16550.c:194-200`). The tick asserts only if `MCR.IENABLE` is set. The summary table omits it; the script writes MCR 0x08 before each IER store (`jazz_vector_witness.py:81-87`). An IER store alone, on a zeroed MCR, does not assert.
+
+(d) Holds. Lowest set bit `i` gives `(i+1)<<2` (`dev_jazz.c:667-675`). Line 8 → 0x24, line 9 → 0x28. OpenBSD does `inb(PVIS)>>2` and indexes `int_table` by that. Slot 9 in `acer_pica_61_cpu` is `com` with enable bit `0x0100` (line 8). `0x2` is `R4030_EXT_IP3`, and OpenBSD's `set_intr` stores Status IM bits `>> 10` (`trap.c:970`), so IP3 (`0x800`) becomes `0x02`. The mask arm stores `idata` unmasked and reads it back (`dev_jazz.c:459,482`).
+
+Two packet claims are too strong. "Self-healing" is also the interval timer: `DEVICE_TICK(jazz)` calls `INTERRUPT_ASSERT(d->jazz_timer_irq)` (`dev_jazz.c:294-295`), which is `jazz_interrupt_assert`, which re-asserts IRQ3 whenever `(int_asserted & 0x7fff)` and IP3 is enabled. On the cold witness `interval_start` and `jazz_timer_value` are 0, so that healer is off and HEAD's `0x0` is stable. After a guest programs the timer, a dropped IRQ3 comes back on the next tick. ISA sibling parity is only partial: `R4030_SYS_ISA_VECTOR` (`398-416`) never touches a CPU line, and it masks by `isa_int_enable_mask`. The jazzio vector does not consult a mask. After the fix the two reads agree while a line is pending; with nothing pending, jazzio still deasserts and the ISA read still does not.
+
+## Q2 — the partition
+
+The tail's predicate is `P = (int_asserted & 0x7fff) && (int_enable_mask & R4030_EXT_IP3)`. One pending line and two pending lines are the same `P`. The fix changes behavior only where `P` is true: HEAD deasserts, the fix does not. That is the cells (one or more of lines 0-14 pending, IP3 enabled). `jz ip after` and `jz ip com1` are those cells. `jz ip one` and `jz ip both` are the same cells before any jazzio access, so both builds are green there.
+
+Everywhere `P` is false, both builds deassert: no line pending (either mask), and any lines pending with IP3 disabled. `jz ip none`, `jz vec none`, and `jz ip nt` cover no-line with IP3 enabled. No row disables IP3.
+
+The (line pending, mask disabled) cell is unobservable as a difference, and I could not refute that. `int_enable_mask` is written only in the `EXT_IMASK` arm, which deasserts IRQ3 when `P` falls. `jazz_interrupt_assert` does not raise IRQ3 when the mask bit is clear. `mips_cpu_interrupt_deassert` is `Cause &= ~line`, idempotent, with no count. Reachable states obey "IRQ3 high implies `P`"; the tail is the only writer that breaks it, and only toward "IRQ3 low while `P`". When the mask is off, IRQ3 is already low, so deassert and skip-deassert read the same. `M_nomask` stays equivalent on every reachable state and on every current row. The cell can be visited; it cannot kill a mask-term mutant through Cause.
+
+## Q3 — mutants, and which diff to ship
+
+Ship the conditional form (1).
+
+| mutant | vs fixed | first input | rows |
+|---|---|---|---|
+| `M_b` unconditional deassert | differs | jazzio access while a UART line is pending and the mask is `0x2` | `jz ip after`, `jz ip com1` (11/13) |
+| `M_lowbits` `& 0x00ff` | differs | same, because lines 8 and 9 sit outside `0xff` | those two |
+| `M_ip6` | differs | same, because the mask holds `0x02`, not `0x10` | those two |
+| `M_timer` bit 15 | differs | same, UART bits are not bit 15 | those two |
+| `M_inv` | differs | deasserts while `P` is true | those two; `jz ip nt` stays green because IP3 is already clear |
+| `M_nomask` | equivalent on reachable states | would differ only if IRQ3 were high, a line were pending, and IP3 were disabled | 13/13, not an escape |
+| `M_del` delete the tail | equivalent on reachable states and on all 13 rows | differs only if IRQ3 is high and `P` is false | 13/13 |
+
+`jz ip nt` does not show that the tail deassert ran. The deassert handler has already cleared IP3 before that read. Deletion and the conditional form both leave 0. They differ in the state the Windows NT comment is the only evidence for: Cause.IP3 high while Jazz considers nothing pending. The handlers never create that state. `mips_cpu_interrupt_*` is a single Cause bit, jazz is the only connector to CPU line 3 on this machine, and a guest `mtc0` of Cause can write only IP0/IP1 (`cpu_mips_coproc.c:949-954`). Keep the conditional deassert so that state, if a guest or an old path still produces it, still clears. Record `M_del` as equivalent on the witness and on every path these functions can reach.
+
+## Q4 — vehicle
+
+Gate 4 is the right home. `gate_mips.sh` is the only gate that already runs `$ARC_RIG/gxsec-gxemul`; the pmax half uses `build/gxemul`. A cold probe adds no boot and no disk oracle. About 40 seconds on a gate the README times at ~6 minutes is acceptable. I did not re-time it.
+
+The rows are not load-sensitive if the committed probe keeps the cold-CPU shape. The UART assert is inside the IER store, stepping does not deliver interrupts, and the timer healer stays off while `interval_start` is 0. A stray `dev_ns16550_tick` re-asserts the same condition.
+
+The witness script is not the committable probe. It imports `_scratchpad/gxprobe.py` from a WSL path (`jazz_vector_witness.py:44-45`). `footbridge_sites_probe.py` imports only the standard library and forks its own pty. The committed probe has to be that shape.
+
+## Q5 — twins
+
+Land the hunk in SEC only. `build/` owes no edit.
+
+`jazz_jazzio` itself matches between the trees (SEC 657-703, est tail 661-662). The handlers do not. est's assert/deassert (`est/src/devices/dev_jazz.c:120-132`) is `int_asserted & int_enable_mask & 0x7fff`. est has no `R4030_EXT_IP3`. Pasting `product.diff` into est does not compile, and it is not "the predicate the deassert handler uses" on that tree. Keeping the function byte-identical would freeze a SEC predicate into a file whose IRQ3 model is still the pre-#69 AND. `build/src/devices/dev_jazz.c` compares against est, and the arc gate does not boot that binary.
+
+## Q6 — an option the list missed
+
+Status and vector reads elsewhere do not drop the CPU line. The line is recomputed when a source or a mask changes, and on an explicit acknowledge:
+
+- `dev_8259.c` IRR/ISR reads (`0x0a`/`0x0b`) return the register. The OCW3 poll read calls `pic8259_acknowledge`, which consumes one request and then asserts or deasserts from `irr & ~ier`. EOI updates that same predicate.
+- `dev_footbridge.c` `IRQ_STATUS` / `IRQ_RAW_STATUS` are pure reads. Enable-set and enable-clear recompute from `irq_status & irq_enable`.
+- `dev_i80321.c` `i80321_assert` / `i80321_deassert` recompute from `*status & *enable`. No status read deasserts.
+- `dev_gc.c` reads at `0x10` and `0x20` return `status & enable`. Enable writes and the clear registers (`status &= ~idata`) recompute old-vs-new, the same shape as the Jazz mask arm.
+
+The member section 4 does not name: recompute in the tail, `if (P) INTERRUPT_ASSERT else INTERRUPT_DEASSERT`, with no leading deassert. Option 5 always pulses the line low first. That pulse is not guest-visible today, because both operations only touch Cause and exception dispatch does not run inside the device access. The if/else form is what footbridge, gc, and i80321 already do, and it also repairs "IRQ3 low while `P`" if some other bug creates it. Option 1 only stops the tail from creating that state. Option 1 is sufficient for the measured bug; the if/else form is the one to prefer if the tail is touched again. A vector read that clears the reported `int_asserted` bit (an 8259-style ack) is the other unnamed member, and it is the wrong one: OpenBSD's loop services the device and reads the vector again, and this file's model is level.
+
+## Something else
+
+OpenBSD's real jazzio traffic during boot is not only the vector read. `pica_intr_establish` does `out16(PICA_SYS_LB_IE, local_int_mask)` (`picabus.c:254`). That is offset 2, which this file implements as `jazz_timer_value` (`jazzlbmask`, correctly left out of this diff). The tail still runs. The 13 rows only load offset 0, so a mutant that puts the unconditional deassert back on case 2 stays green, and that is the access the boot performs while other lines can already be pending.
+
+`com_localbus_attach` writes IER 0 and MCR 0 before `BUS_INTR_ESTABLISH`, so the UART itself is down at that store. An earlier device (ASC on `jazz.5`) can still be pending. HEAD drops IRQ3 on that store; the fix keeps it. That is the correct level result, and gate 4 is what shows whether the boot cares. The witness does not cover it.
+
+## Unsettled from this packet
+
+- Whether Windows NT needs the deassert while a line is still pending. No image, no datasheet. The fix bets that NT needed the nothing-pending case, which the conditional form keeps.
+- The recorded 11/13 and 13/13, and the two binary md5s. I did not re-run the witness. The source predicts those two red rows.
+- XKPHYS cache-attribute decode for `0x9000…`. The registered physical address `0xf0000000` matches `PICA_P_INT_SOURCE`, and the packet says the device returned `0x24`.
+
+VERDICT: PROCEED WITH CHANGES (2)
