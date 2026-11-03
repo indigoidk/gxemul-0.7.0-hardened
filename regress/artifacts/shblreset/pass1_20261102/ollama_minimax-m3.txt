@@ -1,0 +1,130 @@
+VERDICT: PROCEED WITH CHANGES (3)
+
+**READ — core result.** Given the manual’s quoted taxonomy—TLB multiple-hit is a **Reset**-category exception, while §5.5.3 addresses **General** exceptions—the reachable mapping is sound:
+
+- BL + ordinary general exception → `EXPEVT_RESET_MANUAL` (`H'020`).
+- BL + TLB multiple-hit → retain `EXPEVT_RESET_TLB_MULTI_HIT` (`H'140`).
+- BL clear → unchanged.
+
+**REASONED — required changes.**
+
+1. Make the user-break exclusion explicit, or narrow the claimed invariant to currently reachable paths. The manual expressly excludes user break, but the proposed predicate would rewrite `EXPEVT_BREAK` to manual if a raiser were added. There is no current raiser, so this is dormant rather than presently observable.
+2. Add a second **General**-category detector input, such as the proposed `EXPEVT_RES_INST`, if it is reachable at HEAD. The current rows cover one General code (TRAPA) and one Reset code (TLB multiple-hit), not two General codes as section 5 claims. Candidate (f) consequently passes both rows.
+3. State candidate (e) as exact source. `expevt < 0x100` does not describe “every reset-category code” under the packet’s own list: `H'140` is not less than `H'100`. Also correct the interrupt explanation: the later `expevt = -1` overwrites the BL assignment, so an interrupt entering this path would **not** latch the rewritten reset code.
+
+## Q1 — Premise audit
+
+**REASONED — (a) “Only code to exempt” is true only in the reachable-at-HEAD sense.** `EXPEVT_RESET_TLB_MULTI_HIT` is the only reachable code here that must retain its own value. Normatively, the manual’s rule also excludes user break, so the one-predicate implementation is not a complete encoding of the quoted rule.
+
+**REASONED — (b) No committed row depends on `H'000`.** All six committed rows run with BL clear, so the changed block is skipped. No packet-supplied guest path is shown depending on `H'000`; whether an external guest reset handler branches on zero is not checkable from the packet.
+
+**READ — (c) The no-user-break-raiser statement is correct for this tree.** `EXPEVT_BREAK` has no raiser. That makes the omission presently unobservable, not architecturally unnecessary.
+
+**REASONED — (d) Ordinary interrupts are gated, but the “would be rewritten too” sentence is wrong.** Under the packet’s settled premise that the quoted dynamic-translation gate is the ordinary interrupt route and NMI is absent, ordinary interrupts do not reach the BL block. If an interrupt nevertheless entered, the order would be:
+
+1. BL block assigns the local `expevt`;
+2. `intevt > 0` replaces that local value with `-1`;
+3. the interrupt branch does not latch `cpu->cd.sh.expevt` from it.
+
+Thus the gate is load-bearing for preventing interrupt delivery under BL, but such an interrupt would not have its EXPEVT rewritten to `H'020`/`H'000`.
+
+**REASONED — (e) The encodings and expected values are internally correct.**
+
+- `0xc301` is the stated TRAPA #1 encoding.
+- `0x500000f0 = MD | BL | 0xf0`; RB is clear.
+- BL general expects `H'020`.
+- BL multiple-hit expects `H'140`.
+- BL-clear TRAPA expects `H'160`.
+- The reset PC remains `H'A0000000`.
+
+**REASONED — evidence limitation.** The reported witness values agree with the control flow, but “binary newer than source” does not by itself prove which source produced the binary. The run is a packet report, not independently checkable here.
+
+## Q2 — Partition
+
+| Cell | Effect of fix | Detector coverage from packet |
+|---|---|---|
+| General exception, BL clear | Unchanged; original exception code and ordinary vector | **Not identified** in the six committed `tlbm` rows. The external no-BL TRAPA witness is not an in-tree detector row. |
+| General exception, BL set | `H'000` → `H'020` | New `tlbm bl general` |
+| TLB multiple-hit, BL clear | Unchanged at `H'140`; shared reset arm | Existing committed rows, including `tlbm pc` |
+| TLB multiple-hit, BL set | `H'000` → `H'140` | New `tlbm bl multihit` |
+| Interrupt, BL clear | Unchanged; ordinary delivery remains possible | No identified detector member |
+| Interrupt, BL set | Ordinary delivery is prevented | Unreachable under the stated gate; a hypothetical direct entry would overwrite the local `expevt` with `-1` |
+| User break, BL clear | Unchanged | No raiser; unreachable |
+| User break, BL set | Hypothetically `H'000` → `H'020`, which is not manual-correct | No raiser; unreachable |
+
+**REASONED — partition result.** The detector covers both changed cells and TLB multiple-hit/BL clear. It does **not** have an identified member in every reachable cell: general/BL clear and interrupt/BL clear are gaps. If literal whole-partition coverage is required, add no-BL general and interrupt cases; otherwise these are unchanged-cell coverage gaps rather than blockers for this fix.
+
+## Q3 — Candidate weakenings
+
+Let the fixed BL behavior be:
+
+`F(e) = e` when `e == H'140`, otherwise `H'020`.
+
+| Candidate | Equivalent to fixed form? | First differing input | Detector result |
+|---|---|---|---|
+| (a) Always `POWER` | No | TRAPA `H'160`: fixed `H'020`, candidate `H'000` | `bl general` reds |
+| (b) Delete block / identity | No | TRAPA `H'160`: fixed `H'020`, candidate `H'160` | `bl general` reds; `bl multihit` stays green |
+| (c) Always `MANUAL` | No | TLB multiple-hit `H'140`: fixed `H'140`, candidate `H'020` | `bl multihit` reds |
+| (d) Exempt TRAPA instead | No | TRAPA: fixed `H'020`, candidate `H'160`; multiple-hit also becomes `H'020` | Both new rows red |
+| (f) Rewrite only TRAPA | **Not globally**; equal on TRAPA and `H'140` | Any other applicable code, e.g. `EXPEVT_RES_INST` | Both current rows remain green |
+
+**REASONED — candidate (e) is underspecified and its parenthetical is false.**
+
+- If the intended mutant is:
+
+  `if (expevt != H'140 && expevt >= 0x100)`
+
+  then it is equivalent on both current probes. Its first semantic difference is at `H'000`: fixed maps it to `H'020`, while the mutant leaves it `H'000`. No current guest row can distinguish that difference because no such raiser is identified.
+
+- If the intended replacement is:
+
+  `if (expevt >= 0x100)`
+
+  then multiple-hit `H'140` becomes `H'020`; `bl multihit` reds.
+
+- If the intended body is literally:
+
+  `if (expevt < 0x100)`
+
+  then TRAPA remains `H'160`; `bl general` reds.
+
+**REASONED — floor classification.**
+
+- (a)–(d) are the stated floor mutants.
+- The identity mutant’s green multiple-hit row is acceptable only under the explicitly stated contract that the general row carries that clause.
+- The correctly written widened-exemption form is observationally equivalent on current inputs but not globally equivalent.
+- (f) is the uncovered clause-(e) weakening. A second General-category row is needed to reject it, provided `EXPEVT_RES_INST` is actually raisable.
+
+## Q4 — Option-set completeness
+
+**REASONED — omitted member:** the manual’s explicit user-break exclusion. A rule-faithful predicate would preserve both `EXPEVT_RESET_TLB_MULTI_HIT` and `EXPEVT_BREAK`. If the patch deliberately intends only current reachable behavior, that narrower invariant must be stated and a dormant-path follow-up recorded.
+
+**REASONED — the `fatal()` latch should not ride here.** A `(once)` latch is a separate behavioral change, and the guest-drivable repeated diagnostic remains a `floodclass` concern. Combining it with the EXPEVT correction would broaden the patch without helping distinguish the proposed mapping.
+
+**READ — no additional module-reset observable is required in this round.** Under the disclosed premise that the tree models neither reset variant’s module effects, changing EXPEVT cannot create a module-state difference here. This should not be described as complete architectural manual-reset emulation.
+
+## Q5 — Vehicle
+
+**REASONED — committed rows do not re-pin.** Their BL is clear, so none enters the changed block.
+
+**REASONED — `0x500000f0` is the intended preset.** It is `SH_SR_MD | SH_SR_BL | 0xf0`, with RB clear, so the committed program’s bank-0 register setup is retained.
+
+**REASONED — adding the BL-set multiple-hit case is appropriate.** It is the cell whose original `H'140` was actually clobbered to `H'000`.
+
+## Premises not checkable from the packet
+
+1. **Whether `EXPEVT_RES_INST` is reachable at HEAD and how to trigger it.**  
+   **Single settling fact:** a HEAD call-graph/caller entry showing that `sh_exception()` receives `EXPEVT_RES_INST`, together with one deterministic guest input.
+
+2. **Whether any in-tree or external guest reset handler depends on latched `H'000`.**  
+   **Single settling fact:** a complete inventory of guest `expevt` comparisons, especially tests against zero.
+
+3. **Whether all ordinary interrupt entry routes are covered by the quoted gate.**  
+   **Single settling fact:** the complete list of interrupt-to-`sh_exception()` call sites, not merely the dynamic-translation path.
+
+4. **Whether the reported witness binary was built from `987cb596`.**  
+   **Single settling fact:** a build manifest or binary/source hash linking the executed binary to that commit.
+
+**REASONED — recommended landing conditions.** Add or settle the second General-code case, make the user-break treatment explicit, and rewrite candidate (e) and the interrupt wording. A no-BL General detector row is advisable if the partition-coverage requirement is literal.
+
+VERDICT: PROCEED WITH CHANGES (3)

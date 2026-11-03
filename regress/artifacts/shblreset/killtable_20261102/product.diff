@@ -1,0 +1,28 @@
+--- /tmp/gxdivw/src/cpus/cpu_sh.c	2026-10-25 16:35:18.000000000 -0500
++++ /tmp/gxfix577/src/cpus/cpu_sh.c	2026-11-02 18:11:03.422929869 -0600
+@@ -910,11 +910,20 @@
+ 	if (cpu->cd.sh.sr & SH_SR_BL) {
+ 		fatal("[ sh_exception(): BL bit already set. ]\n");
+ 
+-		/*  This is actually OK in two cases: a User Break,
+-		    or on NMI interrupts if a special flag is set?  */
+-		/*  TODO  */
+-
+-		expevt = EXPEVT_RESET_POWER;
++		/*  #577: a general exception taken with BL set is a MANUAL
++		    reset: sh7750_hardware.txt 5.5.3 (:12302-12304) and 5.6.1
++		    (2) Manual Reset, :12376 and :12383-12384 -- "Exception code
++		    H'020 is set in EXPEVT" -- not a power-on reset (H'000),
++		    which is what stood here.  The two TLB multiple-hit
++		    exceptions are reset-category in their own right (Table
++		    5.2, :12006 and :12010; code H'140, :12461) and keep their
++		    code.  A user break under BL is suppressed at the UBC
++		    (:41448-41452) and never reaches here; EXPEVT_BREAK has no
++		    raiser in this tree.  An interrupt cannot latch a code here
++		    either: cpu_dyntrans.c delivers none while BL is set, and
++		    the intevt path below discards expevt before storing it.  */
++		if (expevt != EXPEVT_RESET_TLB_MULTI_HIT)
++			expevt = EXPEVT_RESET_MANUAL;
+ 	}
+ 
+ 	if (cpu->is_halted) {

@@ -1,0 +1,161 @@
+VERDICT: PROCEED WITH CHANGES (3)
+
+---
+
+### Summary of Required Changes Before Commit
+
+1. **Fix the 14-column row-name overflow that breaks `gate_sh_rounding.sh`, and sync the gate to the 10-row working-tree probe (`READ` / `REASONED`)**:
+   - In [brief_shblreset_p1.md](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/w577/brief_shblreset_p1.md#L185-L186), the proposed row names `tlbm bl general` (15 chars) and `tlbm bl multihit` (16 chars) exceed the `%-14s` column width in [`check()`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sh_tlbmulti_probe.py#L88) (`print("%-14s %-24s ..." % (name, got, want, ...))`). Any row name with `len(name) >= 14` is followed by only **one** space, which causes `n=$(count "$TMLOG" "^$v  .*ok$")` in [gate_sh_rounding.sh](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_sh_rounding.sh#L257) (two spaces after `$v`) to match `0` times and fail the gate even when the probe prints `ok`.
+   - The working tree's [sh_tlbmulti_probe.py](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sh_tlbmulti_probe.py#L224-L237) already shortens the names to $\le 13$ chars (`tlbm bl trapa` [13], `tlbm bl mhit` [12], `tlbm bl ldmis` [13], `tlbm trapa` [10]), but [gate_sh_rounding.sh](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_sh_rounding.sh#L254-L259) is still pinned to `6` rows in the working tree and must be updated to `10` rows and the 4 new row names.
+2. **Ship the 4-row addition in the working-tree probe (`tlbm bl trapa`, `tlbm bl mhit`, `tlbm bl ldmis`, `tlbm trapa`) rather than the Pass-1 brief's 2-row addition (`READ` / `REASONED`)**:
+   - Adding `tlbm bl ldmis` (`EXPEVT_ADDR_ERR_LD = 0x0e0`, which is $< \text{0x100}$) kills both the single-code mutant `if (expevt == EXPEVT_TRAPA)` (`Q3(f)`) and the `< 0x100` range-exemption mutant (`Q3(e)`).
+   - Adding `tlbm trapa` (`BL` clear, `EXPEVT_TRAPA = 0x160`) populates the otherwise empty `(general exception, BL clear)` cell of the $4 \times 2$ partition inside [sh_tlbmulti_probe.py](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sh_tlbmulti_probe.py#L236-L237).
+3. **Keep the working-tree comment in `cpu_sh.c:913-924` over the Pass-1 brief's draft comment (`READ` / `REASONED`)**:
+   - The Pass-1 brief's comment (`brief_shblreset_p1.md:38-45`) says *"A user break would be the other exemption"* and `Q1(d)` claims that an interrupt with `BL` set would have its `expevt` rewritten unless gated by `cpu_dyntrans.c`. As proved under `Q1(c)` and `Q1(d)` below, `intevt > 0` overwrites `expevt = -1` **after** the `BL` block (discarding any `expevt` rewrite before latching or switching), and a user break under `BL=1` is masked at the UBC rather than passed through `sh_exception()`. The working-tree comment at [`sh_exception()`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh.c#L913-L924) already states both facts accurately.
+
+---
+
+### Working-Tree State and Line-Number Report (`READ`)
+
+Per [brief_shblreset_p1.md](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/w577/brief_shblreset_p1.md#L14-L15) (*"if your line numbers disagree with mine, say so rather than reconciling"*), the working tree under `C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\` already has the uncommitted Pass-2 edits in place in two files, plus line offsets in two others:
+
+- **[cpu_sh.c](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh.c#L906-L1035)**: [`sh_exception()`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh.c#L906-L1035) already contains the `#577` comment and `if (expevt != EXPEVT_RESET_TLB_MULTI_HIT) expevt = EXPEVT_RESET_MANUAL;` at `:910-927` (vs. `:910-918` at HEAD in the brief). Consequently, all subsequent lines in `sh_exception()` are shifted down by **+9 lines** relative to the brief:
+  - Common `spc`/`ssr`/`sgr`/`intevt`/`expevt`/`sr` block: `:950-964` in working tree (brief `:941-955`).
+  - `switch (expevt)`: `:968` in working tree (brief `:959`).
+  - `case EXPEVT_RESET_POWER:` / `EXPEVT_RESET_MANUAL:` / `EXPEVT_RESET_TLB_MULTI_HIT:`: `:1024-1030` in working tree (brief `:1015-1021`).
+- **[dev_sh4.c](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sh4.c#L1303-L1305)**: The `sh_exception(cpu, EXPEVT_RESET_TLB_MULTI_HIT, 0, 0)` call inside [`DEVINIT(sh4)`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sh4.c#L1303-L1305) is at `:1303-1305` (brief cites `:1178`).
+- **[OUTSTANDING_BUGS.md](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md#L24092)**: `shblreset` is at `:24092` (brief cites `:24063`); `floodclass` is at `:24144`.
+- **[sh_tlbmulti_probe.py](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sh_tlbmulti_probe.py#L202-L238)** vs. **[gate_sh_rounding.sh](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_sh_rounding.sh#L254-L259)**: `sh_tlbmulti_probe.py` in the working tree has 10 rows (6 committed + `tlbm bl trapa`, `tlbm bl mhit`, `tlbm bl ldmis`, `tlbm trapa`), whereas `gate_sh_rounding.sh:254-259` still checks `6` rows.
+
+---
+
+### Section 2 Stated Questions & Q1: Premise Audit
+
+#### Q1(a) & Section 2 Question 2: Is `EXPEVT_RESET_TLB_MULTI_HIT` the only code the BL rule must exempt at HEAD?
+- **Verdict**: **TRUE (`READ` / `REASONED`)**.
+- **Census of `EXPEVT_*` definitions ([sh4_exception.h](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/sh4_exception.h#L57-L76))**:
+  - Reset-category codes defined: `EXPEVT_RESET_POWER` (`0x000`), `EXPEVT_RESET_MANUAL` (`0x020`), `EXPEVT_RESET_TLB_MULTI_HIT` (`0x140`).
+  - General-exception codes defined: `EXPEVT_TLB_MISS_LD` (`0x040`), `EXPEVT_TLB_MISS_ST` (`0x060`), `EXPEVT_TLB_MOD` (`0x080`), `EXPEVT_TLB_PROT_LD` (`0x0a0`), `EXPEVT_TLB_PROT_ST` (`0x0c0`), `EXPEVT_ADDR_ERR_LD` (`0x0e0`), `EXPEVT_ADDR_ERR_ST` (`0x100`), `EXPEVT_FPU` (`0x120`), `EXPEVT_TRAPA` (`0x160`), `EXPEVT_RES_INST` (`0x180`), `EXPEVT_SLOT_INST` (`0x1a0`), `EXPEVT_BREAK` (`0x1e0`), `EXPEVT_FPU_DISABLE` (`0x800`), `EXPEVT_FPU_SLOT_DISABLE` (`0x820`).
+- **Exhaustive census of every [`sh_exception()`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh.c#L906) call site across `GXEMUL-SEC/src` (`READ`)**:
+  1. [cpu_dyntrans.c](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L250): `sh_exception(cpu, 0, cpu->cd.sh.int_to_assert, 0)` — interrupt delivery (`expevt = 0`, `intevt > 0`).
+  2. [dev_sh4.c](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sh4.c#L1304-L1305): `sh_exception(cpu, EXPEVT_RESET_TLB_MULTI_HIT, 0, 0)` — UTLB associative write with `n_hits > 1`. (ITLB multiple-hit is not implemented per [`sh_translate_v2p()`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_sh.c#L151), and shares `EXPEVT_RESET_TLB_MULTI_HIT = 0x140`.)
+  3. [memory_sh.c](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_sh.c#L249) and [memory_sh.c](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_sh.c#L368-L369): raises `EXPEVT_TLB_MISS_LD` (`0x040`), `EXPEVT_TLB_MISS_ST` (`0x060`), `EXPEVT_TLB_MOD` (`0x080`), `EXPEVT_TLB_PROT_LD` (`0x0a0`), `EXPEVT_TLB_PROT_ST` (`0x0c0`).
+  4. [cpu_sh_instr.c](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh_instr.c): raises `EXPEVT_RES_INST` (`0x180` at `:53`, `:245`, `:3212`, `:3237`, `:3294`, `:3713`), `EXPEVT_SLOT_INST` (`0x1a0` at `:2853`, `:3210`, `:3235`, `:3292`), `EXPEVT_FPU_SLOT_DISABLE` (`0x820` at `:62`), `EXPEVT_FPU_DISABLE` (`0x800` at `:64`), `EXPEVT_ADDR_ERR_LD` (`0x0e0` at `:212`), `EXPEVT_ADDR_ERR_ST` (`0x100` at `:218`), `EXPEVT_TRAPA` (`0x160` at `:2858`).
+- Neither `EXPEVT_RESET_POWER` (`0x000`), `EXPEVT_RESET_MANUAL` (`0x020`), `EXPEVT_FPU` (`0x120`), nor `EXPEVT_BREAK` (`0x1e0`) is ever passed to `sh_exception(..., intevt=0, ...)`. Thus `EXPEVT_RESET_TLB_MULTI_HIT` (`0x140`) is the only non-general code reachable at `sh_exception()` with `intevt == 0`.
+
+#### Section 2 Question 1: Module reset effects (SH7750 Manual 5.5.3)
+- **Verdict**: **CONFIRMED OUT OF SCOPE (`READ`)**.
+- In [`sh_exception()`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh.c#L1024-L1030) (brief `:1015-1021`), the reset `case` arm (`EXPEVT_RESET_POWER` / `EXPEVT_RESET_MANUAL` / `EXPEVT_RESET_TLB_MULTI_HIT`) sets `cpu->pc = 0xa0000000; cpu->cd.sh.vbr = 0;` and updates `sr`, without resetting any peripheral module registers in [dev_sh4.c](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sh4.c). Disclosing that module-register reset is unmodelled for all reset paths in `sh_exception()` is accurate and appropriate.
+
+#### Q1(b): Does any committed row or guest path depend on `H'000` being latched on this path?
+- **Verdict**: **NO (`READ` / `REASONED`)**.
+- Cold boot in [`sh_cpu_new()`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh.c#L77-L255) leaves `cpu->cd.sh.expevt` at `0x000` (`EXPEVT_RESET_POWER`) by zero-initialization without calling `sh_exception()`.
+- In [sh_tlbmulti_probe.py](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sh_tlbmulti_probe.py#L173-L221), `tlbm single` checks `expevt == 0x00000000`, which is that untouched cold-boot initial value (no exception fires on a single hit). None of the 6 committed rows sets `SR.BL`.
+
+#### Q1(c): Is the user-break sentence right (no raiser)?
+- **Verdict**: **TRUE that `EXPEVT_BREAK` has no raiser in `src/`, WITH A COMMENT REFINEMENT (`READ` / `REASONED`)**.
+- `EXPEVT_BREAK` (`0x1e0`) is defined at [sh4_exception.h](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/sh4_exception.h#L73) and never referenced anywhere in `GXEMUL-SEC/src/`; the UBC region (`0xff200000..0xff200023`) in [`dev_sh4_access()`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sh4.c#L2024-L2037) is a stub (`/* TODO */`). Furthermore, `switch (expevt)` in [`sh_exception()`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh.c#L968-L1034) has no `case EXPEVT_BREAK:` and would hit `default: exit(1)`.
+- Architecturally, a user break when `SR.BL == 1` is suppressed at the UBC rather than delivered through `sh_exception()` as an exempted `EXPEVT_BREAK` (as the working-tree comment at [cpu_sh.c](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh.c#L920-L922) rightly states, improving on the Pass-1 brief's draft comment).
+
+#### Q1(d): Do interrupts truly never reach the block — and is the brief's walkthrough of `intevt > 0` right?
+- **Verdict**: **Interrupts never reach `sh_exception()` with `BL=1` (`READ`), Set-aside: the parenthetical claim in `Q1(d)` of the brief gets the `intevt > 0` dataflow backwards (`READ` / `REASONED`)**.
+- **Why interrupts never reach `sh_exception()` with `BL=1` (`READ`)**:
+  - The only call site with `intevt > 0` is [cpu_dyntrans.c](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L247-L250), gated by `if (cpu->cd.sh.int_to_assert > 0 && !(cpu->cd.sh.sr & SH_SR_BL) && ...)` (and [`X(sleep)`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh_instr.c#L259-L261) checks the same condition before waking).
+- **Correction to `Q1(d)`'s parenthetical (`READ` / `REASONED`)**:
+  - `Q1(d)` in [brief_shblreset_p1.md](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/w577/brief_shblreset_p1.md#L211-L213) states: *(the `intevt > 0` path sets `expevt = -1` AFTER the block -- walk it: an interrupt delivered with BL set would be rewritten too, so the `cpu_dyntrans.c` gate is load-bearing)*.
+  - Walk [`sh_exception()`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh.c#L910-L972) (brief `:910-963`) if called with `expevt = 0, intevt > 0` while `SR.BL == 1`:
+    1. At `:910-927`, the `BL` block prints `fatal("[ sh_exception(): BL bit already set. ]\n")` and rewrites local variable `expevt = EXPEVT_RESET_MANUAL` (or `EXPEVT_RESET_POWER` at HEAD).
+    2. At `:954-959` (brief `:945-950`):
+       ```c
+       if (intevt > 0) {
+           cpu->cd.sh.intevt = intevt;
+           expevt = -1;
+       } else {
+           cpu->cd.sh.expevt = expevt;
+       }
+       ```
+    3. Because `intevt > 0` runs **after** the `BL` block, `cpu->cd.sh.expevt` is **not** written, and local `expevt` is **overwritten with `-1`**, discarding the `BL` block's rewrite! Then `switch (expevt)` at `:968` takes `case -1:` (`cpu->pc = cpu->cd.sh.vbr + 0x600; break;`).
+  - Therefore, the `cpu_dyntrans.c:247` gate is load-bearing to prevent an interrupt from being *delivered* (and printing `fatal`) while `BL=1`, **not** because the `BL` block's `expevt` rewrite would survive on the `intevt > 0` path. The working-tree comment at [cpu_sh.c](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh.c#L922-L924) (*"and the intevt path below discards expevt before storing it"*) already fixes this.
+
+#### Q1(e): Are the witness rows' instruction encodings and `want` values right?
+- **Verdict**: **TRUE (`READ` / `MEASURED`)**.
+- Verified against the decoder in [`sh_instr_to_be_translated()`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh_instr.c#L4170-L5060), the executor in [cpu_sh_instr.c](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh_instr.c), and the recorded artifacts [witness_head.out](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/shblreset/witness_20261102/witness_head.out#L1-L12) and [witness_fixed.out](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/shblreset/witness_fixed.out#L1-L12):
+  - `TRAPA_1 = 0xc301`: `main_opcode = 0xc`, `r8 = 0x3`, `lo8 = 0x01`, decoded at [cpu_sh_instr.c](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh_instr.c#L4864-L4867) to [`X(trapa)`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh_instr.c#L2848-L2859), which writes `TRA = 0x04` and calls `sh_exception(cpu, EXPEVT_TRAPA, 0, 0)` (`0x160`). With `BL=1`, `want`: `expevt = 0x00000020`, `pc = 0xa0000000`. With `BL=0` (`tlbm trapa`), `want`: `expevt = 0x00000160`.
+  - `MOV_L_R0_AT_R1 = 0x2102`, `MOV_L_R4_AT_R5 = 0x2542`, `MOV_L_R6_AT_R7 = 0x2762`: `mov.l rM,@rN` (`0010 nnnn mmmm 0010`), decoded at [cpu_sh_instr.c](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh_instr.c#L4298-L4300) to [`X(mov_l_store_rm_rn)`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh_instr.c#L1408-L1432). Stores `PTEH` to UTLB entry 0 (`0xf6000000`) and entry 1 (`0xf6000100`), then writes `ASSOC` (`0xf6000080`), firing `sh_exception(cpu, EXPEVT_RESET_TLB_MULTI_HIT, 0, 0)` (`0x140`) at [dev_sh4.c](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sh4.c#L1304-L1305). With `BL=1`, `want`: `expevt = 0x00000140`, `pc = 0xa0000000`.
+  - `MOV_L_AT_R1_R2 = 0x6212` (in the working-tree [sh_tlbmulti_probe.py](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sh_tlbmulti_probe.py#L229)): `mov.l @r1,r2` (`0110 0010 0001 0010`) with `r1 = 0x8c010001`, decoded at [cpu_sh_instr.c](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh_instr.c#L4649-L4651) to [`X(load_l_rm_rn)`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh_instr.c#L739-L764), which invokes [`SH_ALIGN_CHECK_LD(addr, 3)`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh_instr.c#L209-L214) and calls `sh_exception(cpu, EXPEVT_ADDR_ERR_LD, 0, addr)` (`0x0e0`). With `BL=1`, `want`: `expevt = 0x00000020`.
+
+---
+
+### Q2: The Partition (`READ` / `REASONED`)
+
+Over the $4 \times 2$ product `{general exception, TLB multiple hit, interrupt, user break} x {BL clear, BL set}` at [`sh_exception()`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh.c#L906-L1035):
+
+| Event Category | `SR.BL == 0` (`BL` clear) | `SR.BL == 1` (`BL` set) |
+| :--- | :--- | :--- |
+| **General exception** (`0x040..0x100`, `0x160..0x1a0`, `0x800`, `0x820`) | **Unchanged** by fix: latches `expevt` as-is; vectors to `vbr + 0x100` (or `vbr + 0x400` for TLB miss).<br>**Probe coverage**: None in the 6 committed HEAD rows! Covered once working-tree row `tlbm trapa` (`0x160`) is included. | **Changed** by fix: `expevt` rewritten to `EXPEVT_RESET_MANUAL` (`0x020`) instead of `EXPEVT_RESET_POWER` (`0x000`); vectors to `0xa0000000` with `vbr = 0`.<br>**Probe coverage**: `tlbm bl trapa` (`0x160`) and `tlbm bl ldmis` (`0x0e0`). |
+| **TLB multiple hit** (`EXPEVT_RESET_TLB_MULTI_HIT = 0x140`) | **Unchanged** by fix: latches `0x140`; vectors to `0xa0000000` with `vbr = 0`.<br>**Probe coverage**: Committed rows `tlbm alive`, `tlbm expevt`, `tlbm pc`, `tlbm vbr`, `tlbm sr`. | **Changed** by fix: exempted from rewrite, so `expevt` stays `0x140` (instead of being clobbered to `0x000`); vectors to `0xa0000000` with `vbr = 0`.<br>**Probe coverage**: `tlbm bl mhit` (`0x140`). |
+| **Interrupt** (`intevt > 0`, `expevt = 0`) | **Unchanged** by fix: latches `intevt`, sets `expevt = -1`, vectors to `vbr + 0x600`.<br>**Probe coverage**: Covered by `sh_intprio_probe.py`. | **Unreachable** at `sh_exception()`: blocked by `!(cpu->cd.sh.sr & SH_SR_BL)` at [cpu_dyntrans.c](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L247) and [cpu_sh_instr.c](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh_instr.c#L260) (and if entered directly, `intevt > 0` overwrites `expevt = -1` at [cpu_sh.c](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh.c#L956)). |
+| **User break** (`EXPEVT_BREAK = 0x1e0`) | **Unreachable** in this tree: `EXPEVT_BREAK` has no raiser in `src/`, UBC at [dev_sh4.c](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sh4.c#L2024-L2037) is a stub, and `switch (expevt)` has no `case EXPEVT_BREAK:`. | **Unreachable** in this tree (and suppressed at the UBC on hardware when `BL=1`). |
+
+---
+
+### Q3: Candidate Weakenings (`READ` / `REASONED`)
+
+For each candidate replacement of `if (expevt != EXPEVT_RESET_TLB_MULTI_HIT) expevt = EXPEVT_RESET_MANUAL;` inside `if (cpu->cd.sh.sr & SH_SR_BL)` at [`sh_exception()`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh.c#L925-L926):
+
+| Candidate | Equivalent? | First Differing Input (`SR.BL = 1`) | Reddened Row(s) | Classification |
+| :--- | :--- | :--- | :--- | :--- |
+| **(a)** `expevt = EXPEVT_RESET_POWER;` (HEAD verbatim) | **No** | Any exception with `BL=1` (`expevt = 0x160` or `0x140`): stores `0x000`. | `tlbm bl trapa` (`got 0x000`, `want 0x020`), `tlbm bl ldmis` (`got 0x000`, `want 0x020`), `tlbm bl mhit` (`got 0x000`, `want 0x140`) | **Floor** (clause (b): verbatim HEAD reinstatement) |
+| **(b)** `if (sr & SH_SR_BL)` block deleted (or rewrite removed) | **No** | Any general exception with `BL=1` (`expevt = 0x160`): leaves `expevt = 0x160` and vectors to `vbr + 0x100` instead of `0xa0000000`. (`tlbm bl mhit` stays green.) | `tlbm bl trapa` (`got 0x160`, `want 0x020`), `tlbm bl ldmis` (`got 0x0e0`, `want 0x020`) | **Floor** (clause (c): identity body) |
+| **(c)** `expevt = EXPEVT_RESET_MANUAL;` (exemption removed) | **No** | `EXPEVT_RESET_TLB_MULTI_HIT` (`0x140`) with `BL=1`: rewrites `0x140` to `0x020`. | `tlbm bl mhit` (`got 0x020`, `want 0x140`) | **Floor** (clause (d): predicate dropped to `true`) |
+| **(d)** `if (expevt != EXPEVT_TRAPA) expevt = EXPEVT_RESET_MANUAL;` (wrong code exempted) | **No** | Both `EXPEVT_TRAPA` (`0x160` left as `0x160`) and `EXPEVT_RESET_TLB_MULTI_HIT` (`0x140` rewritten to `0x020`) with `BL=1`. | `tlbm bl trapa` (`got 0x160`, `want 0x020`) **and** `tlbm bl mhit` (`got 0x020`, `want 0x140`) | **Floor** (clause (d): predicate corrupted) |
+| **(e)** Exemption widened to `expevt < 0x100` (or `expevt < 0x100 \|\| expevt == 0x140`) | **No** (see note below on `0x040..0x0e0` vs. `{0x000, 0x020}`) |- If written `if (expevt >= 0x100) expevt = 0x020;`: differs on `0x140` (rewritten to `0x020`) **and** on general codes `0x040..0x0e0` (left unrewritten).<br>- If written `if (expevt >= 0x100 && expevt != 0x140) expevt = 0x020;`: differs on general codes `0x040..0x0e0` (`TLB_MISS_LD/ST`, `TLB_MOD`, `TLB_PROT_LD/ST`, `ADDR_ERR_LD`). | - First form reds `tlbm bl mhit` (`got 0x020`) and `tlbm bl ldmis` (`got 0x0e0`).<br>- Second form **escapes** the Pass-1 2-row table (`TRAPA` is `0x160 >= 0x100`), but **reds** `tlbm bl ldmis` (`0x0e0 < 0x100`: `got 0x0e0`, `want 0x020`)! | **Floor** once `tlbm bl ldmis` (`0x0e0`) is in the table; see note below for `{0x000, 0x020}` |
+| **(f)** `if (expevt == EXPEVT_TRAPA) expevt = EXPEVT_RESET_MANUAL;` | **No** | Any non-`TRAPA` general exception with `BL=1` (e.g. `EXPEVT_ADDR_ERR_LD = 0x0e0` or `EXPEVT_RES_INST = 0x180`): leaves `expevt` unrewritten and takes the general vector. | **Escapes** the Pass-1 2-row table; **reds** `tlbm bl ldmis` (`got 0x0e0`, `want 0x020`) in the working-tree 10-row table. | **Floor** on `(f)` once `tlbm bl ldmis` rides; **Clause (e)** disclosure for the remaining 10 undriven general codes |
+
+- **Important check on `Q3(e)`'s premise (`READ` / `REASONED`)**:
+  - `Q3(e)` in [brief_shblreset_p1.md](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/w577/brief_shblreset_p1.md#L221-L222) describes `expevt < 0x100` as *"every reset-category code"*. That is **false** in SuperH encoding ([sh4_exception.h](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/sh4_exception.h#L57-L68)):
+    1. Only `0x000` (`EXPEVT_RESET_POWER`) and `0x020` (`EXPEVT_RESET_MANUAL`) are $< \text{0x100}$ reset codes; `EXPEVT_RESET_TLB_MULTI_HIT` is `0x140` ($\ge \text{0x100}$).
+    2. Codes `0x040`, `0x060`, `0x080`, `0x0a0`, `0x0c0`, and `0x0e0` are **general exceptions** (`TLB_MISS_LD`, `TLB_MISS_ST`, `TLB_MOD`, `TLB_PROT_LD`, `TLB_PROT_ST`, `ADDR_ERR_LD`), all of which are $< \text{0x100}$ and all of which have active raisers in `memory_sh.c` / `cpu_sh_instr.c`!
+  - By contrast, if a mutant widens the exemption strictly to the true reset-category codes `{0x000, 0x020, 0x140}` (`expevt != 0x140 && expevt > 0x020`), that mutant **is** strictly equivalent in this tree because `0x000` and `0x020` have no `intevt == 0` callers to `sh_exception()`.
+- **Should a second general-code row ride?**
+  - **YES (`REASONED`)**: The working tree's `tlbm bl ldmis` ([sh_tlbmulti_probe.py](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sh_tlbmulti_probe.py#L228-L231), 1-step misaligned load `mov.l @r1,r2` at `CODE + 1` raising `EXPEVT_ADDR_ERR_LD = 0x0e0`) simultaneously kills `(f)` (`expevt == EXPEVT_TRAPA`) **and** kills the `< 0x100` exemption widening in `(e)` (`0x0e0 < 0x100`). The remaining 10 reachable general codes (`0x040..0x0c0`, `0x100`, `0x180`, `0x1a0`, `0x800`, `0x820`) are then cleanly disclosed under Clause (e).
+
+---
+
+### Q4: Option-Set Completeness & Unlatched `fatal()` (`READ` / `REASONED`)
+
+- **Option-set completeness**: **COMPLETE (`READ` / `REASONED`)**. Both hardware deviations in [`sh_exception()`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh.c#L910-L927) under `SR.BL == 1` (wrong reset constant `0x000` vs. `0x020` for general exceptions, and missing exemption for `EXPEVT_RESET_TLB_MULTI_HIT = 0x140`) are completely resolved by the 2-line fix. Notice that the downstream `switch (expevt)` at [cpu_sh.c](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh.c#L1024-L1030) already groups `EXPEVT_RESET_POWER`, `EXPEVT_RESET_MANUAL`, and `EXPEVT_RESET_TLB_MULTI_HIT` into the exact same reset vector arm (`cpu->pc = 0xa0000000; cpu->cd.sh.vbr = 0;`).
+- **Should the unlatched `fatal("[ sh_exception(): BL bit already set. ]\n")` at `:911` be latched `(once)` in this round?**
+  - **NO — leave it to `floodclass` ([OUTSTANDING_BUGS.md](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md#L24144)) (`REASONED`)**:
+    1. It is a diagnostic-rate concern (`floodclass`), orthogonal to the `EXPEVT` value fix in `#577`.
+    2. Note also for `floodclass` when it arrives: `fatal("[ sh_exception(): BL bit already set. ]\n")` at `:911` currently fires even when `expevt == EXPEVT_RESET_TLB_MULTI_HIT`, where `BL` being set is *not* what escalates the exception to reset (TLB multiple-hit is already a reset exception regardless of `BL`). Both the `(once)` latch and whether the message should be gated on `expevt != EXPEVT_RESET_TLB_MULTI_HIT` belong in `floodclass`.
+
+---
+
+### Q5: The Vehicle ([sh_tlbmulti_probe.py](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sh_tlbmulti_probe.py) & [gate_sh_rounding.sh](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_sh_rounding.sh)) (`READ` / `REASONED` / `MEASURED`)
+
+1. **Do any of the 6 committed rows re-pin under the fix?**
+   - **NO (`READ` / `MEASURED`)**.
+   - At cold reset in [`sh_cpu_new()`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh.c#L123), `cpu->cd.sh.sr = SH_SR_MD | SH_SR_IMASK` (`0x400000f0`, so `BL = 0` and `RB = 0`). [`sh_ipl_g_emul_init()`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/promemul/sh_ipl_g.c#L52-L67) sets `vbr = 0x8c000000` and does not touch `sr`.
+   - Committed rows `tlbm alive`, `tlbm expevt`, `tlbm pc`, `tlbm vbr`, and `tlbm single` ([sh_tlbmulti_probe.py](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sh_tlbmulti_probe.py#L202-L221)) run with that default `sr = 0x400000f0` (`BL = 0`); `tlbm sr` pre-sets `sr=0x40008000` (`MD | FD`, `BL = 0`).
+   - Thus none of the 6 committed rows enters `sh_exception()` with `SR.BL` set, and all 6 produce identical values before and after the fix.
+
+2. **Is the `sr=0x500000f0` pre-set right (RB clear, so the program's bank-0 seeds are the ones the stores use)?**
+   - **YES (`READ` / `REASONED`)**, and the underlying debugger mechanism is worth noting:
+   - `0x500000f0` is `SH_SR_MD (0x40000000) | SH_SR_BL (0x10000000) | SH_SR_IMASK (0x000000f0)`, with `SH_SR_RB (0x20000000)` **clear** (bank 0).
+   - In the GXemul debugger, `sr=0x500000f0` executes [`debugger_assignment()`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/debugger/debugger.c#L540-L579) $\to$ [`debugger_parse_name()`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/debugger/debugger_expr.c#L164-L173) $\to$ `settings_access()`, which writes directly to the `uint32_t` field registered by [`CPU_SETTINGS_ADD_REGISTER32("sr", cpu->cd.sh.sr)`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh.c#L129) **without** calling [`sh_update_sr()`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh.c#L846-L860).
+   - Because `cpu->cd.sh.sr` starts at `0x400000f0` (`RB = 0`, bank 0 active in `r[0..7]`), keeping `RB = 0` in `0x500000f0` ensures `cpu->cd.sh.sr`'s `RB` bit stays synchronized with the active bank-0 registers (`r0`, `r1`, `r4`, `r5`, `r6`, `r7`) during the 3 store instructions, **and** ensures that when [`sh_exception()`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh.c#L961-L962) subsequently calls `sh_update_sr(cpu, cpu->cd.sh.sr | SH_SR_MD | SH_SR_RB | SH_SR_BL)`, `(new_sr & SH_SR_RB) != (old_sr & SH_SR_RB)` evaluates true (`1 != 0`) and swaps `r[0..7]` with `r_bank[0..7]`. (If `sr=...` had set `RB = 1` via direct `settings_access` write, `sh_update_sr()` on exception entry would see `old_sr & SH_SR_RB` already `1` and skip the bank swap!)
+
+3. **Gate alignment check ([gate_sh_rounding.sh](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_sh_rounding.sh#L254-L259)) (`READ` / `REASONED`)**:
+   - As detailed in Change 1 at the top, [gate_sh_rounding.sh](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_sh_rounding.sh#L254-L259) checks `n=$(count "$TMLOG" "^$v  .*ok$")` (two spaces after `$v`), while [`check()`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sh_tlbmulti_probe.py#L88) formats `name` with `%-14s`. Therefore row names must be $\le 13$ chars (`tlbm bl trapa`, `tlbm bl mhit`, `tlbm bl ldmis`, `tlbm trapa`), and [gate_sh_rounding.sh](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_sh_rounding.sh#L254-L259) must be updated from `6` to `10` rows with those exact 4 names added to the `for v in ...` loop.
+
+---
+
+### What Could Not Be Settled (`READ`)
+
+1. **Direct read of `C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\sh7750_hardware.txt`**: The `read_file` tool rejected `sh7750_hardware.txt` (`2,426,348 bytes`) as a binary file (`appears to be a binary file ... and cannot be read as text`, due to embedded control/form-feed bytes from PDF extraction), and per the strict read-only seat rules no shell commands were run to inspect it. All hardware manual citations (`:12183-12202`, `:12302-12312`, `:12377-12405`, `:12708-12755`, `:41448-41452`) were verified from the verbatim excerpts inlined in [brief_shblreset_p1.md](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/w577/brief_shblreset_p1.md#L73-L120) and [cpu_sh.c](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh.c#L875-L924).
+2. **Live execution of the working-tree 10-row probe and gate**: Per the read-only seat rules (*"Write NOTHING anywhere: no files, no builds, no git commands; run nothing in the background"*), no binaries or scripts were executed. Runtime claims (`MEASURED`) are taken strictly from the pre-recorded witness outputs at [witness_head.out](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/shblreset/witness_20261102/witness_head.out#L1-L12) and [witness_fixed.out](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/shblreset/witness_fixed.out#L1-L12).
+
+---
+
+VERDICT: PROCEED WITH CHANGES (3)

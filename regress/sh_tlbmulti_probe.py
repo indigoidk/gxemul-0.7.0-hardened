@@ -52,9 +52,10 @@ Two further facts worth carrying, both measured rather than assumed:
 
   * The exception flips `SR.RB`, so `r0-r7` are the other bank afterwards.  Anything
     read back across the fault uses `r8-r15`, which are unbanked.
-  * `cpu_sh.c` rewrites ANY expevt to `EXPEVT_RESET_POWER` when `SR.BL` is set, before
-    the assignment.  This tree resets with BL clear, so the path is live -- but a
-    BL-set guest silently latches `0x000` instead.
+  * `cpu_sh.c` USED TO rewrite ANY expevt to `EXPEVT_RESET_POWER` when `SR.BL` is set
+    (a BL-set guest silently latched `0x000`, the multiple hit included).  #577 makes it
+    `EXPEVT_RESET_MANUAL` with the multiple-hit code exempt; the BL rows at the end of
+    this file pin both halves.
 """
 import os
 import pty
@@ -88,11 +89,13 @@ def row(name, got, want):
           % (name, got, want, "#457", "ok" if ok else "FAIL"))
 
 
-def session(pre=(), entry1_vpn=VPN_A, settle=8.0, trigger=True):
+def session(pre=(), entry1_vpn=VPN_A, settle=8.0, trigger=True, program=None, steps=None):
     """Install two UTLB entries then do the associative write. Returns (regs, died).
 
     `pre` runs before the trigger -- used to pre-set SR so the reset transition's
     SR update is observable.
+    #577: `program` (a list of 16-bit words placed at CODE) and `steps` replace the
+    three-store multiple-hit program for the BL rows; the default is that program.
     """
     pid, fd = pty.fork()
     if pid == 0:
@@ -122,14 +125,18 @@ def session(pre=(), entry1_vpn=VPN_A, settle=8.0, trigger=True):
     #  defect and reported DEAD on the committed build -- a control failing for the
     #  very reason it exists to rule out.  Rule 4: did it fail for the reason under
     #  test?  It did not.
-    cmds = list(pre) + ([] if not trigger else [
-        "r0=0x%08x" % VPN_A, "r1=0x%x" % ENTRY0,
-        "r4=0x%08x" % entry1_vpn, "r5=0x%x" % ENTRY1,
-        "r6=0x%08x" % VPN_A, "r7=0x%x" % ASSOC,
-        "put h 0x%x, 0x%04x" % (CODE, MOV_L_R0_AT_R1),
-        "put h 0x%x, 0x%04x" % (CODE + 2, MOV_L_R4_AT_R5),
-        "put h 0x%x, 0x%04x" % (CODE + 4, MOV_L_R6_AT_R7),
-        "pc=0x%x" % CODE, "step 3"]) + [
+    if program is None:
+        trig = ["r0=0x%08x" % VPN_A, "r1=0x%x" % ENTRY0,
+                "r4=0x%08x" % entry1_vpn, "r5=0x%x" % ENTRY1,
+                "r6=0x%08x" % VPN_A, "r7=0x%x" % ASSOC,
+                "put h 0x%x, 0x%04x" % (CODE, MOV_L_R0_AT_R1),
+                "put h 0x%x, 0x%04x" % (CODE + 2, MOV_L_R4_AT_R5),
+                "put h 0x%x, 0x%04x" % (CODE + 4, MOV_L_R6_AT_R7),
+                "pc=0x%x" % CODE, "step 3"]
+    else:   # #577: an arbitrary short program; the caller seeds registers through `pre`
+        trig = ["put h 0x%x, 0x%04x" % (CODE + 2 * i, w) for i, w in enumerate(program)]
+        trig += ["pc=0x%x" % CODE, "step %d" % (steps if steps is not None else len(program))]
+    cmds = list(pre) + ([] if not trigger else trig) + [
         #  `registers` does not exist as a command, and a bare dump would not show
         #  these anyway: cpu_sh.c prints expevt/vbr only under `coprocs & 2`.
         #  `print <name>` reads them through CPU_SETTINGS_ADD_REGISTER32.  Established
@@ -190,5 +197,46 @@ row("tlbm sr", reg(t2, "sr") if not died2 else "died", "0x700000f0")
 #  program.
 t3, died3 = session(entry1_vpn=VPN_B)
 row("tlbm single", "died" if died3 else reg(t3, "expevt"), "0x00000000")
+
+
+#  ---- #577: a general exception taken with SR.BL set is a MANUAL reset -----------
+#  sh7750_hardware.txt 5.5.3 (:12302-12304): with BL set, a general exception other than a
+#  user break performs a manual reset; EXPEVT is H'020 (5.6.1 (2) Manual Reset, :12376 and
+#  :12383-12384 "Exception code H'020 is set in EXPEVT").  Table 5.2 (:12006,
+#  :12010) lists the two TLB multiple-hit exceptions as reset-category in their own right,
+#  code H'140 (:12461), so the BL rule must not touch them.  HEAD's sh_exception() rewrote
+#  EVERY code to EXPEVT_RESET_POWER (H'000) when BL was set; #577 makes it EXPEVT_RESET_MANUAL
+#  with the multiple-hit code exempt.  Rows run under sr = MD|BL (0x500000f0, RB clear as in the
+#  committed rows; the debugger's `sr=' writes the field without a bank swap -- Fable, pass 2);
+#  `tlbm trapa' is the BL-CLEAR control that pins
+#  the general vector's own code.  Contract: TRAPA (H'160) and a misaligned load (H'0E0) are
+#  the two general codes driven; any edit that moves a code between the rewritten set and the
+#  exempt set ONLY at a code this table does not drive -- H'040-H'0C0, H'100, H'120, H'180,
+#  H'1A0, H'800, H'820 -- in either direction (the rewrite keyed to such a code, or an exemption
+#  added at one) is clause-(e) disclosure.  The identity medium for this predicate round is the
+#  REWRITE deleted (the guard and its fatal() stay): `tlbm bl trapa' and `tlbm bl ldmis' then
+#  read their own codes (red); `tlbm bl mhit' reads H'140 either way and cannot carry it.  A
+#  qualification of the GUARD itself on a state no BL row varies -- SR.RB (every BL row presets
+#  RB clear, while a second exception is taken with RB set), SR.IMASK (every BL row presets 0xf;
+#  the committed `tlbm sr' row presets 0x40008000, IMASK 0, with BL clear) or SR.MD (every BL row
+#  presets MD|BL; BL set with MD clear is a guest-reachable state the rows never hold) or SR.FD
+#  (every row presets FD clear) --
+#  keeps all ten rows green and is disclosed, not rowed (Grok and Opus, F2; unmeasured, no score
+#  claimed); the cheapest rows if ever wanted: sr=0x700000f0, trapa #1, want H'020; and
+#  sr=0x100000f0 (BL set, MD clear), trapa #1, want H'020.
+#  Names stay at 13 characters or fewer: row() prints `%-14s' and the gate anchors `^$v  .*ok$'
+#  with TWO spaces (Grok, pass 1 -- the padded-column trap).
+SR_MD_BL = 0x500000f0
+SR_MD = 0x400000f0
+TRAPA_1 = 0xc301            # trapa #1  : 1100 0011 0000 0001
+MOV_L_AT_R1_R2 = 0x6212     # mov.l @r1,r2 : 0110 0010 0001 0010
+t5, died5 = session(pre=["sr=0x%08x" % SR_MD_BL], program=[TRAPA_1], steps=1)
+row("tlbm bl trapa", "died" if died5 else reg(t5, "expevt"), "0x00000020")
+t6, died6 = session(pre=["sr=0x%08x" % SR_MD_BL])
+row("tlbm bl mhit", "died" if died6 else reg(t6, "expevt"), "0x00000140")
+t7, died7 = session(pre=["sr=0x%08x" % SR_MD_BL, "r1=0x%08x" % (CODE + 1)], program=[MOV_L_AT_R1_R2], steps=1)
+row("tlbm bl ldmis", "died" if died7 else reg(t7, "expevt"), "0x00000020")
+t8, died8 = session(pre=["sr=0x%08x" % SR_MD], program=[TRAPA_1], steps=1)
+row("tlbm trapa", "died" if died8 else reg(t8, "expevt"), "0x00000160")
 
 print("SH_TLBMULTI_RESULT=%d/%d" % (sum(1 for r in rows if r), len(rows)))

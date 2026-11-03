@@ -8236,7 +8236,7 @@ before anyone cites those constants as architectural.
 | site | what it does | what the manual says |
 |---|---|---|
 | `cpu_sh.c:312-316` | priority 0 → `fatal()` + **`exit(1)`**, commented *"Interrupt not implemented? Hm."* | Priority 0 is **legal and documented** — *"When level 0 is set, the interrupt is masked and interrupt requests are ignored"* — and IPRA/IPRB/IPRC **reset to `H'0000`**, so everything is priority 0 out of reset. A guest-reachable host kill, latent only because landisk kernels program IPRA before starting the timer. |
-| `cpu_sh.c:653` | BL already set → `EXPEVT_RESET_POWER` (`0x000`) | *"a manual reset is executed. The value in EXPEVT at this time is **H'0000 0020**"* → `EXPEVT_RESET_MANUAL`. Found independently by two sweeps. |
+| `cpu_sh.c:653` | BL already set → `EXPEVT_RESET_POWER` (`0x000`) | *"a manual reset is executed. The value in EXPEVT at this time is **H'0000 0020**"* → `EXPEVT_RESET_MANUAL`. Found independently by two sweeps. **[`#577`, 2026-11-02: FIXED (the block is at `:910-918` of 987cb596, not `:653` -- a stale cite, as two F2 seats noted); the manual-reset code is stored and the multiple-hit code H'140 exempted; see the `#577` section at the end of this file.]** |
 | `memory_sh.c:328-333` | user access ≥ `0x80000000` → `EXPEVT_TLB_MISS_LD/ST` | Listed under **Data Address Error**: *"Exception code H'0E0 (for a read access) or H'100"*. Guest kernels dispatch on EXPEVT. |
 | `cpu_sh_instr.c:3057` | `X(fcnvsd_fpul_drn)` does `cpu->cd.sh.fpul = (int32_t) op1.f;` | FCNVSD reads FPUL and never writes it. **The emulator destroys FPUL on every FCNVSD**, with the same UB `(int32_t)` cast `#297` removed from FTRC. New, unfiled, and the smallest fix in the list. |
 | `memory_sh.c:358-364` | kernel access to `0xe4000000..0xefffffff` → `fatal()` + `exit(1)` | *"Reserved area"*, and *"Operation is not guaranteed"*. Undefined is not process death. |
@@ -24091,6 +24091,7 @@ the prose: 3042-3063 (line numbers of this file as of commit `db8b1a33`) -- `reg
 
 #### `shblreset` (MED, an id for an entry this file already carries in prose) -- BL already set stores EXPEVT_RESET_POWER instead of EXPEVT_RESET_MANUAL
 the prose: 8145 (line numbers of this file as of commit `db8b1a33`) -- `regress/artifacts/idless_20261002/IDLESS_DISPOSITIONS.md`  [the governing line's quoted title (grok)]
+**[`#577`, 2026-11-02: FIXED -- `sh_exception()`'s BL block stores `EXPEVT_RESET_MANUAL` (H'020) for a general exception and keeps the TLB multiple-hit code (H'140); rung-3 witness 2/4 -> 4/4 on unmodified `-E landisk`, the `sh_tlbmulti_probe.py` detector 7/10 -> 10/10 in gate 10.  See the `#577` section at the end of this file.]**
 
 #### `shuseraddr` (MED, an id for an entry this file already carries in prose) -- user access to P1/P2, the reserved hole, and P4 raises a TLB miss
 the prose: 8146 (line numbers of this file as of commit `db8b1a33`) -- `regress/artifacts/idless_20261002/IDLESS_DISPOSITIONS.md`  [the governing line's quoted title (grok)]
@@ -26414,3 +26415,40 @@ src/devices/dev_dec5800.c:359-367 at 987cb596: The DEC 5800 CPU-mask registers a
   `EXPECT_PTY_PROBES` 80 -> 81 (`derive_hygiene_pins.sh --write`; the probe is prompt-detecting, not promptless); `check_probe_wiring.py`
   gains the detector's MANIFEST key and one entry per artifact script.
 * **Landed** as `2a24d9b7` (2026-11-02 22:10; the hook 0 hard, 5 soft); the pass-2 receipt keyed to it in `regress/pass2_ledger.tsv`; the row stays `held` (see its hold question: Fable as adjudicator rather than seat; Astra walled through pass 2 and F2; the deletion ruling).
+
+## 2026-11-02 -- `#577` shblreset: a SuperH general exception taken with SR.BL set stores the manual-reset code (H'020) and keeps the multiple-hit code
+
+* **FIXED** -- `shblreset` (MED, WRONG-RESULT): `src/cpus/cpu_sh.c`, `sh_exception()` (987cb596 :910-918): with SR.BL set the block printed its
+  `fatal()` and stored `EXPEVT_RESET_POWER` (H'000) for EVERY exception code under a `/* TODO */`, so a guest kernel's reset handler read
+  the power-on code for a manual reset and for a TLB multiple hit alike.  Now `if (expevt != EXPEVT_RESET_TLB_MULTI_HIT) expevt =
+  EXPEVT_RESET_MANUAL;` with a `#577` comment carrying the manual's sentences (SH7750 5.5.3 `:12302-12304`, 5.6.1 (2) `:12376`, H'020 at
+  `:12383-12384`, 5.7.2.a `:13164-13166`; Table 5.2 `:12006`/`:12010` and H'140 at `:12461`/`:12499`), why a user break never reaches
+  the block (the UBC suppresses it under BL, `:41448-41452`; `EXPEVT_BREAK` has no raiser) and why an interrupt cannot latch a code here.
+  Byte-identical in `GXEMUL-SEC` and `est/`.  Witness (rung 3, unmodified `-E landisk`, the rig kernel for construction only):
+  `regress/artifacts/shblreset/witness_20261102/` 2/4 on HEAD (both BL rows read H'000) -> 4/4 fixed, same script.  Detector:
+  `regress/sh_tlbmulti_probe.py` gains `program=`/`steps=` and four rows (`tlbm bl trapa`, `tlbm bl mhit`, `tlbm bl ldmis`, `tlbm trapa`),
+  gate 10's pin 6 -> 10 (EQUALITY); kill table `killtable_20261102/` -- base 7/10, fixed 10/10, the reinstated store 7/10 (HEAD's binary
+  byte for byte), the rewrite deleted 8/10, five body-side forms 8-9/10, the guard widened to MD 9/10 (post-table, predicted), and ONE
+  TOTAL ESCAPE (`&& expevt != EXPEVT_RES_INST`, 10/10) that is the disclosed clause-(e) class, filed below.  Panel: pass 1 (design)
+  Fable 5.1 PWC (3), Grok 4.7 PWC (3), Argon (Gemini web) PROCEED, GLM 5.3 PWC (2), DeepSeek PWC (1), minimax PWC (3), kimi PWC (4), Opus 5.5
+  PWC (4), Astra WALLED (its pass 1 is OWED: re-fire scheduled after the 01:10 reset); pass 2 Fable SWC (3), Grok SWC (1), Argon, Astra SWC (3);
+  F2 Fable RWC (4), Grok RWC (1), Astra RWC (4), Argon 20/2/18, GLM RWC (4), DeepSeek RWC (1), minimax RWC (3), kimi RWC (3), Opus RWC (5);
+  agy (late, 22:4x-22:5x) PWC (3) and RWC (3).  Every answering seat: the two-line product diff is right and complete; the changes were records and the detector's
+  contract (seven comment-only probe edits, `killtable_20261102/ASRUN_NOTE.txt`).  The owner's hold for Astra (17:4x) was lifted at 22:3x
+  ("Land #577 now").  REGRESS_FAIL with ONE red that is not this round's: `gdrom_default rows run got=62 want=60` -- HEAD's gate pins gdrom_default at 60 while the working tree carries an uncommitted 62-row `gdrom_default_probe.py` (the peer session's, noted in the checkpoint since 10-25; the identical single red in `#572`'s end-to-end run); the `#577` block read `sh_tlbmulti rows run 10`, `rows correct 10`, every one of the ten names present, control OK (`regress/artifacts/shblreset/landing_20261102/GATE10_RUN.txt`).  State `held` for Astra's pass 1.
+* **`shsleepblwake` (LOW-MED, WRONG-BEHAVIOUR) -- new.**  A guest that executes SLEEP with SR.BL set is never woken by an interrupt in this
+  tree: `cpu_sh_instr.c:260-263` requires BL clear and `cpu_dyntrans.c:247` delivers none under BL, while the SH7750 manual accepts an
+  interrupt in sleep with BL = 1 (`:13170-13171`); the NMI half of the deleted TODO (ICR.NMIB, `:40308-40317`, `:12307-12308`,
+  `:13169-13170`; `dev_sh4.c` models no NMI) is the same class.  Pass-1 F10 (Fable); not fixed here.
+* **`shblundriven` (LOW, coverage debt) -- new.**  The `#577` detector drives two general codes under BL (TRAPA H'160 and the misaligned
+  load H'0E0); a re-introduction of the power-on store keyed to a code it does not drive -- the ten raisable members H'040, H'060, H'080,
+  H'0A0, H'0C0, H'100, H'180, H'1A0, H'800, H'820 (H'120 and H'1E0 have neither raiser nor switch arm) -- is a measured TOTAL ESCAPE
+  (`M_resinst` 10/10); the cheapest row is a misaligned longword store (`mov.l r2,@r1` 0x2122 with r1 odd under BL, want H'020); a
+  qualification of the GUARD itself on SR.RB, SR.IMASK or SR.MD (every BL row presets MD|BL with RB clear and IMASK 0xf) is disclosed in
+  the same contract and unmeasured (cheapest rows: `sr=0x700000f0`, and MD clear with BL set, `trapa #1`, want H'020).  The body-tested
+  partition {H'140, other} is EXHAUSTED; the code domain within "other" is SAMPLED at 2 of 12.
+* **Not changed (assessed):** the unlatched `fatal()` in the BL block (`floodclass`; Opus: now an architectural event announced as if it
+  were an emulator fault -- file the wording with the latch); the manual-reset module re-initialisation (`shresetinit`); SPC/SSR written
+  where the manual calls them undefined; TEA/PTEH not set on the multiple-hit transition (pre-existing, `#457`; Opus pass 1); the
+  product comment cites the multiple hit's instruction-side line `:12461` where `:12499` (the data side, the tree's only raiser) is the
+  sharper cite -- both carry H'140, left as written and recorded here.

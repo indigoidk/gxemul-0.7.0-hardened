@@ -251,9 +251,11 @@ else
     tmctrl=$(grep -o "SH_TLBMULTI_CONTROL=[A-Z]*" "$TMLOG" | tail -1 | cut -d= -f2)
     check "sh_tlbmulti control proves it measures" "${tmctrl:-missing}" "OK"
     tmres=$(grep -o "SH_TLBMULTI_RESULT=[0-9]*/[0-9]*" "$TMLOG" | tail -1 | cut -d= -f2)
-    check "sh_tlbmulti rows run"     "${tmres#*/}" 6
+    #  #577: 6 -> 10 (three BL rows + the BL-clear TRAPA control; see the probe).  EQUALITY on purpose.
+    check "sh_tlbmulti rows run"     "${tmres#*/}" 10
     check "sh_tlbmulti rows correct" "${tmres%/*}" "${tmres#*/}"
-    for v in "tlbm alive" "tlbm expevt" "tlbm pc" "tlbm vbr" "tlbm sr" "tlbm single"; do
+    for v in "tlbm alive" "tlbm expevt" "tlbm pc" "tlbm vbr" "tlbm sr" "tlbm single" \
+             "tlbm bl trapa" "tlbm bl mhit" "tlbm bl ldmis" "tlbm trapa"; do
         n=$(count "$TMLOG" "^$v  .*ok$")
         check "  $v" "$n" 1
     done

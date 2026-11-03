@@ -1,0 +1,45 @@
+VERDICT: PROCEED WITH CHANGES (1)
+
+Packet-fed audit; no file access, no measurements. Labels below are READ (from the brief) or REASONED (from the inlined facts).
+
+## Premise audit
+
+- READ: `EXPEVT_RESET_POWER = 0x000`, `EXPEVT_RESET_MANUAL = 0x020`, `EXPEVT_RESET_TLB_MULTI_HIT = 0x140`, `EXPEVT_TRAPA = 0x160` are given.
+- READ: At HEAD the BL block unconditionally does `expevt = EXPEVT_RESET_POWER`.
+- REASONED: The manual quotes support the fix **if** TLB multiple-hit is not a “general exception” for the BL rule. Table 5.2 places the two TLB multiple-hit exceptions under the reset category, not general exceptions, so exempting `EXPEVT_RESET_TLB_MULTI_HIT` is consistent.
+- READ: The brief states `EXPEVT_RESET_TLB_MULTI_HIT` is the only reset-category code ever raised through `sh_exception()` at HEAD. That premise is not checkable from this packet except by the cited `git grep` claims, but it is internally consistent with the listed raiser at `dev_sh4.c:1178`.
+- REASONED: The interrupt-gate premise is mostly right, but the brief’s “an interrupt delivered with BL set would be rewritten too” is slightly inaccurate. In the quoted common code, `if (intevt > 0) { ... expevt = -1; }` runs **after** the BL block, so the BL block’s rewrite of `expevt` would be overwritten before latching. The gate is still load-bearing for avoiding the `fatal()` and for preventing the BL block from being entered, but not because the `expevt` rewrite would be visible.
+- UNSETTLEABLE FROM PACKET: The witness values are claimed as measured, but I cannot verify them. I treat them as READ from the brief.
+
+## Detector coverage / Q2 partition
+
+REASONED from the packet:
+
+| Cell | BL clear | BL set |
+|---|---|---|
+| General exception | unchanged; committed rows cover | changed; new `tlbm bl general` row |
+| TLB multiple-hit | unchanged; committed rows cover | changed; new `tlbm bl multihit` row |
+| Interrupt | unchanged; ordinary interrupt path | unreachable via `cpu_dyntrans.c` gate; no detector member |
+| User break | no raiser | no raiser; no detector member |
+
+The two new rows therefore cover the two reachable changed cells.
+
+## Q3 weakening analysis
+
+REASONED:
+
+- (a) Verbatim `EXPEVT_RESET_POWER`: both new rows red. Floor.
+- (b) Block deleted: `bl general` red, `bl multihit` green. Not equivalent; carried by the general row.
+- (c) Always `MANUAL`: `bl general` green, `bl multihit` red. Not equivalent.
+- (d) Wrong exemption `!= EXPEVT_TRAPA`: `bl general` red, `bl multihit` red. Not equivalent.
+- (e) Widened `expevt < 0x100`: does **not** exempt `EXPEVT_RESET_TLB_MULTI_HIT` because `0x140 >= 0x100`; so `bl multihit` red. Not equivalent.
+- (f) Keyed to TRAPA: both new rows green, but any other general exception would escape. This is clause (e) material.
+
+Because the detector drives only one general-exception code, TRAPA, a weakening like (f) would pass. I recommend **one change**: add a second general-code row, e.g. `RES_INST` or another TLB miss, with BL set, expecting `0x00000020`. That closes the clause (e) gap for keyed-to-one-general-code mutants.
+
+## Q4 / Q5
+
+REASONED: The unlatched `fatal()` should stay with `floodclass`; adding `(once)` here would be a second behaviour change in a one-constant round.  
+READ/REASONED: Committed `tlbm` rows are stated to run BL clear, so they should not re-pin under the fix. The SR pre-set `0x500000f0` has RB clear, so bank 0 usage matches the committed rows.
+
+VERDICT: PROCEED WITH CHANGES (1)

@@ -1,0 +1,64 @@
+VERDICT: PROCEED WITH CHANGES (2)
+
+## The one premise this packet states wrongly: the Q1(d) parenthetical
+
+The brief asks which premise is false. It is the claim that "an interrupt delivered with BL set would be **rewritten** too, so the `cpu_dyntrans.c` gate is load-bearing." The packet's own code contradicts it.
+
+READ: the packet's stated order is BL block (:910-918) → latch block (:941-955), with the switch after, and the `intevt > 0` branch inside the latch block writes `expevt = -1` and does **not** write `cpu->cd.sh.expevt` (that store is in the `else`). REASONED: for a BL-set interrupt, the block's rewrite lands on the local `expevt`, is then overwritten with -1, never reaches the EXPEVT register, and the switch sees -1 with or without the block. INTEVT, SPC/SSR/SGR, SR, and PC=VBR+0x100 are identical either way. The rewrite is observably vacuous on the interrupt path. The gate *is* load-bearing — but for the manual's pending rule (:12306), which this round does not touch, not for any EXPEVT rewrite. (The charitable reading — "the block would merely run" — makes the sentence vacuous, and the load-bearing role is still the pending rule.)
+
+This does not weaken the fix; it strengthens it: the fix cannot corrupt interrupt delivery even if the dyntrans gate is not the only delivery site (which the packet cannot settle). It weakens only the fix's comment, which is change 1.
+
+## Q1 remainder
+
+**(a)** READ (asserted): the only raiser of any reset-category code through `sh_exception()` at HEAD is MULTI_HIT (`dev_sh4.c:1178`). REASONED: among raisable codes, yes, MULTI_HIT is the only exemption needed; the manual's other exemption (user break) is unraisable here. Caveat: the packet's explicit grep quotes cover MANUAL and BREAK; POWER's raiser-freedom rests on the "of those only H'140" sentence — and a POWER raiser would be *corrupted* by the fix (H'000→H'020), so it deserves its own grep.
+
+**(b)** READ (asserted): the six committed rows run BL clear. REASONED: the block is BL-gated, so no committed row in this vehicle re-pins. Not settleable from the packet: whether any *other* regress row or guest drives BL-set exceptions anywhere.
+
+**(c)** READ (asserted): EXPEVT_BREAK appears only in the define. Consistent with :12302's "other than a user break" and :12305's deferral to section 20 (not inlined). The fix's comment discloses this correctly.
+
+**(e)** READ: TRAPA #1 = 0xC301; the wants 0x020/0x140/0x160 match the manual quotes and the defines; 0x500000f0 decodes MD|BL|IMASK=0xF with RB clear; 2/4 and 4/4 are arithmetically consistent. REASONED: all four values are exactly what the inlined code walk predicts. I cannot re-measure and will not label it MEASURED; internal consistency is as strong as a packet gets.
+
+## Q2, the partition
+
+REASONED: the fix changes exactly two cells — general×BLset (0x000→0x020) and multihit×BLset (0x000→0x140) — and leaves general×BLclear and multihit×BLclear (block inert), both interrupt cells (gate, plus the vacuity above), and both user-break cells (no raiser; BLset×break would be wrong-by-construction if a raiser ever lands — disclosed). Detector membership: the two new rows cover both changed cells, the committed rows cover multihit×BLclear; general×BLclear and the interrupt cells need no member because every mutant of this round acts inside a BL-gated block, leaving those cells invariant.
+
+## Q3, the weakenings
+
+- **(a)** NOT EQUIVALENT; first differs at the first BL-set general exception; `bl general` reds (and `bl multihit` reds). FLOOR.
+- **(b)** NOT EQUIVALENT; first differs at BL-set TRAPA: latches 0x160 and, per the switch structure shown, vectors to VBR+0x100 instead of H'A0000000 — a second divergence the expevt read implies. `bl general` reds; `bl multihit` green by construction. FLOOR, carried by `bl general` alone, as the contract states.
+- **(c)** NOT EQUIVALENT; first differs at BL-set multiple hit; `bl multihit` reds. FLOOR (M_noexempt).
+- **(d)** NOT EQUIVALENT; differs at both driven inputs; both rows red (0x160 and 0x020). FLOOR (M_wrongexempt).
+- **(e)** UNDER-SPECIFIED as written, and its two readings diverge. Literal (exempt condition replaced by `expevt < 0x100`, which *drops* the 0x140 exemption): NOT EQUIVALENT — `bl multihit` reds; floor-carried. Intended (exempt every reset-category code: `<0x100 || == 0x140`): both rows green; equivalent iff no GENERAL code below H'100 can reach the block — **not settleable from this packet**, which inlines only five EXPEVT values. Outside-the-packet flag, REASONED from the ISA, not from the packet: SH-4 general codes plausibly include sub-H'100 values (TLB-miss/protection/address-error, ~H'040–H'0E0); if so, this form leaves them un-rewritten — manual-wrong — and escapes both rows: clause (e), and the second row should drive such a code.
+- **(f)** NOT EQUIVALENT; first differs at the next general code raised with BL set; **no row reds** — pure clause (e), and the cheapest fully-green weakening (keying the fix to the code the test drives). Answer to Q3's tail: **yes, ride a second general-code row**; if the table confirms a general code below H'100, choose that one, and a single row then reds both (e)-intended and (f).
+
+## Q4
+
+REASONED: the named options cover the space. Exempt-the-whole-reset-category is equivalent on HEAD-raisable inputs (POWER/MANUAL/H-UDI unraisable) and differs only if one gains a raiser; delete-the-block is manual-illegal (5.5.3 plus :12002); keep-POWER-exempt-multi is manual-illegal for general codes; exempt-BREAK is unreachable future-proofing, disclosed. The one unnamed member is the comment's interrupt claim (change 1). The unlatched `fatal()` should **not** ride: a second behaviour change in a one-constant round, untestable by these rows — agree with the brief; it stays with floodclass.
+
+## Q5
+
+REASONED: committed rows re-pin — NO (the fix alters only BL-set inputs; every committed row runs BL clear). The pre-set 0x500000F0 is right: MD|BL|IMASK=0xF, RB clear so the bank-0 seeds feed the stores per the committed convention — and (REASONED from the ISA; the value is not inlined in this packet) it is the canonical BL-set SR, apt for a reset-path row.
+
+## Something else, both flagged not settleable from the packet
+
+1. The shared reset arm's SR result keeps **RB set** (the common path at :948 ORs MD|RB|BL; the arm adds IMASK, clears FD) on a path the manual describes as "initialization of ... SR"; hardware's post-reset SR has RB clear. Pre-existing, shared by all three codes, untouched by this round — a later round's material.
+2. The packet asserts the tree's reset SR has BL clear, whereas hardware sets BL at reset (value not inlined) — that is why this path is reachable in-tree only by pre-set. Out of scope, noted.
+
+## Premises I could not settle from this packet
+
+1. No other interrupt-delivery site reaches `sh_exception()` — only one gate is quoted. Settle: grep `sh_exception(` call sites over src/. (Moot for the fix, per the discard order.)
+2. `EXPEVT_RESET_POWER` has no raiser through `sh_exception()`. Settle: `git grep EXPEVT_RESET_POWER src/` — a raiser would be corrupted by the fix.
+3. `EXPEVT_BREAK` no raiser (asserted). Settle: `git grep EXPEVT_BREAK src/`.
+4. `dev_sh4.c:1178` is the only MULTI_HIT raiser (asserted). Settle: `git grep EXPEVT_RESET_TLB_MULTI_HIT src/`.
+5. The full EXPEVT code table — needed for Q3(e)'s classification and the second row's code choice. Settle: `sh4_exception.h:57-73`.
+6. No regress row or guest outside this probe drives a BL-set exception. Settle: grep regress/ for SR pre-sets with bit 28.
+7. The tree's reset SR value (BL clear, asserted). Settle: the reset-SR constant.
+8. The witness's outputs (author-measured; consistent with the walk; I cannot re-measure).
+9. Section 20's user-break operation under BL (not inlined; matters only if BREAK gains a raiser).
+
+## The changes
+
+1. Reword the fix's interrupt comment to the order-based argument — even if an interrupt reached this block, the `intevt > 0` path replaces `expevt` with -1 before latching, so the rewrite cannot touch interrupt delivery — instead of the unverifiable "gates their delivery" completeness claim; and correct the Q1(d) parenthetical in the contract record.
+2. Ride a second general-exception row (gate 6→9), settling the code table first and preferring a general code below H'100 so one row reds both Q3(e)-intended and Q3(f). This is my Q3 answer; the owner may waive it as a scope call without invalidating the round, since the clause-(e) residue is already disclosed.
+
+VERDICT: PROCEED WITH CHANGES (2)

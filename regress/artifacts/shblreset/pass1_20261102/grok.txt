@@ -1,0 +1,82 @@
+I'll audit the premises against `GXEMUL-SEC` at `987cb596` before judging the fix. First I'm reading the exception path, the exception-code defines, and the probe the brief says pins them.The BL block and the exception constants match the brief. The TLB multiple-hit raiser is not at the cited line, so I'm checking that call site and every other path into `sh_exception`.VERDICT: PROCEED WITH CHANGES (3)
+
+The constant and the exemption are the right patch. A general exception taken with `SR.BL` set is a manual reset, `EXPEVT` H'020, and a TLB multiple-hit stays H'140. Three detector problems have to be fixed before that patch is pinned. The C change itself should stay one predicate.
+
+## Q1 — premises
+
+The quoted block at `cpu_sh.c:910-918`, the latch at `:941-955`, the shared reset arm at `:1015-1021`, and the dyntrans gate at `cpu_dyntrans.c:247-250` match this tree. Codes and `SR` bits match `sh4_exception.h:57-73` and `cpu_sh.h:192-194`. `OUTSTANDING_BUGS.md:24063` is the `shblreset` id. Manual reset really is H'020 (`sh7750_hardware.txt:12372-12394` and `:13162-13166`), and both multiple-hit procedures set H'140 (`:12461-12474`, `:12499-12512`) and are not sources of manual reset.
+
+These premises do not hold as stated.
+
+(a) At HEAD the only code the BL rule must exempt is `EXPEVT_RESET_TLB_MULTI_HIT`. The only raiser is the UTLB associative write at `dev_sh4.c:1304-1305`, not `:1178`. Line 1178 is a comment inside `sh4_itlb_da1`. Instruction-fetch and data-access multiple hits are not raised: `memory_sh.c:151` says the multiple-match check is not implemented. H-UDI reset and power-on reset are never passed into `sh_exception()`. One exemption covers the only H'140 this tree produces. Both manual rows share that one code.
+
+(b) Nothing in the tree depends on this path latching H'000. `EXPEVT_RESET_POWER` is used only as that assignment and as the case label. The PROM reads `expevt` only to recognize `EXPEVT_TRAPA` (`sh_ipl_g.c:101`). `tlbm single` wants `0x00000000` because that is the untouched initial value when no exception fires, which is a different fact.
+
+(c) User break has no raiser. `EXPEVT_BREAK` appears only in the header. The UBC registers at `dev_sh4.c:2022-2037` are a `TODO` stub.
+
+(d) Interrupts do not reach the block. The parenthetical is wrong about why that matters. `intevt > 0` runs after the rewrite and sets the local `expevt = -1` without storing `EXPEVT` (`cpu_sh.c:945-949`), then the switch takes `VBR+0x600`. A BL-set interrupt, if one were delivered, would not latch H'000 or H'020. The dyntrans gate is load-bearing for acceptance — 5.5.3 holds an ordinary interrupt pending — and it is not load-bearing for the value this round changes. The call that does exist passes `expevt` 0, which is `EXPEVT_RESET_POWER`, and that 0 is discarded on the interrupt path. Two other sites also refuse delivery when BL is set: `X(sleep)` at `cpu_sh_instr.c:260` returns without calling `sh_exception`, and the check in `X(ldc_rm_sr)` at `:2832` is inside `#if 0`.
+
+(e) The witness encodings and wants are the right ones. TRAPA #imm is `11000011 iiiiiiii`, so TRAPA #1 is `0xc301` and the BL-clear code is `0x160`. The three stores are the probe's `0x2102`, `0x2542`, `0x2762`. H'020 and H'140 are the manual's codes. I did not open the witness transcripts.
+
+## Q2 — partition
+
+| Event | BL clear | BL set |
+|---|---|---|
+| General exception | Unchanged. No committed or proposed row. The witness's `nobl trapa` is the cell. | Changes H'000 to H'020. Proposed row covers TRAPA only. |
+| TLB multiple-hit | Unchanged. `tlbm alive`, `expevt`, `pc`, `vbr`, `sr` all run BL clear. | Changes H'000 to H'140. `tlbm bl multihit` covers it. |
+| Interrupt | Unchanged. Delivery stays outside this probe. | Unreachable here. The rewrite would be discarded anyway. |
+| User break | Unreachable. | Unreachable. The fix would turn H'1E0 into H'020, and nothing raises it. |
+
+The fix moves two cells: general×BL-set, and multiple-hit×BL-set. Both stay on the shared arm (`pc = 0xa0000000`, `vbr = 0`, `IMASK` set, `FD` clear). Deleting the `if (sr & BL)` around the new body leaves every proposed row green and turns a BL-clear TRAPA into H'020.
+
+## Q3 — weakenings
+
+(a) Verbatim `expevt = EXPEVT_RESET_POWER` is not equivalent. `tlbm bl general` reads H'000 and `tlbm bl multihit` reads H'000. Floor.
+
+(b) Deleting the block is not equivalent. TRAPA stays H'160 (`bl general` red). Multiple-hit stays H'140 (`bl multihit` green by construction). Floor, carried by the general row.
+
+(c) Always MANUAL is not equivalent. TRAPA is green. Multiple-hit reads H'020. Floor, `bl multihit`.
+
+(d) `expevt != EXPEVT_TRAPA` is not equivalent. TRAPA stays H'160 and the multiple-hit becomes H'020. Both rows red. Floor.
+
+(e) The written predicate is not the parenthesis. `expevt < 0x100` does not name the reset-category codes. H'140 is greater than H'100, so the multiple-hit is rewritten to H'020 and `bl multihit` reds it. The same predicate also keeps real general codes that sit below H'100 (TLB miss H'040/H'060, protection, modification, load address error H'0E0), which 5.5.3 sends to manual reset. A predicate that actually keeps `{H'000, H'020, H'140}` is guest-visible-equivalent on this tree: nothing passes H'000 or H'020 in as an exception, and the interrupt's 0 is discarded before the latch. No row separates that widening from the fix.
+
+(f) `if (expevt == EXPEVT_TRAPA) expevt = EXPEVT_RESET_MANUAL` is not equivalent, and both proposed rows are green. First difference is any other general exception with BL set: `EXPEVT_RES_INST` stays H'180, a TLB miss stays H'040/H'060, a misaligned load stays H'0E0. This is the clause (e) escape.
+
+A second BL-set general row should ride. Make it a misaligned load, `EXPEVT_ADDR_ERR_LD` (H'0E0), via `SH_ALIGN_CHECK_LD` at `cpu_sh_instr.c:209-213`. That kills (f), and because H'0E0 is below H'100 it also kills (e)'s over-exemption. `EXPEVT_RES_INST` kills (f) only. A TLB miss kills both and needs the MMU.
+
+## Q4 — options
+
+The disposition is complete for this round: correct the constant, exempt the one reset code this function actually receives, leave the `fatal()` where it is.
+
+No user-break term. It would be dead, and the detector cannot see it. No NMI term. 19.2.1 accepts NMI unless BL is set, with a software setting and a sleep/standby exception (`:39890-39893`, and 5.7.2 at `:13167-13171`). This tree has no such setting, and sleep refuses the interrupt when BL is set. No module reset. `Manual_reset()` and `TLB_multi_hit()` both call `Initialize_CPU()` / `Initialize_Module(Manual)`, and this function models neither for power-on, manual, or multiple-hit. Switching the latched code drops no modelled side effect. SPC/SSR stay written on a path the manual calls undefined (`:13165-13166`); that is already true on HEAD.
+
+The unlatched `fatal()` at `:911` stays with `floodclass`. This round does not change how often it fires. A `(once)` latch is a second behavior.
+
+## Q5 — vehicle
+
+Committed rows do not re-pin. Initial SR is `SH_SR_MD | SH_SR_IMASK` (`cpu_sh.c:123`), BL clear. `tlbm sr` pre-sets `0x40008000`, which is MD|FD, BL clear. The new body is inside the BL test, and the shared arm is untouched.
+
+`0x500000f0` is MD|BL|IMASK=0xf, RB clear, FD clear. MD is the bit the multiple-hit program needs: a user store to P4 becomes a TLB miss in `memory_sh.c` before the UTLB device runs. IMASK=0xf is not observable on an `expevt`-only row.
+
+RB clear matches the committed rows. It is not what routes the seeds. Debugger `sr=` writes `cpu->cd.sh.sr` through `CPU_SETTINGS_ADD_REGISTER32` and does not call `sh_update_sr`, so it does not swap banks. `mov.l` reads `r[]`, and the probe writes `r0`–`r7` after the poke. Those are the values the stores use.
+
+`session()` cannot express the general row. With `trigger=True` it always plants the three stores and `step 3`. On the fixed build that latches H'140. A general row appended as `session(pre=["sr=0x500000f0"])` fails the correct fix. The helper has to take a program and a step count. TRAPA #1 is `put h` of `0xc301` and `step 1`.
+
+The gate pin `6` is `gate_sh_rounding.sh:254`, and the name loop is `:256-259`: `count` of `^$v  .*ok$` (`lib.sh:326`, two spaces). `row()` prints with `%-14s`. That width is a minimum, so a longer name gets only the one space in the format string, and the two-space anchor matches nothing. `tlbm bl general` is 15 characters and `tlbm bl multihit` is 16. Both per-row checks would be red on a correct run. `rows run` would still pass.
+
+## Changes
+
+1. Make the new names match the anchor. Widen the `%-14s` field to at least 16, or keep every name at 13 characters or fewer. Existing names are 11 or shorter, so a wider field still satisfies `^$v  .*ok$`.
+
+2. Add a BL-set misaligned-load row, want `0x00000020`, same `sr=0x500000f0`. That is the row that reds Q3(f) and the H'0E0 case of Q3(e). Give `session()` a program and a step count so this row and the TRAPA row are not the three-store program.
+
+3. Commit the witness's BL-clear TRAPA control, want `0x00000160`. That is the only row that reds running the new body when BL is clear. With (2) and (3) the pin is 6 → 10, and both new names go through the same width constraint.
+
+Correct the floor note for Q3(e) in the contract: `expevt < 0x100` is a failing mutant, not an exemption of every reset-category code.
+
+## Unsettled
+
+Git was not available, so `987cb596`, the single-commit `git log -L`, `grep -c shblreset CHANGELOG.md`, and the claim that `gate_sh_rounding.sh` is dirty were not re-derived. The witness transcripts were not opened. No guest outside this tree was audited. The quoted sources match the files that were read.
+
+VERDICT: PROCEED WITH CHANGES (3)

@@ -1,0 +1,43 @@
+I'll review the #577 diff against HEAD `987cb596`, not the working tree, and check the citations, the detector, and the kill-table claims before a verdict.VERDICT: SHIP WITH CHANGES (1)
+
+The one change is in the new `#577` block comment in `regress/sh_tlbmulti_probe.py`: it still cites `EXPEVT is H'020 (:678-681)`. Those lines are the revision-history reprint in the front matter (the amended text of usage note 2). The body sentences are 5.6.1 (2) at `:12383-12384` ("Exception code H'020 is set in EXPEVT") and 5.7.2.a at `:13164-13165` ("The value in EXPEVT at this time is H'0000 0020"). Point the probe comment at `:12383-12384`, the same cite the product comment already uses. F4 fixed this in `cpu_sh.c` and the probe comment puts it back.
+
+**Q1.** The edit is the right complete patch for this defect. Inside the existing `sr & SH_SR_BL` block, `expevt = EXPEVT_RESET_POWER` becomes: keep `EXPEVT_RESET_TLB_MULTI_HIT` (`0x140`), otherwise store `EXPEVT_RESET_MANUAL` (`0x020`). The common path and the shared reset arm stay as they are. `fatal()` at `:911` still only prints (`debugmsg.c:384-391`); no kill-table raw contains `died`.
+
+Citations checked in `_scratchpad/sh7750_hardware.txt`:
+
+- `:12302-12304` is 5.5.3: BL set and a general exception other than a user break puts the machine into the manual-reset state and branches to H'A000 0000.
+- `:12376` is the manual-reset source line for that same case.
+- `:12383-12384` is the quoted EXPEVT sentence, H'020.
+- Table 5.2 `:12006` and `:12010` are the instruction and data TLB multiple-hit rows, both H'140.
+- `:12461` is the instruction multiple-hit sentence "Exception code H'140 is set in EXPEVT".
+- `:41448-41452` is the UBC rule: BL set records the match flag and does not start exception handling.
+
+`EXPEVT_BREAK` appears only as the define in `sh4_exception.h`. The only interrupt entry, `cpu_dyntrans.c:247-250`, requires BL clear. With `intevt > 0`, `cpu_sh.c:945-947` sets the local `expevt = -1` and stores INTEVT, so EXPEVT is not written. The comment's claims match that code. The 5.5.3 lines also describe module initialization; the comment quotes only the EXPEVT clause, and the arm at HEAD `:1015-1021` still sets PC, VBR, and SR. That remainder stays `shresetinit`.
+
+**Q2.** No floor cell of the stated partition is open. `{BL set} × {expevt == H'140}` is `tlbm bl mhit` (H'140). `{BL set} × {expevt != H'140}` is `tlbm bl trapa` and `tlbm bl ldmis` (both H'020).
+
+This edit keeps all ten rows green and changes a guest-visible EXPEVT:
+
+```c
+if (expevt != EXPEVT_RESET_TLB_MULTI_HIT && expevt != EXPEVT_RES_INST)
+    expevt = EXPEVT_RESET_MANUAL;
+```
+
+It first differs on a reserved instruction executed with BL set (`cpu_sh_instr.c:245`, H'180): EXPEVT stays H'180. None of the ten rows raises H'180 under BL.
+
+**Q3.** That conjunct is the smallest edit of the fixed block with a guest-visible effect. No row catches it. The probe's clause-(e) sentence already discloses it: a rewrite keyed to a code this table does not drive (a TLB miss, a reserved instruction). The nearest sibling of the new load row is the same shape: a misaligned longword store (`SH_ALIGN_CHECK_ST`, H'100) with BL set would stay H'100. `tlbm bl ldmis` drives only the load code H'0E0. The same sentence covers it.
+
+**Q4.** The record sentences match the code and the artifacts, with the probe citation in the change above as the correction.
+
+- Witness: `witness_head.out` is 2/4, both failures H'000 against H'020 and H'140. `witness_fixed.out` is 4/4. That file's binary is the 17:47 build, md5 `b7b0d0b5f5ae`, size 6164096. `fixed.raw` is the 18:11 rebuild and the same md5 and size, so the comment rewrite left the measured code unchanged.
+- Detector: four rows, pin 6 to 10, names 13, 12, 13, and 10 characters. `fixed.raw` prints `tlbm bl trapa` followed by two spaces, so the gate's `^$v  .*ok$` matches. Result 10/10, and the six committed rows stay green.
+- Table, read from the raws: base 7/10, fixed 10/10, M_b 7/10, M_c 8/10 (H'160 and H'0E0), M_noex 9/10, M_wrongex 8/10 (H'160 and H'020), M_lt100 8/10 (mhit H'020 and ldmis H'0E0), M_trapaonly 9/10 (ldmis H'0E0), M_power 8/10. `mutate577.py` builds those eight texts. The sibling correction matches `M_lt100.raw`. `KILLTABLE.log` starts `2026-11-02 18:11:05`.
+- F7's rejection is right. The working tree has the multiple-hit raiser at `dev_sh4.c:1304-1305`. The 2026-10-30 git archive of HEAD `987cb596` has that call at `:1178-1179`. Shell was unavailable here, so this check is that archive plus the working tree, not a fresh `git show`.
+- `shblreset` is `OUTSTANDING_BUGS.md:24063`. The unlatched `fatal()` belongs with `floodclass`. `shresetinit` is `:23283` and is untouched. SPC and SSR are still written at `:941-942`; 5.7.2.a `:13165-13166` calls them undefined on this path. H-UDI reset remains the table's H'000 row with no new raiser. The `#457` sentence at `:985-989` becomes true for every multiple-hit raise, because the exemption leaves H'140 in place when BL is set and the raiser passes `intevt == 0`. SLEEP under BL still never wakes: `cpu_sh_instr.c:260` requires BL clear, and `:13170-13171` says an interrupt is accepted in sleep with BL set. The history sentence in the probe docstring matches the diff.
+
+**Q5.** Nothing here holds beyond the owner's standing hold for Astra. Astra's wall and glm's outage are seat failures. The citation retarget belongs in the draft the round waits with.
+
+Also seen while checking: the data/operand multiple-hit code sentence is `:12499`, the same H'140, so `:12461` remains a true cite for the instruction sentence. `witness_20261102/product.diff` and its apply script still carry the pre-F4 product comment (`H'020 (:678-681)`). The shipping text is the kill-table `product.diff`, which matches section 1. M_b's md5 equals the HEAD binary (`b76a7799a3ea`) because that mutant is the old assignment again.
+
+VERDICT: SHIP WITH CHANGES (1)

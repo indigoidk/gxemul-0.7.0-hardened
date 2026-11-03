@@ -1,0 +1,28 @@
+PRETABLE -- #577 shblreset, written before table 1 (the HEAD base leg) runs; HEAD 987cb596.  Detector = four rows appended to
+regress/sh_tlbmulti_probe.py (w577/sh_tlbmulti_probe.NEW.py), gate pin `sh_tlbmulti rows run` 6 -> 10.  A correction, if one is
+needed after the table, goes to the SIBLING file PRETABLE_CORRECTION.out so this file's mtime keeps proving the order (#576's lesson).
+
+SIBLING PARITY: the three reset-category codes share one arm (cpu_sh.c:1015-1021); the fix changes which code the BL block latches
+  and nothing in the arm.  `tlbm pc' / `tlbm vbr' / `tlbm sr' already pin the arm on the multiple-hit path; no new arm row is owed.
+CLAIM -> ROW: the added comment claims (1) a BL-set general exception latches H'020 -> `tlbm bl trapa', `tlbm bl ldmis';
+  (2) the multiple hit keeps H'140 -> `tlbm bl mhit'; (3) the user-break exemption has no raiser and interrupts do not reach the
+  block -> no row (both are absence claims, checked by grep: EXPEVT_BREAK appears only in the define; cpu_dyntrans.c:247 gates on BL).
+GUARD FIELD vs BODY FIELD: the dominating predicate of the edited lines is `cpu->cd.sh.sr & SH_SR_BL' (reads sr); the body reads
+  `expevt' (the parameter) and, after the fix, tests it against EXPEVT_RESET_TLB_MULTI_HIT.  Partition the body induces on expevt:
+  {== 0x140, != 0x140}.  Floor cells = {BL set} x {multi-hit, other}: both rowed (`tlbm bl mhit'; `tlbm bl trapa'/`tlbm bl ldmis').
+  sr and expevt are written at different sites (sr by the guest / the exception entry; expevt by the raiser), but the body's test is
+  on expevt alone, so no disagreeing-state row is owed.  Partition on sr beyond BL: none tested by the body.
+CHANNEL, per row (mutant it kills -> observable that differs):
+  tlbm bl trapa   M_b (0x000), M_c (0x160: the block gone), M_power (0x000), M_trapaonly? NO (green: TRAPA is the keyed code) -> EXPEVT readback
+  tlbm bl ldmis   M_b (0x000), M_c (0x0e0), M_power (0x000), M_trapaonly (0x0e0 -- the row Grok asked for) -> EXPEVT readback
+  tlbm bl mhit    M_b (0x000), M_noex (0x020), M_wrongex (0x020), M_lt100 (0x020: 0x140 is not below 0x100 so it is rewritten) -> EXPEVT
+  tlbm trapa      the BL-clear control: M_c? no (0x160 either way); it reds a mutant that rewrites with BL CLEAR (none built; disclosed)
+  Vacuous-by-construction check: `tlbm bl mhit' cannot see M_c (0x140 either way) -- stated in the contract; carried by the two general
+  rows.  `tlbm trapa' sees no built mutant: it is a CONTROL (the general vector's own code) and is recorded as such, not as a kill row.
+PREDICTIONS (predictions, not scores):
+  base (HEAD)  7/10  -- the three BL rows red (0x000 each), `tlbm trapa' and the six committed rows ok
+  fixed       10/10
+  M_b          7/10 (bl trapa, bl ldmis, bl mhit)      M_c          8/10 (bl trapa 0x160, bl ldmis 0x0e0)
+  M_noex       9/10 (bl mhit 0x020)                    M_wrongex    9/10 (bl mhit 0x020; bl trapa reads 0x160? NO -- `!= TRAPA' leaves TRAPA
+                                                                      at 0x160 -> ALSO red: predict 8/10)
+  M_lt100      9/10 (bl mhit 0x020)                    M_trapaonly  9/10 (bl ldmis 0x0e0)      M_power 8/10 (bl trapa, bl ldmis 0x000)

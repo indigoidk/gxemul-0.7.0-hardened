@@ -1,0 +1,40 @@
+This defensive review examines the claims in the `shblreset` pass 1 brief based exclusively on the provided inline text.
+
+### Q1: Premise Audit
+1. **Exemption scope (a):** The brief claims `EXPEVT_RESET_TLB_MULTI_HIT` (H'140) is the only code the BL rule must exempt at HEAD. The manual (`:12000-12012`) lists Power-on (H'000), Manual (H'020), H-UDI (H'000), and the two TLB multiple hits (H'140) as reset-category. The brief states H-UDI has no raiser and EXPEVT_BREAK has no raiser. Therefore, the claim that H'140 is the only raised code that must be exempted is correct. **[HOLDS]**
+2. **Committed rows dependency (b):** The brief states the committed `tlbm` rows run with BL CLEAR (reset SR has BL clear, or pre-set 0x40008000). The BL rule is only triggered when `sr & SH_SR_BL` (`SH_SR_BL` is 0x10000000). Since BL is clear in the committed rows, they bypass this block entirely and are unaffected by the change. **[HOLDS]**
+3. **User-break exemption (c):** The brief states `EXPEVT_BREAK` has no raiser in the tree, appearing only in the define. This is verified by the text (`"has no raiser in this tree ('git grep' over 'src/')"`). **[HOLDS]**
+4. **Interrupt gate (d):** `cpu_dyntrans.c:247-250` clearly checks `!(cpu->cd.sh.sr & SH_SR_BL)`. If BL is set, `sh_exception` is never called for interrupts. Thus, the gate is indeed load-bearing, preventing interrupts from reaching the `expevt = EXPEVT_RESET_POWER` (or manual) rewrite. **[HOLDS]**
+5. **Witness row encoding (e):** The witness reads 0x00000000 for `bl trapa expevt` (which corresponds to `EXPEVT_RESET_POWER`) and expects 0x00000020 (`EXPEVT_RESET_MANUAL`). For `bl multihit`, it reads 0x00000000 and expects 0x00000140. This aligns perfectly with the manual and proposed fix. **[HOLDS]**
+
+### Q2: The Partition
+Mapping the matrix `{general exception, TLB multiple hit, interrupt, user break} x {BL clear, BL set}`:
+*   **General Exception, BL Clear:** Unchanged (latches its own code, e.g., 0x160). Covered by `nobl trapa expevt`.
+*   **General Exception, BL Set:** Changed (was 0x000, now 0x020). Covered by `tlbm bl general`.
+*   **TLB Multiple Hit, BL Clear:** Unchanged (latches 0x140). Covered by existing `tlbm` rows.
+*   **TLB Multiple Hit, BL Set:** Changed (was 0x000, now 0x140). Covered by `tlbm bl multihit`.
+*   **Interrupt, BL Clear:** Unchanged (accepted, `expevt = -1`).
+*   **Interrupt, BL Set:** Unchanged (blocked by `cpu_dyntrans.c`).
+*   **User Break (BL Clear/Set):** Unreachable (no raiser).
+The fix correctly targets only the "BL Set" variants of General Exceptions and TLB Multiple Hits. The detector covers every reachable cell. **[HOLDS]**
+
+### Q3: Candidate Weakenings
+*   **(a) Verbatim (`expevt = EXPEVT_RESET_POWER`):** Fails both new rows (they get 0x000). (Floor)
+*   **(b) Block deleted:** `bl general` fails (reads 0x160 instead of 0x020). `bl multihit` passes (reads 0x140). Carried by `bl general`. (Floor)
+*   **(c) Exemption removed (always MANUAL):** `bl multihit` fails (reads 0x020 instead of 0x140). (Floor)
+*   **(d) Exemption on wrong code (`!= EXPEVT_TRAPA`):** `bl general` reads 0x160 (fails); `bl multihit` reads 0x020 (fails). (Floor)
+*   **(e) Exemption widened (`expevt < 0x100`):** `EXPEVT_RESET_TLB_MULTI_HIT` is 0x140. Since 0x140 is not `< 0x100`, it would not be exempted and would latch 0x020. `bl multihit` fails. (Floor)
+*   **(f) Keyed to TRAPA (`if (expevt == EXPEVT_TRAPA) ...`):** This is a Clause (e) mutation since it keys to the specific driven test code rather than the general predicate. Adding a second general-code row (like `RES_INST`) is unnecessary for floor coverage, as the contract acknowledges this is a Clause (e) escape. **[HOLDS]**
+
+### Q4: Option-Set Completeness
+The disposition to correct the constant and add the TLB multiple-hit exemption is complete. There are no other missing resets to handle (H-UDI has no raiser, Power-on is H'000 which is what is being removed from the BL path).
+Regarding the `fatal()` unlatched print (`:911`), it is a separate class of defect (log flood). Modifying it in this round constitutes a second behavior change outside the scope of fixing the `EXPEVT` constant. It should stay with the `floodclass` round. **[HOLDS]**
+
+### Q5: The Vehicle
+*   The committed rows run with BL clear, meaning the `sh_exception` BL block is bypassed. They will not re-pin under this fix.
+*   The SR pre-set `0x500000f0` translates to `SH_SR_MD` (0x40000000) | `SH_SR_BL` (0x10000000) | IMASK (0xf0). `SH_SR_RB` (0x20000000) is definitively clear. Because RB is clear, bank 0 is used, which perfectly matches the bank used by the committed rows. **[HOLDS]**
+
+VERDICT: PROCEED
+
+P-GWEBP1SHBLRESET-5084
+GWEBP1SHBLRESET: 9 ATTACKS 0 BROKEN 9 HOLDS 0 UNSETTLED DRAFTABLE:YES

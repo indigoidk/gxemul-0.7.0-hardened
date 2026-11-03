@@ -1,0 +1,37 @@
+VERDICT: PROCEED WITH CHANGES (4)
+
+The fix itself is correct on the packet: one predicate, one constant, control flow demonstrably shared by the three codes at :1015-1021, and the witness values are consistent with the quoted code. The defects I found are in two premises and two parts of the floor/mutant analysis. Details below, then unsettleable premises.
+
+**Q1, premise audit.**
+
+(a) "0x140 is the only code the BL rule must exempt" — REASONED: internally consistent with the quoted Table 5.2 (H-UDI is H'000, power-on H'000, manual H'020 — all share codes or have no raiser) — but it rests on a grep claim the packet never shows for the *load-bearing* case: `EXPEVT_RESET_POWER`. The brief states where `EXPEVT_RESET_MANUAL` and `EXPEVT_BREAK` appear and states MULTI_HIT's sole raiser, but only implicitly ("of those only H'140 is ever raised through `sh_exception()`") claims no POWER raiser. If anything (e.g. a machine-reset path) calls `sh_exception(EXPEVT_RESET_POWER)`, the fix regresses it to H'020. One shown grep settles it.
+
+(d) **The quoted reasoning here is wrong, though the conclusion is right** (REASONED from the verbatim code): "an interrupt delivered with BL set ... would be rewritten too, so the `cpu_dyntrans.c` gate is load-bearing." Walk it: interrupt arrives with `expevt=0, intevt>0`; the BL block rewrites the local `expevt`; then :945-950 takes the `intevt > 0` arm, sets `intevt`, and sets `expevt = -1`, so `cpu->cd.sh.expevt` is never written. The rewrite is **unobservable for interrupts under HEAD, the fix, or any constant**. The gate is therefore *not* load-bearing for this round's EXPEVT correctness — -1 latching is. (The gate still correctly models manual :12306 interrupt-pending; that is a different property.) Fix is interrupt-safe on either ground; the brief should stop claiming the gate protects the rewrite.
+
+(b), (c), (e): (b) cannot be fully settled from the packet — the claim "committed tlbm rows all run BL clear" is asserted, not quoted; and whether *any other* regress script pins BL-set EXPEVT is open (settling facts below). (c) is a grep claim. (e) the encodings check out (0xc301 = TRAPA #imm 0x01, TRAPA H'160 matches the nobl control), and the wants follow from the quoted manual lines.
+
+**Q2, partition.** REASONED: changed cells are exactly {general×BL-set, multihit×BL-set}; BL-clear cells are unreachable by construction (the fix sits inside `if (sr & SH_SR_BL)`); interrupt×BL-set is doubly dead (gate + expevt=-1); break cells have no raiser. Detector covers both changed cells and multihit×BL-clear (committed). **Gap: general×BL-clear is pinned only in the one-off witness**, not in the gate.
+
+That gap is not cosmetic — it defines an escaping mutant the floor never lists: `M_noBLgate` (drop the outer `if (sr & SH_SR_BL)`, keep the new body verbatim). Committed multihit rows stay green (0x140 exempted), both new rows pre-set BL so the gate is irrelevant, and no BL-clear general-exception row exists in the 8 to read 0x020-instead-of-0x160. Clause (d) of the floor claims to enumerate the predicate mutants; this one is missed.
+
+**Q3, weakenings.** (a)-(d), (f) map exactly as the brief says. **(e) as written is numerically broken** (REASONED): the reset-category codes are H'000, H'020, H'140 — and H'140 = 0x140 is **not** `< 0x100`. The predicate `expevt < 0x100` does not express "every reset-category code"; as literally written it rewrites the multiple hit to 0x020 and reds `bl multihit`, i.e. it is a floor mutant, not an equivalence-widening. The intended mutant (`== 0x000 || == 0x020 || == 0x140`) is equivalent-at-HEAD only because no raiser exists for the low codes — same unproven grep as Q1(a). Second general-code row: **yes** — driving a general illegal instruction (cheaper than a TLB miss; needs no MMU setup) under `pre=["sr=0x500000f0"]` collapses (f) into a floor mutant.
+
+**Q4.** Disposition is the correct minimal member. Identity is *not* equivalent even ignoring EXPEVT: deleting the block leaves a BL-set general exception routed to vbr+0x100 with H'160, contradicting manual :12304 (branch H'A000 0000). The `(once)` latch should **stay with `floodclass`**: this round's witness and gate measure registers, not stderr; riding an unmeasured second behavior change would dilute a cleanly measured 4/4. (Note for that round: post-fix the "BL bit already set" print now describes a legitimate manual reset — the message, not just the flood, belongs there.)
+
+**Q5.** REASONED: committed rows run BL clear per the described pre-sets, and the fix touches nothing outside the BL block, so no re-pin — but I cannot verify the rows' pre= values from the packet. 0x500000f0 arithmetic checks against the given constants: MD(0x40000000)|BL(0x10000000)|0xf0, RB(0x20000000) clear. READ: the IMASK mask value itself is never given; the RB-clear premise — the one the bank-0 argument needs — does verify.
+
+**Named changes:**
+1. Add a BL-clear general-exception row to the probe/gate (promote the witness `nobl trapa` control; 8→9, or cite an existing pin elsewhere) — kills the `M_noBLgate` escape, which no current row reds.
+2. Add a second BL-set general-code row (general illegal instruction) — kills the keyed-to-TRAPA escape (Q3(f)/clause (e)).
+3. Restate Q3(e): `expevt < 0x100` excludes H'140; as written it is a floor mutant red on `bl multihit`, not the widened-equivalence described.
+4. Correct the Q1(d)/§2 rationale: the dyntrans gate is not load-bearing for the EXPEVT rewrite (the `expevt = -1` path is); and inline the one missing grep — no `EXPEVT_RESET_POWER` raiser through `sh_exception()` — which Q1(a) needs and which the packet currently only implies. (Optional, near-free: pin `pc` on the two new rows so "shared arm unchanged" is pinned for BL-set sessions, matching the witness.)
+
+**Premises I cannot settle from the packet, with the single fact that settles each:**
+- No `EXPEVT_BREAK` raiser (manual's user-break exemption is moot). Settle: `git grep -n EXPEVT_BREAK src/`.
+- No `EXPEVT_RESET_POWER`/H-UDI raiser through `sh_exception()` (the regression-relevant one). Settle: `git grep -n EXPEVT_RESET_POWER src/`.
+- Sole MULTI_HIT raiser is `dev_sh4.c:1178`; only caller passing `intevt>0` is `cpu_dyntrans.c:247-250`. Settle: grep over raiser/call sites.
+- Committed probe rows' BL-clear pre-sets; no other regress row pins BL-set EXPEVT. Settle: print the committed rows; grep `regress/` for sessions setting SR bit 28 that read expevt.
+- All C0/git bookkeeping (HEAD `987cb596`, `log -L` = one commit, CHANGELOG 0 hits) and the MEASURED witness table itself — READ as author claims, not verifiable here; settle by rerunning.
+- Manual line numbers/verbatim text — internally consistent (the :680 column interleave is credibly a rendering artifact; the sentence reads continuously), but settle only against the manual file.
+
+VERDICT: PROCEED WITH CHANGES (4)

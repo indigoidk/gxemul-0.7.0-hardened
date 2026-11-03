@@ -2833,7 +2833,29 @@ MANIFEST = {
     "sh4_val_witness.py":          (CLASS_WITNESS,  "#447 pre-fix symptom: the host dies"),
     "sh_halt_probe.py":            (CLASS_DETECTOR, "SH halt path"),
     "sh_intprio_probe.py":         (CLASS_DETECTOR, "#455 SH interrupt priority 0"),
-    "sh_tlbmulti_probe.py":        (CLASS_DETECTOR, "#457 SH TLB multiple hit"),
+    "sh_tlbmulti_probe.py":
+        (CLASS_DETECTOR, "#457 SH TLB multiple hit; #577 (2026-11-02) adds four rows: a general exception taken with SR.BL set "
+                         "stores the manual-reset code H'020 (TRAPA and a misaligned load), the TLB multiple hit keeps H'140, and "
+                         "a BL-clear TRAPA control pins the general vector's own code (the sole carrier of the guard-side class).  "
+                         "10 rows, gate_sh_rounding.sh pins by EQUALITY.  Witness artifacts/shblreset/witness_20261102/ (2/4 -> 4/4); "
+                         "kill table artifacts/shblreset/killtable_20261102/ (11 legs incl. two post-table ones; one measured total "
+                         "escape disclosed and filed as shblundriven)."),
+    #  #577 shblreset artifacts: the as-run instrument copies and the applier/mutator are kill-table evidence; the witness is ungated.
+    "artifacts/shblreset/witness_20261102/sh_blreset_witness.py":
+        (CLASS_WITNESS, "#577: the rung-3 witness (4 rows, gxprobe-based, unmodified -E landisk), 2/4 on HEAD and 4/4 on the fix with "
+                        "the same script; its HEAD column asserts the power-on code, so it is ungated."),
+    "artifacts/shblreset/witness_20261102/apply_fix577.py":
+        (CLASS_TOOL, "#577: the fix applier at its pre-pass-1 comment wording (same code as the shipped one), preserved as run."),
+    "artifacts/shblreset/killtable_20261102/apply_fix577.py":
+        (CLASS_TOOL, "#577: the shipped fix applier (the BL block's store made conditional and the manual citations), preserved as run."),
+    "artifacts/shblreset/killtable_20261102/mk_detector577.py":
+        (CLASS_TOOL, "#577: writes the four detector rows and the program=/steps= session parameter into sh_tlbmulti_probe.py."),
+    "artifacts/shblreset/killtable_20261102/mutate577.py":
+        (CLASS_TOOL, "#577: the table's variant builder (seven table forms plus the two post-table forms M_guard and M_resinst)."),
+    "artifacts/shblreset/killtable_20261102/sh_tlbmulti_probe.ASRUN.py":
+        (CLASS_RESEARCH, "#577: the instrument the table ran (md5 d41edccdee1c), preserved at run time; the shipped probe differs by comment-only edits."),
+    "artifacts/shblreset/killtable_20261102/sh_tlbmulti_probe.NEW.py":
+        (CLASS_RESEARCH, "#577: the shipped probe's staged copy (identical to regress/sh_tlbmulti_probe.py at the landing)."),
     "sh_pclock_probe.py":          (CLASS_DETECTOR, "#459 SH pclock: declines instead of exit(1)"),
     "gdrom_data_probe.py":         (CLASS_DETECTOR, "#460 GDROM_DATA: four exits, no legal first touch"),
     "gdrom_default_probe.py":      (CLASS_DETECTOR, "#461 both default: arms + #462 the DMA+0x18 pair"),
