@@ -131,12 +131,12 @@
 > *** MY FIRST DERIVER RETURNED **3**, AND IT WAS WRONG FOR THE EXACT REASON THIS ROW WARNS
 > ABOUT. ***  It asked *"does the file contain a nonzero `sys.exit` anywhere?"* -- a CORRELATE -- so
 > `ppc_rldicl_probe.py`, the very subject of the finding, scored CLEAN on the strength of an
-> apparatus guard at `:89`.  Keyed on what DEFINES the class -- an exit keyed on the tally, searched
+> apparatus guard at `:89` [at 987cb596: the file's only nonzero `sys.exit` is the usage guard `sys.exit(2)` at `:115`; `:89` is header-comment text].  Keyed on what DEFINES the class -- an exit keyed on the tally, searched
 > only AFTER the tally is computed -- the answer is 41.  **Wrong by 13x, in the row telling the next
 > person not to key on a correlate.**
 >
 > **THE DEFECT IS THE SPLIT, NOT THE 41.**  Exiting 0 is the house idiom, and the gates REFUSE the
-> exit-status channel in writing: `gate_arm.sh:672` and `gate_sh_rounding.sh:1457` both end
+> exit-status channel in writing: `gate_arm.sh:672` and `gate_sh_rounding.sh:1457` [at 987cb596: both are comment lines; the quoted `> "$LOG" 2>&1 || true` launch is `gate_arm.sh:100` and `gate_sh_rounding.sh:45`] both end
 > `> "$LOG" 2>&1 || true`, then guard with `if ! grep -q "..._RESULT="` (PARSE BEFORE SCORE), then
 > pin the denominator against a literal.  But 26 probes carry the opposite idiom, several with an
 > identical `sys.exit(0 if ok == len(rows) else 1)` -- so **a gate author who has read those
@@ -247,18 +247,18 @@
 > DDI0100I requires.  **Two combined-instruction handlers do the transfer themselves and never
 > reach those calls**, so the rounding does not apply to them:
 >
-> * **`netbsd_memset`** (`cpu_arm_instr.c:2093`, replaces STM) does
->   `memset(page + (addr & 0xfff), 0, 128);` at `:2127` -- a RAW page offset with no word
+> * **`netbsd_memset`** (`cpu_arm_instr.c:2093` [at 987cb596: `X(netbsd_memset)` is `:2171`], replaces STM) does
+>   `memset(page + (addr & 0xfff), 0, 128);` at `:2127` [at 987cb596: `:2205`] -- a RAW page offset with no word
 >   rounding.  Its runtime guards check page bounds, zero source values and page availability;
 >   **none rejects an unaligned address.**
-> * **`netbsd_memcpy`** (`:2274`, replaces LDM/STM) copies through raw `& 0xfff` offsets on BOTH
+> * **`netbsd_memcpy`** (`:2274` [at 987cb596: `X(netbsd_memcpy)` is `:2232`, and its raw-offset copy `memcpy(page_0 + (addr_r0 & 0xfff), ...)` is `:2352-2353`], replaces LDM/STM) copies through raw `& 0xfff` offsets on BOTH
 >   source and destination, **while its register-publication reads use `& 0xffc`.**
 >
 > **The sharpest part is the internal disagreement: `netbsd_memcpy` ROUNDS THE ADDRESS IT PUBLISHES
 > TO REGISTERS AND DOES NOT ROUND THE ADDRESS IT COPIES FROM.**  One handler, two address rules.
-> Their matchers (`:3428`) recognise instruction patterns without establishing alignment, so an
+> Their matchers (`:3428` [at 987cb596: `COMBINE(netbsd_memset)` is `:3506` and `COMBINE(netbsd_memcpy)` `:3535`]) recognise instruction patterns without establishing alignment, so an
 > unaligned base reaches the combined body unopposed.  *The file already half-knows --
-> `netbsd_memcpy`'s own comment at `:2252` acknowledges "the overlap and unaligned-copy
+> `netbsd_memcpy`'s own comment at `:2252` [at 987cb596: `:2330`] acknowledges "the overlap and unaligned-copy
 > divergences" -- which is the recurring shape of a fact living where nobody consults it at edit
 > time.*
 >
@@ -456,7 +456,7 @@
 > `asicindexcase`/`asicdecline` notes follow in the batch-9 records round.  Filed by the retro adjudication (GPT-6 Astra finding,
 > Fable 5.1 confirming and extending).
 >
-> ### OPEN -- filed 2026-09-05 (retrospective batch 7): dev_luna88k.c delivers an interrupt to a CPU that
+> ### ~~OPEN~~ CLOSED by `#503` (commit `79cd12e`) [records 2026-11-02: this heading still said OPEN after the ledger row `lunaabsentcpu` closed; the tick below records the fix at `dev_luna88k.c:178`] -- filed 2026-09-05 (retrospective batch 7): dev_luna88k.c delivers an interrupt to a CPU that
 > ### does not exist -- two ordinary guest stores on the one-cpu luna-88k kill the emulator process (MEASURED)
 >
 > ✅ **`lunaabsentcpu` RESOLVED. Ticked in place 2026-09-11: ledger `closed`, sev high, shipped as `#503`
@@ -549,7 +549,7 @@
 > excluded: `dev_algor.c` (`static int x; if (((++x) & 0xffff) == 0)`, a periodic RTC-bit
 > hack) and `dev_mc146818.c` (`static int x; if (++x == 1)`).  Largest populations:
 > `dev_osiop.c` 8, `dev_pcc2.c` 5, `dev_dec21143.c`/`dev_disk.c`/`dev_jazz.c`/`dev_pvr.c`/
-> `dev_sgi_re.c`/`dev_vga.c` 2 each.
+> `dev_sgi_re.c`/`dev_vga.c` 2 each.  [2026-11-02, records: re-derived at 987cb596 with the deriver above (git grep over HEAD's src/devices/): 28 sites across 13 files; dev_pcc2.c 3.]
 >
 > **WHY THE NAME PATTERNS ALL FAILED, since this is the reusable part:** they keyed on the
 > variable being called `w`/`warned`/`first`, and the population's names are
@@ -1742,7 +1742,7 @@
 >   entries, so **every record form** halted — `fadd.`, `frsp.`, `fmr.` — including those
 >   of instructions that worked with Rc=0. Twelve are decoded now (the Rc forms, `mcrfs`,
 >   `mtfsb0`, `mtfsb1`, `mtfsfi`, `fctiw`, `fnabs`, `fsel`); gate 15 holds the line.
-> - **Twelve encodings still halt, deliberately, and gate 15 asserts that they do.** Split
+> - **Twelve encodings still halt, deliberately, and gate 15 asserts that they do.** [2026-11-02, records: ten of these twelve since `#344` -- `fnmadd` and `fnmsub` are decoded at 987cb596 (`cpu_ppc_instr.c:5290-5298`) and `ppc_halt_probe.py` marks them fixed, as the `#555` note on the `fnmadd`/`fnmsub` bullet above records] Split
 >   by reason, because the reasons are not the same:
 >   - `fctid`, `fctidz`, `fcfid`, `fsqrt`, `fsqrts` — **64-bit-only, or outside the G4's
 >     instruction groups.** On a 32-bit G4 real silicon raises a program interrupt, so
@@ -2668,7 +2668,7 @@
 >   of #234 but off the MIPS audit path; the PPC data side is already fixed (#216). Fix = `return`/RI when promoted.
 > - **#11 PPC `MSR.IP` reboot hack** (`cpu_ppc.c`) and **#12 m88k CMMU / `dev_mb89352`** fatal errors — off-path.
 > - **SPECIAL3 `RDHWR` selector halt + `HWREna` gate** (`cpu_mips_instr.c`): Fable verified SPECIAL3 is ISA-gated to
->   RI on R3000/R4000, so the halt is **unreachable** on pmax/arc (MIPS32r2-only). Cheap hardening for a future
+>   RI on R3000/R4000, so the halt is **unreachable** on pmax/arc (MIPS32r2 or MIPS64r2 [corrected 2026-11-02, records: said MIPS32r2-only; the gate admits revision 2 at ISA level 32 or 64 -- 987cb596 `cpu_mips_instr.c:5584-5585` -- and `5KE`, the `baremips`/`testmips` default, is level 64 revision 2, `mips_cpu_types.h:104`]). Cheap hardening for a future
 >   round; no audit-path exposure.
 
 > ## 2026-07-16 — Twenty-second round (#230–#233): MIPS fault-signature fidelity (FULL 4-model panel)
@@ -2734,7 +2734,7 @@
 > #215–#217 Alpha/PPC/SH host-crashes → guest faults; #218–#223 OF + footbridge/mp/kn02ba/8253 guest-reachable
 > `exit(1)`s → graceful.  *[Corrected 2026-09-19 by `#539`: NOT ALL of footbridge's -- #220 removed two of its ten
 > `exit(1)`, eight guest-reachable ones stayed (the `n6` row); `#539` accepted the IRQEnable read, seven remain as
-> `fbdeclinefive` (5) and `fbsdrampair` (2).]*
+> `fbdeclinefive` (5) and `fbsdrampair` (2).]* [2026-11-02, records: #545 (4264ee20) then removed fbdeclinefive's five; DEVICE_ACCESS(footbridge) keeps two, fbsdrampair's, at dev_footbridge.c:735 and :760 (987cb596)]
 > **New deferred (broad device-exit tail):** the same untagged `fatal("…TODO/unimplemented…"); exit(1)` inside
 > many other guest-writable `DEVICE_ACCESS` handlers persists (Fable-A's list: `dev_adb.c`, `dev_clmpcc.c`,
 > `dev_igsfb.c`, `dev_lca.c`, `dev_m8820x.c`, the `dev_pcc2.c` remainder, `dev_mb8696x.c`, `dev_mvme187.c`,
@@ -2974,7 +2974,7 @@ corruption without a clear host-OOB path.
 ## Confirmed clean
 - **#69 (arc Jazz interrupt-enable mask)** — both review passes independently found **no regression**:
   assert/deassert gate on `int_asserted & int_enable_mask`, `EXT_IMASK` recomputes IRQ3/6 on mask
-  change, and masked pendings stay in `int_asserted` (delivered when later enabled).
+  change, and masked pendings stay in `int_asserted` (delivered when later enabled). [2026-11-02, records] Superseded by 9d18d156 (CHANGELOG.md:25231): pending-line bits and EXT_IMASK enable bits are separate namespaces, and each line is gated on its own pending and enable bits (dev_jazz.c:143-146, :153-156).
 
 ## Suggested remediation order
 1. **Window>backing (OB-2, OB-12, OB-15):** straight out-of-bounds host write from any access in-window;
@@ -4256,7 +4256,7 @@ corruption without a clear host-OOB path.
 > alignment exception will be taken. There is no support for unaligned Load Exclusive. If
 > Rd<1:0> != 0b00 and (A,U) = (0,0), the result is UNPREDICTABLE." Table A2-10's WSync rows
 > agree — only U=1 or A=1 give an Alignment Fault. This tree sits permanently at (A,U) = (0,0),
-> so unaligned LDREX/STREX is **UNPREDICTABLE here**. Two caveats. `Rd<1:0>` is a manual typo
+> so unaligned LDREX/STREX is **UNPREDICTABLE here**. [2026-11-02, records: false -- reset ORs `ARM_CONTROL_ALIGN` (the A bit, `0x0002`) into the control word (987cb596 `cpu_arm.c:128-129`, `cpu_arm.h:305`) and a guest CP15 write replaces the whole word (`cpu_arm_coproc.c:134-135`), so at reset (A,U) = (1,0), for which the manual text quoted above says an alignment exception will be taken; the "choice under latitude" below applies only after a guest clears A] Two caveats. `Rd<1:0>` is a manual typo
 > for `Rn` — the pseudocode reads `Memory[Rn,4]`, and SWP's own note on p. A4-213 says `Rn[1:0]`
 > correctly. And the **halt is still wrong**, because UNPREDICTABLE licenses any architectural
 > outcome and stopping the machine is not one; that is precisely `#312`'s finding. But raising a
@@ -5778,7 +5778,7 @@ straddling access beginning inside a device, which the late split leaves returni
    TWICE. The read side of partial completion is recorded honestly in the differential's E4
    comment; this is the store side and it is the one with a visible consequence. Not
    introduced by #430 (the memblock split has had the property all along), but newly easier
-   to reach now that the split fires 256x more often.
+   to reach now that the split fires 1,024x more often [2026-11-02, records: this said 256x; the split granule is 1 KB, as memory_rw.c:150-151 (at 987cb596) says].
 
 ### And one method note, because it cost a vacuous row
 
@@ -6170,7 +6170,7 @@ actually claimed.
    for every offset it later touches. A per-kind latch is FILED, not done — widening it is a
    behaviour change and this round's claim is only that the host stops dying.
 2. The SSR arm said SSR is "written by the MODEL". **Nothing in the tree ever writes
-   `reg[CMMU_SSR]`** — only PFSR and PFAR are model-written. The conclusion held; the reason did
+   `reg[CMMU_SSR]`** — only PFSR and PFAR are model-written [2026-11-02, records: on the FAULT paths -- machine setup also writes `reg[CMMU_IDR]` (987cb596 `dev_luna88k.c:953`, `:964`; `dev_mvme187.c:139`, `:151`), and the live comment, `dev_m8820x.c:292-294`, says "the model's FAULT PATHS write only PFSR and PFAR"]. The conclusion held; the reason did
    not, and the right reason is stronger: dropping the write is what makes the command arm's
    argument true, because a guest that could store there could set the V bit and turn a dropped
    PROBE into a plausible-looking valid translation.
@@ -6256,8 +6256,8 @@ been READ.** Firing nine seats and reading four is a four-seat review reported a
   (and `PG_M` on a write) back into the page descriptor **in emulated memory** after every
   SUCCESSFUL table walk when `FLAG_NOEXCEPTIONS` is absent (a walk that faults does not update the
   guest descriptor); a PATC READ hit sets `PG_U` only in the PATC copy (`:228-229`) when
-  `FLAG_NOEXCEPTIONS` is absent, but a PATC WRITE hit on an entry whose `PG_M` is clear ALSO updates
-  the guest descriptor when `FLAG_NOEXCEPTIONS` is absent, through `m8820x_mark_page_as_modified()`
+  `FLAG_NOEXCEPTIONS` is absent, but a PATC WRITE hit on an entry that is not write-protected and whose `PG_M` is clear ALSO updates
+  the guest descriptor when `FLAG_NOEXCEPTIONS` is absent (a write-protected hit takes the exception at `memory_m88k.c:211-213` first) [corrected 2026-11-02, records: said "on an entry whose `PG_M` is clear"], through `m8820x_mark_page_as_modified()`
   (`:217-224`; it ORs `PG_M|PG_U` into the descriptor at `:86` and writes it back at `:93`). [#561] So a guest that clears U
   on a page in segment B, issues a segment-A flush, and then touches B observes a U bit that a
   correctly-scoped flush would have left clear. The tighter mapping needs no manual: match on
@@ -6343,8 +6343,8 @@ been READ.** Firing nine seats and reading four is a four-seat review reported a
 
      ***`SCTR` WAS LISTED HERE AND THAT WAS WRONG***, caught by a pass-1 seat on the round that
      acted on this filing. `SCTR` is stored at `dev_m8820x.c:460` and read back to the
-     guest through `:258`; NO TRANSLATION CONSUMER in `src/` reads `reg[CMMU_SCTR]` (the only other
-     occurrences are the definitions at `thirdparty/m8820x.h:64,118-120`), so a write to it cannot
+     guest through `:258`; NO TRANSLATION CONSUMER in `src/` reads `reg[CMMU_SCTR]` (outside the store arm's case label at `dev_m8820x.c:440` and the comment at `:340`, the only other
+     occurrences are the definitions at `thirdparty/m8820x.h:64,118-120`) [qualified 2026-11-02, records: those two are the other src/ occurrences], so a write to it cannot
      change a translation and it belongs with `SAR`/`PFSR`/`PFAR`, not with the area pointers. [#561] The error did not reach the code (the
      round split the arm on the measured consumer table, not on this sentence), but it would have
      put `SCTR` on the wrong side of the argument for anyone reading the filing afterwards.
@@ -8242,6 +8242,8 @@ before anyone cites those constants as architectural.
 | `dev_sh4.c:2899` | BSC reset `WCR3 = 0x77777777` | *"WCR3 is initialized to **H'07777777**"*. BCR2/WCR1/WCR2 on the same lines are correct. |
 | `dev_sh4.c:2023` | TCR write stores UNF verbatim | *"Writing 1 does not change the value."* A guest can fabricate an underflow and a spurious interrupt. |
 | `dev_sh4.c:596` | DMA count masked `0x1fffffff` | *"Bits 31-24 of these registers are reserved"* — DMATCR is 24-bit. (The 29-bit SAR/DAR masks are correct.) |
+
+[2026-11-02, records] Line numbers in this table are 8a8f145c's. At 987cb596: cpu_sh.c:653 is :917; memory_sh.c:328-333 is :365-370; memory_sh.c:358-364 is :395-401.
 
 #### 4. A claim this project made twice, refuted
 
@@ -11677,7 +11679,7 @@ oracle.
 **#473 closed `wdcringambig` + `wdcrearmzero` with one diff.** Three edits in the ATAPI DATAIN
 chunking: move the existing 32768 clamp BEFORE the initial push loop, clamp the re-arm to 32768
 instead of 0, and refill the next chunk from `data_in[atapi_received + j]`. Kill table 8/8,
-`regress/artifacts/wdcchunking/killtable_20260827/`. Detector 22 rows, 0 failures.
+`regress/artifacts/wdcchunking/killtable_20260827/`. Detector 22 rows, 0 failures. [2026-11-02, records] Superseded: the 8/8 and 22-row figures came from a stale archive (CHANGELOG.md:19809-19819). The table was re-derived at 9 of 9 (CHANGELOG.md:19806); its baseline is 24 rows there and 26 rows in killtable_20260827/TABLE.txt:15, last written by d894e35d.
 
 ### Residuals -- open
 
@@ -11703,7 +11705,7 @@ instead of 0, and refill the next chunk from `data_in[atapi_received + j]`. Kill
 
 - **`wdcrearmzero` still owes a rung-3/4 witness.** A rung-1 direct-call harness is a
   DETECTOR, never a reproduction. Both ledger rows close with `witness: none`, which is the
-  honest value; the obligation is recorded, not discharged.
+  honest value; the obligation is recorded, not discharged. [2026-11-02, records] Superseded: both rows now carry rung-3 probe witnesses (ledger.json:25309, :26143); wdcringambig is closed and wdcrearmzero is held.
 
 ### *** SEAT FINDING: ONE SEAT, BOTH TRANSPORTS DOWN AT ONCE, FOR TWO UNRELATED REASONS.
 ### Measured 2026-08-27. ***
@@ -12208,7 +12210,7 @@ damaged the first to patch the second, breaking the ATAPI completion handshake.
 
   **But the instinct is sound and points at real rows.** A guest that writes data while in
   `PHASE_DATAOUT` is not ignored: the data-port write arm pushes unconditionally, so those
-  bytes enter the SHARED `inbuf` ring. From there they are reachable by
+  bytes enter the SHARED `inbuf` ring. [2026-11-02, records: no longer -- since `#495` (67120fd6) the data-port write arm refuses the push while an ATAPI command is in progress outside `PHASE_CMDOUT`, which covers `PHASE_DATAOUT` (987cb596 `dev_wdc.c:1575-1577`, its comment at `:1558-1565`)] From there they are reachable by
   [[wdcdataoutdrain]] (they can be written to the disk image) and are an instance of
   [[wdccdbaccum]] (one ring aliasing CDB bytes, DATA-IN payload and disk-write payload).
 
@@ -13878,6 +13880,10 @@ not a fix and not a sweep.
 
 ### `sgirekills` -- and my own brief's premise was the thing that broke
 
+> *** [2026-11-02, records] Historical: the 2026-08-30 census. #513 (e302c98c) closed the read exit quoted here.
+> At 987cb596 one live exit(1) remains in dev_sgi_re.c (:1774-1775), the unreachable one the block at :13967
+> describes. The 2026-10-18 tail (:24947-24951 at 987cb596) records #564. ***
+
 `dev_sgi_re.c` carries **21** terminating calls inside `DEVICE_ACCESS` — seven times the
 gdrom file, and the top of the census list. Besides the six width guards above, its adjacent
 arm kills on a plain **read** (`fatal("TODO: read from CRIME_RE_TLB_A"); exit(1);`), which is
@@ -14231,6 +14237,10 @@ WIDTH kills, this is VALUE kills. Filing them as one row would merge two fix des
 census that finds two files at once is exactly where over-claiming starts.*
 
 ### `pcc2widthkills` (HIGH) -- twelve width kills, twice `#497`'s six, in a file nobody looked at
+
+> *** [2026-11-02, records] FIXED by Round pcc2widthkills (b78bb0f6, 2026-09-03; CHANGELOG.md:13848 at 987cb596).
+> The text below is kept as the record of what was found. The ledger row stays open for its detector work
+> (its `reopened` field). ***
 
 Every one is the same shape:
 
@@ -14847,7 +14857,7 @@ Both LINEAR arms compute `int tlbi = ((relative_addr & 0x7f) >> 2) & 0x1f;` — 
 **0..31** — then write **both** `[tlbi]` and `[tlbi+1]` into `uint32_t re_linear_a[32]` /
 `re_linear_b[32]`. **At `tlbi == 31` the second store writes index 32, one past the end.**
 
-> **It is unreachable today for exactly one reason: `len == 8` forces 8-byte alignment.**
+> **It is unreachable today for exactly one reason: `len == 8` forces 8-byte alignment.** [2026-11-02, records: the reason is misstated -- the guard tests LENGTH, and width does not imply alignment; on guest paths `tlbi` is kept even by CPU-side alignment (ld/sd raise ADES/ADEL before `memory_rw`, and the unaligned helper masks the address), while the host debugger's `put d` can deliver an unaligned `len == 8` (987cb596 `dev_sgi_re.c:640-671`, `:735-741`)]
 > `(0x78 & 0x7f) >> 2` = 30, so the largest reachable `tlbi` is 30 and `tlbi+1` is 31 — the
 > last valid index. Permit `len == 4` and offset `0x7c` gives `(0x7c & 0x7f) >> 2` = **31**,
 > and index 32 is written.
@@ -14874,7 +14884,7 @@ site saying *why* the guard is mandatory, so a future round reading "unimplement
 an invitation to implement one is warned where the decision happens.
 
 *Source-derived, not measured: no probe has driven a 4-byte LINEAR access, because the shipped
-code kills the host before reaching the store. It cannot be witnessed without first
+code kills the host before reaching the store [2026-11-02, records: true at 83477305; since `#497` (821eb83b) an access whose len is not 8 is declined -- a latched `fatal()`, then the common tail's `return 1` -- so the emulator keeps running and the store is still not reached (987cb596 `dev_sgi_re.c:640-686`)]. It cannot be witnessed without first
 introducing the defect.*
 
 ## 2026-08-30 -- the pass-2 seat measured a row I had just shipped to be VACUOUS, and
@@ -15041,7 +15051,7 @@ in the message text; **derive the marker's spelling and count rather than quotin
 figure has been wrong in this file twice.
 
 **Distinct from `sgideprimop`**, which is the drawing-op switch in the same file and *does*
-`exit(1)`. Both are guest-driven `switch` defaults in `dev_sgi_re.c` and a round touching one
+`exit(1)` [2026-11-02, records: no longer -- `#500` (840f3d0a) made that arm a latched decline that breaks out of the switch (987cb596 `dev_sgi_re.c:1150-1163`)]. Both are guest-driven `switch` defaults in `dev_sgi_re.c` and a round touching one
 should say explicitly that it is not touching the other.
 
 *Found by the `sgitexindex` seat as a residual while checking an unrelated question, and
@@ -15194,7 +15204,7 @@ to be guest-unreachable by construction**, which was measured only when someone 
 SET, rather than one diff at a time, and convene the full panel if it finds significant change.
 
 **WHY IT IS A DIFFERENT QUESTION FROM THE TEN PASSES ALREADY RUN.**  Every pass so far reviewed
-ONE diff against the pass before it.  Nobody has reviewed the ten commits together, and this
+ONE diff against the pass before it.  Nobody has reviewed the nine [corrected 2026-11-02, records: said ten -- the list below is eight hashes plus the straggler artifacts commit, and this entry's closing note says nine] commits together, and this
 chain is exactly the shape where that matters: **twelve defects, four of them in repairs made
 for an earlier defect in the same chain.**  A per-diff review cannot see a repair that quietly
 undid an earlier one, because each diff was green on its own.
@@ -15289,7 +15299,7 @@ On 2026-09-02 that prints **26**, across **18 rows**.
 > SUBJECT IS SILENTLY-DROPPED ENTRIES *** -- and it is also "a correction is not safer than the
 > thing it corrects", for the second time in one round.  The fix is deleting three words.
 
-The 26 break down as:
+The 26 break down as [2026-11-02, records: the table below lists 25 entries on 17 rows; the 26th entry and 18th row is the no-phase `lethalonly` / kimi entry of 2026-08-24 described above, which the table omits]:
 
 | phase | entries | rows |
 |---|---|---|
@@ -15430,11 +15440,14 @@ the table ran, the table kept scoring its frozen copy, and the two never mixed. 
 
 ### `pcc2c040kill` (HIGH) -- a LEGAL byte write to GENCTL ends the host
 
+> *** [2026-11-02, records] FIXED by #512 (9fa07fe9, 2026-09-08; CHANGELOG.md:9457 at 987cb596). The text below is
+> kept as the record of what was found. ***
+
 **2026-09-03, surfaced by the `pcc2widthkills` pass-1 panel (fable5 and kimi, independently);
 the panel found it while auditing the width fix and noted that "ten kills removed" would read as
 "file clean" unless this one is cited.**
 
-`dev_pcc2.c`, `reassert_interrupts()` (around `:189-195`): if GENCTL has bit `0x04` set
+`dev_pcc2.c`, `reassert_interrupts()` (around `:189-195` [at 987cb596: `reassert_interrupts()` is `dev_pcc2.c:289` and the C040 test is `:390-397`, a latched decline since `#512` -- no `exit(` is left on that path]): if GENCTL has bit `0x04` set
 (C040), the function does `fatal("pcc2: C040 interrupt assertions... TODO"); exit(1);`.  GENCTL
 is written by the guest through its own arm at the LEGAL width (`ld.b`/`st.b`), and that arm
 calls `reassert_interrupts()` on every write.  So **a single byte store of `0x04` to
@@ -15479,7 +15492,7 @@ and it has been reporting `no commit-message file passed -- check C skipped, NOT
 EVERY commit this session, as a soft WARN that nobody reads.
 
 **The mechanism, verified by reading:** `precommit_check.sh` takes the message file as `$1`
-(`MSGFILE=${1:-}` at :32) and only runs check C when it is present (:1137).  The installed
+(`MSGFILE=${1:-}` at :32) and only runs check C when it is present (:1137 [at 987cb596: `:1239`]).  The installed
 `.git/hooks/pre-commit` calls `bash "$ROOT/tools/precommit_check.sh"` with NO argument.  A
 pre-commit hook has no message to pass -- git has not collected it yet -- so from that hook
 the check is unreachable BY CONSTRUCTION, not by omission.
@@ -15607,7 +15620,7 @@ write to read-only" (every write), and the `HUH?` prints at VECBASE (idata & ~0x
 eight sit inside the twelve arms the width round rewrote.  The carrier's own rule -- grep for
 the siblings before calling a claim fixed -- applies to a filing too.  The width probe itself
 trips two of them (`acc all` stores 0x10 at every block, which is `& ~7` at TxCTL -- 0x10 & ~7 = 0x10 -- and
-PSCALEADJ's unconditional print; it trips NONE of the five HUH? arms, because 0x10 has no bit outside
+PSCALEADJ's unconditional print; it trips NONE of the five HUH? arms, because 0x10 has no bit inside [corrected 2026-11-02, records: said outside -- 0x10 & ~0xf0, 0x10 & ~0x1f and 0x10 & ~0xdf are all 0, so 0x10 lies inside each mask and has no bit in its complement]
 ~0xf0, ~0x1f or ~0xdf.  This filing said SCCICR/SCCTX until 2026-09-04; the correction then said VECBASE,
 which is arithmetically false too (0x10 & ~0xf0 == 0) and was caught by the Opus pass-13 seat on
 2026-09-05 -- a correction is not safer than the thing it corrects), and its `devsig` oracle counts CHIPID's message at 1 after ONE byte write, so
@@ -15861,7 +15874,7 @@ switch's `default:` does `buf[0..3] = random()` and those bytes are then written
 design panel and verified by reading before filing: four `random()` calls remain in `dev_sgi_re.c` after this
 round removed the one in `horrible_getputpixel()`.  Not codex, not the packet-fed seats, not me — and I had read
 the file several times that evening.  Presumably the same member 3, but the observable differs: it fills a
-BUFFER rather than one caller variable, so what a declined fill should leave is its own question.
+BUFFER rather than one caller variable, so what a declined fill should leave is its own question.  [2026-11-02, records] Historical: #519 (fd15065) closed this residual. The arm stores nothing and random() survives only in comments; the width qualification is in the ledger row's state_note.
 
 **`sgirandomskipput` (MED — codex's fuller form, filed rather than dropped).**  A declined GET still lets the
 caller perform its dependent PUT, so the destination now gets the FOREGROUND — deterministic, which is this
@@ -17130,16 +17143,16 @@ only in the ledger is invisible to anyone reading the queue.*
 
 `do_mte_transfer()` computes the same expression twice:
 
-    :1312  int src     = (mode & MTE_MODE_SRC_BUF_MASK) >> MTE_SRC_TLB_SHIFT;
-    :1333  int src_tlb = (mode & MTE_MODE_SRC_BUF_MASK) >> MTE_SRC_TLB_SHIFT;
+    :1312 [at 987cb596: :1497]  int src     = (mode & MTE_MODE_SRC_BUF_MASK) >> MTE_SRC_TLB_SHIFT;
+    :1333 [at 987cb596: :1532]  int src_tlb = (mode & MTE_MODE_SRC_BUF_MASK) >> MTE_SRC_TLB_SHIFT;
 
-**Byte-identical.** `src` guards `:1336 if (src > MTE_TLB_C)`; `src_tlb` builds `src_mode` at
-`:1365`. They cannot disagree today, so **this is not a defect** -- it is recorded because the
+**Byte-identical.** `src` guards `:1336 if (src > MTE_TLB_C)` [at 987cb596: `:1535`]; `src_tlb` builds `src_mode` at
+`:1365` [at 987cb596: `:1571`]. They cannot disagree today, so **this is not a defect** -- it is recorded because the
 two-names-for-one-value shape is exactly what `#508` found in `memory_alpha.c` (`ALPHA_PAGESHIFT`
 and a local `pageSizeShift` both meaning 13), where the hazard is a later edit changing one and
 not the other.
 
-*The read that found it was checking something else: `:1336` tests `src`, not the `src_tlb`
+*The read that found it was checking something else: `:1336` [at 987cb596: `:1535`] tests `src`, not the `src_tlb`
 computed one line above, which LOOKS like a variable mix-up until you find the earlier
 declaration. That momentary alarm is the actual cost of the duplication.*
 
@@ -17766,7 +17779,7 @@ as "the hardware does X".*
 
 ### `armbfiwidth` (med) -- filed 2026-09-07
 
-cpu_arm_instr.c X(bfi): `(1 << width) - 1' where width = msb - lsb + 1 ranges [-30,32] -- 468 of 1024 encodable (msb,lsb) pairs reach an undefined shift on a 32-bit-int host (a DIFFERENT 496 have architecturally invalid field ordering).  #510 fixed the SAME expression at UBFX and SBFX and left this third site fifty lines below, and its `== 32' form covers none of the negative widths
+cpu_arm_instr.c X(bfi): `(1 << width) - 1' where width = msb - lsb + 1 ranges [-30,32] -- 468 of 1024 encodable (msb,lsb) pairs reach an undefined shift on a 32-bit-int host (a DIFFERENT 496 have architecturally invalid field ordering) [2026-11-02, records: the two sets OVERLAP -- 465 of the 468 are among the 496, as this row's ledger title and the 2026-09-08 correction below say].  #510 fixed the SAME expression at UBFX and SBFX and left this third site fifty lines below, and its `== 32' form covers none of the negative widths
 
 FILED 2026-09-07.  **`#510` fixed TWO of THREE sites of one idiom and left the third, whose undefined
 domain is WIDER than either it repaired.**  Found by reading an UNREAD codex answer
@@ -17800,7 +17813,7 @@ so **`width` ranges over [-30, 32]** and `1 << width` is undefined three separat
       1   width == 32        (msb=31, lsb=0)
       2   width == 31        (msb=lsb+30)
     ---
-    499   of 1024 pairs reach an undefined shift
+    499   of 1024 pairs reach an undefined shift   [2026-11-02, records: 468 -- the 31 zero widths are defined; see the 2026-09-08 correction below]
 
 **That arithmetic was INDEPENDENTLY DERIVED TWICE and the first attempt was mine and wrong.**  A
 codex answer on a different brief (`codex_shiftub_20260907.txt`) corrected it: *"`msb - lsb + 1 < 0`
@@ -18086,7 +18099,7 @@ class, not another instance of the recorded one.
 
     On a MISSING file `grep -c` prints nothing, so `N` is the EMPTY STRING.  `[ "" -lt 3 ]` is not
     false -- it is a **bash syntax error**, `integer expression expected`, which exits NON-ZERO, and
-    an `if` reads a non-zero exit as FALSE.  **So the else-branch ran and printed "ok -- launching".**
+    an `if` reads a non-zero exit as FALSE.  **So the refusal branch was skipped and execution fell through to the next line, which printed "ok -- launching".** [corrected 2026-11-02, records: said "So the else-branch ran" -- the quoted guard has no `else`]
 4.  `panel.sh` printed `no such brief` and launched **nothing** -- and exited 0, so the background
     task reported SUCCESS.
 
@@ -18488,7 +18501,7 @@ it owes negative controls in both directions and ships as its own harness round.
 
 A truncation census over **200 seat answers written today** flagged 11. Six are the known
 `codexcyberflag` zero-byte class (two of those still in flight), two are the `seattruncverdict`
-glm fragment, and **three were grok answers preserved mid-stream**:
+glm fragment, and **three were grok answers preserved mid-stream** [2026-11-02, records: the list below names two truncated grok answers, pass 3 and pass 5, as the heading and "both artifacts" say; 6 + 2 + 3 = 11 matches the census total, so the third flagged grok answer is not named here]:
 
     pass 3   1,017 of 10,649 bytes preserved   (10%)
     pass 5   1,340 of 11,718 bytes preserved   (11%)
@@ -18959,7 +18972,7 @@ handler.
 
 Ownership is an **overlay, not a disjoint population**: 22 live exits and 3 others are actively owned
 (`n6` holds eight footbridge sites, `alphavmkill` one, `sgirekills` five, `lcaisalane` and `lcabadval`
-eight between them, `m88kexit` two dead ones). A strict open/held filter leaves 83, seven of which belong
+eight between them, `m88kexit` two dead ones) [2026-11-02, records: this list sums to 24, not the 25 stated; it omits the one dead exit `sgirekills` (with `sgimtewidth`) also covers -- the evidence audit's ownership table, `regress/artifacts/queuetriage/codex_exitaudit_20260910.txt:50`, and its totals row `:62`, 22 live + 3 other = 25]. A strict open/held filter leaves 83, seven of which belong
 to in-work LCA repairs, so **the unowned remainder is 76**.
 
 *** One of my own earlier qualifications was too aggressive and is corrected here: lacking a separate
@@ -19317,7 +19330,7 @@ whose low word is negative but whose full value is positive records GT where LT 
 **Scope is the whole record form, not one instruction** — every `_dot` handler routes through this
 function — which is why it is filed separately rather than inside either rotate row. LOW only because
 reachability is unestablished in the sharpest possible way: it needs a 64-bit PowerPC CPU running with SF
-clear, and no gate in this tree executes any 64-bit PowerPC instruction and checks the result.
+clear, and no gate in this tree executes any 64-bit PowerPC instruction and checks the result. [2026-11-02, records: stale or too broad at 987cb596 -- the grade is MED since `#554`, as the heading says; gate 13 now runs 64-bit probes on the PPC970 (`regress/gate_ppc.sh:183` runs `ppc_rldicl_probe.py` on `-E bareppc`); and only the integer `_dot` handlers route through `update_cr0()` (the `DOT0`/`DOT1`/`DOT2` macros, `cpu_ppc_instr.c:208-213`), while the floating-point ones (`FDOT`, `:205-206`) update CR1 and `X(tlbsx_dot)` (`:3976`) writes CR0 itself]
 
 
 ### `mapledmaaddr` -- REVIEWED 2026-09-10: *** THE ROUND IS UNBLOCKED, AND MY DETECTOR WAS THE WEAK PART, NOT THE FIX ***
@@ -19477,7 +19490,7 @@ ATA-2 `:2534` and `:5083`: a device completing diagnostics without error **sets 
 `01h`**. So the value the model writes is right.
 
 **The defect is that `d->error` is ONE variable serving TWO registers with opposite meanings** --
-`dev_wdc.c:1843` returns it as the **Error register**, and `:594` uses it to raise the **Status**
+`dev_wdc.c:1843` [at 987cb596: `:1932-1934`, `case wd_error:` ... `odata = d->error;`] returns it as the **Error register**, and `:594` uses it to raise the **Status**
 register's `ERR` flag inside `status_byte()`. The tree's own header shows the collision:
 `WDCS_ERR = 0x01` and `WDCE_AMNF = 0x01`, the same number in different registers.
 
@@ -19878,9 +19891,9 @@ bit the model does not implement prints, with no `(once)` marker and no latch:
 It is the same class as `pit8253flood` and belongs to `floodclass`.
 
 > *** BUT LATCHING IT WOULD RED A SHIPPED DETECTOR ROW, AND THE COUPLING IS EXACT. ***
-> `regress/crime_width_probe.py:1256` is
-> `row("p acc ctl msg", count(t, "CRIME_CONTROL: unimplemented", clean), 3, ...)` -- it COUNTS this
-> very message and expects **3**, one per accepted CONTROL write (`0x01` sd, `0x0001` sw, `0x0201` sw).
+> `regress/crime_width_probe.py:1612` (as first committed, 7440e129; the :1256 / 3 form was the uncommitted probe of 2026-09-18) is
+> `row("p acc ctl msg", count(t, "CRIME_CONTROL: unimplemented", clean), 4, ...)` -- it COUNTS this
+> very message and expects **4**, one per accepted CONTROL write (`0x01` sd, `0x0001` sw, `0x0201` sw, `0x0201` sd) [corrected 2026-11-02, records: said `:1256`, 3 and three writes].
 > A latch takes that count to **1** and reds the row.
 
 **So this is not a free tidy-up.**  Whoever takes it must re-pin that row IN THE ORACLE-CORRECTION
@@ -20240,7 +20253,7 @@ intended, and the fourth time this session that a seat checking one claim found 
 
 ### `diskimageternaryoob` (WITHDRAWN; it said HIGH, coverage/(d)-floor, until 2026-10-09) -- filed 2026-09-17, kimi seat via the late-review panel
 
-*[2026-10-09, Fable 5.1's regress review of `diskimagesign` (F2.1): WITHDRAWN the day it was filed -- the ledger has this row `dropped`, titled "WITHDRAWN -- #491's ternary swap is NOT undetected".  `regress/diff_diskimage_io.c` reds on the arm swap: 10 rows red, then a stack-smashing abort with no PASS token (`regress/artifacts/fablequeue8n_20261009/regress_devices/offline_out/io_HEAD_armswap.out`).  The text below is as filed.]*
+*[2026-10-09, Fable 5.1's regress review of `diskimagesign` (F2.1): WITHDRAWN the day it was filed -- the ledger has this row `dropped`, titled "WITHDRAWN -- #491's ternary swap is NOT undetected".  `regress/diff_diskimage_io.c` reds on the arm swap: 17 rows red (io_HEAD_armswap.out:64-110) [corrected 2026-11-02, records: said 10], then a stack-smashing abort with no PASS token (`regress/artifacts/fablequeue8n_20261009/regress_devices/offline_out/io_HEAD_armswap.out`).  The text below is as filed.]*
 
 **`#491`'s CLAMP CAN BE NULLED BY SWAPPING TWO TERNARY ARMS, AND NOTHING IN THIS TREE WOULD
 NOTICE.**  The shipped line in `fread_helper()` is
@@ -20306,7 +20319,7 @@ belief was false:** the `return' variant had already been built and KILLED, 9/10
 (ctlq_20260909/repaired_M_return.raw). The seats' prediction is a re-derivation of a measured, killed
 mutant, not an open gap. [#560]  minimax, deepseek and kimi are all PACKET-FED -- they cannot
 build -- and grok read rather than ran.  So this is a PREDICTION from four independent readers plus
-the commit's own comment.  A measured escape would make it L2.
+the commit's own comment.  A measured escape would make it L2. [2026-11-02, records: superseded by the [#560] sentence above -- measured and killed; 'PREDICTION' and 'would make it L2' describe the record before that measurement was found.]
 
 **The dissent verbatim, as provenance** (minimax, `_scratchpad/panel_20260917_100431/ollama_minimax.txt`):
 
@@ -20910,7 +20923,7 @@ SHIPPED oracle + `M_lenrev` = 62/62, the escape). What the tightened form still 
    example is `0x3800`**, so a guest that programs a length is ordinary rather than exotic. The
    stronger session programs a **DISTINCT** length and pins BOTH halves of
    `Transfering %i bytes ... (guest asked for %i)` -- a new session, not an oracle edit.
-3. **`accept byte` still uses the substring form**, verified at `regress/gdrom_default_probe.py:1608`.
+3. **`accept byte` still uses the substring form**, verified at `regress/gdrom_default_probe.py:1608`. [2026-11-02, records: this cite does not resolve at 987cb596 -- the committed file has 1419 lines and no committed `regress/*.py` has a row named `accept byte`; the committed `accept dma` row (`:1400`) still tests the substring `"Transfering" in t`, and the ledger row `gdromacceptdmanum` records the tightened oracle as uncommitted]
    It is a DIFFERENT cell (the SUCCESS arm's shadow-clear pair-oracle) and `accept dma` is the
    print site clause (b) was measured against, so this is **not** a (b) hole -- but it is the old
    form left sitting beside the repair of it, which is the shape a future reader mistakes for a
@@ -21102,7 +21115,7 @@ So **ip30 is constructed and run in-tree today and the ISR aborts are on no path
 travels.** Only one gate names ip30 at all, there is no in-tree Octane boot image, and the
 device's own header says it is *"just comprised of hardcoded guesses so far. (Ugly.)"* The
 defect is real for a guest that touches those addresses — which a booting Linux/IP30 would,
-since the code cites that very driver three times — and hypothetical for anything running here.
+since the pre-#531 code cited that very driver three times (as "according to Linux/IP30", which survives once in what ships, dev_sgi_ip30.c:359 at 987cb596) [corrected 2026-11-02, records: said "the code cites that very driver three times"] — and hypothetical for anything running here.
 
 **`armmsrmodekill`** kills the **process** (not a halt, not a probe-only path) on ARM, whose
 decode *is* exercised across `testarm`/`barearm`/`cats`. Its real-guest reachability is **also**
@@ -21202,7 +21215,7 @@ loop bound with no cap and no yield.
 
 | site | scale | machine |
 |---|---|---|
-| `dev_sgi_re.c:1477` MTE linear fill — `dst1 - dst0 + 1` **underflows uint32** | ~2²⁰ passes × ≤4 KiB ≈ **4 GiB** of `memory_rw` | sgi/ip32 |
+| `dev_sgi_re.c:1477` [at 987cb596: `:1494`] MTE linear fill — `dst1 - dst0 + 1` **underflows uint32** | ~2²⁰ passes × ≤4 KiB ≈ **4 GiB** of `memory_rw` | sgi/ip32 |
 | `dev_sgi_re.c:1516-1574` MTE tiled fill — 12-bit coords, no cap | **16,777,216** getputpixel | sgi/ip32 |
 | `dev_pvr.c:171-204` SH4 DMAC — TCR 0 means 16M | **16,777,216** transfers in one store | dreamcast |
 | `dev_osiop.c:433` SCRIPTS MOVE — 24-bit guest count | **16,777,215** byte accesses per MOVE | mvme88k |
@@ -21372,6 +21385,10 @@ in the file, measured against a live denominator of **293** round-block headings
     #466  9ca9cca                    0  CHANGELOG mentions   asiceventaddr: state the domain restriction where the even
     #487  6faba0f eb8fafb            0  CHANGELOG mentions   landiskaux: the census is RE-TAKEN and the panel's gate is
     #493  3521a22                    0  CHANGELOG mentions   wdcaltoffset: a durable rung-3 witness for a live sev-high
+
+[2026-11-02, records: these counts were measured 2026-09-17 and committed in 686d179c. Since the 2026-10-09 records block
+(CHANGELOG.md:2609-2613 at 987cb596), #466 is mentioned in CHANGELOG.md (686d179c's own copy of this table,
+CHANGELOG.md:6376 at 987cb596, names it too); it still has no round block.]
 
 **None is a void number** — this project has one (`#289`), so a missing heading is a breach only
 if the number shipped, and all seven did. Three are ordinary defect fixes (`#441 sh4bcr`,
@@ -21667,7 +21684,7 @@ Four guest-reachable `abort()` calls in `dev_sgi_ip30.c` on the advertised `-E s
 `0x10020` had **no `writeflag` test and ran its store first**, so a guest LOAD wrote `idata`
 (zero on a read) into the interrupt-status register and *then* killed the host.
 
-**The disposition came from `heart.h`**, the header this file cites three times: `set_isr` and
+**The disposition came from `heart.h`**, the header the pre-#531 file cited three times (as "according to Linux/IP30", which survives once in what ships, dev_sgi_ip30.c:359 at 987cb596) [corrected 2026-11-02, records: said "the header this file cites three times"]: `set_isr` and
 `clear_isr` are write-side, `isr` is **read-only**. So writes keep their stores with a latched
 announce, reads of the write-side registers decline, and `0x10030`'s clear-on-write is dropped —
 **the file's own `TODO: is this correct?` answered NO by its own source.**
@@ -21703,7 +21720,7 @@ the unguarded BITMASK macro is **the third instance of the same shape in one hea
 
 **The remedy is already in the file and costs one token:** give BITMASK the same
 `+ SYSASIC_EVENT_RANGE_OK(e)` that ADDR carries — not an addition under the licence, but the
-existing guard applied to the sibling it was written for.
+existing guard applied to the sibling it was written for. [2026-11-02, records] Superseded: sysasicbitmask31 (ledger.json:64017-64023) records this remedy as inert, measured, and names the fix; see that row.
 
 *Count caution: my first sweep said 22 constants / max 96. The 96 came from a `#define` quoted
 **inside a comment**. The seat's 21/67 was right and mine was wrong.*
@@ -22123,10 +22140,10 @@ bounded reap, `HARNESS-KILL`/`HARNESS-CLOSE` labels) and every K row requires th
 tables in a scratch clone: pre-fix RED 10/19; 11/12 mutants killed, (j) ESCAPED as disclosed; x_exit2, y_sigkill and
 z_silentexit each red 3/3 K rows.  **The record sentence this row was opened against is the one at :2681-2682 above**
 ("#218-#223 ... footbridge ... guest-reachable `exit(1)`s -> graceful"): corrected in place -- footbridge's ten
-`exit(1)` became eight in #220, seven now; the remaining seven are `fbdeclinefive` (5) and `fbsdrampair` (2).
+`exit(1)` became eight in #220, seven now; the remaining seven are `fbdeclinefive` (5) and `fbsdrampair` (2). [2026-11-02, records: #545 (4264ee20) then removed fbdeclinefive's five; DEVICE_ACCESS(footbridge) keeps two, fbsdrampair's, at dev_footbridge.c:735 and :760 (987cb596)]
 
 ### `fbsdrampair` (HIGH; it said LOW until #554 re-graded it, 2026-10-02) — SDRAM_BA_MASK / SDRAM_BA_OFFSET reads: documented R/W, write arms discard the value
-HEAD :712, :737.  DECLINE by default (member 3); BACKED ACCEPT only on a warrant -- a guest in the rig set that reads
+`:712, :737` at 78360718^ (before #539); at 987cb596 the read arms are :732 and :757, their exits :735 and :760 [corrected 2026-11-02, records: said "HEAD :712, :737"].  DECLINE by default (member 3); BACKED ACCEPT only on a warrant -- a guest in the rig set that reads
 them back after writing (0/2 backing fields, 0/2 consumers today; codex M2).  With it: the mask whitelist rejects the
 documented no-window value 0x8ffc0000 (Table 7-7).
 
@@ -22226,8 +22243,13 @@ that has waited uncommitted since 2026-09-17.  Two wrong CHANGELOG records were 
 green-line claim, #517's heading); two cited durable copies were made; the peer's out-of-snapshot work was copied,
 never edited, to `peer_carriers/` (1170 files, cmp and md5 verified).
 
+[2026-11-02, records] Historical: gate 6 was measured red on 2026-09-23 at that day's HEAD (f685d75c), and #546
+hygienecensus (3e33201d, 2026-09-24) re-derived those census pins. The thirteen exemptions were wired, re-dated or
+discharged by #548 (f4f601c4), #550 (04500deb) and #551 (f5e155ac); at 987cb596 the dated entries run from 2026-11-05
+to 2026-12-10 (check_probe_wiring.py:3355-3419, gate_offline.sh:2391).
+
 ### `dashmalformedheld` (LOW) — a malformed hold filed after a seat's answer renders as the plain answer on the dashboard
-The unrepaired half of `stagetokens` entry [18]'s "ALL REPAIRED": `tools/pipeline/gen_dashboard.py:143-146` keeps the
+The unrepaired half of `stagetokens` entry [18]'s "ALL REPAIRED": `tools/pipeline/gen_dashboard.py:143-146` [at 987cb596: `if not ents:` is `:157` and the fallback `:158-160`] keeps the
 malformed-marker fallback inside `if not ents:`, and `:173` drops held records from an answered seat's cell (both
 written by `09ded75`).  The closure checks (H, I, the wall) already refuse the case, so this is display only.  Found
 by reading, not measured; the fix owes a fixture both ways.
@@ -22462,7 +22484,7 @@ entries under an unanchored regex (all seats); the phrase came from the carrier'
 ### `batterymissedruns` (HIGH, harness) — the weekly batteries of 2026-09-06 and 2026-09-13 left no verdict, and nothing said so
 
 `_scratchpad/nightly/` holds no verdict between 2026-08-30 and 2026-09-20; the scheduled task's last run is 09-20 (result
-1), next 09-27.  `tools/nightly_check.sh` -- the dead-man switch whose whole job is reporting a battery that never ran --
+1), next 09-27 [2026-11-02, records: as of this section's date, 2026-09-24; the task has run weekly since -- `_scratchpad/nightly/` holds verdicts dated from 2026-09-27 on].  `tools/nightly_check.sh` -- the dead-man switch whose whole job is reporting a battery that never ran --
 is run by nothing: not precommit, not the session hooks (main loop, measured; Opus).  The missed runs cost gate 8 a week
 of visibility, and the one battery that did run (09-20) was RED on gates 6 and 8 and went unacted for four days.  HIGH by
 the flagship seat's ruling: the carrier names a never-run battery its sharpest gap.  Closure should show an independently
@@ -22980,7 +23002,7 @@ is absolute).
 #### `ppcbatppkill` (HIGH) -- PPC: a BAT hit with PP=00, or a store through a read-only BAT, reaches fatal()+exit(1) instead of a DSI/ISI
 batch 1b -- `regress/artifacts/astraretro_20260926/DISPOSITIONS.md`  [re-found 2026-10-22 as the adjudication's N5: memory_ppc.c:69-73 and the caller's exit at :273-276 -- no second row]
 
-#### `ppcfmasingle` (HIGH) -- PPC opcode-59 fnmadds/fnmsubs (and their Rc forms) are undecoded and stop the emulator (cpu_ppc_instr.c:5197-5218); fmadds/fmsubs are ALREADY FILED in prose (OUTSTANDING_BUGS.md:1705, :1712) -- cross-reference, do not double-file
+#### `ppcfmasingle` (HIGH) -- PPC opcode-59 fnmadds/fnmsubs (and their Rc forms) are undecoded and stop the emulator (cpu_ppc_instr.c:5197-5218); fmadds/fmsubs are ALREADY FILED in prose (OUTSTANDING_BUGS.md:1705, :1712 [at 987cb596: the prose is `:1649-1655` -- the `fnmadd`/`fnmsub` bullet naming `fmadds`/`fmsubs` at `:1653`, and the `#555` note at `:1655` filing them as `qhppcdecode` -- and `:1752-1756` names them again]) -- cross-reference, do not double-file
 batch 1b -- `regress/artifacts/astraretro_20260926/DISPOSITIONS.md`  [title corrected: Astra afile_01, D:24-27]
 
 #### `gdromdmareentr` (HIGH) -- A guest-aimed GD-ROM DMA into its own +0x18 trigger recurses unboundedly and exhausts the host stack -- CONDITIONAL: a nonzero staged word, count and enable armed, data loaded, and the destination inside the trigger window
@@ -22995,7 +23017,7 @@ batch 2a -- `regress/artifacts/astraretro_20260926/DISPOSITIONS.md`
 #### `i960disasmspan` (HIGH) -- i960: disassembling a long (two-word MEMB) instruction reads ib[4..7] of a four-byte buffer, on the to_be_translated `bad:` path and on the trace/single-step path
 batch 2c -- `regress/artifacts/astraretro_20260926/DISPOSITIONS.md`
 
-#### `xscalecp6exits` (HIGH, an id for an entry this file already carries in prose) -- OUTSTANDING_BUGS.md:18721-18722 at db8b1a33 -- the three XScale CP6 exits of cpu_arm_coproc.c (:322, :331, :417) end the process; the entry's other three siblings are `armcp15cp14exits`
+#### `xscalecp6exits` (HIGH, an id for an entry this file already carries in prose) -- OUTSTANDING_BUGS.md:18721-18722 at db8b1a33 -- the three XScale CP6 exits of cpu_arm_coproc.c (:322, :331, :417) end the process; the entry's other three siblings are `armcp15cp14exits` [corrected 2026-11-02, records: the other siblings are four -- three are `armcp15cp14exits` (:62, :264, :528) and one is `armendianexit` (:177); at 987cb596 the live `exit(1)` calls of cpu_arm_coproc.c are :62, :177, :264, :322, :331, :417 and :528]
 batch 2c -- `regress/artifacts/astraretro_20260926/DISPOSITIONS.md`  [title corrected: Astra afile_01, D:335-336]
 
 #### `mboutcapacity` (HIGH) -- MB89352: the WRITE path re-sizes data_out_len without reallocating, and DREG writes bound on that length
@@ -23021,6 +23043,7 @@ batch 3a, `cpum88kinstr:F4` -- `regress/artifacts/astraretro_20260926/DISPOSITIO
 
 #### `m88kfpr0stop` (HIGH) -- every FP arithmetic/convert decode with rD = r0 stops the CPU instead of raising the FP unimplemented-opcode exception
 batch 3a, `cpum88kinstr:F5` -- `regress/artifacts/astraretro_20260926/DISPOSITIONS.md`
+[2026-11-02, records] One of the eight sites (DISPOSITIONS.md:577) is fcmp (cpu_m88k_instr.c:3294-3298, at 987cb596), so the title's 'arithmetic/convert' is narrower than its site set.
 
 #### `m88kbcndnest` (HIGH) -- m88k: a delayed branch entered as another delayed branch's delay slot recurses on the host without bound; separately, on the untaken nested unwind the shared dispatch pointer overruns its array once the cumulative increments exceed the entries that remain
 batch 3a, `generatem88kbcnd:F1` -- `regress/artifacts/astraretro_20260926/DISPOSITIONS.md`  [title corrected: grok's re-read asked for a condition; Astra REJECTS grok's wording as too narrow and gives this one (afile_07)]
@@ -23039,9 +23062,11 @@ batch 3d, `devpvr:F1` -- `regress/artifacts/astraretro_20260926/DISPOSITIONS.md`
 
 #### `x11alloc32` (HIGH) -- X11 resize allocation wraps when size_t is 32 bits, inside the 16384 cap
 batch 3g, `bundle_console:F1` -- `regress/artifacts/astraretro_20260926/DISPOSITIONS.md`
+[2026-11-02, records] File: src/console/x11.c -- the resize allocation at :441-442 (the ruling also names :632), at 987cb596.
 
 #### `emulgzipfail` (HIGH) -- A gzip load that fails to decompress terminates the process
 batch 3g, `emul:F1` -- `regress/artifacts/astraretro_20260926/DISPOSITIONS.md`
+[2026-11-02, records] Site: src/core/emul.c:609-616 at 987cb596.
 
 #### `ne2krxbudget` (HIGH) -- NE2000: enabled reception with an invalid ring has no per-tick packet budget -- CONDITIONAL: reception enabled, the ring persistently invalid with OVW clear, and ingress keeping packets available; a finite burst drains
 batch 3f, `devne2000:F1` -- `regress/artifacts/astraretro_20260926/DISPOSITIONS.md`  [title corrected: grok's re-read: true only under a condition the title omitted; Astra ACCEPTS the condition (afile_07)]
@@ -23067,14 +23092,17 @@ batch 3h, `bundle_promemul:F1` -- `regress/artifacts/astraretro_20260926/DISPOSI
 #### `armcp15cp14exits` (HIGH, an id for an entry this file already carries in prose) -- OUTSTANDING_BUGS.md:18721-18722 at db8b1a33 -- the three remaining sibling exits of cpu_arm_coproc.c: :62 CP15 Rd==PC, :264 CP15 PID, :528 CP14 unknown (the id is assigned HERE: the ruling left one id owed)
 batch 2c -- `regress/artifacts/astraretro_20260926/DISPOSITIONS.md`  [Astra afile_01, D:335-336 and D:284; id chosen by the main loop]
 
-#### `m88kpsrbokill` (HIGH) -- m88k: a supervisor stcr or rte that writes PSR with the BO bit flipped against the machine's byte order stops the CPU (cpu_m88k.c:522-532; cpu_m88k_instr.c:843-847)
+#### `m88kpsrbokill` (HIGH) -- m88k: a supervisor stcr or rte that writes PSR with the BO bit flipped against the machine's byte order stops the CPU (cpu_m88k.c:522-532 [at 987cb596: the BO test is `:527-530` and the stop, `cpu->running = false;` then `return;`, is `:535-536`, so the range reads `:522-536`]; cpu_m88k_instr.c:843-847)
 batch 3a -- `regress/artifacts/astraretro_20260926/DISPOSITIONS.md`  [Astra afile_01, D:557-563 (the ruler's own addition)]
+[2026-11-02, records] The title's cpu_m88k.c:522-532 are 1202d342's lines; at 987cb596 (after #570, c8fcb5ff) the same arm is :526-536.
 
 #### `osiopselectzero` (HIGH, an id for an entry this file already carries in prose) -- a SITE of the existing class row `exitunowned76` (dev_osiop.c), id reserved by the ruling for the round that takes it
 batch 3e, `devosiop:F1` -- `regress/artifacts/astraretro_20260926/DISPOSITIONS.md`  [Astra afile_01, D:681]
+[2026-11-02, records] Site: src/devices/dev_osiop.c:656 at 987cb596
 
 #### `osiopregexit` (HIGH, an id for an entry this file already carries in prose) -- a SITE of the existing class row `exitunowned76` (dev_osiop.c), id reserved by the ruling for the round that takes it
 batch 3e, `devosiop:F3` -- `regress/artifacts/astraretro_20260926/DISPOSITIONS.md`  [Astra afile_01, D:683]
+[2026-11-02, records] Site: src/devices/dev_osiop.c:1152 at 987cb596
 
 #### `osiopdnadexit` (HIGH, an id for an entry this file already carries in prose) -- a SITE of the existing class row `exitunowned76`: dev_osiop.c:942, :946 whitelist OSIOP_DNAD (0x28) and OSIOP_ADDER (0x3c) for 32-bit width, the register switch has no case for either, and one aligned access reaches exit(1) at :1152
 batch 3e -- `regress/artifacts/astraretro_20260926/DISPOSITIONS.md`  [Astra afile_01, D:700 (the ruler's own addition)]
@@ -23289,7 +23317,7 @@ batch 3d, `cpush:F4` -- `regress/artifacts/astraretro_20260926/DISPOSITIONS.md`
 #### `alphatbilowerwidth` (MED, test coverage) -- alpha_tbi_probe.py cannot see the LOWER-bound selector cast narrowed to 32 bits alone (cpu_alpha_palcode.c:430): every value it drives gives the same answer
 batch 3d, `cpualphapalcode:F2` -- `regress/artifacts/astraretro_20260926/DISPOSITIONS.md`  [sev corrected: Astra afile_01 and afile_02: the harness consolidation grades it MED, D:734 and H:206; title corrected: Astra afile_01, D:734 and fable_batch3d.md]
 
-#### `thumbrorstale` (MED, test coverage) -- arm_flags_probe.py's two `T RORS clears Z / N` rows preset N=0 Z=0, so #329's clear-before-re-deriving repair (cpu_arm.c:1454-1455) can be removed and both still pass (also the harness review's `rorsstalevacuous`)
+#### `thumbrorstale` (MED, test coverage) -- arm_flags_probe.py's two `T RORS clears Z / N` rows preset N=0 Z=0, so #329's clear-before-re-deriving repair (cpu_arm.c:1454-1455 [at 987cb596: the RORS clear is `:1504-1505`, its `#329` comment `:1498-1503`; `:1455` is `case 0x4:`]) can be removed and both still pass (also the harness review's `rorsstalevacuous`)
 batch 3c, `cpuarm:F5` -- `regress/artifacts/astraretro_20260926/DISPOSITIONS.md`  [sev corrected: Astra afile_01: the harness consolidation grades it MED, D:774 and H:839; title corrected: Astra afile_01, D:774, H:34, :839; also covers the harness review's group 01 harmflagsprobe:F1 (the id `rorsstalevacuous`, consolidated here)]
 
 #### `armabortdest` (MED) -- A faulting word load zero-fills its destination after Data Abort entry (LE hosts)
@@ -23370,7 +23398,7 @@ batch 3c, `cpuarminstrloadstore:F5` -- `regress/artifacts/astraretro_20260926/DI
 #### `armoddpair` (MED, an id for an entry this file already carries in prose) -- OUTSTANDING_BUGS.md:5142-5143 at db8b1a33 -- (task #76) LDRD/STRD with an odd Rd reach the pair transfer where the ARM ARM makes the instruction UNDEFINED
 batch 3c, `cpuarminstrloadstore:F6` -- `regress/artifacts/astraretro_20260926/DISPOSITIONS.md`  [Astra afile_01, D:780]
 
-#### `ramspaninval` (MED, an id for an entry this file already carries in prose) -- OUTSTANDING_BUGS.md:2727-2728 at db8b1a33 -- a bulk RAM write invalidates translated code once per memblock fragment, at the fragment's first page (memory_rw.c:760; the split and recursion at :762-775), so translated code in the later pages it writes can go stale -- CONDITIONAL: only an access that skips the 1 KB split (a PHYSICAL access, or a CPU with no translate_v2p: memory_rw.c:186) reaches that single invalidate with a length past its first page, e.g. GD-ROM DMA on the Dreamcast; a translated store is cut to at most 1024 bytes and each chunk invalidates its own page.  The queue's prose says `only the endpoint pages`
+#### `ramspaninval` (MED, an id for an entry this file already carries in prose) -- OUTSTANDING_BUGS.md:2727-2728 at db8b1a33 -- a bulk RAM write invalidates translated code once per memblock fragment, at the fragment's first page (memory_rw.c:760 [at 987cb596: `:776-779`]; the split and recursion at :762-775 [at 987cb596: `:781-795`]), so translated code in the later pages it writes can go stale -- CONDITIONAL: only an access that skips the 1 KB split (a PHYSICAL access, or a CPU with no translate_v2p: memory_rw.c:186) reaches that single invalidate with a length past its first page, e.g. GD-ROM DMA on the Dreamcast; a translated store is cut to at most 1024 bytes and each chunk invalidates its own page.  The queue's prose says `only the endpoint pages`
 batch 3g, `memoryrw:F3` -- `regress/artifacts/astraretro_20260926/DISPOSITIONS.md`  [missing from the table until chk_filed_exist.py.txt (the id existed nowhere); the grok ruling grok_rule3g.txt:13-14 (proposes the id; independent grade MED), Astra codex_astraconfirm_3g.txt:8 (the id does not exist; the prose files the defect), D:824; the CONDITION is grok's first-hand read (grok/grok_file3ids.txt), and the main loop read memory_rw.c:186 and :757-775 at 7440e129]
 
 #### `jazzlbmask` (MED, an id for an entry this file already carries in prose) -- OUTSTANDING_BUGS.md:2730 at db8b1a33 -- the Jazz local-bus interrupt enable BITS are unused: the access at the LB_IE address (pica.h:117; dev_jazz.c:677-684, relative 2) stores and returns jazz_timer_value, and jazz_interrupt_assert (dev_jazz.c:138-147) forwards every pending local line when EXT_IP3 is enabled, so a local interrupt the guest would mask is still delivered (the `dual-pending-IRQ loss` half of the queue's sentence is the existing entry OB-22)
@@ -23442,7 +23470,7 @@ group 02, `hbundle_pipeline4:F1` -- `regress/artifacts/astraretro_harness_202609
 group 03, `hbundle_regress10:F1` -- `regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md`
 
 #### `sgilwreadzero` (HIGH) -- narrow read of a zeroed window looks like the width decline
-group 03, `hbundle_regress11:F1` -- `regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md`  [HIGH IS DISPUTED -- the grok seat's first-hand re-read says NOT HIGH (grok/grok_filehigh.txt: nothing live ends the process today); GPT-6 Astra HOLDS HIGH (afile_07): a fixed defect leaves the harness row HIGH if its faulty check would ACCEPT the protected process-ending or out-of-bounds regression, and no live instance is required where a preventive check DEMONSTRABLY misses the severe class it was shipped to catch -- an unrelated hypothetical severe consequence does not qualify.  agy's fact table (agy/agy_highfacts.txt) establishes what the check does on a real emulator death and that the protected path declines today; it does not test Astra's regression argument. agy's own verdicts on that line (agy/agy_highfacts.txt:6), verbatim: "Q1: FAILS | Q2: NO LONGER | Q3: N/A" -- Q1 the check on a real emulator death, Q2 the protected path today, Q3 a live instance of the shape.  A RULE QUESTION for the flagship]
+group 03, `hbundle_regress11:F1` -- `regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md`  [HIGH IS DISPUTED -- the grok seat's first-hand re-read says NOT HIGH (grok/grok_filehigh.txt: nothing live ends the process today); GPT-6 Astra HOLDS HIGH (afile_07): a fixed defect leaves the harness row HIGH if its faulty check would ACCEPT the protected process-ending or out-of-bounds regression, and no live instance is required where a preventive check DEMONSTRABLY misses the severe class it was shipped to catch -- an unrelated hypothetical severe consequence does not qualify.  agy's fact table (agy/agy_highfacts.txt) establishes what the check does on a real emulator death and that the protected path declines today; it does not test Astra's regression argument. agy's own verdicts on that line (agy/agy_highfacts.txt:6), verbatim: "Q1: FAILS | Q2: NO LONGER | Q3: N/A" -- Q1 the check on a real emulator death, Q2 the protected path today, Q3 a live instance of the shape. [2026-11-02, records: agy's Q1 here is FAILS -- the row REJECTS a real emulator death, since `regress/sgi_re_width_probe.py:338-340` scores `how + "/" + v0` against `exit0/0x0` (agy/agy_highfacts.txt:6) -- which is the opposite of the check ACCEPTING the process-ending regression that the HIGH warrant above needs; agy's own audit says the clause before the gloss misstates its table (agy/agy_highfacts2.txt:5); the grade is not changed here]  A RULE QUESTION for the flagship]
 
 #### `sgialiaspace` (HIGH) -- alias extractor misses aliases that contain a space
 group 06, `regress24:F3` -- `regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md`
@@ -23454,25 +23482,25 @@ group 06, `regress24:F7` -- `regress/artifacts/astraretro_harness_20260926/HARNE
 group 09, `hbundle_regress33:F5` -- `regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md`
 
 #### `diagdivunaryop` (HIGH) -- diag_div_sweep divisor regex rejects unary operators and pointer dereference
-group 09, `hbundle_regress33:F8` -- `regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md`  [HIGH IS DISPUTED -- the grok seat's first-hand re-read says NOT HIGH (grok/grok_filehigh.txt: nothing live ends the process today); GPT-6 Astra HOLDS HIGH (afile_07): a fixed defect leaves the harness row HIGH if its faulty check would ACCEPT the protected process-ending or out-of-bounds regression, and no live instance is required where a preventive check DEMONSTRABLY misses the severe class it was shipped to catch -- an unrelated hypothetical severe consequence does not qualify.  agy's fact table (agy/agy_highfacts.txt:11): agy found no current missed guest-zero diagnostic division or offending unary/dereference divisor shape. agy's own verdicts on that line (agy/agy_highfacts.txt:11), verbatim: "Q1: CAN PASS | Q2: NO LONGER | Q3: NONE FOUND" -- Q1 the check on a real emulator death, Q2 the protected path today, Q3 a live instance of the shape.  A RULE QUESTION for the flagship]
+group 09, `hbundle_regress33:F8` -- `regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md`  [HIGH IS DISPUTED -- the grok seat's first-hand re-read says NOT HIGH (grok/grok_filehigh.txt:47) [corrected 2026-11-02, records: said "(grok/grok_filehigh.txt: nothing live ends the process today)", a sentence that file does not contain; the row's own NOT HIGH reason is at :47]; GPT-6 Astra HOLDS HIGH (afile_07): a fixed defect leaves the harness row HIGH if its faulty check would ACCEPT the protected process-ending or out-of-bounds regression, and no live instance is required where a preventive check DEMONSTRABLY misses the severe class it was shipped to catch -- an unrelated hypothetical severe consequence does not qualify.  GPT-6 Astra's proposed clause (afile_09/codex_afile_09.txt:8), which agy rejected as CLAUSE MISSTATES (agy/agy_highfacts2.txt:6) [corrected 2026-11-02, records: said "agy's fact table (agy/agy_highfacts.txt:11)"]: agy found no current missed guest-zero diagnostic division or offending unary/dereference divisor shape. agy's own verdicts on that line (agy/agy_highfacts.txt:11), condensed, citations and reasons omitted [corrected 2026-11-02, records: said "verbatim"]: "Q1: CAN PASS | Q2: NO LONGER | Q3: NONE FOUND" -- Q1 the check on a real emulator death, Q2 the protected path today, Q3 a live instance of the shape. [2026-11-02, records: for this row the gloss does not describe agy's answer -- `diag_div_sweep.py` is a static sweep and runs no emulator, so agy's Q1 "CAN PASS" means the sweep can drop a unary or dereference divisor (agy/agy_highfacts.txt:11), and agy's own audit says the clause before the gloss omits that (agy/agy_highfacts2.txt:6, CLAUSE MISSTATES); the grade is not changed here]  A RULE QUESTION for the flagship]
 
 #### `diagdivchained` (HIGH) -- diag_div_sweep nonconst classifies chained division with leading constant divisor as constant
-group 09, `hbundle_regress33:F9` -- `regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md`  [HIGH IS DISPUTED -- the grok seat's first-hand re-read says NOT HIGH (grok/grok_filehigh.txt: nothing live ends the process today); GPT-6 Astra HOLDS HIGH (afile_07): a fixed defect leaves the harness row HIGH if its faulty check would ACCEPT the protected process-ending or out-of-bounds regression, and no live instance is required where a preventive check DEMONSTRABLY misses the severe class it was shipped to catch -- an unrelated hypothetical severe consequence does not qualify.  agy's fact table (agy/agy_highfacts.txt:12): agy found no current missed guest-zero chained diagnostic division. agy's own verdicts on that line (agy/agy_highfacts.txt:12), verbatim: "Q1: CAN PASS | Q2: NO LONGER | Q3: NONE FOUND" -- Q1 the check on a real emulator death, Q2 the protected path today, Q3 a live instance of the shape.  A RULE QUESTION for the flagship]
+group 09, `hbundle_regress33:F9` -- `regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md`  [HIGH IS DISPUTED -- the grok seat's first-hand re-read says NOT HIGH (grok/grok_filehigh.txt:48) [corrected 2026-11-02, records: said "(grok/grok_filehigh.txt: nothing live ends the process today)", a sentence that file does not contain; the row's own NOT HIGH reason is at :48]; GPT-6 Astra HOLDS HIGH (afile_07): a fixed defect leaves the harness row HIGH if its faulty check would ACCEPT the protected process-ending or out-of-bounds regression, and no live instance is required where a preventive check DEMONSTRABLY misses the severe class it was shipped to catch -- an unrelated hypothetical severe consequence does not qualify.  GPT-6 Astra's proposed clause (afile_09/codex_afile_09.txt:10), which agy rejected as CLAUSE MISSTATES (agy/agy_highfacts2.txt:7) [corrected 2026-11-02, records: said "agy's fact table (agy/agy_highfacts.txt:12)"]: agy found no current missed guest-zero chained diagnostic division. agy's own verdicts on that line (agy/agy_highfacts.txt:12), condensed, citations and reasons omitted [corrected 2026-11-02, records: said "verbatim"]: "Q1: CAN PASS | Q2: NO LONGER | Q3: NONE FOUND" -- Q1 the check on a real emulator death, Q2 the protected path today, Q3 a live instance of the shape. [2026-11-02, records: for this row the gloss does not describe agy's answer -- `diag_div_sweep.py` is a static sweep and runs no emulator, so agy's Q1 "CAN PASS" means the sweep can class a chained division with a leading constant divisor as constant (agy/agy_highfacts.txt:12), and agy's own audit says the clause before the gloss omits that (agy/agy_highfacts2.txt:7, CLAUSE MISSTATES); the grade is not changed here]  A RULE QUESTION for the flagship]
 
 #### `diagdivtruncarg` (HIGH) -- diag_div_sweep truncates arguments to 150 characters before nonconst classification
-group 09, `hbundle_regress33:F10` -- `regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md`  [HIGH IS DISPUTED -- the grok seat's first-hand re-read says NOT HIGH (grok/grok_filehigh.txt: nothing live ends the process today); GPT-6 Astra HOLDS HIGH (afile_07): a fixed defect leaves the harness row HIGH if its faulty check would ACCEPT the protected process-ending or out-of-bounds regression, and no live instance is required where a preventive check DEMONSTRABLY misses the severe class it was shipped to catch -- an unrelated hypothetical severe consequence does not qualify.  agy's fact table (agy/agy_highfacts.txt:13): agy found no current guest-zero diagnostic division beyond the classification cutoff. agy's own verdicts on that line (agy/agy_highfacts.txt:13), verbatim: "Q1: CAN PASS | Q2: NO LONGER | Q3: NONE FOUND" -- Q1 the check on a real emulator death, Q2 the protected path today, Q3 a live instance of the shape.  A RULE QUESTION for the flagship]
+group 09, `hbundle_regress33:F10` -- `regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md`  [HIGH IS DISPUTED -- the grok seat's first-hand re-read says NOT HIGH (grok/grok_filehigh.txt:49) [corrected 2026-11-02, records: said "(grok/grok_filehigh.txt: nothing live ends the process today)", a sentence that file does not contain; the row's own NOT HIGH reason is at :49]; GPT-6 Astra HOLDS HIGH (afile_07): a fixed defect leaves the harness row HIGH if its faulty check would ACCEPT the protected process-ending or out-of-bounds regression, and no live instance is required where a preventive check DEMONSTRABLY misses the severe class it was shipped to catch -- an unrelated hypothetical severe consequence does not qualify.  GPT-6 Astra's proposed clause (afile_09/codex_afile_09.txt:12), which agy rejected as CLAUSE MISSTATES (agy/agy_highfacts2.txt:8) [corrected 2026-11-02, records: said "agy's fact table (agy/agy_highfacts.txt:13)"]: agy found no current guest-zero diagnostic division beyond the classification cutoff. agy's own verdicts on that line (agy/agy_highfacts.txt:13), condensed, citations and reasons omitted [corrected 2026-11-02, records: said "verbatim"]: "Q1: CAN PASS | Q2: NO LONGER | Q3: NONE FOUND" -- Q1 the check on a real emulator death, Q2 the protected path today, Q3 a live instance of the shape. [2026-11-02, records: for this row the gloss does not describe agy's answer -- `diag_div_sweep.py` is a static sweep and runs no emulator, so agy's Q1 "CAN PASS" means the sweep can miss a division in an argument cut at 150 characters (agy/agy_highfacts.txt:13), and agy's own audit says the clause before the gloss omits that (agy/agy_highfacts2.txt:8, CLAUSE MISSTATES); the grade is not changed here]  A RULE QUESTION for the flagship]
 
 #### `sgiat1count` (HIGH) -- sgi wr lat1 and rd lat1 pass when the second access exits
 group 10, `hbundle_regress9:F1` -- `regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md`  [HIGH IS DISPUTED -- the grok seat's first-hand re-read says NOT HIGH (grok/grok_filehigh.txt: nothing live ends the process today); GPT-6 Astra HOLDS HIGH (afile_07): a fixed defect leaves the harness row HIGH if its faulty check would ACCEPT the protected process-ending or out-of-bounds regression, and no live instance is required where a preventive check DEMONSTRABLY misses the severe class it was shipped to catch -- an unrelated hypothetical severe consequence does not qualify.  agy's fact table (agy/agy_highfacts.txt:17): agy corroborates acceptance of process death and the current safe decline, without adjudicating the HIGH rule. agy's own verdicts on that line (agy/agy_highfacts.txt:17), verbatim: "Q1: CAN PASS | Q2: NO LONGER | Q3: N/A" -- Q1 the check on a real emulator death, Q2 the protected path today, Q3 a live instance of the shape.  A RULE QUESTION for the flagship]
 
 #### `probewiringinterpopt` (HIGH) -- check_probe_wiring.py ignores interpreter options preceding -c false-wiring probes passed as arguments
-group 11, `hcheckprobewiring:F2` -- `regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md`  [HIGH IS DISPUTED -- the grok seat's first-hand re-read says NOT HIGH (grok/grok_filehigh.txt: nothing live ends the process today); GPT-6 Astra HOLDS HIGH (afile_07): a fixed defect leaves the harness row HIGH if its faulty check would ACCEPT the protected process-ending or out-of-bounds regression, and no live instance is required where a preventive check DEMONSTRABLY misses the severe class it was shipped to catch -- an unrelated hypothetical severe consequence does not qualify.  agy's fact table (agy/agy_highfacts.txt:18): agy establishes the false-wiring mechanism and found no current offending invocation shape. agy's own verdicts on that line (agy/agy_highfacts.txt:18), verbatim: "Q1: CAN PASS | Q2: NO LONGER | Q3: NONE FOUND" -- Q1 the check on a real emulator death, Q2 the protected path today, Q3 a live instance of the shape.  A RULE QUESTION for the flagship]
+group 11, `hcheckprobewiring:F2` -- `regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md`  [HIGH IS DISPUTED -- the grok seat's first-hand re-read says NOT HIGH (grok/grok_filehigh.txt: nothing live ends the process today); GPT-6 Astra HOLDS HIGH (afile_07): a fixed defect leaves the harness row HIGH if its faulty check would ACCEPT the protected process-ending or out-of-bounds regression, and no live instance is required where a preventive check DEMONSTRABLY misses the severe class it was shipped to catch -- an unrelated hypothetical severe consequence does not qualify.  agy's fact table (agy/agy_highfacts.txt:18): agy establishes the false-wiring mechanism and found no current offending invocation shape. agy's own verdicts on that line (agy/agy_highfacts.txt:18), verbatim: "Q1: CAN PASS | Q2: NO LONGER | Q3: NONE FOUND" -- Q1 the check on a real emulator death, Q2 the protected path today, Q3 a live instance of the shape. [2026-11-02, records: for this row the gloss does not describe agy's answer -- `check_probe_wiring.py` is a static checker and runs no emulator, so agy's Q1 "CAN PASS" means the checker can credit a probe as wired without running it when an interpreter option comes before `-c`, and its Q2 "NO LONGER" means only that a static checker cannot end the emulator process (agy/agy_highfacts.txt:18); the grade is not changed here]  A RULE QUESTION for the flagship]
 
 #### `wirereassign` (HIGH) -- check_probe_wiring.py variable map ignores non-py assignments and ignores assignment order
-group 11, `hcheckprobewiring:F3` -- `regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md`  [id corrected: Astra afile_03: the tie-break assigns this id, H:734; HIGH IS DISPUTED -- the grok seat's first-hand re-read says NOT HIGH (grok/grok_filehigh.txt: nothing live ends the process today); GPT-6 Astra HOLDS HIGH (afile_07): a fixed defect leaves the harness row HIGH if its faulty check would ACCEPT the protected process-ending or out-of-bounds regression, and no live instance is required where a preventive check DEMONSTRABLY misses the severe class it was shipped to catch -- an unrelated hypothetical severe consequence does not qualify.  agy's fact table (agy/agy_highfacts.txt:19): agy establishes the stale-map mechanism, current BSC probe execution, and absence of the offending reassignment shape. agy's own verdicts on that line (agy/agy_highfacts.txt:19), verbatim: "Q1: CAN PASS | Q2: NO LONGER | Q3: NONE FOUND" -- Q1 the check on a real emulator death, Q2 the protected path today, Q3 a live instance of the shape.  A RULE QUESTION for the flagship]
+group 11, `hcheckprobewiring:F3` -- `regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md`  [id corrected: Astra afile_03: the tie-break assigns this id, H:734; HIGH IS DISPUTED -- the grok seat's first-hand re-read says NOT HIGH (grok/grok_filehigh.txt: nothing live ends the process today); GPT-6 Astra HOLDS HIGH (afile_07): a fixed defect leaves the harness row HIGH if its faulty check would ACCEPT the protected process-ending or out-of-bounds regression, and no live instance is required where a preventive check DEMONSTRABLY misses the severe class it was shipped to catch -- an unrelated hypothetical severe consequence does not qualify.  agy's fact table (agy/agy_highfacts.txt:19): agy establishes the stale-map mechanism, current BSC probe execution, and absence of the offending reassignment shape. agy's own verdicts on that line (agy/agy_highfacts.txt:19), verbatim: "Q1: CAN PASS | Q2: NO LONGER | Q3: NONE FOUND" -- Q1 the check on a real emulator death, Q2 the protected path today, Q3 a live instance of the shape. [2026-11-02, records: for this row the gloss does not describe agy's answer -- `check_probe_wiring.py` is a static checker and runs no emulator, so agy's Q1 "CAN PASS" means its variable map (only `.py` assignments, order ignored) can pass a false wiring, and its Q2 "NO LONGER" means only that a static checker cannot end the emulator process (agy/agy_highfacts.txt:19, where the row is named `probewiringvarmap`); the grade is not changed here]  A RULE QUESTION for the flagship]
 
 #### `probewiringheredocstrip` (HIGH) -- check_probe_wiring.py heredoc strip treats indented terminator as end of heredoc false-wiring body lines
-group 11, `hcheckprobewiring:F4` -- `regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md`  [HIGH IS DISPUTED -- the grok seat's first-hand re-read says NOT HIGH (grok/grok_filehigh.txt: nothing live ends the process today); GPT-6 Astra HOLDS HIGH (afile_07): a fixed defect leaves the harness row HIGH if its faulty check would ACCEPT the protected process-ending or out-of-bounds regression, and no live instance is required where a preventive check DEMONSTRABLY misses the severe class it was shipped to catch -- an unrelated hypothetical severe consequence does not qualify.  agy's fact table (agy/agy_highfacts.txt:20): agy establishes the parsing mechanism and found no current probe-looking heredoc body. agy's own verdicts on that line (agy/agy_highfacts.txt:20), verbatim: "Q1: CAN PASS | Q2: NO LONGER | Q3: NONE FOUND" -- Q1 the check on a real emulator death, Q2 the protected path today, Q3 a live instance of the shape.  A RULE QUESTION for the flagship]
+group 11, `hcheckprobewiring:F4` -- `regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md`  [HIGH IS DISPUTED -- the grok seat's first-hand re-read says NOT HIGH (grok/grok_filehigh.txt: nothing live ends the process today); GPT-6 Astra HOLDS HIGH (afile_07): a fixed defect leaves the harness row HIGH if its faulty check would ACCEPT the protected process-ending or out-of-bounds regression, and no live instance is required where a preventive check DEMONSTRABLY misses the severe class it was shipped to catch -- an unrelated hypothetical severe consequence does not qualify.  agy's fact table (agy/agy_highfacts.txt:20): agy establishes the parsing mechanism and found no current probe-looking heredoc body. agy's own verdicts on that line (agy/agy_highfacts.txt:20), verbatim: "Q1: CAN PASS | Q2: NO LONGER | Q3: NONE FOUND" -- Q1 the check on a real emulator death, Q2 the protected path today, Q3 a live instance of the shape. [2026-11-02, records: for this row the gloss does not describe agy's answer -- `check_probe_wiring.py` is a static checker and runs no emulator, so agy's Q1 "CAN PASS" means its heredoc strip can end a body early on an indented terminator and expose body lines to the wiring check, and its Q2 "NO LONGER" means only that a static checker cannot end the emulator process (agy/agy_highfacts.txt:20); the grade is not changed here]  A RULE QUESTION for the flagship]
 
 #### `wdcchildstatus` (HIGH) -- row_null_atapi_st ignores non-zero child exit status and waitpid failure
 group 13, `hdiffwdcidentify:F1` -- `regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md`  [id corrected: Astra afile_04: the tie-break assigns this id, H:853; HIGH IS DISPUTED -- the grok seat's first-hand re-read says NOT HIGH (grok/grok_filehigh.txt: nothing live ends the process today); GPT-6 Astra HOLDS HIGH (afile_07): a fixed defect leaves the harness row HIGH if its faulty check would ACCEPT the protected process-ending or out-of-bounds regression, and no live instance is required where a preventive check DEMONSTRABLY misses the severe class it was shipped to catch -- an unrelated hypothetical severe consequence does not qualify.  agy's fact table (agy/agy_highfacts.txt:23): agy corroborates acceptance of nonsignalled process termination and the current safe decline, without adjudicating HIGH. agy's own verdicts on that line (agy/agy_highfacts.txt:23), verbatim: "Q1: CAN PASS | Q2: NO LONGER | Q3: N/A" -- Q1 the check on a real emulator death, Q2 the protected path today, Q3 a live instance of the shape.  A RULE QUESTION for the flagship; the NULL-transfer kill it guards is the existing row `wdcnullxfer`; accepting a nonsignalled process death is this row's own defect]
@@ -23483,7 +23511,7 @@ group 13, `hgatehygiene:F7` -- `regress/artifacts/astraretro_harness_20260926/HA
 #### `sgideprimbitslive` (HIGH) -- dec b26-b31 and n25 line ignore liveness and exit status
 group 17, `hsgideprimopprobe:F2` -- `regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md`  [HIGH IS DISPUTED -- the grok seat's first-hand re-read says NOT HIGH (grok/grok_filehigh.txt: nothing live ends the process today); GPT-6 Astra HOLDS HIGH (afile_07): a fixed defect leaves the harness row HIGH if its faulty check would ACCEPT the protected process-ending or out-of-bounds regression, and no live instance is required where a preventive check DEMONSTRABLY misses the severe class it was shipped to catch -- an unrelated hypothetical severe consequence does not qualify.  agy's fact table (agy/agy_highfacts.txt:25): agy corroborates the discarded liveness/status predicate and current safe decline, without adjudicating HIGH. agy's own verdicts on that line (agy/agy_highfacts.txt:25), verbatim: "Q1: CAN PASS | Q2: NO LONGER | Q3: N/A" -- Q1 the check on a real emulator death, Q2 the protected path today, Q3 a live instance of the shape.  A RULE QUESTION for the flagship]
 
-#### `gdromcondhow` (HIGH) -- gdrom_cond_probe.py's R1b and R2b rows pass on the announced byte alone (:419, :499) and never assert that the session survived, though the wait status is collected (:224-233) and asserted by their siblings R1 and R2 (:410-411, :493)
+#### `gdromcondhow` (HIGH) -- gdrom_cond_probe.py's R1b and R2b rows pass on the announced byte alone (:419, :499 [at 987cb596: `:428`, `:508`]) and never assert that the session survived, though the wait status is collected (:224-233) and asserted by their siblings R1 and R2 (:410-411, :493 [at 987cb596: `:416-417`, `:502-503`])
 group 14, `hgdromcondprobe:F3` -- `regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md`  [the grok tie-break, HELD against Astra's FILED `ptywaitstatus` (grok_hopen3.txt: putting the status into the liveness verdict would leave :419 and :499 green, so it is the rows' own oracle, not the class); the lines read by the main loop at 7440e129; HIGH IS DISPUTED; THE KIND IS SETTLED -- GPT-6 Astra's confirmation had filed this finding under the existing class `ptywaitstatus` (hconfirm_14) and the grok seat held it as its own row (grok_hopen3.txt); asked again, Astra CONCEDED the kind (afile_09: :419 and :499 compare only the captured byte and consume neither `alive` nor `how`, so folding the status into the liveness verdict leaves them unchanged).  On the grade, grok under its own re-read test (grok/grok_filehigh3.txt): HIGH ONLY ON THE RE-INTRODUCTION RULE -- nothing on the live decline path ends the process; what the rows miss is the removed exit(1) being put back after the diagnostic prints -- which is the rule question of the ten disputed harness rows (GPT-6 Astra's rule, afile_07, grades such a check HIGH).  agy's facts for these two rows (agy/agy_highfacts2.txt:16), verbatim: "Q1: CAN PASS | Q2: NO LONGER | Q3: NONE FOUND" -- Q1 the check on a real emulator death, Q2 the protected path today, Q3 a live instance of the shape.  Filed HIGH with both positions; a RULE QUESTION for the flagship]
 
 #### `cachecleanrdmask` (MED) -- cacheclean wrongregs fails #346's Rd check, so removing #345 still looks intact
@@ -24244,8 +24272,8 @@ the prose: 4139-4145 (line numbers of this file as of commit `db8b1a33`) -- `reg
 * 2453-2455 -> `arcpartlba` (named in this file only: no ledger row of its own)
 * 2456-2459 -> `OB-22` (named in this file only: no ledger row of its own)
 * 2597-2599 -> `qhfcsrflags` (a `#555` row above), `qhmipstlbwarn` (a `#555` row above)
-* 2614-2615 -> `armthumbabortkill` (in part: the Thumb half only)
-* 2616 -> `m88kexit` (ledger: held)
+* 2614-2615 -> `armthumbabortkill` (the Thumb half), `qhslowifetch` (the PPC half) [widened 2026-11-02, records: said "`armthumbabortkill` (in part: the Thumb half only)"]
+* 2616 -> `m88kexit` (ledger: held), `qhppciphack`, `qhm88kstops`, `qhmbphasestops`, `qhmbunimplstops`, `qhmbbufendstops` [widened 2026-11-02, records: named `m88kexit` only]
 * 2636-2638 -> `mipsreadpriv`
 * 2685-2689 -> `exitunowned76`
 * 2721-2723 -> `pvrrenderexit`
@@ -24348,7 +24376,7 @@ stream with docstrings identified by the parser, shell by its non-comment lines 
 with comments removed -- and `verify_hrec_controls.py.txt` fails it on a bad placement in each language (4 of 4).
 Astra then read every placed note against the code (`hplace_01` .. `hplace_09`: 01: 6 of 20 notes wrong; 02: 1 of 15 notes wrong; 03: 7 of 19 notes wrong; 04: 5 of 19 notes wrong; 05: 5 of 20 notes wrong; 06: 7 of 18 notes wrong; 07: 5 of 20 notes wrong; 08: 6 of 18 notes wrong; 09: CLOSES -- all 5 notes are placed right and read true): 42 findings, of which
 22 were placement errors of the script (fixed by an overlay that names the line, `HREC_PLACE_OVERLAY.tsv`) and
-34 said the ruled sentence was false, incomplete or a fragment.  Those sentences went to grok, which ruled each
+34 said the ruled sentence was false, incomplete or a fragment. [2026-11-02, records: the two classes overlap -- 22 + 34 = 56 against 42 findings; `regress/artifacts/recordfix_20261002/HPLACE_FINDINGS.tsv` marks 14 findings as both (13 `PLACE/READS`, 1 `PLACE/TRUE/READS`), and 22 + 34 - 14 = 42]  Those sentences went to grok, which ruled each
 first-hand (19 conceded, 8 held, 7 conceded in part, of 34); the sentence that stands is cut from grok's line (`HREC_TEXT_OVERLAY.tsv`, 27 sentences).
 Astra's check of the changed notes (`hplace_10`): 3 of 48 notes wrong -- one disposition corrects two statements and now has two
 notes, one sentence grok had held was settled in Astra's favour by reading the probe's own row table, one gained a
@@ -24505,11 +24533,11 @@ SITES (c29a5fd3, src/devices/dev_mb89352.c): :312 (len != 1: a halfword or word 
 #### `qhmbbufendstops` (HIGH, filed by #558) -- An MB89352 data-register access at or past the end of the selected buffer, in a phase supported for the access direction, stops the emulated CPU
 SITES (c29a5fd3, src/devices/dev_mb89352.c): :176 (DREG read, transfer_bufpos >= len against the selected DATAIN, STAT or MSGIN buffer -- read completion changes phase WITHOUT resetting the cursor, so a subsequent nonempty buffer can meet this guard, not only the original DATAIN buffer) and :242 (DREG write: reachable through empty or unprepared outgoing-buffer states; an exact fill runs completion and can change phase so a further write reaches :235 instead).  PREREQUISITES: a transfer object and a nonzero count, as for the phase guards (the count prerequisite applies to every DREG helper call; the :146 stop is the case with NO transfer object).  CARRIERS OF THE REST: b120 carries the unknown-CDB producer omission and its empty-status consequence; this row's residual is every OTHER empty-buffer path and every nonempty-buffer case.  FIX SHAPE: keep the bounds protection and refuse the access or handle phase completion -- removing the guard exposes the indexed accesses at :180 / :246 -- a CONTROLLER fix; b120 remains the PRODUCER fix.
 
-**What else changes: nothing in the queue text or the other ledger rows.**  The brief generator's defect -- a passage
+**What else changes: nothing in the queue text or the other ledger rows.** [2026-11-02, records: not quite -- idlesslow gained #558's review entries (ledger.json:63722 onward).]  The brief generator's defect -- a passage
 with both a pointer and a new row listed with the pointer alone -- is recorded and not re-run: agy is walled until
 2026-10-07 by its own message and the fix is one column.  `icite2_2`'s twenty rows (the ones the first agy set had not
-reached) are unaudited by agy; Astra's own passes read the whole table before `#555` shipped (`ifile_04`: 128/128
-rows), so the gap is a missing second reader.
+reached) are unaudited by agy; Astra's own passes read the 128-row table (`ifile_04`: 128/128
+rows) before the closing check added two rows (`closeassessrows`, `gdromtailcov`); `#555` shipped 130 (CHANGELOG.md:3140, :3159) [corrected 2026-11-02, records: said "read the whole table before `#555` shipped"], so the gap is a missing second reader.
 
 **Also in this commit:** the committed ledger's `boilerplateprefix` commits field, left for "the next commit" by
 `#557`'s post step, is filled with `e1871fa5`, and -- the row being closed WITH commits from then on -- it gets the
@@ -24633,7 +24661,7 @@ agy's read-only research (`regress/artifacts/armmmuvehicle/agy_research_20261008
 agreement): CP15 c1/c2/c3 cannot be set from the debugger, so the guest must `mcr` them; `put` writes VIRTUAL memory;
 `step` keeps working with the MMU on; a one-section map is a descriptor 0x00000c02 at a 16 KB-aligned TTB with DACR 1;
 and the vehicle MUST map the exception vectors, or a fault reaches `cpu_dyntrans.c`'s "could not find physical address
-of the exception handler" `exit(1)` (`alphaifetchkill`).  It also found no per-CPU Thumb capability flag -- the T bit
+of the exception handler" `exit(1)` (`alphaifetchkill`). [2026-11-02, records: refuted by measurement -- the `armvecrecurse` entry below records that this exit never appears: `arm_exception()` ends in `quick_pc_to_pointers()` (987cb596 `cpu_arm.c:780-783`), whose failed translation takes another prefetch abort, so a fault with the vectors unmapped recurses until the emulator process ends]  It also found no per-CPU Thumb capability flag -- the T bit
 alone selects the Thumb interpreter -- which answers this row's open question about testarm's default SA1110.  Of the
 process kills and CPU stops agy listed on that path, these match existing rows by their titles: `armdesc3kill`,
 `armdacr2kill`, `armcp15cp14exits`, `armendianexit`, `qharmexalign`, `alphaifetchkill`.  The mapping is NOT complete
@@ -24716,7 +24744,7 @@ each scored 0 failures out of 128 at HEAD:
 
 * **Bound position (Fable 5.1):** the re-arm `atapi_len > 32768` relaxed to `65536` or lowered to `16384`, the arm's
   bound relaxed to `65536`, and the re-arm operand swapped to `atapi_received > 65536`.  No row's remainder or
-  transfer size sits near 32768 on either side (re-arm remainders 4998, 7232, 68930; arm sizes up to 263168).
+  transfer size sits near 32768 on either side (re-arm remainders 4998, 7232, 68928 [corrected 2026-11-02, records: said 68930, the figure before the read's two bytes are consumed; `atapi_received` advances first, so the re-arm computes 200000 - 131072 (987cb596 `dev_wdc.c:1292-1293`, `:1423-1425`)]; arm sizes up to 263168).
   MEASURED repair: rows at 32767 and 32769 on each clamp kill all four.  A just-PAST row alone cannot see a LOWERED
   bound -- both sides are owed.
 * **Content (Opus 5.5):** `Md_frozenj` (codex's, named on #473's pass 2 and never built), `Md_revwalk` (glm's),
@@ -24972,7 +25000,7 @@ Fable 5.1, GPT-6 Astra, Grok 4.7).  Each row's ledger `state_note` carries its s
 * **`wiringcliff` (MED, in work)** -- `#565` wired `regress/ppc_rldicl_probe.py` into gate 13 and deleted its 2026-10-22
   exemption (30 checks; gate 13 PASS 140).  Next due: `alpha_tbi_probe.py` 2026-10-22 (refuses every commit from 10-23;
   the other session's Alpha area -- a gate block or an owner re-date), then the three `lca_*` probes 10-23 / 10-26 /
-  10-27, `ip30_abort_probe.py` 10-30 and the four `wdc_*` probes 11-05 .. 12-03.
+  10-27, `ip30_abort_probe.py` 10-30 and the four `wdc_*` probes 11-05 .. 12-03. [2026-11-02, records: re-dated since -- alpha_tbi_probe.py by 0efeb283 (2026-10-23) and the three lca_* probes by 318e3d53 (2026-10-24), all to 2026-11-06; a re-date is not a discharge]
 * **`nullmediumlegs` (LOW, open)** -- the rldicl half MEASURED with the identity body (11 of gate 13's 30 rldicl checks
   red); the `alpha_tbi_probe.py` half is still owed.
 * **`ppcprobescorestale` (LOW, open)** -- part 1 done by `#565`; the flagship's 2026-09-11 demotion of `naive fix wrong`
@@ -24997,7 +25025,7 @@ Fable 5.1, GPT-6 Astra, Grok 4.7).  Each row's ledger `state_note` carries its s
 * **`wiringcliff` (MED, in work)** -- `#566` wired `regress/artifacts/ip30abortkill/ip30_abort_probe.py` into gate 14
   (`regress/gate_arm.sh`, 41 checks: one parse check, controls, exit status, the 33 rows by name, five pinned counts) and
   deleted its 2026-10-30 exemption.  Next due: `alpha_tbi_probe.py` 2026-10-22 and the three `lca_*` probes 10-23 / 10-26
-  / 10-27 (the other session's), then the four `wdc_*` probes 11-05 .. 12-03.
+  / 10-27 (the other session's), then the four `wdc_*` probes 11-05 .. 12-03. [2026-11-02, records: re-dated since -- alpha_tbi_probe.py by 0efeb283 (2026-10-23) and the three lca_* probes by 318e3d53 (2026-10-24), all to 2026-11-06; a re-date is not a discharge]
 * **`ip30abortkill` (HIGH, in work)** -- its detector now runs in gate 14, and the pre-fix counterpart on the shipped
   33-row instrument is measured: 10/33, 23 rows red, against 33/33.  Still owed before it closes: the witness field still
   leads with the 21-row pair (the 33-row pair is added beside it here); clause (b) -- `abort()` re-inserted at each fixed
@@ -25507,12 +25535,12 @@ are in its ledger `state_note`.
   (0x80-0x94, 0xA0, 0xC0) read 0 and ignore writes -- WRONG-RESULT (borders on a feature).  TRIAGE.md T101; report rows
   A5-32; port: yes (rs6000 72075be, rs6000 711d6fc, rs6000 b31c0ea).
 * **`pckbcgetid` (MED, open)** -- new.  devices/dev_pckbc.c KBC_GETID -- always answers AB 41 regardless of translation
-  mode -- WRONG-RESULT (minor).  TRIAGE.md T102; report rows A5-14; port: yes (rs6000 94e3ed4).
+  mode -- WRONG-RESULT (minor) [2026-11-02, records: this effect label and the entry's MED grade disagree; the severity is the owner's to rule].  TRIAGE.md T102; report rows A5-14; port: yes (rs6000 94e3ed4).
 * **`bt459retrace` (MED, open)** -- new.  devices/dev_bt459.c -- the retrace interrupt fires every 500 ticks instead of
   ~72 Hz of emulated time, ports are not mirrored through the 1 MB window, cursor colours are 8-bit, no TEST comparator
   -- WRONG-RESULT.  TRIAGE.md T103; report rows A2-13; port: yes (rpajarola 26ac95a).
 * **`rarpaddr` (MED, open)** -- new.  net/net.c:net_arp RARP arm -- the reply assigns 10.0.0.0 when MAC byte 5 is below
-  0x10 -- WRONG-RESULT (minor).  TRIAGE.md T104; report rows A2-59; port: yes (rpajarola a4f5ea2).
+  0x10 -- WRONG-RESULT (minor) [2026-11-02, records: this effect label and the entry's MED grade disagree; the severity is the owner's to rule].  TRIAGE.md T104; report rows A2-59; port: yes (rpajarola a4f5ea2).
 * **`mipspromemulexc` (MED, open)** -- new.  cpus/cpu_mips_instr.c:X(promemul) + core/memory.c helpers -- PROM-emulation
   helpers access guest memory with CACHE_DATA and X(promemul) sets pc = RA unconditionally, discarding any exception a
   helper raised -- WRONG-RESULT.  TRIAGE.md T105; report rows A5-33; port: partial, or an idea only (rs6000 e7b01c8,
@@ -25536,7 +25564,7 @@ are in its ledger `state_note`.
   short final record returns GOOD zero-padded with no ILI/residue -- WRONG-RESULT (zero data delivered as records).
   TRIAGE.md T112; report rows A2-5; port: none -- a design is owed.
 * **`emulflushcpu0` (MED, open)** -- new.  core/emul.c run loop -- console/X11 flushing is paced by the boot CPU's
-  instruction count, so output stalls if CPU 0 stops while other CPUs run -- WRONG-RESULT (low).  TRIAGE.md T113; report
+  instruction count, so output stalls if CPU 0 stops while other CPUs run -- WRONG-RESULT (low) [2026-11-02, records: this effect label and the entry's MED grade disagree; the severity is the owner's to rule].  TRIAGE.md T113; report
   rows C U22; port: yes (SVN r6532/r6555).
 * **`vr4131siuinuse` (MED, open)** -- new.  devices/dev_vr41xx.c:dev_vr41xx_init -- the VR4131 on-chip SIU is registered
   with the default in_use=1, so two ns16550 handles race for host stdin on the BE-300 -- WRONG-RESULT (lost console
@@ -25548,7 +25576,7 @@ are in its ledger `state_note`.
   while the subtype reports 16 bpp -- WRONG-RESULT (host display only).  TRIAGE.md T116; report rows A3-12; port: yes
   (jroark 3c3d5cb).
 * **`dyntransnoexc` (MED, open)** -- new.  cpus/memory_rw.c device arm -- DM_DYNTRANS_OK device pages are inserted into
-  the translation table even under NO_EXCEPTIONS (debugger/PROM accesses warm guest translations) -- WRONG-RESULT (low).
+  the translation table even under NO_EXCEPTIONS (debugger/PROM accesses warm guest translations) -- WRONG-RESULT (low) [2026-11-02, records: this effect label and the entry's MED grade disagree; the severity is the owner's to rule].
   TRIAGE.md T117; report rows A5-34; port: yes (rs6000 3992857).
 * **`netmacdup` (MED, open)** -- new.  net/net_misc.c MAC generation -- MACs derive from serial number and NIC count, so
   they repeat across processes and wrap after 8 NICs or 16 serial numbers -- WRONG-RESULT (duplicate MACs when bridged).
@@ -25734,7 +25762,7 @@ frozen witness 24/24; 27 of 27 legs match the pre-table; clause (c) measured; cl
 checks with the `#570` block 31/31 and `#568`'s pin 38/38; GATE 11 111 checks; the luna rig boots to `login:` on both
 binaries).  Panel: Astra, Grok, GLM 5.3, DeepSeek on pass 1, adjudicated by Astra (AMEND: the NULL cell is reachable via
 the debugger's `pause`, the instruction x NULL joint cell owed, C5 withdrawn); pass 2 on the diff: Astra, Grok, GLM 5.3, DeepSeek (DO NOT SHIP on one claimed breach, REJECTED in adjudication and filed as clause-(e) debt) and Gemini 4 Argon (back on the roster, read the tree through agy) -- no executable defect; F2 by Astra on five seats: AMEND, no L2 breach, comment/docstring/record corrections made before commit (`repair1_20261024/`, revision 2b of the detector's documentation, the measured rev 2 artifact untouched); Fable HELD
-with its question; Argon not fired (seat failure).  The row's witness is the frozen rung-3 probe
+with its question; Argon not fired on pass 1 (seat failure) [corrected 2026-11-02, records: said "Argon not fired" with no pass named; it fired on pass 2 through agy, as the pass-2 list above and `#570`'s CHANGELOG block say].  The row's witness is the frozen rung-3 probe
 (`witness_20261023/m88k_buserr_probe.py`, RED on HEAD 16/24).  Not claimed: unclaimed addresses, luna-88k's other
 refusals (they still stop the cpu), free-running instruction-fetch refusals, PFAR's low bits, translation-fault
 semantics.
@@ -25751,7 +25779,7 @@ semantics.
   runs.  No committed probe's scored rows depend on it (`#568`'s vector-3 pins would shift); `#570`'s four `ifetch` rows
   and its null session's instruction cell DO, disclosed in their contract -- when this is fixed they red for an
   unrelated reason (the real fetch then reaches `m88kifetchhalt`'s path) and are re-rooted.
-* **`m88kunclaimedberr` (LOW, open, research)** -- new.  cpus/memory_rw.c:662-713 (upstream's TODOs at :682, :709-710): a
+* **`m88kunclaimedberr` (LOW, open, research)** -- new.  cpus/memory_rw.c:662-713 (upstream's TODOs at :682, :709-710 [at 987cb596: `:682` is `if (paddr >= mem->physical_max) {`; the TODOs in `:662-713` are `:664`, `:675`, `:688`, `:701` and `:710`]): a
   guest access to a physical address NO device claims is served zeros / dropped with no exception and no CMMU write on
   m88k (measured: `#570`'s witness, `INFO unclaimed`, `ld 0x10000000`).  Whether real MVME187 / LUNA-88K hardware
   asserts BERR* there is a board question -- no MC88200 manual on disk; `_scratchpad/vmesbcp2.txt:341-348` lists
@@ -25863,7 +25891,7 @@ phase, while `wdc_new_command_reset()` clears `atapi_phase` at `:917` (Astra, pa
   words 60-61 carry the capacity.  Advertising switches every word-49-honouring guest from CHS to LBA addressing; its gate
   is a measured guest on a content-bearing image with a checked sector plus truthful capacity words and DMA bit 8 clear --
   not the boot battery, which cannot see it.  `wdccylwrap` is revisited in that round.
-* **`wdcmediastatus` (LOW, open)** -- new.  devices/dev_wdc.c:531-533 and :1868-1870 discard `diskimage_access()`'s
+* **`wdcmediastatus` (LOW, open)** -- new.  devices/dev_wdc.c:531-533 and :1868-1870 [at 987cb596: the second call is `:1867-1869`] discard `diskimage_access()`'s
   failure return and complete the command with no error bit: a refused access (a write past the backed extent, a read past
   the logical capacity) completes as success, CHS and LBA alike.  Pre-existing; `#572` only makes the LBA path reach it.
   The LBA 4096-5039 band of a rounded-up image is NOT a specimen (a short zero-filled read returning success is `#416`'s
@@ -25906,7 +25934,7 @@ phase, while `wdc_new_command_reset()` clears `atapi_phase` at `:917` (Astra, pa
   as NOT preserving them -- the sources differ; all three readings recorded, no replacement value asserted.  The model leaves
   CSR1-3 untouched by a STOP write (CSR3 never cleared, CSR1/CSR2 trivially kept); `#573` adds no STOP behaviour.  Research row 9 (CSR0 STOP/STRT) does not carry this.
 * **`lediagfmt` (LOW, records/robustness) -- new.**  `dev_le.c` passes `uint64_t` values to narrower conversions: `idata` to `%i`
-  (1019-1020), `relative_addr`/`odata` to `%x` (1039-1040), the SRAM offset to `%05x` (911, 921) -- a variadic-format mismatch
+  (1019-1020), `relative_addr`/`odata` to `%x` (1039-1040), the SRAM offset to `%05x` (911, 921) (lines of 9ac43a17^, the pre-#573 file; at 987cb596 `%i` :1039-1040, `0x%06x`/`0x%08x` :1059-1060, `%05x` :928, :938) -- a variadic-format mismatch
   (undefined under C99 7.19.6.1p9; prints the low bits on this ABI).  Not this round's edit.
 * **`lecsr3inert` (LOW, documented) -- new.**  The three implemented CSR3 bits (BSWP, ACON, BCON -- DMA byte lanes and bus
   signalling) are stored and never consulted by the model; `#573` pins their read-back only.
@@ -25937,7 +25965,7 @@ phase, while `wdc_new_command_reset()` clears `atapi_phase` at `:917` (Astra, pa
   as `last_int` was); the specific EOI resets the ISR bit when the line is in service and otherwise consumes the request as before
   (the legacy path for PReP/footbridge, whose vector reads acknowledge nothing); the non-specific EOI resets the lowest set ISR bit.
   Witness (rung 3, unmodified `evbmips -e malta`): `regress/artifacts/i8259eoiirr/witness_20261025/` (06:51 WSL clock, 19 rows, before any
-  edit) and `witness_20261025b/` / `_c/` / `_d/` / `_e/` (the re-pinned probe on unmodified HEAD at each revision -- v2, v2d, v2e, v2f -- each before any fix measurement of that revision); the storm measured with a
+  edit) and `witness_20261025b/` / `_c/` / `_d/` / `_e/` (the re-pinned probe on unmodified HEAD at each revision -- v2, v2d, v2e, v2f -- each before any fix measurement of that revision) and `_f/` (v2g, the shipped 123-row revision) [2026-11-02, records: `_f/` added]; the storm measured with a
   guest handler counting deliveries (`pass1_20261025/rate_explore_20261025/`: 7,415 IRQ 0 interrupts in 180M instructions at a programmed 18 Hz).
   Detector `regress/i8259_eoi_probe.py` (123 rows, md5 c1fa683e): pre-fix GATE 91/123 (the 32 symptom rows red), fix 123/123, null medium
   0/123 CONTROL FAIL (`pass2_20261025/legs_133457/`); kill table 26/29 killed (`killtable_20261025/`).  F2d closed the chain
