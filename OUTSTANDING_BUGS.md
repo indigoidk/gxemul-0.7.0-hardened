@@ -26494,3 +26494,9 @@ src/devices/dev_dec5800.c:359-367 at 987cb596: The DEC 5800 CPU-mask registers a
   the SH tree does not.  Measured incidentally by `#576`'s `snan` row (the sNaN widens to the all-ones double).
 * **Not changed (assessed):** FCNVDS writes FPUL by design; the DN=1 subnormal input widens to its true value where the manual treats it
   as zero (`#303`'s named gap); the reserved precision combinations and the NaN pattern are the two filings above.
+* **Landed** as `7ccd4e42` (2026-11-03); the pass-2 receipt keyed to it in `regress/pass2_ledger.tsv`; the row stays `held` (the Opus-seat question, the Fable-only regress review, the late seats' findings).
+
+## 2026-11-03 -- owner rulings on `#577` and `#578`: the deletion ruling reopened; the regress reviews wait for Fable
+
+* **`jazzvecreopen` (LOW, design) -- new.**  The owner reopened `#578`'s DELETION ruling (02:1x): a follow-up round weighs pass 1's conditional deassert guard (`if (!((int_asserted & 0x7fff) && (int_enable_mask & R4030_EXT_IP3))) INTERRUPT_DEASSERT(...)`) against the shipped deletion (`2a24d9b7`).  Pass 1: five of seven seats preferred the conditional; pass 2 and F2: every seat ratified the deletion; the conditional measured equivalent (M_cond 26/26 on the shipped detector).  The shipped code stays under the late-dissent rule; the round's adjudication is held for Fable (09:1x).
+* `jazzvecdeassert` and `shblreset` stay `held` for their Fable-only regress reviews: the owner's 02:1x answer ("main loop as the seat") is suspended by the 09:1x switch of the main loop to Opus 5.5 ("hold any Fable adjudication").
