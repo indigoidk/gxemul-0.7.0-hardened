@@ -136,8 +136,8 @@ again`, `poll once` (the one-shot latch, in the masked session), `eoi acked` (th
 service; the non-specific EOI), `casc isr2` / `casc isr8` (the cascade by poll), `pit poll irr0`, `gt isr` / `gt irr4 after` / `gtcasc
 isr2` / `gtcasc isr8` / `gtboth iack` / `gtboth isr2` / `gtboth isr8` (the GT read: master, cascade, and the returned line with a master and a slave line pending together), `poll once2` (the latch after a SUCCESSFUL poll), `spec isr both` / `spec eoi one` (a specific EOI with two lines in service clears exactly its bit), and `rate storm` (a BAND: HEAD >= 5000 deliveries per 180M instructions, the
 fix 1..1000).  Measured, one frozen copy per run: `witness_20261025b/` (v2 on unmodified HEAD, 69/69 HEAD column, 08:01, before any fix
-measurement) `witness_20261025c/` (v2d on unmodified HEAD, 84/84), `witness_20261025d/` (v2e, 101/101) and `witness_20261025e/` (v2f, the shipped
-revision, 123/123), each before any fix measurement of its revision; `pass2_20261025/fixlegs_132736/` (v2d, HEAD column on the base clone 123/123, FIX column on the fix clone 123/123, CONTROL OK
+measurement) `witness_20261025c/` (v2d on unmodified HEAD, 84/84), `witness_20261025d/` (v2e, 101/101), `witness_20261025e/` (v2f, 101/101) and `witness_20261025f/` (v2g, the shipped
+revision, 123/123), each before any fix measurement of its revision [corrected 2026-11-02, records: said `witness_20261025e/` was "v2f, the shipped revision, 123/123"]; `pass2_20261025/fixlegs_132736/` (v2g [corrected 2026-11-02, records: said v2d], HEAD column on the base clone 123/123, FIX column on the fix clone 123/123, CONTROL OK
 both; rate HEAD 7300 / FIX 3); `pass2_20261025/legs_133457/` -- **L0, the pre-fix build in GATE mode: 91/123 with
 exactly the 32 symptom rows red** (`(a): measured at` `L0/RESULTS_L0_base_gate.txt`); **L3, `/bin/false`: CONTROL FAIL, 0/123** (`(c):
 measured at` `L3/RESULTS_L3_null_gate.txt`).  **The kill table** (`killtable_20261025/`, `PRETABLE.out` written 08:1x before table 1:
@@ -145,15 +145,15 @@ sibling parity, claim->row, guard/body fields, the channel per symptom row, the 
 CATCHES a reinstated IRR clear in the specific-EOI arm in any form, an acknowledge that sets no ISR or clears no IRR, a sticky poll
 latch, a mask-blind poll, a GT read that acknowledges nothing or skips the slave, an acknowledge that does not retire the 8253's event,
 a non-specific EOI that clears every ISR bit.  OUTSIDE: the `default` read arm, priority inhibition by ISR, level-triggered mode, the
-PReP/footbridge vector reads, the OCW2 bytes that stop the emulation, a zero 8253 count, the spurious IACK, a write to the IACK
-register, the two-slave-request CPU-line case (owed as a filed row).  Gate: a `gate_arm.sh` block (the tree's device-probe gate by
+PReP/footbridge vector reads, the OCW2 bytes that stop the emulation, a zero 8253 count,
+the two-slave-request CPU-line case (owed as a filed row) [2026-11-02, records: 'the spurious IACK, a write to the IACK register' removed; rowed by `quiet iack` and `gt write isr`].  Gate: a `gate_arm.sh` block (the tree's device-probe gate by
 accretion; `gatedevicesplit` stays OWED) with the sentinel first, the control line, 123 named rows and four denominators pinned by
 equality (`rows run` 123 -- SCORE_CLAIMS_MANIFEST 41 -> 42); `check_probe_wiring.py` MANIFEST key; EXPECT_PTY_PROBES 79 -> 80, the probe grandfathered as promptless.
 
 **Records and filings.**  `OUTSTANDING_BUGS.md` 2026-10-25: `i8259eoiirr` FIXED (state `held` for the Fable question and the roster
 question); `i8259isrnever` NARROWED to the PReP/footbridge vector reads (the poll and the GT read now set ISR); `8259cmdhalt` gains the
 reachability this round READ (0x21-0x27 are non-specific EOIs the model treats as specific, 0xa0-0xa7 and 0x6c reach `cpu->running = 0`);
-new rows `pit8253pendingptr` (the dead decrement), `pit8253count0` (a zero count maps to a timer that never fires, MEASURED), `i8259ocw2
+new rows `pit8253pendingptr` (the dead decrement), `pit8253count0` (a zero count maps to a timer that does not fire within any run (clamped to 1e-8 Hz), MEASURED) [corrected 2026-11-02, records: said "a timer that never fires"], `i8259ocw2
 nonspec`, `algorisaintclear` (dev_algor.c's status reads clear PIC request bits), `i8259ltim`, `i8259priority`, `i8259cascline` (the
 two-slave-request CPU-line row owed to D_fold), `i8259aeoi` (ICW4 AEOI is unsupported while the acknowledge always sets ISR; pass 2,
 Astra), `i8259icwreset` (ICW1 resets neither ISR nor `current_command`; pass 2, Astra and GLM), `i8259ocw3revert` (the one-shot
@@ -161,8 +161,8 @@ poll reverts to the IRR, not to the last RR/RIS selection; F2b, GLM), `i8259smm`
 while NetBSD sets it at attach; F2b, GLM) and `pit8253retireguard` (the retire guard's two conjuncts, rowable only as a band
 with a pending count >= 2; F2b, Astra and GLM -- declined this round on cost, construction recorded).  The mask-blind poll (`i8259pollmask` in the pass-1 record) is closed by construction
 here, not filed.  Witness term: `probe:regress/i8259_eoi_probe.py` with ORDER evidence `witness_20261025/` (pass 1, 06:51 WSL clock),
-`witness_20261025b/` (the v2 re-pin, 08:01), `witness_20261025c/` (v2d, 08:58), `witness_20261025d/` (v2e, 11:24) and `witness_20261025e/`
-(v2f, the shipped revision), each before any fix measurement of its instrument revision.
+`witness_20261025b/` (the v2 re-pin, 08:01), `witness_20261025c/` (v2d, 08:58), `witness_20261025d/` (v2e, 11:24), `witness_20261025e/`
+(v2f) and `witness_20261025f/` (v2g, the shipped revision) [corrected 2026-11-02, records: said `witness_20261025e/` was "v2f, the shipped revision"], each before any fix measurement of its instrument revision.
 
 # `#573` Records (follow-up, 2026-10-25): `lecsrmask` names its landing commit `9ac43a17`; the committed-tree proofs; the pass-2 receipt
 
@@ -259,7 +259,7 @@ cycle's `RUN_IDENTITY.txt` by the landing generator, never typed):
   record says OWED and nothing more (the pass-2 brief of this round had understated (d) as "the separate null-repair clause";
   the adjudication pass corrected that premise): the F2 packet's variants V7'-V10', V21-V25 were classified by three seats (predicted red sets in `f2_20261025/F2_PACKET.md`
   4.3) and not built in this session, under the standing rule after a classifier stop of the main loop's own response (the
-  `#567` "land with filed debt" precedent).  The contract names what the rows are known to catch; the table is a filed obligation.
+  `#567` "land with filed debt" precedent) [2026-11-02, records: withdrawn by the sentence above, which says the adjudication pass (Grok, F2b) read `#567` as filing NON-floor coverage debt, "so no earlier ruling is cited as the licence"].  The contract names what the rows are known to catch; the table is a filed obligation.
 
 **The panels.**  Pass 1 (`pass1_20261025/`): GPT-6 Astra NOT READY, Grok 4.7 NOT READY (both on the CSR1/CSR2 premise), GLM 5.3
 READY WITH CHANGES (two firings), DeepSeek NOT READY / READY WITH CHANGES, Gemini 4 Argon READY WITH CHANGES by the session-cookie
@@ -292,7 +292,7 @@ LACK of a preservation guarantee for CSR1/CSR2 across STOP -- the Am7990 manual 
 and are "normally not affected ... recommended to reload" (2853-2857), while the Am79C90 datasheet's Table B-1 characterises the
 Am7990 as NOT preserving them (3411 right column; 3686-3687): the sources differ and all three readings are recorded; the model
 leaves CSR1-3 untouched by a STOP write -- CSR3 never cleared, CSR1/CSR2 trivially kept -- and `#573` adds no STOP behaviour), `lediagfmt` (`uint64_t` values passed
-to `%i` at 1019-1020, `%x` at 1039-1040, `%05x` at 911/921), `lecsr3inert`, and the carrier's source-list item; OWED: the variant
+to `%i` at 1019-1020, `%x` at 1039-1040, `%05x` at 911/921) (lines of 9ac43a17^; at 987cb596 `%i` :1039-1040, `0x%06x`/`0x%08x` :1059-1060, `%05x` :928/:938), `lecsr3inert`, and the carrier's source-list item; OWED: the variant
 table; Argon's F2, pass-2 and F2b answers (the web meter read 0 of 2400 from the pass-1 firing until its 07:30:45 CDT reset,
 after which they are re-fired and filed in the records commit -- *corrected in place 2026-10-25: the FIRST records commit,
 94b247db, predates the re-fire; the pass-2 and F2b answers are filed in the SECOND; the pass-1 F2 pair is still owed*).  **A follow-up to `#572`'s follow-up `2956c32d`**: its census population -- the 78 counts the
@@ -639,7 +639,7 @@ eleven more are absent on every width; the licensed fix is the `rld*`
 idiom (PEM :6253 + the opcode-30 precedent) applied to the ungated implemented set in its own round), `wiringwitnessclass`
 (LOW, records -- HEAD's wiring MANIFEST classes post-fix-green frozen witness copies CLASS_WITNESS against the checker's own
 WITNESS/DETECTOR line; found by the final exact-text clearance).
-The five filed ids have zero rows in the HEAD ledger and in the working-tree ledger (C0 part 4 for the first four; re-checked at landing).
+The five filed ids have zero rows in the HEAD ledger and in the working-tree ledger (C0 part 4 for the first four; re-checked at landing). [2026-11-02, records: true only before filing -- this landing commit, cb21331c, added all five rows, so each has a ledger row at cb21331c and at 987cb596]
 
 **Records.**  The ledger row's witness is `probe:regress/artifacts/ppcdsformxo/witness_20261024/ppc_dsform_probe.py`
 (rung 3, the LOAD half; the store half's clause-(a) artifact is `table1_20261024/prefix_BASE.out`), state `held` (the Fable 5.1 review is owed under the owner's hold; its question is on the row),
@@ -913,7 +913,7 @@ after `m88kxmemusr` (N2), 4 none.
 * `src/cpus/tmp_m88k_loadstore.c` -- REGENERATED by the fixed generator, not hand-edited: exactly 24 lines change
   (`NULL` -> the counterpart name), 512 entries, 272 `NULL` (was 296).  The committed table is a second fixed site: the
   make rule regenerates it only when the generator binary or the template is newer, so a build can compile either copy.
-* `regress/diff_m88k_loadstore_gen.sh` (new, 276 lines, mode 100755) -- the detector, on `diff_autodev_gen.sh`'s
+* `regress/diff_m88k_loadstore_gen.sh` (new, 280 [corrected 2026-11-02, records: said 276; the file has 280 lines at 66920157, this landing commit, and at 987cb596] lines, mode 100755) -- the detector, on `diff_autodev_gen.sh`'s
   pattern: a scratch copy of the generator is compiled and RUN, its stdout and the COMMITTED table are each parsed by
   a reader parametrized by file and array size, and both are pinned against names hard-coded in the driver, never read
   from either artifact.  123 rows: 4 generator-status rows (compiles, exit status, non-empty stdout, `generated_functions
@@ -2415,13 +2415,15 @@ stage-token controls, run from a HEAD archive, still give base 49/49 with all 33
 byte-identical to the committed v3 file; the held-count fix's verbatim pre-fix reinstatement scores 42/49; the
 `fbpending_bound` self-variant lane, re-run on a clean HEAD build exactly as gate 2 invokes it, reproduces every
 recorded leg, and R3 is the right pin (the only row that sees this variant) with no further lane coverage owed.  The
-device rows (`.../regress_devices/fable5_regress_devices.md`), each on fresh builds of the true parent and the commit with
-ONE committed instrument: `wdcaltctrlbit` re-measured at HEAD (Md_bitswap 11/128, Mb_revert 12/128); `diskimagesign`'s
+device rows (`.../regress_devices/fable5_regress_devices.md`), each with ONE committed instrument -- `sgirergbroundtrip` and
+`landiskaux` on fresh emulator builds of the true parent and the commit, `wdcaltctrlbit` and `diskimagesign` on compiles
+and offline differentials of both, and `pcc2c040mienannounce` on the commit build only, because bb8efbf changed no
+product source *[2026-11-02, records: this said all five ran on fresh builds of the true parent and the commit]*: `wdcaltctrlbit` re-measured at HEAD (Md_bitswap 11 of 128 rows red, Mb_revert 12 of 128 rows red) [corrected 2026-11-02, records: said 11/128 and 12/128, the k/n shape this sentence uses for rows passed]; `diskimagesign`'s
 two warnings at the parent and none after, and the ternary arm swap -- warning-free, as the 2026-09-17 dissent said --
 ABORTS the gated `diff_diskimage_io.c`, so the dissent's conclusion is false; `sgirergbroundtrip` 4/10 -> 10/10;
 `landiskaux` 1/6 -> 6/6, value-identical to the round's preserved pre-fix run; `pcc2c040mienannounce` A and F 17/18, the
 pass-1 variant 16/18.  **Verdicts: two REGRESS CLEAN, six REGRESS WITH FINDINGS -- every finding a record, none a
-defect in shipped code.**  Applied in place here: `stagetokens`' stale "PASS 2 IS OWED" and a v3 count that predates its
+defect in shipped code.** *[2026-11-02, records: one finding (fable5_regress_harness.md:87, finding 4) was a display defect in shipped tooling, filed as dashokclass; none was in emulator code]*  Applied in place here: `stagetokens`' stale "PASS 2 IS OWED" and a v3 count that predates its
 last row; `fbsmlane`'s "the SM_EXEMPT line is gone" (the line stays; the entry went); `diskimagesign`'s witness re-keyed
 from a directory of logs to its two detectors; `landiskaux`'s and `pcc2c040mienannounce`'s holds dated as history; the
 latter's witness re-keyed from `probe:` to `detector:` (a round that changed no `src/`); `wdcaltctrlbit`'s "Controls at
@@ -2449,7 +2451,7 @@ CLOSED.  The main loop MEASURED both variants on the 18-row HEAD probe before an
 (`regress/artifacts/pcc2c040kill/assertrow_review_20261009/probe_*.raw`) -- which refutes minimax's "no other one-token
 edit passes".  **A packet defect is recorded against the main loop: the packet inlined the 13-row 2026-09-08
 instrument, not HEAD's 18 rows**, so those four answers settle only the hold's narrow return-variant question (caught by
-`c040 noassert`, 9/10 and 14/16) and earn no credit as a review of the 18-row detector.  **The ruling took three
+`c040 noassert` at 9/10, and by `c040 noassert` and `c040 noassert2` at 14/16 [corrected 2026-11-02, records: said `c040 noassert`, 9/10 and 14/16]) and earn no credit as a review of the 18-row detector.  **The ruling took three
 versions, recorded in `RULING_PROVENANCE.txt`:** v1 was written by claude-opus-4-8 after two Fable refusals and is not
 credited; v2 (Fable 5.1) graded X floor; GPT-6 Astra confirmed with five changes and dissented on X; v3 (Fable 5.1)
 reversed v2 -- the C040 guarded block writes `assert` and tests nothing on it, and `if (assert)` after the block cannot
@@ -5529,7 +5531,7 @@ ask **was this panel convened ON THIS ROW?**
 |---|---|---|
 | `asiceventaddr` | **8** | NOT a stage — all eight cite `panel_20260826_222557`, a pass 2 on a COMMENT-ONLY commit to a vendored header. ***FALSE — corrected by `#534` (fable5 F1): that commit, `9ca9cca`, IS this row's own commit, so the stage RAN 6/9. It is now HELD for fable5, opus5 and deepseek (a thinking burn in that panel).*** |
 | `diskimagesign`, `pcc2genctlc040alias`, `sh4dmacie` | 8 each | REAL stages — they share `panel_20260917_100431`, whose brief IS convened on them |
-| `pcc2c040assertrow`, `pcc2c040returnmutant` | 8 / 2 | NOT subjects — that brief's five `### commit` headings do not include them; they are SIBLING rows of the `#512` work |
+| `pcc2c040assertrow`, `pcc2c040returnmutant` | 8 / 2 | NOT subjects — that brief's five `### commit` headings do not include them; they are SIBLING rows of the `#512` work [2026-11-02, records: FALSE for `pcc2c040assertrow` -- `#534` R3 / F1 records that its panel WAS convened on it, and this block's WHAT WAS CLEARED note counts it among the two FALSE exemptions] |
 
 **The count is a CORRELATE of "a panel ran"; the brief's subject is the thing itself.** My first
 pass sorted by count and was wrong in both directions at once — a row with eight recorded seats
@@ -7565,8 +7567,8 @@ unmasked `Rn`. The code generator already separates the two the same way, emitti
 
 `ddi0100i.txt:7954-7959`: *"For `CP15_reg1_Ubit == 0`, the Load Multiple instructions ignore the
 least significant two bits of the address. If an implementation includes a System Control
-coprocessor, an address with bits[1:0] != 0b00 causes an alignment exception **if alignment checking
-is enabled**. For `CP15_reg1_Ubit == 1`, all non-word aligned accesses cause an alignment fault."*
+coprocessor (see Chapter B3 The System Control Coprocessor), an address with bits[1:0] != 0b00 causes an alignment exception **if alignment checking
+is enabled**. For `CP15_reg1_Ubit == 1`, all non-word aligned accesses cause an alignment fault."* [corrected 2026-11-02, records: the quotation dropped "(see Chapter B3 The System Control Coprocessor)" after "coprocessor" with no ellipsis; restored from `ddi0100i.txt:7955-7956`]
 
 **An earlier draft of the comment stated this flat, and the row's own 2026-08-29 record already said
 "the record must NOT say unqualifiedly" — so the comment broke an obligation the row had already
@@ -7792,7 +7794,7 @@ with two.
   PASS. ***  **`p` and `u` are ONE SELECTOR with FOUR values -- the addressing mode**, not two
   independent bits: the code tests them NESTED (`if (p_bit) { if (u_bit)`), the architecture names
   the pair as one field, and `generate_arm_multi.c:120` switches on `p*2+u`.  Thumb PUSH is
-  hardcoded **DB** (`cpu_arm.c:1670`) and every STM row was **IA** -- so the sentence stated TWO
+  hardcoded **DB** (`cpu_arm.c:1670`, lines of 4dfc7165; at 987cb596 `:1720`) and every STM row was **IA** -- so the sentence stated TWO
   MODES OF FOUR as an axis, leaving **IB and DA with no row at all on the store side, at any
   residue or strength**.  The dropped-qualifier class, and the qualifier was load-bearing.
   Closed by `ARM_STM_IB_R7`, `ARM_STM_DA_R7` and `ARM_STM_S_R7`.
@@ -8144,7 +8146,7 @@ Scratch clone, one frozen instrument per leg, sentinel cleared only after both c
 **ZERO ESCAPES across nine mutants.** `M_SH5` is red on the two shift rows and nothing else; `M_CR0` is
 red on the condition-register row alone. **Each added row is the sole killer of the mutant it was written
 for**, which is the test of whether a row is necessary rather than decoration. All three also redden under
-the original defect and the null medium, so they satisfy the floor's first two clauses as well.  *[L4 2026-10-09, queue 7n-1: "the null medium" is the table's HEAD row -- the whole-file PRE-FIX build, clause (a)'s medium and never clause (c)'s; with the original defect (clause (b)) the conclusion stands and only the label was wrong.  Clause (c) is UNMEASURED here and cannot be carried by construction -- `ppc_rldicl_probe.py` has no runtime gate wiring or equality pin -- so its leg is OWED: row `nullmediumlegs`.]*
+the original defect and the null medium, so they satisfy the floor's first two clauses as well.  *[L4 2026-10-09, queue 7n-1: "the null medium" is the table's HEAD row -- the whole-file PRE-FIX build, clause (a)'s medium and never clause (c)'s; with the original defect (clause (b)) the conclusion stands and only the label was wrong.  Clause (c) is UNMEASURED here and cannot be carried by construction -- `ppc_rldicl_probe.py` has no runtime gate wiring or equality pin -- so its leg is OWED: row `nullmediumlegs`.]* *[2026-11-02, records: discharged by #565 (2026-10-18) -- wired into gate 13 with equality pins and the leg MEASURED with an identity body (regress/artifacts/ppcrldiclzero/gatewire_20261018/nullmedium/identity/); OUTSTANDING_BUGS.md:24817-24818 at 987cb596]*
 
 **This reproduces the measuring seat's own numbers exactly** — two independently written mutators, two
 clones, same figures.
@@ -9782,12 +9784,12 @@ Filed by the codex seat during `lcabadval` scoping and verified then; witnessed 
 # `#510` armbfxwidth32: UBFX and SBFX built their mask with an undefined shift
 
 **THE DEFECT.** `cpu_arm_instr.c`. The decoder gives both handlers
-`width = 1 + ((iword >> 16) & 31)` (`:4486`, `:4493`), so **`width` reaches 32** — and `1` is a
+`width = 1 + ((iword >> 16) & 31)` (`:4486`, `:4493`; lines of c0c7f55d^, the pre-fix tree -- at 987cb596 `:4679`, `:4686`), so **`width` reaches 32** — and `1` is a
 plain `int`:
 
-    :1316  ubfx   uint32_t mask = (1 << width) - 1;
-    :1340  sbfx   uint32_t mask = (1 << width) - 1;
-    :1344  sbfx   uint32_t topBitMask = 1 << (width-1);
+    :1316  ubfx   uint32_t mask = (1 << width) - 1;      (pre-fix line of c0c7f55d^; fixed at 987cb596 :1370)
+    :1340  sbfx   uint32_t mask = (1 << width) - 1;      (pre-fix line of c0c7f55d^; fixed at 987cb596 :1430)
+    :1344  sbfx   uint32_t topBitMask = 1 << (width-1);  (pre-fix line of c0c7f55d^; replaced at 987cb596, its old form quoted at :1434)
 
 `1 << 32` shifts by the full width of the type (C99 6.5.7p3); `1 << 31` overflows a signed `int`
 (6.5.7p4). Both are undefined. `UBFX rd, rn, #0, #32` is a legal A32 encoding — the architectural
@@ -11419,7 +11421,7 @@ HALT; every other class HALTs); the fix 29/29 (`probe_v5_fix_final.out`).  Recor
 filed by (vii) -- and `m88ksfrzfatal`, a separate filing from this pass (grok: (vii) named three, not four) -- had no
 OUTSTANDING_BUGS block (Fable; `check_bugfile_sync` now passes with them); this block's own 'earlier from this
 campaign' list contradicted (vii) (corrected in place); the product comment attributed the delay-slot shadow values to Table 6-3 --
-Table 6-3 says only that the shadows copy XIP/NIP/FIP, the values come from UM 6.2's pointer definitions (mc88100.txt:2093-2104)
+Table 6-3 says only that the shadows copy XIP/NIP/FIP, the values come from UM 2.3.4's [corrected 2026-11-02, records: said UM 6.2's; `mc88100.txt:2080` heads these lines "2.3.4 Internal Registers", and section 6.2 is "Exception Vectors and Vector Base Register" (`:8465`)] pointer definitions (mc88100.txt:2093-2104)
 (Fable; comment and probe docstring corrected); '(shadows updated normally)' for a tb1 naming vector 10 is true only UNFROZEN --
 inside a handler it takes the is_trap exemption with frozen shadows (codex F15, Fable; corrected); the gate comment named
 killtable4/ but not 4b/ (corrected); the probe's sfu1h description said HEAD reads BADREGS stage1 where it reads STOP (codex;
@@ -14186,7 +14188,7 @@ copied forward from an earlier table and never re-derived.  M_ASSIGN's was writt
   panel silently missing, which is worse than an empty one**, because a full-looking row invites
   no question.  And phases are **rows**, seats are columns, so DECLARE adds two rows per bug.
 * **deepseek:** headline was that the deriver counts files containing `pty.fork` while the 44th
-  file "almost certainly does not contain" it.  **It does** -- `sgi_de_primop_probe.py:237` is
+  file "almost certainly does not contain" it.  **It does** -- `sgi_de_primop_probe.py:237` (lines of 3fb1f8f6; at 987cb596 `:308`) is
   `pid, fd = pty.fork()`.  Refuted by reading; the seat hedged honestly.  Its Q2 point stands
   and is filed: the pin can be set back to any wrong value and nothing reds, because the check
   is battery-only.
@@ -15050,7 +15052,7 @@ because **nothing had set those bits** -- vacuous by construction, a row whose c
 cannot vary under its named mutant.
 
 The cause is one line of the device.  `DEVICE_ACCESS(sgi_re)` does
-`relative_addr += 0x1000` (`dev_sgi_re.c:303`) because the device is registered at
+`relative_addr += 0x1000` (`dev_sgi_re.c:303`, lines of 80cab9e3; at 987cb596 `:452`) because the device is registered at
 `baseaddr + 0x1000` with length `0x1000`, so `CRIME_RE_TLB_A` sits at device offset
 `0x000`.  **The row used the CONSTANTS as offsets, and all six accesses landed past the
 end of the device.**  `#499`'s `UNMAP_W`/`UNMAP_R` were right for the same reason these
@@ -15289,9 +15291,9 @@ at two points on one axis and said nothing about the mask's **WIDTH**. `crmfbreg
 real modifier bits down there, and `dev_sgi_re.c` reads all three:
 
 ```
-  DE_PRIM_RL             0x00010000   right to left    read at :703
-  DE_PRIM_TB             0x00020000   top to bottom    read at :704
-  DE_PRIM_LINE_SKIP_END  0x00040000   line bound       read at :735
+  DE_PRIM_RL             0x00010000   right to left    read at :703 (lines of 840f3d0a; at 987cb596 :962)
+  DE_PRIM_TB             0x00020000   top to bottom    read at :704 (lines of 840f3d0a; at 987cb596 :963)
+  DE_PRIM_LINE_SKIP_END  0x00040000   line bound       read at :735 (lines of 840f3d0a; at 987cb596 :994)
 ```
 
 So `RECTANGLE|RL` and `LINE|SKIP_END` are legal, implemented primitives that the widened mask
@@ -20020,7 +20022,7 @@ that, reporting occupancy 14.*
     Md_wrongoff  KILLED  1/6   (d) refill re-based to data_in[j]
 
 `regress/artifacts/wdcchunking/killtable_20260827/TABLE.txt`, one file per mutant run, the
-pre-fix source, and `regress/artifacts/wdcchunking/killtable_20260827/PREFIX_RUN.txt`.  Baseline 22 rows, 0 failures, `WDC_IDENTIFY_PASS`.
+pre-fix source, and `regress/artifacts/wdcchunking/killtable_20260827/PREFIX_RUN.txt`.  Baseline 22 rows, 0 failures, `WDC_IDENTIFY_PASS`. [2026-11-02, records: that archive was not produced from the final detector -- this round's pass-2 block ("The archive contradicted itself, and a seat caught it") records that every archived run said 22 rows while the committed source had 23, and re-derived the set; at 987cb596 `killtable_20260827/TABLE.txt` reads `26 rows, 0 failures`, last written by d894e35d; the same 22 stands in OUTSTANDING_BUGS.md's 2026-08-27 #473 entry]
 
 *Five of the six rows red pre-fix; the sixth is the liveness control, which is green in BOTH
 builds by design -- it proves the fixture reached the re-arm branch rather than that the branch
@@ -21154,10 +21156,10 @@ The probe's `%-14s ` leaves `15 - L` spaces after a name of length L, so at 14 t
 anchor becomes unsatisfiable and **the row silently stops being tested while the gate stays
 green.** Longest name here is `kill store` at 10, so there are three characters of headroom.
 
-*A gate that reddens correctly on four kinds of broken input and on a missing row is worth the
+*A gate that reddens correctly on three kinds of broken input [corrected 2026-11-02, records: said four; the table above has three -- `13`, `=` and absent -- beside the dropped row] and on a missing row is worth the
 one invocation it cost to review.*
 
-### The final kill table -- THIRTEEN rows, TWELVE mutants, NO ESCAPES
+### The final kill table -- THIRTEEN rows, ELEVEN mutants [corrected 2026-11-02, records: said TWELVE; the table below, like `table5_13rows/table463.results`, is the unmutated baseline plus eleven edits], NO ESCAPES
 
 Artifacts: `regress/artifacts/asic463/table5_13rows/`. `N/M` is N passed of M run.
 
@@ -21190,10 +21192,10 @@ escapes from pass 2 and the decisive one from the single capped ask-again.
 failure paths ran `exit(1)`. MEASURED on the committed build, each with its own
 device-signature control:
 
-* **the arming-mismatch arm** (`exit(1)` at `:845` on HEAD, the declining `else` at `:972` now) -- `r7 = 0xa05f7418; r8 = 1; mov.l r8,@r7`. **One guest store ends the host
+* **the arming-mismatch arm** (`exit(1)` at `:845` on HEAD, the declining `else` at `:972` now; lines of 7c9dd9eb^ and 7c9dd9eb -- at 987cb596 the `exit(1)` is gone and the decline is `:1521`) -- `r7 = 0xa05f7418; r8 = 1; mov.l r8,@r7`. **One guest store ends the host
   process**, because count and enable are 0 on a fresh device so the arming test fails.
   The identical store to the implemented `+0x04` leaves the host alive.
-* **the no-staged-data arm** (`exit(1)` at `:829` on HEAD, the decline at `:916` now) -- three stores arm the transfer correctly and it dies on `d->data == NULL`.
+* **the no-staged-data arm** (`exit(1)` at `:829` on HEAD, the decline at `:916` now; lines of 7c9dd9eb^ and 7c9dd9eb -- at 987cb596 the `exit(1)` is gone and the decline is `:1465`) -- three stores arm the transfer correctly and it dies on `d->data == NULL`.
   The identical three with the trigger left at 0 leave the host alive, which isolates the
   trigger rather than the arming.
 
@@ -21244,8 +21246,8 @@ so a guest waiting that way hangs for real."*  **That spin is not a poll of
    both 0, never 0x08.  **The loop would hang on CORRECT hardware if it polled
    +0x18.**
 2. **This tree already documented it, in code this round did not touch.**
-   `dev_dreamcast_gdrom.c:722-737` says NetBSD writes 0xa0 to `GDROM_COND`
-   to START A COMMAND and then *"expects (BUSY & 0x88) to be 0x08"*, and `:737`
+   `dev_dreamcast_gdrom.c:722-737` (lines of 7c9dd9eb; at 987cb596 the comment is `:1210-1222` and the store `:1280`) says NetBSD writes 0xa0 to `GDROM_COND`
+   to START A COMMAND and then *"expects (BUSY & 0x88) to be 0x08"*, and `:737` (lines of 7c9dd9eb; at 987cb596 `:1280`)
    sets `d->busy |= 0x08` in reply.  It is the command-start handshake on the
    CONTROL window's BUSY register -- a different register, in a different phase,
    from DMA completion.
@@ -22037,13 +22039,13 @@ still ends the host**.
 
 **The full census, so a reader of this section does not conclude the file is now clean:**
 **eight `exit(1)` sites remain live** in `dev_dreamcast_gdrom.c` after this round --
-`:294`, `:346`, `:424`, `:600`, `:639`, `:699`, `:804`, `:820`. Four are command-layer
+`:294`, `:346`, `:424`, `:600`, `:639`, `:699`, `:804`, `:820` [2026-11-02, records: lines of ba30e64f; at 987cb596 one of the eight remains live, the `Too much GDROM_DATA?` site at `:1108`, and later rounds removed the other seven]. Four are command-layer
 (TOC length != 408, bad data format, unknown command, and the assessed-unreachable "too
 much GDROM_DATA"), reachable through `GDROM_DATA` packets; two are the DMA+0x18 pair; two
 
 *Those eight line numbers were `:274 :326 :404 :580 :619 :679 :762 :778` when a seat
 supplied them, and every one was wrong by the time this block was written -- a uniform
-**+9**, because two later comment insertions of mine sat ABOVE them in the same file.
+**+9** [2026-11-02, records: false on this block's own numbers -- the two lists differ by +20 at the first six sites and by +42 at the last two, so the shift was neither +9 nor uniform, and "the uniform offset is the tell" below does not apply], because two later comment insertions of mine sat ABOVE them in the same file.
 Re-derived against the file after the last edit, which is the carrier's own rule ("a
 line number in a comment is invalidated by your own edits to that file") catching its
 author. The uniform offset is the tell: drift from an intervening commit shifts lines
@@ -22307,7 +22309,7 @@ happen. It is reached by an ordinary store.
 
 ### THE BRIEF SAID TWO MACHINES. IT IS THREE, AND TWO SEATS CAUGHT IT INDEPENDENTLY
 
-`machine_test.c:535` is `MACHINE_DEFAULT_CPU(baresh)`; `:541` is
+`machine_test.c:535` is inside `MACHINE_DEFAULT_CPU(baresh)`; `:541` is inside [corrected 2026-11-02, records: said each line IS the macro; at 0bb8be2b and at 987cb596 `:535` and `:541` are the `machine->cpu_name = strdup("SH7750");` lines inside the macros, which open at `:533` and `:539`]
 `MACHINE_DEFAULT_CPU(testsh)`. The brief cited both line numbers and attributed them to one
 machine, so **`baresh` -- a separately registered machine type -- was never named**.
 Measured: `-E baresh` dies identically. A third seat additionally measured `-e jornada690`
@@ -23383,7 +23385,7 @@ verbosity, never crash). No bounds check removed.
 
 Rate-limited with `static` first-N guards (GXemul is single-threaded) so a hostile ROM cannot flood. `#95`
 (generic memory_rw zero-fill) left unwarned by consensus (would flood benign boots). Regression: gcc 0/0 +
-**clang 21 0/0 in all changed files**; full sweep + pmax deep (disk/net -- the pmax machines attach ASC or SII, never osiop, so the
+**clang 21 0/0 in all changed files**; full sweep + pmax deep (disk/net -- the pmax machines attach ASC or SII, never osiop [2026-11-02, records: not every pmax subtype attaches either -- at 987cb596 `machine_pmax.c` gives the DECsystem 5800 and 5400 subtypes neither ASC nor SII (the 5400 case attaches only `dev_ssc_init`); none attaches osiop], so the
 #114/#118 osiop guards were not exercised by that run) + arc clean, 0 spurious warnings in normal
 operation. [#561]
 
@@ -23752,7 +23754,7 @@ both trees; **build 0/0**; **pmax + arc boot**.
 **Deferred (off the MIPS audit path; source + 2-model agreement):** #10 PPC/ARM slow-path ifetch `exit` (the data
 side is already #216), #11 PPC `MSR.IP` reboot hack, #12 m88k CMMU / `dev_mb89352` fatal errors. Also **not
 reachable** on pmax/arc: the SPECIAL3 **RDHWR** selector halt — Fable verified SPECIAL3 is ISA-gated to RI on
-R3000/R4000, so the halt only exists on emulated MIPS32r2 (off-path); the RDHWR `HWREna` gate is the same class.
+R3000/R4000, so the halt only exists on emulated MIPS32r2 or MIPS64r2 [corrected 2026-11-02, records: said MIPS32r2; the SPECIAL3 gate admits revision 2 at ISA level 32 or 64 (987cb596 `cpu_mips_instr.c:5584-5585`), and `5KE` is level 64 revision 2 (`mips_cpu_types.h:104`)] (off-path); the RDHWR `HWREna` gate is the same class.
 Logged for a future round.
 
 **Provenance:** Fable (source-verified — located every site, confirmed guest-reachability, wrote each minimal fix,
@@ -23775,7 +23777,7 @@ Applied to both trees; **build 0/0**; **pmax + arc boot**.
   dumps require SUBSYS_PROMEMUL verbosity VERBOSITY_DEBUG; a promemul subsystem breakpoint alone does not
   enable them [#560]. No new machinery (reuses
   the #210 channel). 8 sites; the 4 PROM/ARC vector sites' unconditional register-dump + a0-string scaffolding is
-  folded behind the same gate.
+  folded behind the same gate. [2026-11-02, records: two of the four -- the ARC sites; the DEC vector sites print one VERBOSITY_DEBUG line instead (dec_prom.c:189, :651 at 987cb596) and keep no dump.]
 - **#246 (C3)** `cpus/cpu_mips_coproc.c` (FPU denormals → real Unimplemented-Operation trap): the R3010/R4000 FPUs
   do not compute denormalized (IEEE subnormal) values in hardware — they set FCSR cause bit **E** (which, unlike
   V/Z/O/U/I, has **no enable bit** and always traps) and abort so the kernel softfloat completes the op. GXemul
@@ -26642,7 +26644,7 @@ REGIMM's `default` arm ran `fatal()` and fell into `goto bad`. The implemented
 sub-opcodes are the eight conditional branches and branch-and-links (rt 0-3, 0x10-0x13)
 and the six trap-immediates (rt 8-0xc, 0xe); everything else -- rt 4-7, 0xd, 0xf, 0x14-0x1f,
 which includes MTSAB (0x18), MTSAH (0x19) and SYNCI (0x1f), none of which has a decoder
-case -- stopped the machine. [#561] Real silicon raises a Reserved Instruction exception, which
+case -- stopped the machine. [#561] Real silicon raises a Reserved Instruction exception [2026-11-02, records: only on CPUs that lack the encoding -- `opcodes_mips.h:249-251` define MTSAB/MTSAH (R5900/TX79/C790) and SYNCI, and the open ledger row `mipssynci` records that the Release-2 CPUs this tree models raise RI on SYNCI, a defined instruction], which
 is what the guest kernel is written to handle.
 
 Reproduced on both rigs with rt = 0x15, and again with 0x1e; BGEZ ran throughout
@@ -27723,7 +27725,7 @@ All three pass-1 seats that proposed a mutant proposed the same one: drop the
 `memory_writemax64(cpu, data, len, 0)` call on the declined-read path, and the guest gets
 stale host bytes. **It was built, and it does not.**
 
-`memory_rw.c:484-491` — **correction `#95` in this same tree** — already zeroes the caller's
+`memory_rw.c:484-492` [corrected 2026-11-02, records: said `:484-491`; the `memset(data, 0, len);` is `:492` at 927553fa and at 987cb596] — **correction `#95` in this same tree** — already zeroes the caller's
 buffer before every device read, described there as the *"root-cause fix for the uninit-read
 class"*. Measured in five contexts: a bare read; one primed by a non-zero array-1 read; one
 with the destination register pre-set to `0xdeadbeef`; one primed through RAM; one primed
@@ -28097,7 +28099,7 @@ kill table proves that answer rather than asserting it.
 
 Width-matched casts per the house idiom. A seat corrected the brief's arithmetic here: the four
 pre-existing casts split **3-to-1** (`(uint64_t)` at `:1349/:1400/:1449`, `(uint32_t)` only at
-`:600`), not 2-and-2 as the brief claimed — the house rule is *the cast matches the width of the
+`:580` [corrected 2026-11-02, records: said `:600`; at f39b8984^, the tree this round started from, `src/promemul/arcbios.c:580` is the one pre-existing `((uint32_t)buf[3]<<24)` and `:600` is the end of a commented-out debug]), not 2-and-2 as the brief claimed — the house rule is *the cast matches the width of the
 value being assembled*, and the fix follows it.
 
 ### Two gate-9 rows, because the existing three-way CANNOT pin this
@@ -28714,7 +28716,7 @@ failure *of the fix*. Only the row that compares the failing name against the ex
 caught it — which is why it does that.
 
 And a citation correction worth recording: the `-H` alias parser is at `gate_asan_sweep.sh:233-249`,
-not `:50-55` as a brief claimed. That widened alias class (`[A-Za-z0-9_.+/-]`) was adopted here.
+not `:50-55` as a brief claimed. [2026-11-02, records: at a29f87b0, the commit that wrote this sentence, `gate_asan_sweep.sh` had 129 lines and its `-H` parser WAS the awk at `:50-55`, as the brief said; `firstalias()` and the widened class arrived with `#444` pass 2 (7849fad5, `:229-258`), and at 987cb596 the parser is `:232-261`] That widened alias class (`[A-Za-z0-9_.+/-]`) was adopted here.
 
 `EXPECT_CONVERTED` is **unchanged at 23**, recomputed read-only with gate 6's own definitions before
 and after staging: that census counts *pty readiness* sites and this probe drives the emulator with
@@ -28739,7 +28741,7 @@ Fixed with a per-timer bound of one emulated second of that timer's delivered ra
 `TIMER_MAX_CATCHUP * TIMER_BASE_FREQUENCY` — **derived, not chosen**: the most the core can
 deliver to one timer in one wall second, so it cannot throttle a legitimately fast timer. The
 comparison precedes the increment, because increment-then-check reintroduces the UB at `INT_MAX`;
-the one in-tree precedent (`dev_luna88k.c:252`) does it the other way and is safe only because its
+the one in-tree precedent (`dev_luna88k.c:252`, lines of 3f9ff561; at 987cb596 `:260`) does it the other way and is safe only because its
 own reset keeps the counter far below `INT_MAX`.
 
 ### This block is late, and so was everything else about this round's records
@@ -28774,7 +28776,7 @@ exactly once**, so it was structurally blind to both of those.
 
 ### Four comments in the shipped code were measurably false, and are corrected here
 
-* The clamp claimed to match `timer_clamp_freq`'s NaN idiom. **It is the inverse.** `timer.c:80-82`
+* The clamp claimed to match `timer_clamp_freq`'s NaN idiom. **It is the inverse.** `timer.c:78` [corrected 2026-11-02, records: said `:80-82`; the quoted words are `:78` at 3f9ff561 and at 987cb596]
   puts the floor first *deliberately* — *"so a NaN lands SLOW rather than fast"* — and this tested
   the ceiling first. Harmless, because NaN is unreachable (`emulated_hz` is an `int`,
   `footbridge_effective_cycles()` is ≥ 1 by construction), but the claim was false in the one
@@ -28984,7 +28986,7 @@ an honest UNKNOWN in the source and filed as `pitlatch2`, not decided by vote.
 
 **Kimi raised an out-of-bounds concern** — an `SC=11` Read-Back Command indexing `latched[3]` /
 `rd_msb[3]` / `wr_msb[3]` — and reasoned at length about which field each would clobber.
-**Refuted by opening the file**: `dev_8253.c:269-272` clamps `counter_select > 2` back to 0, four
+**Refuted by opening the file**: `dev_8253.c:291-295` [corrected 2026-11-02, records: said `:269-272`, which at af4884c6 is the read arm's `default:`; the clamp is `:291-295` there and at 987cb596] clamps `counter_select > 2` back to 0, four
 lines above the first array write. The premise the whole chain rests on cannot occur. Settled in
 under a minute, which is the rule working.
 
@@ -29012,7 +29014,7 @@ SAME SHAPE: the table asserted that something happened, never WHAT.**
 | pass | what the seats measured passing the table | rows |
 |---|---|---|
 | 1 → 2 | `d->hz = (int) TIMER_MAX_FREQUENCY;` → `d->hz = 1;` — a guest asking for the fastest rate available silently gets 1 Hz | 9 → 12 |
-| 2 → 3 | `TIMER_MAX_FREQUENCY` → `TIMER_MAX_CATCHUP` — **one identifier**, and the macros sit two lines apart in `timer.h` | 12 → 17 |
+| 2 → 3 | `TIMER_MAX_FREQUENCY` → `TIMER_MAX_CATCHUP` — **one identifier**, and the macros sit on adjacent lines in `timer.h` [corrected 2026-11-02, records: said two lines apart; they are `:81` and `:82` at d89229e0 and at 987cb596] | 12 → 17 |
 | 2 → 3 | `timer_update_frequency()` deleted — `last_timer_hz` was captured by the stubs from the first draft and **no row ever read it** | |
 
 The second is the cheapest edit on record here. The table sampled exactly ONE in-range value,
@@ -29138,7 +29140,7 @@ mistake was made with a different probe. Wiring the probe into gate 11 then imme
 surfaced a second defect: `build/`'s **binary was four hours stale**, so measurements against
 that tree were of the wrong code.
 
-Filed, not fixed: `lunafuse` — `:573`'s byte-write arm is unlatched *and* silently drops the
+Filed, not fixed: `lunafuse` — `:573`'s byte-write arm (lines of 9976161a, the arm `:570-580`; at 987cb596 `:578-588`) is unlatched *and* silently drops the
 write while the word-write arm above it stores. Different semantic class, needs a new oracle,
 so it could not join this round under the reopening rule.
 
@@ -29346,7 +29348,7 @@ dependency on a file it does not own; row identifiers are stable by construction
 - "`SCTR` appears nowhere in `src/` outside its own case label" — **literally false**, and the
   next sentence relies on the header it denies. `CMMU_SCTR` is defined at
   `thirdparty/m8820x.h:64` with its bit macros at `:118-120`. The substantive claim holds and is
-  now said precisely: *no code in `src/` ever reads `reg[CMMU_SCTR]`*.
+  now said precisely: *no code in `src/` ever reads `reg[CMMU_SCTR]`*. *[2026-11-02, records: still too strong -- the guest readback through dev_m8820x.c:258 returns that slot; the precise claim is that no translation consumer in src/ reads it (OUTSTANDING_BUGS.md:6345-6346)]*
 
 Gates: offline-differential **PASS, 213 checks**; luna88k **1:1:1 to `login:`** with zero
 `m8820x` diagnostics, on the final built binary.
@@ -29460,8 +29462,8 @@ is overstated. Checked, not judged: `memory_m88k.c:344-366` writes `PG_U` (and `
 back into the page descriptor **in emulated memory** after every SUCCESSFUL table walk when
 `FLAG_NOEXCEPTIONS` is absent (a walk that faults does not update the guest descriptor); a PATC
 READ hit sets `PG_U` only in the PATC copy (`:228-229`) when `FLAG_NOEXCEPTIONS` is absent, but a
-PATC WRITE hit on an entry whose `PG_M` is clear ALSO updates the guest descriptor when
-`FLAG_NOEXCEPTIONS` is absent, through `m8820x_mark_page_as_modified()` (`:217-224`; it ORs
+PATC WRITE hit on an entry that is not write-protected and whose `PG_M` is clear ALSO updates the guest descriptor when
+`FLAG_NOEXCEPTIONS` is absent (a write-protected hit takes the exception at `memory_m88k.c:211-213` first) [corrected 2026-11-02, records: said "on an entry whose `PG_M` is clear"], through `m8820x_mark_page_as_modified()` (`:217-224`; it ORs
 `PG_M|PG_U` into the descriptor at `:86` and writes it back at `:93`). [#561] So over-invalidation can set a U bit the guest cleared.
 The direction is still the safe one — under-invalidation is what leaves a stale translation — but
 the cost is not purely performance. The comment is corrected; the tighter 4 MB mapping
@@ -30454,12 +30456,12 @@ marker but no instruction record — the exact shape a dropped `-N` produces —
   and used the number anyway. The completed file reads 7,315,767,413, not 6.38 G. *A partially
   flushed log is not a measurement.*
 * ***`CLAUDE.md` asserted for months that `selftest_mutation.sh` does `rm -rf` on the shared gate
-  workdir. It does not*** — `T=$LOGDIR/mutation` (`:27`), `rm -rf "$T"` (`:41`), scoped to one
+  workdir. It does not*** — `T=$LOGDIR/mutation` (`:27`), `rm -rf "$T"` (`:41`; both are lines of ec308139 -- at 987cb596 `:40` and `:54`), scoped to one
   subdirectory. Nor do the rig images serialise: both consumers open them read-only via `R:` with a
   pid-unique overlay. The real serialisers are three producer/consumer orderings —
   `gate_build.sh:64-65` withdraws a binary `gate_mips.sh:30` needs, `gate_hygiene.sh:198-258` grades
-  pty logs gates 4 and 5 produce, `gate_ab.sh:42` removes trees `gate_upstream.sh:46-47` reads — and
-  a per-gate `LOGDIR` would not help, because `drive_guest.py:110` hardcodes its path.
+  pty logs gates 4 and 5 produce, `gate_ab.sh:42` (lines of ec308139; at 987cb596 `:46`) removes trees `gate_upstream.sh:46-47` reads — and
+  a per-gate `LOGDIR` would not help, because `drive_guest.py:110` hardcodes its path. [2026-11-02, records: true at ec308139, where `:110` is the `log_path = "/tmp/gxregress/drive_%s.log" % rig` hardcode; `#422` (f92e5a1c) made the driver honour `$LOGDIR` -- at 987cb596 `drive_guest.py:249` -- so the path is no longer hardcoded]
 
 ### Pass 2 found the mutant this round was built to catch, still alive
 
@@ -31591,7 +31593,7 @@ Above the divergence point it is wrong 100% of the time. The ~0.39% of sizes whe
 Worst case a real disk announces **zero sectors**.
 
 **Smallest divergence, reachable rather than theoretical.** The raw threshold is 65,280
-sectors, but `diskimage_recalc_size()` (`diskimage.c:254-268`) rounds every image up to
+sectors, but `diskimage_recalc_size()` (`diskimage.c:254-268`, lines of 2e709cdb; at 987cb596 `:290-303`, moved by `#414`) rounds every image up to
 whole cylinders, so that exact count could not occur AT THIS ROUND'S TREE — since #414 an override
 `-d g1;1:` on a 33,423,360-byte image gives exactly 65,280 sectors, so the sentence is time-indexed
 (retrospective review 2026-09-05); with the DEFAULT 16/63 geometry the smallest count an actual image can
@@ -31675,7 +31677,7 @@ than cautious ones.** `rs5c313reg.h:64-67` names `CTRL_BSY`/`CTRL_ADJ` and
 **bit names only**. It does not say that `WTEN` gates writes, what event commits a staged
 time, or whether the counter holds meanwhile.
 
-The house pattern argues *against* guessing rather than for it. `dev_mk48txx.c:98-106` gates
+The house pattern argues *against* guessing rather than for it. `dev_mk48txx.c:98-106` (lines of e098973c; at 987cb596 `:127-135`) gates
 on a latch that **its own header documents** — `mk48txxreg.h:101` reads
 `/* want to read (freeze clock) */`. `dev_mc146818.c:532-540` does the same with
 `MC_REGB_SET`, in a comment that says so. `rs5c313reg.h` carries no equivalent, so reasoning
@@ -31762,7 +31764,7 @@ Also measured, and worth keeping: the patch is bit-identical to the pre-#400 cod
 landed on `TCOR - 1` in only 5,081 of 19,231 cases and anywhere at all — including *above*
 `TCOR` — in the rest, so no guest could have been written against it. `d->tcnt[]` is read
 in exactly two places tree-wide, so the blast radius is one guest register. And the
-already-filed truncation at `dev_sh4.c:204` loses **63.25 counts per second** at the
+already-filed truncation at `dev_sh4.c:204` (lines of bd5b9104; at 987cb596 `:481`) loses **63.25 counts per second** at the
 landisk P4 prescaler, which is the first number anyone has put on it.
 
 Gate 2 is green at 63 checks.
@@ -32054,7 +32056,7 @@ check "arc: build_tree ran to completion"  "$rc_arc"  "0"
 The same-line capture is load-bearing rather than stylistic: `check()` is itself a
 command, so reading `$?` after the first `check` would report *that check's* status and — #398: **understated.** `check()` returns 0 *unconditionally* (`lib.sh:46` ends the
 ok branch in `printf`; `lib.sh:49` ends the FAIL branch in the assignment
-`_fails=$((_fails+1))`), so the naive form is not merely mismeasuring, it is permanently
+`_fails=$((_fails+1))`; `lib.sh:46` and `:49` are lines of 860efcb5 -- at 987cb596 `:83` and `:86`), so the naive form is not merely mismeasuring, it is permanently
 green. Demonstrated: that form with arc's `cd` broken gives `PASS (13 checks)`, exit 0,
 and publishes the *previous* run's binary. Two seats called this claim overstated from
 reading alone; execution moved it the other way. What follows below is therefore weaker
@@ -32103,7 +32105,7 @@ Publication now keys off `gate_end`'s **return value**. `gate_end` is what decid
 PASS/FAIL, so nothing can be appended between the decision and the action.
 
 The seat also named the mutant a careful reviewer would write: "harden" `$_fails` to
-`${_fails:-0}` for consistency with `lib.sh:102`. Measured — when unset that takes the
+`${_fails:-0}` for consistency with `lib.sh:102` (lines of fe4038ed; at 987cb596 `:139`). Measured — when unset that takes the
 **publish** branch. Defaulting an unknown state to "publish" is exactly backwards for a
 guard whose entire job is to withhold.
 
@@ -32152,8 +32154,8 @@ the ne2000 `device_add` at `:209-212` is unconditional inside `machine_arc_init`
 `:140-141` is PICA-gated). `promemul/arcbios.c` is not wholly `MACHINE_ARC`-gated
 (`CHECK_ALLOCATION(boot_string)` at `arcbios.c:2654` sits outside that test). And the
 `#257` tag named the wrong change entirely: `#257` is the R4030 interval-timer rate
-(`CHANGELOG.md:726`), present in **both** trees and therefore not a divergence at all;
-the real one is the arc-only `EXT_IMASK` IP3/IP4/IP6 split described at `:653-656`, which
+(`CHANGELOG.md:726`, lines of fe4038ed; at 987cb596 `:23962`, the "Thirtieth round (#257)" heading), present in **both** trees and therefore not a divergence at all;
+the real one is the arc-only `EXT_IMASK` IP3/IP4/IP6 split described at `:653-656` (lines of fe4038ed; at 987cb596 `:23889-23892`), which
 belongs to the #251/#252 round and carries no number of its own.
 
 **Nine record corrections** were applied to the #394/#395 blocks above, and they are worth
@@ -32225,7 +32227,7 @@ silent-false-pass class this harness ranks first.
 
 The guard now tests `_fails`, the harness's own accounting (`lib.sh:33`, reset per gate
 at `:36`, incremented by `check()` at `:49` and `check_min()` at `:60`, read by
-`gate_end()` at `:76`); `gate_build.sh` sources `lib.sh` into the same shell, so it is
+`gate_end()` at `:76`; lines of dd288e5d -- at 987cb596 `:70`, `:73`, `:86`, `:97` and `:113`); `gate_build.sh` sources `lib.sh` into the same shell, so it is
 live at the publish site, and every check in the gate has already run by then. That last
 detail is the whole design: **the failure that triggered this was the divergence check**,
 and a guard scoped to the arc build's own health would have sailed straight past it.
@@ -32235,7 +32237,7 @@ lie — downstream gates would go green against a binary that is not the code un
 which is the same "build-tree residue is not evidence" trap that cost four rounds of #88.
 Removing them makes the downstream `need_exec` preflights SKIP loudly. Precedent for
 preferring a loud stop over a quiet stale pass: `gate_offline.sh:87-95` ("THE HONESTY
-LINK") and `selftest_mutation_295.sh:51-52`.
+LINK"; lines of dd288e5d, at 987cb596 `:244-252`) and `selftest_mutation_295.sh:51-52`.
 
 **The detector, and why its injection is orthogonal.** An entry was dropped from the
 `DIVERGENT` allowlist so the *divergence* check fails while both builds stay clean.
@@ -32295,7 +32297,7 @@ so the red was purely the divergence check. The two files needed **opposite**
 dispositions, and blanket-allowlisting both (the obvious move) would have silenced a
 real staleness.
 
-`devices/autodev.c` is generated by `makeautodev.sh:56-64,81-90`, which globs the
+`devices/autodev.c` is generated by `makeautodev.sh:56-64,81-90` (lines of 804d8c6e; `#406` rewrote the script, and at 987cb596 the two loops are `:85-95` and `:114-125`), which globs the
 device directory and emits an entry per `DEVINIT()` it greps out. `dev_ne2000.c` is
 the only device file SEC has and est lacks — confirmed with `comm -13` — and the
 diff is exactly its declaration plus its `device_register()` call. Every other
@@ -32394,7 +32396,7 @@ repeat the mistake that once false-FAILed a 45-minute battery.
 
 **Shipped:** all 14 sites take a fresh `mark` before the write, require the full prompt
 inside `buf[mark:]`, and require the command's own ECHO in that slice first. The echo is
-emitted by the debugger's own read loop (`debugger.c:594`), not by the tty
+emitted by the debugger's own read loop (`debugger.c:597` [corrected 2026-11-02, records: said `:594`, which is `cmd_len ++;` at 6c74b31a; the echo `printf("%c", ch);` is `:597` there and at 987cb596]), not by the tty
 (`console.c:859-863` clears `ECHO`), so its presence proves the debugger consumed the
 command — measured: a command written 0.25 s into a 2,196,367-byte `dump` echoed at offset
 2195480, i.e. only when the debugger reached its prompt, never interleaved. The empty
@@ -32594,7 +32596,7 @@ and silent. Unmutated: 102/102 rows, every control OK. Gate 14: PASS, 352 checks
 0 SKIP.
 
 **This round's own brief was wrong on all three of its headline claims, and that is worth
-more than the fix.** It asserted a deterministic wrong-value defect across six probes. A
+more than the fix.** [2026-11-02, records: two of three after pass 2 -- the Consequence bullet below is marked RETRACTED IN PASS 2 ("The original brief was RIGHT and this correction was WRONG.")] It asserted a deterministic wrong-value defect across six probes. A
 compile-and-measure seat could not confirm any of it:
 
 - **Scope**: ONE probe, not six. Only `arm_flags_probe.py` still has the whole-buffer
@@ -32813,7 +32815,7 @@ only, declared detector-free by construction). The STRD arm leaves the shared de
 byte walk entirely (`#ifndef A__STRD` around the walk with its `int i` declared inside —
 the walk's shared index IS what produced E1, and a dead `|| defined(A__STRD)` disjunct
 left behind would be the #372 defect shape, so that guard is reduced to `#ifndef A__H` in
-the same edit — **at :310 in the post-change file**; this block first cited `:293`, which
+the same edit — **at :310 in the post-change file** (lines of d6f860d2; at 987cb596 `:318`); this block first cited `:293`, which
 was its pre-change line, moved by this round's own insertions [pass-2; the FOURTH recorded
 instance of a numeric site cite going stale in the round that touched it — cite the
 CURRENT file]. Byte/halfword/word stores keep the walk byte-identical.
@@ -32890,7 +32892,7 @@ each), and M12 is an adjacent-index transcription slip inside the NEW LE store a
 (`~7` → `~3`) remains the DECLARED survivor, and the record is stated here rather than
 delegated: under the aligned bases the #355 rule requires, `addr & ~7 == addr & ~3 ==
 addr`, so no legal row can separate the two masks. [pass-2 correction: this sentence
-originally pointed at `OUTSTANDING_BUGS.md:2508-2514`, which contains the writeback-probe
+originally pointed at `OUTSTANDING_BUGS.md:2508-2514` (lines of d6f860d2; at 987cb596 that paragraph, since narrowed, is `:4084-4092`), which contains the writeback-probe
 row-omission rationale and says nothing about M10, `~3`, or mutants — a pointer to a
 paragraph that does not hold the record is worse than no pointer, so the substance is
 inlined. An Opus diff-review seat found it. Note the M10 declaration is itself
@@ -33200,7 +33202,7 @@ is always 0 and every aligned row still passes), the rotate applied to the LOAD 
 guarded on `rot_sh` (`<<32` is UB in C), `Rd` written LAST (a data abort on either access
 leaves it unchanged — the manual's both-access clause), `swpb` untouched (byte-sized,
 order-free; A4.1.109 carries no Alignment note). Masking in place is safe because swp has
-no base writeback (the `#357` block comment at `cpu_arm_instr_loadstore.c:157` lists it
+no base writeback (the `#357` block comment at `cpu_arm_instr_loadstore.c:157` (lines of 3757175a; at 987cb596 `:168`) lists it
 [#387 precision: previously cited as the file "header"]). The aligned LE path is
 byte-identical to the old code, and the alignment half is inert on aligned addresses (mask
 a no-op, rotate skipped) — neither half can regress a currently-correct case.
@@ -33251,7 +33253,7 @@ round (the #384 precedent).
 legitimate guest data abort is console noise the template's silent return avoids, and the
 handler does not reset `next_ic` the way the template's `!cpu->running` arm does — task
 filed; the behaviour (return without writing Rd) is otherwise correct. (2)
-`cpu_arm_instr_loadstore.c:248-249` lacks the `(uint32_t)` cast on its `<<24` term (formal
+`cpu_arm_instr_loadstore.c:248-249` (lines of 813ee67a; at 987cb596 `:259-260`, still uncast) lacks the `(uint32_t)` cast on its `<<24` term (formal
 UB for byte values ≥ 0x80, benign on real compilers) — RECORDED, not tasked: the effect is
 unmeasurable by construction, and a fix whose effect cannot be measured gets documented
 instead.
@@ -36423,7 +36425,7 @@ Gate 14 has only ever driven ARM-mode encodings, and the Thumb interpreter
 touched. Thumb is entered **architecturally** here — an ARM `bx` to an odd address sets
 `ARM_FLAG_T` and `cpu_dyntrans.c` dispatches to the interpreter — and never by writing the
 T bit with the debugger, because the interpreter requires both an odd `pc` and
-`ARM_FLAG_T` in `cpsr` (`cpu_arm.c:1216`); the probe's BX establishes both conditions
+`ARM_FLAG_T` in `cpsr` (`cpu_arm.c:1216`, lines of 3d7c61bb; at 987cb596 `:1266`); the probe's BX establishes both conditions
 together in one guest instruction. [#560] `mrs` is ARM-only in Thumb-1, so each row returns to ARM with a second
 `bx` before publishing; `bx` touches no flags.
 
