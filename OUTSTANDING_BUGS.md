@@ -26413,3 +26413,4 @@ src/devices/dev_dec5800.c:359-367 at 987cb596: The DEC 5800 CPU-mask registers a
   refused on a clean tree (the carrier's 2026-08-31 note predicted exactly this); `SCORE_CLAIMS_MANIFEST` 42 -> 43; `gate_hygiene.sh`
   `EXPECT_PTY_PROBES` 80 -> 81 (`derive_hygiene_pins.sh --write`; the probe is prompt-detecting, not promptless); `check_probe_wiring.py`
   gains the detector's MANIFEST key and one entry per artifact script.
+* **Landed** as `2a24d9b7` (2026-11-02 22:10; the hook 0 hard, 5 soft); the pass-2 receipt keyed to it in `regress/pass2_ledger.tsv`; the row stays `held` (see its hold question: Fable as adjudicator rather than seat; Astra walled through pass 2 and F2; the deletion ruling).
