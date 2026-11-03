@@ -26452,3 +26452,4 @@ src/devices/dev_dec5800.c:359-367 at 987cb596: The DEC 5800 CPU-mask registers a
   where the manual calls them undefined; TEA/PTEH not set on the multiple-hit transition (pre-existing, `#457`; Opus pass 1); the
   product comment cites the multiple hit's instruction-side line `:12461` where `:12499` (the data side, the tree's only raiser) is the
   sharper cite -- both carry H'140, left as written and recorded here.
+* **Landed** as `bb672a16` (2026-11-03 00:2x); the pass-2 receipt keyed to it in `regress/pass2_ledger.tsv`; the row stays `held` for Astra's walled pass 1 (its hold question).

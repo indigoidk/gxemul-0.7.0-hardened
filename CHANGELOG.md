@@ -1,3 +1,9 @@
+# `#577` Records (follow-up, 2026-11-03): `shblreset` names its landing commit `bb672a16`; the committed-tree proofs; the pass-2 receipt
+
+`git ls-tree bb672a16` shows `regress/sh_tlbmulti_probe.py` at `100644 blob 34cf5ea3d4557c5acc0f60d8e1fa4060ce720bca`, blob md5 `d41d8cd98f00` (the shipped revision: AST-identical to the table's as-run copy `d41edccdee1c` with docstrings kept, seven comment-only edits logged in `regress/artifacts/shblreset/killtable_20261102/ASRUN_NOTE.txt`); `src/cpus/cpu_sh.c` md5 `d41d8cd98f00` (the measured fix source, byte-identical in `est/`; the two-part clearance `regress/artifacts/shblreset/landing_20261102/PREP.out`).  `git diff --numstat bb672a16^ bb672a16`: `4 2 regress/gate_sh_rounding.sh; 60 12 regress/sh_tlbmulti_probe.py; 14 5 src/cpus/cpu_sh.c; 23 1 tools/pipeline/check_probe_wiring.py`; 99 artifact files under `regress/artifacts/shblreset/`.  Gate 10 before the landing: `regress/artifacts/shblreset/landing_20261102/GATE10_RUN.txt` (the `#577` block 10/10; the run's one red the pre-existing gdrom_default 62-vs-60 pin, the peer's uncommitted probe, as in `#572`'s run).  The row's `commits` field now names `bb672a16`; its state stays `held` for Astra's walled pass 1 (re-fired after the 01:10 reset).
+
+Ledger (the `commits` field and the state note's date), this block, the `regress/pass2_ledger.tsv` receipt line, a landing line in OUTSTANDING_BUGS.md's `#577` section, `matrix.html` and `fable_queue.md` re-rendered.
+
 # `#577` (2026-11-02) -- `shblreset`: a SuperH general exception taken with SR.BL set stored the power-on reset code, and clobbered the TLB multiple-hit code
 
 **The defect.**  `src/cpus/cpu_sh.c`, `sh_exception()` (HEAD `987cb596` :910-918): when SR.BL was already set the block printed its
