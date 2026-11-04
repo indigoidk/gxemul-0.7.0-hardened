@@ -2276,7 +2276,7 @@ X(fdivs)
 X(llsc)
 {
 	int iw = ic->arg[0], len = 4, load = 0, xo = (iw >> 1) & 1023;
-	int i, rc = iw & 1, rt, ra, rb;
+	int i, rt, ra, rb;
 	uint64_t addr = 0, value;
 	unsigned char d[8];
 
@@ -2302,10 +2302,12 @@ X(llsc)
 	addr += cpu->cd.ppc.gpr[rb];
 
 	if (load) {
-		if (rc) {
-			fatal("ll: rc-bit set?\n");
-			exit(1);
-		}
+		/*  #579: bit 31 of lwarx/ldarx is a reserved field ("/" in the
+		    Book I/II layout), which the processor ignores, so a word with
+		    it set is a valid form: it runs this one body and writes no
+		    CR bit.  The decoder keys on the extended opcode alone and
+		    delivers both values of the bit; the guard that stood here
+		    ended the emulator process on the set form.  */
 		if (cpu->memory_rw(cpu, cpu->mem, addr, d, len,
 		    MEM_READ, CACHE_DATA) != MEMORY_ACCESS_OK) {
 			/*  #216: (Codex/Fable) memory_rw() raised a DSI on the
@@ -2328,10 +2330,21 @@ X(llsc)
 		cpu->cd.ppc.ll_bit = 1;
 	} else {
 		uint32_t old_so = cpu->cd.ppc.spr[SPR_XER] & PPC_XER_SO;
-		if (!rc) {
-			fatal("sc: rc-bit not set?\n");
-			exit(1);
-		}
+		/*  #579: bit 31 of stwcx./stdcx. is "1" in the layout; the
+		    bit-clear word is an invalid form whose permitted outcomes are
+		    the illegal-instruction handler or boundedly undefined results
+		    (Book I v2.01 1.9.2).  This core takes the latter and performs
+		    the defined store-conditional, the CR0 update below included:
+		    this core defines no Program-interrupt constant and sets no
+		    illegal-instruction cause bit in SRR1, and none is required.
+		    The guard that stood here ended the emulator process.  The
+		    #216 return below stays: it follows a failed memory access,
+		    after which the memory path may already have raised an
+		    exception or stopped the CPUs, or raised nothing at all (a
+		    failed device access raises no PPC exception); this handler
+		    adds nothing either way.  ldarx/stdcx. on the 32-bit CPUs are
+		    an illegal-opcode question for both values of the bit, left as
+		    #571 left opcodes 58/62.  */
 
 		value = cpu->cd.ppc.gpr[rt];
 

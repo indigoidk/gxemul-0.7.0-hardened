@@ -27,7 +27,9 @@
 >
 > 1. `m88kscaledbyte` (HIGH, FIXED by `#569` on 2026-10-23, held for Fable) -- m88k scaled byte ld/st/xmem use NULL table slots; a user-mode xmem calls a NULL
 >    function in the host.  T1; ~~the fix shape is disputed and pass 1 settles it~~ -- pass 1 settled it (the table alias) and `#569` ships it with a 123-row offline detector; see the 2026-10-23 section at the end.
-> 2. `ppcllscrcexit` (HIGH) -- lwarx/ldarx with Rc=1 and stwcx./stdcx. with Rc=0 exit the host.  T3; design owed.
+> 2. `ppcllscrcexit` (HIGH, FIXED by `#579` on 2026-11-04, closed) -- lwarx/ldarx with Rc=1 and stwcx./stdcx. with Rc=0 exit the host.  T3;
+>    ~~design owed~~ -- shipped: X(llsc)'s two guards deleted (the load pair's bit 31 is a reserved field the processor ignores; the store
+>    pair's bit-clear word is an invalid form whose defined operation is a permitted outcome), with an 83-row rung-3 detector in gate 13.
 > 3. `qhslowifetch` (HIGH) -- a failed slow-path instruction fetch exits the host; user-reachable on 32-bit PowerPC.
 >    T6; PPC970 stops first at `ppc64xlateexit`.
 > 4. `ppcdsformxo` (HIGH, FIXED by `#571` on 2026-10-24, held for Fable) -- DS-form XO bits: ldu/lwa/stdu run as ld/std at EA+1/+2.  T2;
@@ -23014,6 +23016,7 @@ batch 2a -- `regress/artifacts/astraretro_20260926/DISPOSITIONS.md`  [kind corre
 
 #### `ppcllscrcexit` (HIGH) -- lwarx/ldarx with Rc=1 or stwcx/stdcx with Rc=0 reach fatal()+exit(1) in X(llsc); the decoder keys on xo alone
 batch 2a -- `regress/artifacts/astraretro_20260926/DISPOSITIONS.md`
+**[`#579`, 2026-11-04: FIXED -- X(llsc)'s two guards are deleted; witness 44/73 -> 73/73 on the committed build, the final 83-row detector in gate 13; the F2 ruling, the closing ruling and the regress review complete.  See the `#579` section at the end of this file.]**
 
 #### `i960disasmspan` (HIGH) -- i960: disassembling a long (two-word MEMB) instruction reads ib[4..7] of a four-byte buffer, on the to_be_translated `bad:` path and on the trace/single-step path
 batch 2c -- `regress/artifacts/astraretro_20260926/DISPOSITIONS.md`
@@ -26500,3 +26503,8 @@ src/devices/dev_dec5800.c:359-367 at 987cb596: The DEC 5800 CPU-mask registers a
 
 * **`jazzvecreopen` (LOW, design) -- new.**  The owner reopened `#578`'s DELETION ruling (02:1x): a follow-up round weighs pass 1's conditional deassert guard (`if (!((int_asserted & 0x7fff) && (int_enable_mask & R4030_EXT_IP3))) INTERRUPT_DEASSERT(...)`) against the shipped deletion (`2a24d9b7`).  Pass 1: five of seven seats preferred the conditional; pass 2 and F2: every seat ratified the deletion; the conditional measured equivalent (M_cond 26/26 on the shipped detector).  The shipped code stays under the late-dissent rule; the round's adjudication is held for Fable (09:1x).
 * `jazzvecdeassert` and `shblreset` stay `held` for their Fable-only regress reviews: the owner's 02:1x answer ("main loop as the seat") is suspended by the 09:1x switch of the main loop to Opus 5.5 ("hold any Fable adjudication").
+
+## 2026-11-04 -- `#579` ppcllscrcexit: the PowerPC load-reserve / store-conditional handler no longer ends the emulator process
+
+* **FIXED** -- `ppcllscrcexit` (HIGH): `src/cpus/cpu_ppc_instr.c`, `X(llsc)` ended the process -- `fatal()` + `exit(1)` -- on lwarx/ldarx with bit 31 set and on stwcx./stdcx. with it clear, both delivered by an opcode-31 decoder that keys on the extended opcode alone.  The two guards are DELETED and the unread `rc` dropped: the load pair's bit 31 is a reserved field the processor ignores (Book I v2.01 :432-433, Book II :1264), so the word runs the one body and writes no CR bit; the store pair's bit-clear word is an invalid form, and executing the defined store-conditional, CR0 update included, is one of its permitted outcomes (Book I :1116-1120, Book II :1305/:1307).  Witness (rung 3, unmodified `-E bareppc -M 64`, a `-C PPC603` leg): `regress/artifacts/ppcllscrcexit/witness_20261103/` 44/73 on the committed build -> 73/73, same script.  Detector: `regress/ppc_llsc_probe.py`, 83 rows, gate 13; test-variant table 4 (`killtable_20261103/table4/`) red on every variant but the disclosed M20.  Rulings: pass 1 `adj_20261103/FABLE_ADJ.md`; F2 `MYTHOS_F2R.md`; closing `MYTHOS_F2P2R.md` (chain closed, SHIP); regress `FABLE_REGRESS.md` (0 floor breaches, R1-R6 applied).  See the `#579` round block in CHANGELOG.md.
+* **Filed, new (all LOW):** `ppcllsc216text` (the #216 comments' "raised a DSI"; the #216 returns' missing detecting variant; the upstream CR0 comment's "copied to to bit 4", from five out-of-roster pass-1 answers read at landing), `ppcexcsrr1mask` (ppc_exception's SRR1 mask and missing cause bits), `ppcllscrealaddr` (the reservation keyed on the effective address), `ppcmode32gprhi` (MODE32 reg() on a big-endian host), `gate13deadlegs` (gate 13's dead-binary legs, D2) and `ppcllscprobeext` (four detector extensions the regress review filed).  The 32-bit ldarx/stdcx. delivery is noted on the existing `ppc64on32gate` (#571's disclosure), as the F2 ruling directs.  The unsynchronised PC and stale SRR0 stay on the existing row `ppcllscsrr0`.

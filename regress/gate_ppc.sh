@@ -95,7 +95,7 @@ set -u
 cd "$(dirname "$0")"
 . ./lib.sh
 
-gate_begin "gate 13: PowerPC FP conversion + FPSCR (#304/#305/#324-#330) + rlwimi/rldimi/rldicl + #571 DS-form"
+gate_begin "gate 13: PowerPC FP conversion + FPSCR (#304/#305/#324-#330) + rlwimi/rldimi/rldicl + #571 DS-form + #579 llsc"
 
 PMAX=${PMAX:-$ROOT/build/gxemul}
 LOG=$LOGDIR/gate_ppc.log
@@ -238,6 +238,50 @@ else
     check "ppc_dsform rows run"   "$dsfrun" 39
     check "ppc_dsform rows green" "$dsfok" 39
     check "ppc_dsform rows red"   "$dsfbad" 0
+fi
+
+# ---- ppcllscrcexit (#579): X(llsc)'s bit-31 forms no longer end the emulator process -- its 83-row witness/detector ---------------
+# The opcode-31 decoder keys on the extended opcode alone, so lwarx/ldarx with bit 31 set and stwcx./stdcx. with it clear reached
+# X(llsc), whose two guards ended the process on them.  The guards are gone: the load pair's bit is a reserved field the processor
+# ignores (Book I 1.5.2), the store pair's bit-clear word is an invalid form whose permitted outcomes include boundedly undefined
+# results (Book I 1.9.2), and the handler performs the defined operation.  `-E bareppc -M 64' needs no image (PPC970; a -C PPC603 leg
+# runs the word forms), so this block runs BEFORE the NetBSD prerequisite, like the #571 block above.  Twenty-three cold
+# debugger sessions: a control and a bogus-machine negative control; the four valid forms; six reservation and XER[SO] controls
+# (no reservation, a mismatched address, a chained failure, SO on a success, SO on a failure, a second store-conditional after a
+# success) and a field-decode control (a base register); the four bit-31 forms and two reservation sessions on them (a
+# bit-31-set lwarx whose reservation a stwcx. consumes; a bit-clear stwcx. with no reservation); and on the 32-bit CPU the
+# two valid and the two bit-31 word forms.
+# The rung-3 witness is the same probe on the committed build
+# (regress/artifacts/ppcllscrcexit/witness_20261103/prefix_final2.out: 50/83, SYMPTOM=PRESENT) and on the fix (postfix_final2.out: 83/83).
+# Scored in the #565/#571 shape: the completion sentinel exactly once and as the last line; each protocol key exactly once in ANY
+# form, then exactly once in its accepted form; every row by name; the census row at its frozen count of placed words; the emitted,
+# green and red row counts -- each pinned to a literal.  Names are at most 16 characters in an 18-wide column, so `^name  ' cannot
+# match a neighbour (the padded-column trap).  Session transcripts go to $LOGDIR/ppc_llsc/.  Kill table:
+# regress/artifacts/ppcllscrcexit/killtable_20261103/.
+LLSCLOG=$LOGDIR/ppc_llsc.log
+python3 -u ppc_llsc_probe.py "$PMAX" gate "$LOGDIR/ppc_llsc" > "$LLSCLOG" 2>&1 || true
+if [ "$(grep -cx 'PPC_LLSC_PROBE_DONE' "$LLSCLOG")" != 1 ]; then
+    note "ppc_llsc: completion sentinel missing or duplicated; last lines follow"
+    tail -5 "$LLSCLOG" | sed 's/^/       /'
+    check "ppc_llsc probe completed" "no" "yes"
+else
+    check "ppc_llsc probe completed" "yes" "yes"
+    check "ppc_llsc sentinel is the last line" "$(tail -n 1 "$LLSCLOG")" "PPC_LLSC_PROBE_DONE"
+    for k in RESULT CONTROL SYMPTOM RED; do
+        check "ppc_llsc $k= lines" "$(grep -c "^PPC_LLSC_$k=" "$LLSCLOG")" "1"
+    done
+    check "ppc_llsc RESULT=83/83"    "$(grep -cx 'PPC_LLSC_RESULT=83/83' "$LLSCLOG")" "1"
+    check "ppc_llsc CONTROL=OK"      "$(grep -cx 'PPC_LLSC_CONTROL=OK' "$LLSCLOG")" "1"
+    check "ppc_llsc SYMPTOM=ABSENT"  "$(grep -cx 'PPC_LLSC_SYMPTOM=ABSENT' "$LLSCLOG")" "1"
+    check "ppc_llsc RED=none"        "$(grep -cx 'PPC_LLSC_RED=none' "$LLSCLOG")" "1"
+    for v in "ctl session" "ctl live" "ctl seed holds" "ctl data" "neg apparatus" "lw ok session" "lw ok value" "lw ok cr" "lw ok pc" "lw ok seed" "ld ok session" "ld ok value" "ld ok cr" "ld ok pc" "ld ok seed" "stw ok session" "stw ok bytes" "stw ok tail" "stw ok cr" "stw ok pc" "std ok session" "std ok bytes" "std ok cr" "std ok pc" "noresv session" "noresv bytes" "noresv cr" "mismatch bytes" "mismatch cr" "chain bytes" "chain cr" "so bytes" "so cr" "twice bytes" "twice cr" "ra value" "ra r3 kept" "nso bytes" "nso cr" "lw rc1 session" "lw rc1 value" "lw rc1 cr" "lw rc1 pc" "lw rc1 seed" "ld rc1 session" "ld rc1 value" "ld rc1 cr" "ld rc1 pc" "ld rc1 seed" "stw rc0 session" "stw rc0 bytes" "stw rc0 tail" "stw rc0 cr" "stw rc0 pc" "std rc0 session" "std rc0 bytes" "std rc0 cr" "std rc0 pc" "rc1 resv bytes" "rc1 resv cr" "rc0 nr bytes" "rc0 nr cr" "lw32 ok session" "lw32 ok value" "lw32 ok cr" "lw32 ok pc" "lw32 ok seed" "sw32 ok session" "sw32 ok bytes" "sw32 ok tail" "sw32 ok cr" "sw32 ok pc" "lw32 rc1 session" "lw32 rc1 value" "lw32 rc1 cr" "lw32 rc1 pc" "lw32 rc1 seed" "sw32 rc0 session" "sw32 rc0 bytes" "sw32 rc0 tail" "sw32 rc0 cr" "sw32 rc0 pc" "unasm census"; do
+        check "ppc_llsc row: $v" "$(count "$LLSCLOG" "^$v  .*ok$")" "1"
+    done
+    check "ppc_llsc census, 35 placed words" "$(count "$LLSCLOG" "^unasm census  *35/35  *35/35  .*ok$")" "1"
+    llscok=$(count "$LLSCLOG" " ok$"); llscbad=$(count "$LLSCLOG" " FAIL$"); llscrun=$((llscok + llscbad))
+    check "ppc_llsc rows run"   "$llscrun" 83
+    check "ppc_llsc rows green" "$llscok" 83
+    check "ppc_llsc rows red"   "$llscbad" 0
 fi
 
 need_file "$IMAGES/netbsd401-macppc-GENERIC"

@@ -3354,6 +3354,16 @@ MANIFEST = {
                      "(SCORES_V12_V7.txt); V17v (SCORES_V17v.txt) was applied by the separate one-edit "
                      "script preserved beside it as run_v17v.sh.txt, not by this applicator; one text "
                      "edit to dev_wdc.c per mutant, applied in a cp -a clone with a .MUTANT sentinel."),
+    #  #579 ppcllscrcexit: the PowerPC load-reserve / store-conditional bit-31 forms.  The SHIPPING detector is CLASS_DETECTOR
+    #  and gated in gate_ppc.sh (gate 13) in the same commit; its wiring is DERIVED, not asserted here.
+    "ppc_llsc_probe.py":
+        (CLASS_DETECTOR, "#579 ppcllscrcexit: lwarx/ldarx with bit 31 set and stwcx./stdcx. with it clear no longer end the process -- 83 "
+                         "rows over 23 cold -E bareppc -M 64 sessions plus a -C PPC603 leg; gate_ppc.sh pins RESULT 83/83 by EQUALITY and "
+                         "every row by name.  Witness artifacts/ppcllscrcexit/witness_20261103/ (44/73 -> 73/73); test-variant table "
+                         "artifacts/ppcllscrcexit/killtable_20261103/table4/ (every variant red but the disclosed M20)."),
+    "artifacts/ppcllscrcexit/f2r_20261104/probe_frozen.py":
+        (CLASS_RESEARCH, "#579 F2R repair: regress/ppc_llsc_probe.py frozen for the step-3 measurement (build 83/83, "
+                         "/bin/true 14/83, a missing binary 0/83, census 35/35 / 0/35 / 0/35), preserved as evidence"),
 }
 
 #  DATED, NAMED DEBT -- not a count and not a silent allowlist.  gate_offline.sh MEASURED that

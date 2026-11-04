@@ -1,0 +1,39 @@
+PRE-TABLE CHECK -- round #579 ppcllscrcexit, written BEFORE table 1 (2026-11-03 23:2x), the four checks of CLAUDE.md.
+
+SIBLING PARITY.  The diff touches two arms of one if/else: the load arm (lwarx/ldarx) and the store arm (stwcx./stdcx.).  Observable
+channels -- load arm: r3 (the loaded value), CR (must NOT change), pc; store arm: the bytes at EA (stored or not), CR0 (EQ, SO), pc.  The
+probe rows both arms in both bit-31 forms with the SAME channels as the valid twins (lw/ld rc1: value, cr, pc, seed; stw/std rc0: bytes,
+tail, cr, pc).  Asymmetry: the store arm has a reservation state the load arm has not; rowed by noresv / mismatch / chain / so.  No
+sentence owed.
+
+CLAIM -> ROW.  Load comment: "runs this one body and writes no CR bit" -> rows `lw rc1 value`, `ld rc1 value`, `lw rc1 cr`, `ld rc1 cr`.
+"the guard that stood here ended the emulator process on the set form" -> the pre-fix session rows (prefix.out, SYMPTOM=PRESENT).
+Store comment: "performs the defined store-conditional, the CR0 update below included" -> `stw rc0 bytes`, `std rc0 bytes`,
+`stw rc0 cr`, `std rc0 cr`.  "ppc_exception() has no Program vector and no illegal-instruction cause bit" -> no row (a fact about
+cpu_ppc.c:318-345 / cpu_ppc.h:252-257, CHECKED, not an observable of this handler).  "The #216 returns below stay" -> no row (the DSI
+paths are DISCLOSED, not claimed).  "ldarx/stdcx. on the 32-bit CPUs ... left as #571 left opcodes 58/62" -> no row, DISCLOSED.
+
+GUARD FIELD vs BODY FIELD.  The deleted predicates read `rc` (= iw & 1) only.  The bodies read: xo-derived `load` and `len`, gpr[ra]
+(if ra != 0), gpr[rb], gpr[rt] (store), memory at EA, ll_bit and ll_addr (store), XER[SO] (store), byte_order.  Partitions the bodies
+induce: load {0,1} EXHAUSTED (both arms rowed); len {4,8} EXHAUSTED (word and double rows, patterns differ in every byte); ll_bit x
+ll_addr {reserved-and-equal, reserved-and-different, not reserved} EXHAUSTED (stw ok / mismatch / noresv); old_so {0, set} EXHAUSTED
+(stw ok / so); ra {0, !=0} SAMPLED at ra=0 only (DISCLOSED: RA=0 means no base register, the field decode is unchanged by this diff);
+byte_order {BE} SAMPLED (the PPC core is big-endian; DISCLOSED); ncpus {1} SAMPLED (DISCLOSED).  No field the deleted predicate read
+survives, so no disagreeing-state row is owed.
+
+CHANNEL -- per table-row, the variant it catches and the observable that differs:
+  M1_loadguard   (b) load guard reinstated         -> lw rc1 / ld rc1 / lw32 rc1 sessions exit1 (no reg dump); value rows "none"
+  M2_storeguard  (b) store guard reinstated        -> stw rc0 / std rc0 / sw32 rc0 sessions exit1
+  M3_loadinv     (d) if (load) inverted            -> lw ok value stays the seed (store path ran); stw ok bytes unchanged
+  M4_loadrekey   (d) if (load && !(iw & 1))        -> lw rc1 value stays the seed; lw rc1 cr changes (store path); ld rc1 likewise
+  M5_ldarxlen    (d) len=8 dropped on LDARX        -> ld ok value = the 4-byte pattern 0xa5c3e719 (want the 8-byte one)
+  M6_stdcxlen    (d) len=8 dropped on STDCX        -> std ok bytes = 4 bytes of the low half (want 8)
+  M7_len8all     (d) len defaults to 8             -> lw ok value = 8 bytes; stw ok tail overwritten
+  M8_loadnoop    no-op return at the load site     -> lw rc1 value = seed, pc advanced (alive, nothing loaded)
+  M9_storenoop   no-op return at the store site    -> stw rc0 bytes = pattern, cr = seed (alive, nothing stored)
+  M10_noeq       EQ not set on success             -> stw ok cr = 0x0fffffff (and every store cr row)
+  M11_noso       XER[SO] copy dropped on success   -> so cr = 0x2fffffff (want 0x3fffffff)
+  M12_noresv     reservation test nulled           -> noresv bytes stored, noresv cr = 0x2fffffff; mismatch likewise
+  M13_noclear    failure-path ll_bit clear dropped -> chain bytes stored on the third word (want refused)
+  NULL           no emulator (/bin/true as the binary) -> every session fails to answer: RESULT near 0/73, CONTROL=FAIL
+Each named channel varies under its variant by construction of the rows' wants; none is a survival-only oracle.
