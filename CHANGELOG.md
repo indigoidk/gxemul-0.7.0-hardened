@@ -1,3 +1,9 @@
+# `#579` Records (follow-up, 2026-11-04): `ppcllscrcexit` names its landing commit `dc35d1be`; the committed-tree proofs; the pass-2 receipt
+
+`git ls-tree dc35d1be`, md5s hashed in Python from the committed bytes: `src/cpus/cpu_ppc_instr.c` blob `8797a48c3110`, md5 `29963c800505`; `regress/ppc_llsc_probe.py` blob `5c8a6a58df97`, md5 `6ecf66745f53`; `regress/gate_ppc.sh` blob `370dcea54378`, md5 `0632bde42a09`.  The working tree matches each (cpu_ppc_instr.c same, ppc_llsc_probe.py same, gate_ppc.sh same).
+
+The row's `commits` field names `dc35d1be` and its state note gives the landing date, 2026-11-04 (it said 2026-11-03, the day the fix was built; the CHANGELOG block and OUTSTANDING_BUGS say 11-04).  The `regress/pass2_ledger.tsv` receipt line for `dc35d1be`, a landing line in OUTSTANDING_BUGS.md's `#579` section and `matrix.html` re-rendered complete this records commit.
+
 # `#579` (2026-11-03) -- `ppcllscrcexit`: the PowerPC load-reserve / store-conditional handler no longer ends the emulator process on the four bit-31 forms the decoder delivers to it
 
 **The defect.**  `src/cpus/cpu_ppc_instr.c`, `X(llsc)` (HEAD `ebe5af82` :2276-2374): the opcode-31 decoder keys on the ten-bit extended
