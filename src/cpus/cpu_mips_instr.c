@@ -5549,15 +5549,83 @@ X(to_be_translated)
 		}
 		break;
 
+	case HI6_LWC2:
+	case HI6_SWC2:
+		/*  #580: coprocessor-2 word load and store.  Nothing in this
+		    tree creates a coprocessor-2 object and no coprocessor-2
+		    load or store is implemented, so the arm raises Coprocessor
+		    Unusable with Cause.CE = 2 whatever Status.CU2 holds, as the
+		    HI6_COP2 arm does.  With CU2 clear that is the architectural
+		    result at every ISA level; with CU2 set and no coprocessor,
+		    MIPS I-IV leave it undefined and MIPS32/64 Vol. II say
+		    Reserved Instruction, a distinction this arm does not make.
+		    Before this the words fell to default: goto bad, which
+		    stopped the emulated CPU from any privilege level.  */
+		ic->f = instr(cpu);
+		ic->arg[0] = 2;
+		break;
+
+	case HI6_LDC2:
+	case HI6_SDC2:
+		/*  #580: the doubleword forms are MIPS II; below that the
+		    encoding is reserved, as LDC1/SDC1 already are (above).
+		    From MIPS II on: Coprocessor Unusable, CE = 2, with the
+		    Status.CU2 note under HI6_LWC2 applying.  */
+		if (cpu->cd.mips.cpu_type.isa_level < 2) {
+			ic->f = instr(reserved);
+		} else {
+			ic->f = instr(cpu);
+			ic->arg[0] = 2;
+		}
+		break;
+
+	case HI6_SWC3:
+		/*  #580: through MIPS II, SWC3 is a coprocessor-3 store; no
+		    coprocessor-3 load or store is implemented, so it raises
+		    Coprocessor Unusable with CE = 3 whatever Status.CU3 holds.
+		    MIPS III removed the coprocessor-3 loads and stores and later
+		    levels through Release 5 keep the encoding reserved (Release
+		    6 reassigns it to PCREL; no Release 6 CPU is modelled), so
+		    from ISA III on it is a Reserved Instruction here (MIPS IV
+		    Instruction Set rev 3.2, Table A-39; R4000 User's Manual,
+		    Figure A-2).  Neither stops the CPU.  */
+		if (cpu->cd.mips.cpu_type.isa_level >= 3) {
+			ic->f = instr(reserved);
+		} else {
+			ic->f = instr(cpu);
+			ic->arg[0] = 3;
+		}
+		break;
+
+	case 0x1d:
+		/*  #580: JALX exists only with the MIPS16 ASE (MIPS16e
+		    included) or microMIPS.  This tree models neither -- the
+		    Config registers report no MIPS16 -- and without them the
+		    encoding is reserved through Release 5: it is a Reserved
+		    Instruction here (#309's REGIMM precedent), not a stopped
+		    CPU.  */
+		ic->f = instr(reserved);
+		break;
+
 	case HI6_LWC3:
 		/*  PREF (prefetch) on ISA IV and MIPS32/64:  */
 		if (cpu->cd.mips.cpu_type.isa_level >= 4) {
 			/*  Treat as nop for now:  */
 			ic->f = instr(nop);
+		} else if (cpu->cd.mips.cpu_type.isa_level == 3) {
+			/*  #580: MIPS III removed the coprocessor-3 loads; the
+			    encoding is a Reserved Instruction there (MIPS IV
+			    Instruction Set rev 3.2, Table A-39; R4000 User's
+			    Manual, Figure A-2).  */
+			ic->f = instr(reserved);
 		} else {
-			if (!cpu->translation_readahead)
-				fatal("TODO: lwc3 not implemented yet\n");
-			goto bad;
+			/*  #580: through MIPS II, LWC3 is a coprocessor-3 load.  No
+			    coprocessor-3 load or store is implemented, so it raises
+			    Coprocessor Unusable with Cause.CE = 3, as the HI6_COP3
+			    arm does when no coprocessor 3 is attached, whatever
+			    Status.CU3 holds, instead of stopping the CPU.  */
+			ic->f = instr(cpu);
+			ic->arg[0] = 3;
 		}
 		break;
 
@@ -5568,11 +5636,14 @@ X(to_be_translated)
 			goto bad;
 		}
 
-		if (!cpu->translation_readahead)
-			fatal("TODO: MDMX\n");
-
-		goto bad;
-		/*  break  */
+		/*  #580: MDMX is not implemented, so the encoding decodes as a
+		    Reserved Instruction (as on a CPU without the MDMX ASE)
+		    instead of stopping the CPU.  The same opcode (0x1e) carries
+		    MSA from Release 5 on; MSA is not implemented either, and on
+		    a CPU without it the encoding is likewise a Reserved
+		    Instruction.  */
+		ic->f = instr(reserved);
+		break;
 
 	case HI6_SQ_SPECIAL3:
 		if (cpu->cd.mips.cpu_type.rev == MIPS_R5900) {

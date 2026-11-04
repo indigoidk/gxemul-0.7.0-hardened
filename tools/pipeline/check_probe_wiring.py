@@ -3364,6 +3364,57 @@ MANIFEST = {
     "artifacts/ppcllscrcexit/f2r_20261104/probe_frozen.py":
         (CLASS_RESEARCH, "#579 F2R repair: regress/ppc_llsc_probe.py frozen for the step-3 measurement (build 83/83, "
                          "/bin/true 14/83, a missing binary 0/83, census 35/35 / 0/35 / 0/35), preserved as evidence"),
+    #  #580 mipsprimundec: MIPS primary opcodes with no working translator arm.  The SHIPPING detector is CLASS_DETECTOR and gated in
+    #  gate_mips_folds.sh (gate 16) in the same commit; its wiring is DERIVED, not asserted here.
+    "mips_primundec_probe.py":
+        (CLASS_DETECTOR, "#580 mipsprimundec: 0x1d JALX, 0x1e MDMX, LWC2/LDC2/SWC2/SDC2 and LWC3/SWC3 no longer stop the emulated "
+                         "CPU -- 122 rows over cold -E testmips sessions (R4400, R3000, R5000, 24KEc, 5KE, R5900, a branch delay "
+                         "slot); gate_mips_folds.sh pins RESULT 122/122 by EQUALITY and every row by name.  Witness "
+                         "artifacts/mipsprimundec/witness_20261104/ (16/80 pre-fix, symptom PRESENT); test-variant table "
+                         "artifacts/mipsprimundec/killtable_20261104/ (29 of 34 red, the five undetected disclosed)."),
+    "artifacts/mipsprimundec/witness_20261104/probe_frozen.py":
+        (CLASS_WITNESS, "#580: the rung-3 witness as run (80 rows, frozen): 16/80 on the pre-fix build with the symptom PRESENT "
+                        "(prefix_build.out), 16/80 on the two dead-binary legs (null.out, nobin.out); ungated by design."),
+    "artifacts/mipsprimundec/draft_20261104/main_table.py":
+        (CLASS_RESEARCH, "#580: the per-word exception table instrument for the draft stage (table_head.out, table_draft.out), "
+                         "preserved as evidence"),
+    "artifacts/mipsprimundec/v3_20261104/main_table_frozen.py":
+        (CLASS_RESEARCH, "#580: the draft-stage table instrument frozen for the v3 measurement, preserved as evidence"),
+    "artifacts/mipsprimundec/v3_20261104/main_table_cpus.py":
+        (CLASS_RESEARCH, "#580: the table instrument widened to further CPUs for the v3 measurement (table_head_cpus.out, "
+                         "table_head_5cpu.out), preserved as evidence"),
+    "artifacts/mipsprimundec/v3_20261104/main_table_v3b.py":
+        (CLASS_RESEARCH, "#580: the table instrument for the v3b alternative put to the adjudicator, preserved as evidence"),
+    "artifacts/mipsprimundec/v3_20261104/apply_v3.py":
+        (CLASS_RESEARCH, "#580: the v3 applier (the main loop's measured draft, 2026-11-04 04:4x), preserved as evidence"),
+    "artifacts/mipsprimundec/v3_20261104/apply_v3b.py":
+        (CLASS_RESEARCH, "#580: the v3b applier (a measured alternative for the adjudicator), preserved as evidence"),
+    "artifacts/mipsprimundec/v3_20261104/probe_frozen.py":
+        (CLASS_RESEARCH, "#580: the 80-row witness frozen for the v3/v3b measurement (probe_v3.out, probe_v3b.out: 80/80), "
+                         "preserved as evidence"),
+    "artifacts/mipsprimundec/impl_20261104/probe_frozen.py":
+        (CLASS_RESEARCH, "#580: the 80-row witness frozen for the implementation measurement (probe_final.out: 80/80), preserved "
+                         "as evidence"),
+    "artifacts/mipsprimundec/killtable_20261104/probe_frozen.py":
+        (CLASS_RESEARCH, "#580: the 121-row detector frozen for test-variant tables 1 and 2 (SCORES.txt, SCORES2.txt), preserved "
+                         "as evidence"),
+    "artifacts/mipsprimundec/killtable_20261104/mpu_variants.py":
+        (CLASS_RESEARCH, "#580: the test-variant builder for table 1 (mpu_variants.py; one exact-string edit per variant in a "
+                         "scratch clone under a .MUTANT sentinel), preserved as evidence"),
+    "artifacts/mipsprimundec/killtable_20261104/mpu_variants2.py":
+        (CLASS_RESEARCH, "#580: the supplement's five variants (D27-D31) the pass 2 named, preserved as evidence"),
+    "artifacts/mipsprimundec/killtable_20261104/d31_20261104/probe122_frozen.py":
+        (CLASS_RESEARCH, "#580: the 122-row detector frozen for the D31 table (base 122/122, D31 121/122, HEAD 29/122, dead legs "
+                         "16/122); its syntax tree equals the shipped probe's (SOURCE_IDENTITY.md), preserved as evidence"),
+    "artifacts/mipsprimundec/landing_20261104/probe_shipped_frozen.py":
+        (CLASS_RESEARCH, "#580: the shipped 122-row detector frozen for the regress review's extra null medium (false.out: 17/122 "
+                         "on /bin/false, CONTROL=FAIL, predicted before the run in PREDICTION_false.md), preserved as evidence"),
+    "artifacts/mipsprimundec/killtable_20261104/d31_20261104/mpu_variants.py":
+        (CLASS_RESEARCH, "#580: table 1's variant builder, frozen beside the D31 driver (mpu_variants2.py imports it), preserved "
+                         "as evidence"),
+    "artifacts/mipsprimundec/killtable_20261104/d31_20261104/mpu_variants2.py":
+        (CLASS_RESEARCH, "#580: the supplement's variant builder, frozen beside the D31 driver (it applied D31), preserved as "
+                         "evidence"),
 }
 
 #  DATED, NAMED DEBT -- not a count and not a silent allowlist.  gate_offline.sh MEASURED that

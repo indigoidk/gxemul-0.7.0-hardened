@@ -1,0 +1,72 @@
+PRETABLE -- mipsprimundec detector (regress/mips_primundec_probe.py, 121 rows), written BEFORE table 1 (2026-11-04, the main loop)
+Baseline: the round's post-fix working set, GXEMUL-SEC/src/cpus/cpu_mips_instr.c (v3 + v3b + C2), copied beside this file as
+cpu_mips_instr.c.base and cmp'd against the clone before variant 1.  Fixed build 121/121; HEAD (pre-fix) 28/121 (detector121_*.out).
+
+1. SIBLING PARITY (the six edited arms; channels: stop, exc, epc, pc; plus Cause.BD in a delay slot; per translator)
+   LWC2/SWC2  64-bit R4400 | MODE32 R3000, 24KEc | delay slot: 64 dsc        -- all channels rowed
+   LDC2/SDC2  64-bit R4400 | MODE32 R3000 (RI), 24KEc (CpU)                  -- no delay-slot row: the CpU raise is X(cpu), the same
+                                                                                handler 64 dsc reaches; owed nothing new
+   SWC3       64-bit R4400, R5000, 5KE | MODE32 R3000 (CpU), 24KEc (RI)      -- rowed both translators, both dispositions
+   0x1d       64-bit R4400 | MODE32 R3000 | delay slot: 64 ds                -- rowed
+   LWC3       64-bit R4400 (RI), R5000/5KE (PREF) | MODE32 R3000 (CpU), 24KEc (PREF)
+              ASYMMETRY: the ISA III RI arm has no MODE32 row -- N/A: no ISA III CPU is built with the MODE32 translator.
+   LQ_MDMX    64-bit R4400 | MODE32 R3000                                    -- the R5900 branch is untouched and disclosed
+   ISA II: no row on any arm -- no ISA II CPU constructs on testmips (disclosed in the probe's contract).
+
+2. CLAIM -> ROW (each added comment sentence asserting an observable consequence)
+   LWC2/SWC2 "the architectural result is Coprocessor Unusable (Cause.CE = 2)"     -> 64/32/24k lwc2,swc2 exc
+             "Before this they fell to default: goto bad, which stopped ... from any privilege level" -> HEAD history; the witness
+             (detector121_head.out, 93 red) is its row in kernel mode; user mode is disclosed, not claimed
+   LDC2/SDC2 "below that the encoding is reserved"                                -> 32 ldc2,sdc2 exc (10/0)
+   SWC3      "raises Coprocessor Unusable with CE = 3 whatever Status.CU3 holds"   -> 32 swc3 exc; CU3 = 1 is the contract's explicit
+             no-row sentence ("Status.CU2 = 1 and CU3 = 1 ... not claimed")
+             "from ISA III on it is a Reserved Instruction"                         -> 64, r5k, 24k, 5ke swc3 exc
+             "Neither stops the CPU"                                                -> 64/32 swc3 stop
+   0x1d      "it is a Reserved Instruction here ..., not a stopped CPU"             -> 64/32 jalx exc, stop; 64 ds
+   LWC3      "the encoding is a Reserved Instruction there" (ISA III)              -> 64 lwc3 exc
+             "raises Coprocessor Unusable with Cause.CE = 3 ... instead of stopping the CPU" (ISA <= II) -> 32 lwc3 exc, stop
+   LQ_MDMX   "decodes as a Reserved Instruction ... instead of stopping the CPU"    -> 64/32 mdmx exc, stop
+
+3. GUARD FIELD vs BODY FIELD, and the partition the body induces on each lvalue
+   guards read: cpu_type.isa_level (LDC2/SDC2 `< 2`; SWC3 `>= 3`; LWC3 `>= 4`, `== 3`), cpu_type.rev (LQ_MDMX `== MIPS_R5900`),
+   x64 (the MODE32 tail, after the switch).  bodies write ic->f and ic->arg[0]; X(cpu) reads arg[0] (Cause.CE); X(reserved) none.
+   isa_level partition: {1, 2, 3, 4, 32, 64}; rowed 1 (R3000), 3 (R4400), 4 (R5000), 32 (24KEc), 64 (5KE) -- SAMPLED, the ISA II
+   slice unrowed and disclosed.  Rule-D2 edges: `< 2` pinned at 1, its edge 2 unrowed (D01 predicted to pass: disclosed); `>= 3`
+   pinned at 3 (D08), edge 2 unrowed (D11, disclosed); `>= 4` pinned at both edges 3 (D15) and 4 (D16); `== 3` at 3 and 4.
+   rev: {R5900, other} -- R5900 unrowed (every R5900 behaviour disclosed).  arg[0]: {2, 3} -- read by every CpU exc row (D06, D07,
+   D13, D18).  x64: {0, 1} on MODE32 -- the 24KEc and R3000 rows hold 0; D23/D24 set it.
+   Guard field and body field differ (isa_level/rev vs arg[0]/ic->f) but are written at the SAME site (one decode), so no
+   disagreeing-state row is owed.
+
+4. CHANNEL (each variant, the rows predicted red, the observable that differs) -- below; measured next to it in SCORES.txt.
+   exc rows read ExcCode/CE from `reg ,0`; stop rows read the debugger's "UNIMPLEMENTED instruction" text; epc/pc rows read
+   EPC and PC; bd rows read Cause.BD.  A stopped CPU leaves EPC/Cause untouched, so a (b) variant reds all four of its rows.
+   B1_lwc2swc2_del    (b) the LWC2/SWC2 case removed: both fall to default: goto red: 64/32/24k lwc2+swc2 stop|exc|epc|pc, 64 dsc *
+   B2_ldc2sdc2_del    (b) the LDC2/SDC2 case removed (HEAD)                      red: 64/32/24k ldc2+sdc2 *
+   B3_swc3_del        (b) the SWC3 case removed (HEAD)                           red: 64/32/r5k/24k/5ke swc3 *
+   B4_jalx_del        (b) the 0x1d case removed (HEAD)                           red: 64/32 jalx *, 64 ds *
+   B5_lwc3_head       (b) HEAD's LWC3 block verbatim (fatal TODO + goto bad belo red: 64/32 lwc3 *
+   B6_mdmx_head       (b) HEAD's LQ_MDMX block verbatim (fatal TODO: MDMX + goto red: 64/32 mdmx *
+   D01_ldc2_le2       (d) LDC2/SDC2 gate `< 2` -> `<= 2` (edge B+1 = 2)          red: NONE -- the ISA II cell (no ISA II CPU constructs on testmips; disclosed)
+   D03_ldc2_lt4       (d) LDC2/SDC2 gate widened `< 4` (R4400 RI, not CpU)       red: 64 ldc2+sdc2 exc
+   D04_ldc2_ge2       (d) LDC2/SDC2 gate inverted                                red: 64/32/24k ldc2+sdc2 exc
+   D05_ldc2_nogate    (d) LDC2/SDC2 gate dropped (CpU at ISA I)                  red: 32 ldc2+sdc2 exc
+   D06_ldc2_ce3       (d) arg[0] 2 -> 3 on the LDC2/SDC2 CpU arm                 red: 64/24k ldc2+sdc2 exc
+   D07_lwc2_ce3       (d) arg[0] 2 -> 3 on the LWC2/SWC2 arm                     red: 64/32/24k lwc2+swc2 exc, 64 dsc exc
+   D08_swc3_ge4       (d) SWC3 gate `>= 3` -> `>= 4` (edge: ISA III)             red: 64 swc3 exc
+   D09_swc3_gt4       (d) SWC3 gate `> 4`                                        red: 64 swc3 exc, r5k swc3 exc
+   D10_swc3_eq3       (d) SWC3 gate `== 3`                                       red: r5k/24k/5ke swc3 exc
+   D11_swc3_ge2       (d) SWC3 gate `>= 2` (edge B-1 = 2)                        red: NONE -- the ISA II cell (disclosed)
+   D12_swc3_ge1       (d) SWC3 gate `>= 1` (RI at ISA I)                         red: 32 swc3 exc
+   D13_swc3_ce2       (d) arg[0] 3 -> 2 on the SWC3 CpU arm                      red: 32 swc3 exc
+   D14_lwc3_le3       (d) LWC3 ISA III arm `== 3` -> `<= 3` (RI at ISA I)        red: 32 lwc3 exc
+   D15_pref_ge3       (d) PREF gate `>= 4` -> `>= 3` (eats ISA III; edge B-1 = 3 red: 64 lwc3 exc|epc|pc
+   D16_pref_ge5       (d) PREF gate `>= 4` -> `>= 5` (edge B+1: ISA IV to CpU CE red: r5k lwc3 exc|epc|pc
+   D18_lwc3_ce2       (d) arg[0] 3 -> 2 on the LWC3 CpU arm                      red: 32 lwc3 exc
+   D19_r5900_inv      (d) the MDMX arm's R5900 test inverted                     red: 64/32 mdmx *
+   D22a_jalx_nosync   (contract) jalx through an RI handler with no PC sync      red: 64 ds epc and/or bd (the contract's claim; MEASURE)
+   D22b_lwc2_nosync   (contract) LWC2/SWC2 through a CpU handler with no PC sync red: 64 dsc epc and/or bd (the contract's claim; MEASURE)
+   D23_ldc2_x64       (contract) x64 set on the LDC2/SDC2 CpU arm: the MODE32 ta red: 24k ldc2+sdc2 exc
+   D24_lwc2_x64       (contract) x64 set on the LWC2/SWC2 arm (MODE32 rows only) red: 32/24k lwc2+swc2 exc
+   D25_swc2_label     (d) the SWC2 label alone dropped                           red: 64/32/24k swc2 *
+   D26_sdc2_label     (d) the SDC2 label alone dropped                           red: 64/32/24k sdc2 *

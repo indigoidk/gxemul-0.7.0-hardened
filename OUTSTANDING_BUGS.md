@@ -37,7 +37,9 @@
 > 5. `m88kbuserrregs` (MED, FIXED by `#570` on 2026-10-24, held for Fable) -- 88K bus errors carry no PFSR/PFAR; the carrier of the reopened PFAR item.  T36;
 >    ~~before any 88K fault round~~ -- shipped: the refused-device arm writes PFSR/PFAR on the faulting CMMU and the LUNA probe address faults through it, with a 31-row rung-3 detector in gate 14; see the 2026-10-24 section at the end.
 > 6. `ppccrandcorc` (MED, new) -- crandc/crorc compute NAND/NOR.  T18.
-> 7. `mipsprimundec` (MED, new) -- MIPS primary opcodes with no case stop the CPU, from user mode.  T120.
+> 7. `mipsprimundec` (MED, FIXED by `#580` on 2026-11-04, closed) -- MIPS primary opcodes with no case stop the CPU,
+>    from user mode.  T120; shipped: each word raises Reserved Instruction or Coprocessor Unusable per CPU level as ruled,
+>    with a 122-row rung-3 detector in gate 16.
 > 8. `mvme187memcoob` (MED) -- the MEMC host over-read: the bounds repair first, then the dev_mvme187.c exits that
 >    `exitunowned76` carries.  T7.
 > 9. `vr41xx1kpage` (HIGH, new) -- VR41xx 1 KB-page TLB writes exit the host at two sites.  T11; design owed.
@@ -25604,6 +25606,7 @@ are in its ledger `state_note`.
   `default: goto bad`, which clears cpu->running -- CPU-STOP (any privilege, every MIPS machine incl. the pmax/arc
   rigs).  TRIAGE.md T120; report rows A3-13, A7-3, A6 note A2, A(c)#2; port: yes (klx3300 366d5cc, jroark 3c3d5cb).
   Batch 7 of 10.
+**[`#580`, 2026-11-04: FIXED -- witness 16/80 -> 80/80 on the committed build, the 122-row detector in gate 16; the ruling of record, pass 2, its adjudication with the D31 follow-up, and the regress review complete.  See the `#580` section at the end of this file.]**
 * **`m88kcarryundec` (MED, open)** -- new.  cpus/cpu_m88k_instr.c register-form decode -- triadic opcodes 0x71-0x77
   (add.ci/.co/.cio, signed sub with overflow trap, sub.ci/.co/.cio) have no case and reach `goto bad` -- CPU-STOP (any
   privilege; includes the manual's `sub.co r0,r0,r0` idiom).  TRIAGE.md T121; report rows A1-57, A7-25, A(c)#9, C U7;
@@ -26509,3 +26512,8 @@ src/devices/dev_dec5800.c:359-367 at 987cb596: The DEC 5800 CPU-mask registers a
 * **FIXED** -- `ppcllscrcexit` (HIGH): `src/cpus/cpu_ppc_instr.c`, `X(llsc)` ended the process -- `fatal()` + `exit(1)` -- on lwarx/ldarx with bit 31 set and on stwcx./stdcx. with it clear, both delivered by an opcode-31 decoder that keys on the extended opcode alone.  The two guards are DELETED and the unread `rc` dropped: the load pair's bit 31 is a reserved field the processor ignores (Book I v2.01 :432-433, Book II :1264), so the word runs the one body and writes no CR bit; the store pair's bit-clear word is an invalid form, and executing the defined store-conditional, CR0 update included, is one of its permitted outcomes (Book I :1116-1120, Book II :1305/:1307).  Witness (rung 3, unmodified `-E bareppc -M 64`, a `-C PPC603` leg): `regress/artifacts/ppcllscrcexit/witness_20261103/` 44/73 on the committed build -> 73/73, same script.  Detector: `regress/ppc_llsc_probe.py`, 83 rows, gate 13; test-variant table 4 (`killtable_20261103/table4/`) red on every variant but the disclosed M20.  Rulings: pass 1 `adj_20261103/FABLE_ADJ.md`; F2 `MYTHOS_F2R.md`; closing `MYTHOS_F2P2R.md` (chain closed, SHIP); regress `FABLE_REGRESS.md` (0 floor breaches, R1-R6 applied).  See the `#579` round block in CHANGELOG.md.
 * **Landed** as `dc35d1be` (2026-11-04); the records commit after it names it.
 * **Filed, new (all LOW):** `ppcllsc216text` (the #216 comments' "raised a DSI"; the #216 returns' missing detecting variant; the upstream CR0 comment's "copied to to bit 4", from five out-of-roster pass-1 answers read at landing), `ppcexcsrr1mask` (ppc_exception's SRR1 mask and missing cause bits), `ppcllscrealaddr` (the reservation keyed on the effective address), `ppcmode32gprhi` (MODE32 reg() on a big-endian host), `gate13deadlegs` (gate 13's dead-binary legs, D2) and `ppcllscprobeext` (four detector extensions the regress review filed).  The 32-bit ldarx/stdcx. delivery is noted on the existing `ppc64on32gate` (#571's disclosure), as the F2 ruling directs.  The unsynchronised PC and stale SRR0 stay on the existing row `ppcllscsrr0`.
+
+## 2026-11-04 -- `#580` mipsprimundec: eight MIPS primary opcodes no longer stop the emulated CPU
+
+* **FIXED** -- `mipsprimundec` (MED): `src/cpus/cpu_mips_instr.c`, `X(to_be_translated)`: 0x1d (JALX), 0x1e off the R5900 (MDMX), LWC2/LDC2/SWC2/SDC2 and LWC3/SWC3 fell to `goto bad` and stopped the CPU.  Each now raises Reserved Instruction or Coprocessor Unusable per CPU level as cloud Fable's ruling of record ordered (`regress/artifacts/mipsprimundec/adj_20261104/FABLE_FINAL.md`, R1-R11; the R5900's 0x1e untouched, R3).  Witness (rung 3, unmodified `-E testmips`): 16/80 -> 80/80.  Detector: `regress/mips_primundec_probe.py`, 122 rows, gate 16 (HEAD 29/122, fix 122/122); test-variant tables 29 of 34 red, the five undetected disclosed.  See the `#580` round block in CHANGELOG.md.
+* **Filed, new (all LOW):** `mipscpuconstruct` (the R6000, Allegrex and VR5432 exit 1 at construction on testmips), `mpuprobetmpdir` (the probe's mkdtemp directory is never removed), `mpupcsyncrow` (a free-running PC-sync row in cloud Fable's shape).  The ruling of record's filings (a) and (b) ride `mipsr5900lqsq` and `mipscop3pmaxstop`; the #309 comment gap rides `mipssynci`.

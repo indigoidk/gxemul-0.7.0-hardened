@@ -1,0 +1,64 @@
+--- /mnt/c/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips_instr.c	2026-08-12 15:16:31.677952700 -0500
++++ src/cpus/cpu_mips_instr.c	2026-11-04 02:14:41.812607265 -0600
+@@ -5549,15 +5549,50 @@
+ 		}
+ 		break;
+ 
++	case HI6_LWC2:
++	case HI6_LDC2:
++	case HI6_SWC2:
++	case HI6_SDC2:
++		/*  #NNN: coprocessor-2 loads and stores.  No COP2 is modelled on
++		    any emulated MIPS, so the architectural result is Coprocessor
++		    Unusable (Cause.CE = 2), as X(cpu) already raises for COP1
++		    (#236).  Before this they fell to default: goto bad, which
++		    stopped the emulated CPU from any privilege level.  */
++		ic->f = instr(cpu);
++		ic->arg[0] = 2;
++		break;
++
++	case HI6_SWC3:
++		/*  #NNN: SWC3 is a coprocessor-3 store on ISA I-III (CpU, CE = 3)
++		    and a reserved encoding from ISA IV on (Reserved Instruction);
++		    neither stops the CPU.  */
++		if (cpu->cd.mips.cpu_type.isa_level >= 4) {
++			ic->f = instr(reserved);
++		} else {
++			ic->f = instr(cpu);
++			ic->arg[0] = 3;
++		}
++		break;
++
++	case 0x1d:
++		/*  #NNN: JALX exists only with MIPS16e, which this tree does not
++		    model; the encoding is a Reserved Instruction here (#309's
++		    REGIMM precedent), not a stopped CPU.  */
++		ic->f = instr(reserved);
++		break;
++
+ 	case HI6_LWC3:
+ 		/*  PREF (prefetch) on ISA IV and MIPS32/64:  */
+ 		if (cpu->cd.mips.cpu_type.isa_level >= 4) {
+ 			/*  Treat as nop for now:  */
+ 			ic->f = instr(nop);
+ 		} else {
+-			if (!cpu->translation_readahead)
+-				fatal("TODO: lwc3 not implemented yet\n");
+-			goto bad;
++			/*  #NNN: LWC3 on ISA I-III is a coprocessor-3 load and no
++			    COP3 is modelled: the architectural result is Coprocessor
++			    Unusable with Cause.CE = 3 (the #236 idiom), not a stopped
++			    CPU.  */
++			ic->f = instr(cpu);
++			ic->arg[0] = 3;
+ 		}
+ 		break;
+ 
+@@ -5597,7 +5632,6 @@
+ 		}
+ 
+ 		switch (s6) {
+-
+ 		case SPECIAL3_EXT:
+ 			{
+ 				int msbd = rd, lsb = (iword >> 6) & 0x1f;

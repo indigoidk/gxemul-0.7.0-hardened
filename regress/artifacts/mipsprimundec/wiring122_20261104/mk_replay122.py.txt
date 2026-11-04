@@ -1,0 +1,46 @@
+#!/usr/bin/env python3
+"""mk_replay122.py <gate_mips_folds.sh> <base122 log> <outdir> -- cloud Fable's P16 (adj_20261104/ADJ_P2_FABLE.md): gate 16's
+mips_primundec block, extracted VERBATIM from the gate (the 122-row form) but for two marked lines, replayed on recorded logs; plus
+the four synthetic logs P16 names, each built from the fixed build's 122-row log and each of which must red:
+  syn_truncated.out    the log cut before its RESULT line (a killed run)
+  syn_dupsentinel.out  the sentinel printed twice
+  syn_aftersentinel.out  a stray line after the sentinel
+  syn_rc1.out          a clean log whose probe exit was 1 (the replay reads <log>.rc for the exit status; the gate takes it from
+                       the launch)
+Writes <outdir>/gate16_replay122.sh and the four logs (+ syn_rc1.out.rc)."""
+import io
+import os
+import sys
+
+gate, base, out = sys.argv[1:4]
+NL = "\n"
+g = io.open(gate, encoding="utf-8").read().replace("\r\n", NL).split(NL)
+i = next(k for k, x in enumerate(g) if x.startswith(("#  #NNN mipsprimundec:", "#  #580 mipsprimundec:")))
+j = next(k for k in range(i, len(g)) if g[k] == "fi")
+blk = g[i:j + 1]
+L1 = [k for k, x in enumerate(blk) if x == "MPULOG=$LOGDIR/mips_primundec_probe.log"]
+L2 = [k for k, x in enumerate(blk) if x.startswith("python3 -u mips_primundec_probe.py ")]
+assert len(L1) == 1 and len(L2) == 1, (L1, L2)
+blk[L1[0]] = 'MPULOG="$REPLAY_LOG"   # replay: the log under test'
+blk[L2[0]] = 'mpurc=$(cat "$REPLAY_LOG.rc" 2>/dev/null || echo 0)   # replay: the launch is replaced by the log and its recorded exit'
+head = ["#!/bin/bash",
+        "# gate16_replay122.sh <log>... -- gate 16's mips_primundec block (122-row form; verbatim from gate_mips_folds.sh but for the",
+        "# two lines marked `replay:`) on recorded logs.  P16 of cloud Fable's pass-2 adjudication: the synthetic logs must red.",
+        'check() { if [ "$2" = "$3" ]; then P=$((P+1)); else F=$((F+1)); fi; }',
+        "note() { :; }",
+        'for REPLAY_LOG in "$@"; do P=0; F=0']
+tail = ["printf '%-34s %3d pass %3d fail  %s\\n' \"$(basename $REPLAY_LOG)\" $P $F \"$([ $F = 0 ] && echo GREEN || echo RED)\"",
+        "done"]
+os.makedirs(out, exist_ok=True)
+io.open(out + "/gate16_replay122.sh", "w", encoding="utf-8", newline=NL).write(NL.join(head + blk + tail) + NL)
+
+b = io.open(base, encoding="utf-8", errors="replace").read().replace("\r\n", NL).rstrip(NL).split(NL)
+assert b[-1] == "MIPS_PRIMUNDEC_PROBE_DONE" and sum(1 for x in b if x.startswith("MIPS_PRIMUNDEC_RESULT=")) == 1, "base log incomplete"
+r = next(k for k, x in enumerate(b) if x.startswith("MIPS_PRIMUNDEC_RESULT="))
+w = lambda n, L: io.open(out + "/" + n, "w", encoding="utf-8", newline=NL).write(NL.join(L) + NL)
+w("syn_truncated.out", b[:r])
+w("syn_dupsentinel.out", b + ["MIPS_PRIMUNDEC_PROBE_DONE"])
+w("syn_aftersentinel.out", b + ["stray output after the sentinel"])
+w("syn_rc1.out", b)
+io.open(out + "/syn_rc1.out.rc", "w", encoding="utf-8", newline=NL).write("1" + NL)
+print("replay script + 4 synthetic logs written to", out)

@@ -1,3 +1,92 @@
+# `#580` (2026-11-04) -- `mipsprimundec`: eight MIPS primary opcodes with no working translator arm now raise Reserved Instruction or Coprocessor Unusable instead of stopping the emulated CPU
+
+**The defect.**  `src/cpus/cpu_mips_instr.c`, `X(to_be_translated)`: the primary-opcode switch had no case for 0x1d (JALX), 0x32 (LWC2),
+0x36 (LDC2), 0x3a (SWC2), 0x3b (SWC3) and 0x3e (SDC2), so those words fell to `default: goto bad`; the 0x1e arm off the R5900 (MDMX) and the
+0x33 arm below ISA IV (LWC3) printed a TODO and also went to `bad`.  `bad:` stops the emulated CPU ("UNIMPLEMENTED instruction") -- one
+guest word, no privilege test, no exception delivered.  Filed 2026-10-22 from the external-fixes research (`regress/artifacts/
+research_20261022/TRIAGE.md` row T120, class CPU-STOP, reach U; external-research batch 7 of 10).
+
+**The ruling of record** (cloud Fable 5.1, `regress/artifacts/mipsprimundec/adj_20261104/FABLE_FINAL.md`: 11 rulings, 2 changes, 24
+rows, GO-WITH-CHANGES): adopt the main loop's measured v3 (`v3_20261104/MEASURED.md`: the draft plus the share-findings consensus) plus the
+v3b alternative (Reserved Instruction for LWC3/SWC3 on ISA III) plus one comment amendment on 0x1d.  Per word and level: R1 JALX RI
+everywhere; R2 0x1e off the R5900 RI; R3 the R5900's 0x1e (LQ, a real EE instruction this tree does not implement) NOT changed -- it still
+stops, outside this fix (row `mipsr5900lqsq`); R4 LWC2/SWC2 Coprocessor Unusable with CE = 2 everywhere; R5 LDC2/SDC2 RI on ISA I; R6 CpU
+CE = 2 from ISA II; R7 LWC3 CpU CE = 3 on ISA I and II; R8 RI on ISA III; R9 PREF on ISA IV, MIPS32 and MIPS64, unchanged from HEAD; R10
+SWC3 CpU CE = 3 on ISA I and II (the follow-up `FABLE_U1.md`: R10 STANDS); R11 SWC3 RI from ISA III.  A same-model replication
+(`FABLE_FINAL_r2.md`: 12 rulings, GO-WITH-CHANGES) is banked beside it.
+
+**The fix.**  In `X(to_be_translated)`'s primary switch: LWC2/SWC2 -> `instr(cpu)` with `arg[0] = 2`; LDC2/SDC2 -> `instr(reserved)` below
+ISA II, else `instr(cpu)` with 2; SWC3 -> `instr(reserved)` from ISA III, else `instr(cpu)` with 3; 0x1d -> `instr(reserved)`; LWC3 keeps its
+PREF arm for ISA IV and up, gains `else if (isa_level == 3)` -> `instr(reserved)`, and below that `instr(cpu)` with 3 replaces the TODO and
+`goto bad`; 0x1e off the R5900 -> `instr(reserved)` replaces the TODO and `goto bad`.  Every arm carries a `#580` comment in the
+adjudication's final words (below).  Byte-identical in est/; propagated to and rebuilt in the three build trees (two-part clearance
+`CLEAR` on each: `build/`, `build-asan/`, `/tmp/gxsec-build`; zero compiler warnings).
+
+**Witness (rung 3).**  `regress/artifacts/mipsprimundec/witness_20261104/`: the 80-row probe on unmodified `-E testmips` (each word placed
+with `put w` and stepped once on an R4400 and an R3000): 16/80 on the pre-fix build with the symptom PRESENT (`witness_20261104/prefix_build.out`), 80/80 on
+the fix (`impl_20261104/probe_final.out`); 16/80 on both dead-binary legs (`witness_20261104/null.out`, `witness_20261104/nobin.out`).
+
+**Detector.**  `regress/mips_primundec_probe.py`, 122 rows over cold `-E testmips` sessions -- the R4400 (ISA III, the 64-bit translator)
+and the R3000 (ISA I, the MODE32 translator) for all eight words, the R5000, 24KEc and 5KE for the coprocessor words, a jalx and an lwc2 in
+a branch delay slot, and one R5900 row -- each `exc` row wanting the EXACT ExcCode and CE.  Wired into `regress/gate_mips_folds.sh` (gate
+16): RESULT pinned 122/122 by equality, every row by name, CONTROL=OK and SYMPTOM=ABSENT required, and the denominator pinned unquoted
+(`mips_primundec rows run` 122, with `rows green` 122 and `rows red` 0) in the form `check_score_claims.py` reads;
+`tools/precommit_check.sh` SCORE_CLAIMS_MANIFEST 44 -> 45; `tools/pipeline/check_probe_wiring.py` MANIFEST entries for the probe and
+every artifact script.  HEAD 29/122 (the 121-row instrument: 28/121), the fix 122/122, `/bin/true` and an absent binary 16/122 with
+CONTROL=FAIL (`killtable_20261104/d31_20261104/SCORES_D31.txt`), and `/bin/false` 17/122 with CONTROL=FAIL -- the neg row
+green too, as the regress review predicted (`landing_20261104/false.out`).  Gate 16 alone on the fixed build: PASS 293
+(`wiring122_20261104/gate16.out`; again on the final bytes, `landing_20261104/gate16_final.out`).
+
+**Test-variant tables** (`regress/artifacts/mipsprimundec/killtable_20261104/TABLE.md`; WSL scratch clones of `build/`, clone-local
+`.MUTANT` sentinels cleared only after a `cmp`-verified, rebuilt restore; a PRETABLE written before each run): table 1, 29 variants, 25 red;
+the supplement, the five the pass 2 named (D27-D31), 3 red; and the D31 row (cloud Fable's follow-up, below), red.  **29 of 34 red.**
+Undetected and disclosed in the probe's contract: D01, D11 and D30 (the ISA II cells -- the R6000 and Allegrex exit 1 before the prompt on
+testmips, `isa2_*.out`) and D22a/D22b (an exception raised without the PC sync: a single-stepped word's PC is already in sync, so the sync is
+invisible to this probe).  **Floor**: (a) 28/121 and 29/122 on the pre-fix build; (b) B1-B6 reinstate each removed defect verbatim at its
+site, all red; (c) 16/122 on `/bin/true` and on an absent binary, 17/122 on `/bin/false`, CONTROL=FAIL on all three; (d) every DEPENDS-ON variant red but the disclosed ISA II
+edges.  CHANNEL predictions checked mechanically: 26 of 27 matched; B1 named two rows the probe does not have.
+
+**Pass 2** on the real diff and the 121-row detector (`_scratchpad/panel_20261104_182430_p2_mipsprimundec/`;
+`adj_20261104/P2_FABLE.md`, `P2_OPUS.md`): cloud Fable 5.1 (95 checked, 3 false, 4 floor gaps), cloud Opus 5.5 (171 / 4 / 4), Grok 4.7
+(65 / 3 / 0), GLM 5.3 (61 / 2 / 2) -- all four REPAIR-NEEDED, text only (the code ships as it stands), and all four ruled D22 DISCLOSE.
+GPT-6 Astra was walled until 2026-11-09 and Gemini 4 Argon's pass-2 packet failed three times on the web app's generic error: two seat
+failures, recorded by name, never agreement.
+
+**The adjudication** (cloud Fable 5.1, `adj_20261104/ADJ_P2_FABLE.md`: 23 rulings, 16 text changes, 2 filed, APPLY-WITH-CHANGES; it named
+five of the main loop's proposals wrong as proposed -- P1, P4, P6, P12, P19 -- and supplied their final texts).  Applied: the product comments
+P1-P6 (comment text only -- the file with comments stripped equals the measured base); the docstring P8-P14 and the absent-binary comment
+P12; gate 16's comment P15 and P17; P16's synthetic replay, extracted verbatim from the gate but for two marked lines, on which a truncated
+log, a doubled sentinel, a line after the sentinel and a nonzero probe exit each red for their own reason
+(`wiring122_20261104/GATE16_REPLAY122.out`); P19's identity record (`killtable_20261104/SOURCE_IDENTITY.md`: the shipped probe's syntax tree
+equals the measured 122-row copy's, and minus the D31 block equals the 121-row copy's); P20's annotations (`adj_20261104/ANNOTATIONS.md`).
+**The adjudication packet carried a false premise of mine** -- that the R5900 has no constructible session on testmips (measured only for
+the two ISA II CPUs).  Measured before applying: `-E testmips -C R5900` constructs, and 0x1e there stops with "UNIMPLEMENTED instruction".
+Cloud Fable's follow-up on the corrected premise (`adj_20261104/ADJ2_D31_FABLE.md`): D31 ROW-OWED, in a form that does not pin the stop,
+HOLD until measured.  The row `r59 mdmx notRI` (`-C R5900`, 0x1e: exit 0, the cause line read, ExcCode not 10) measured as predicted
+(`killtable_20261104/d31_20261104/PRETABLE_D31.out` before the run): D31 121/122 with only that row red, the fix 122/122, HEAD 29/122 (the row green -- HEAD's arm already
+sent the R5900 to its LQ branch).  `killtable_20261104/TABLE.md` corrected in place, quoting the two sentences it refutes.
+
+**Landing edits, none changing code**: `#NNN` -> `#580`; the DETECTOR paragraph's ExcCode/CE pairs reworded into words, since
+`check_score_claims.py` reads "10/0" as a score claim; gate 16's three denominator checks; the MANIFEST entries; the regress review's two
+docstring corrections (below).  **The citation gate cannot select this block**: `check_cited_artifacts.py` keys on `## Round <digits>` headings,
+which this file's newer blocks, this one included, do not use (`citeprefixblind`, filed by `#554`).  Its own resolver, run over
+the block by hand at landing, resolves all 13 citations inside this round's artifacts -- after four bare ones were stamped with
+their directories: the bare citation of the witness's null leg had resolved, by walk order, to another round's file of the same name.
+
+**Seats.**  Every answer is recorded on the row, one entry each, read whole before it was written (the out-of-roster answers by an Opus digest agent at the landing, the rest when they landed).  Pass 1 (research): agy 27, codex 6, deepseek 6, fable5 3, glm 8, grok 8, kimi 6, minimax 2, opus5 4 entries -- the six 2026-11-03 stage panels (`_scratchpad/panel_20261103_103048_next5_mipsprimundec/`, `panel_20261103_103050_next5_mipsprimundec_draft/`, `panel_20261103_111231_next5_mipsprimundec_manual/`, `panel_20261103_111232_next5_mipsprimundec_siblings/`, `panel_20261103_111233_next5_mipsprimundec_witness/`, `panel_20261103_111234_next5_mipsprimundec_port/`), the witness share-findings and v3-review panels (`_scratchpad/panel_20261104_014913_wsf_mipsprimundec/`, `_scratchpad/panel_20261104_044334_v3r_mipsprimundec/`), the Gemini web (Argon) jobs under `_scratchpad/gweb/jobs_20261102_next5/` and `jobs_20261103_adj/`, the 02:0x Opus batch (`_scratchpad/opus_20261104/`) and the cloud Fable rulings.  The agy CLI, deepseek, kimi-k3 and minimax answered the 2026-11-03 panels before the owner's noon roster ruling; they were weighed in no ruling and are recorded as answered outside that roster.  Pass 2 (review): agy 5, codex 1, deepseek 1, fable5 3, glm 1, grok 1, kimi 1, minimax 1, opus5 1 entries (`_scratchpad/panel_20261104_182430_p2_mipsprimundec/`, the cloud answers in `adj_20261104/`); GPT-6 Astra walled until 2026-11-09 and Argon's three failed tries are seat failures, and kimi, deepseek and minimax were not fired under the 11-04 roster, each recorded by name.  The Claude seats ran as Claude Code Cloud routines (owner, 2026-11-04).
+
+**The regress review** (Fable-only; cloud Fable 5.1, `adj_20261104/FABLE_REGRESS.md`): 26 checks, 0 floor breaches, 2 record findings, REGRESS-WITH-FINDINGS.  Both record findings (L4, the probe's catches clause: D15 reds the 64 lwc3 exc, epc and pc rows, not "the 64 lwc3 rows"; D16 and D24, both measured red, were missing) are applied in its words, docstring only -- the docstring-stripped syntax tree is unchanged (`killtable_20261104/SOURCE_IDENTITY.md`, regenerated).  Its two UNSETTLED items were settled by measurement: the shipped probe against the measured 122-row copy is P19's identity record, which its packet lacked; and gate 16's totals reconcile -- 289 with the 121-row probe and 293 with the 122-row probe plus the three denominator checks, the other 161 checks identical in both runs (the packet had put the 293 beside the 80-row witness).  A fresh in-situ gate 16 run on the final bytes: PASS 293 (`landing_20261104/gate16_final.out`).  Its extra null medium, `/bin/false`, was measured rather than filed: 17/122, CONTROL=FAIL, as predicted before the run (`landing_20261104/false.out`); `killtable_20261104/TABLE.md` records all of it.  A second lens on the same packet, Gemini 4 Argon (recorded under review, the stage being Fable-only), also returned REGRESS-WITH-FINDINGS; both of its BROKEN claims fall to the packet's own text -- the PC-sync variants sit under the docstring's 'discloses, not claimed' heading, and '29 of 34' counts D31 red through the 122-row probe's R5900 row.
+
+**Assessed, not changed.**  Seven pass-1 answers in the port stage asked for a once-only notice on the new arms, as #309's REGIMM default has.  #309 latches its warning because it reports a DEFICIENCY of the emulator, a defined opcode nobody implemented (#279); #580's arms deliver the architectural result on every modelled CPU (Reserved Instruction where the encoding is reserved, Coprocessor Unusable where no coprocessor is present), so there is no deficiency to announce, and no ruling ordered one.  The R3000 sessions plant at the 64-bit address and pass because the address is truncated (GLM, share-findings); were that to change, the R3000 controls would red, so it cannot pass silently.  The VR5432 does not construct on testmips either (measured at landing, `killtable_20261104/vr5432_construct.out`); its ISA IV cells are the R5000 session's, so the detector loses no cell.  The Opus answers the rulings consumed are banked at `adj_20261104/opus/` (two of them only from their transcripts: they had been summarised and never saved).  The adjudication's P7 (whether pmax attaches a coprocessor-3 object: "No coprocessor-3 load or store is
+implemented" is true either way), P18 (the variant numbering gaps, recorded in `TABLE.md`) and P22 (superseded by P1).  The ruling of
+record's filing (d), the witness's loose `exc` rows that accept 10 or 11, is discharged by the detector, whose `exc` rows want the exact
+ExcCode and CE.
+
+**Filed, not fixed here.**  From the adjudication: P21, the probe's `mkdtemp` directory is never removed (`mpuprobetmpdir`); D, a
+free-running PC-sync row in the shape cloud Fable named -- a breakpoint at the vector reusing the exc/epc/pc reader, admitted only if its
+four-part prediction holds (`mpupcsyncrow`).  From the ruling of record: (c) the ISA II CPUs fail to construct on testmips -- with the
+VR5432 (`mipscpuconstruct`, all three measured); (a) and (b) ride the existing rows `mipsr5900lqsq` and `mipscop3pmaxstop`.
+
 # `#579` Records (follow-up, 2026-11-04): `ppcllscrcexit` names its landing commit `dc35d1be`; the committed-tree proofs; the pass-2 receipt
 
 `git ls-tree dc35d1be`, md5s hashed in Python from the committed bytes: `src/cpus/cpu_ppc_instr.c` blob `8797a48c3110`, md5 `29963c800505`; `regress/ppc_llsc_probe.py` blob `5c8a6a58df97`, md5 `6ecf66745f53`; `regress/gate_ppc.sh` blob `370dcea54378`, md5 `0632bde42a09`.  The working tree matches each (cpu_ppc_instr.c same, ppc_llsc_probe.py same, gate_ppc.sh same).
