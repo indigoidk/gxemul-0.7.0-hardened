@@ -1,3 +1,11 @@
+# `#580` Records (follow-up, 2026-11-04): `mipsprimundec` names its landing commit `68c0d60b`; the committed-tree proofs; the pass-2 receipt
+
+`git ls-tree 68c0d60b`, md5s hashed in Python from the committed bytes: `src/cpus/cpu_mips_instr.c` blob `0df67fd9e38a`, md5 `c35bf86a5114`; `regress/mips_primundec_probe.py` blob `6adba356a8d8`, md5 `dae62682d838`; `regress/gate_mips_folds.sh` blob `83275c9b67fd`, md5 `a4e3546e4da2`.  The working tree matches each (cpu_mips_instr.c same, mips_primundec_probe.py same, gate_mips_folds.sh same).
+
+The row's `commits` field names `68c0d60b` and its state note names the landing commit.  The `regress/pass2_ledger.tsv` receipt line for `68c0d60b`, a landing line in OUTSTANDING_BUGS.md's `#580` section and `matrix.html` re-rendered complete this records commit.
+
+**Filed (LOW): `seatsreadstemcollide`.**  The landing's pretest (`regress/artifacts/mipsprimundec/landing_20261104/PRETEST_580.out`) printed, under section G, `panel_20261104_014913: AMBIGUOUS -- 4 dirs share this stem` and then `cited but NOT ON DISK; cannot verify`.  The four directories exist and every citation names its full path; `check_seats_read.py`'s `PANEL_RE` keeps only the timestamp stem, and `resolve_dir` declines to guess among four.  So no answer in the four same-second wsf panels is checked by G (#580's were recorded by the landing's digest).  A checker change owes its own round with two negative controls.
+
 # `#580` (2026-11-04) -- `mipsprimundec`: eight MIPS primary opcodes with no working translator arm now raise Reserved Instruction or Coprocessor Unusable instead of stopping the emulated CPU
 
 **The defect.**  `src/cpus/cpu_mips_instr.c`, `X(to_be_translated)`: the primary-opcode switch had no case for 0x1d (JALX), 0x32 (LWC2),
