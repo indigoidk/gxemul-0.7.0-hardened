@@ -1,0 +1,208 @@
+/*
+ *  Copyright (C) 2007-2020  Anders Gavare.  All rights reserved.
+ *
+ *  Redistribution and use in source and binary forms, with or without
+ *  modification, are permitted provided that the following conditions are met:
+ *
+ *  1. Redistributions of source code must retain the above copyright
+ *     notice, this list of conditions and the following disclaimer.
+ *  2. Redistributions in binary form must reproduce the above copyright  
+ *     notice, this list of conditions and the following disclaimer in the 
+ *     documentation and/or other materials provided with the distribution.
+ *  3. The name of the author may not be used to endorse or promote products
+ *     derived from this software without specific prior written permission.
+ *
+ *  THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ *  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ *  ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE   
+ *  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ *  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ *  OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ *  HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ *  LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ *  OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ *  SUCH DAMAGE.
+ *
+ *
+ *  COMMENT: MVME187-specific devices and control registers
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "cpu.h"
+#include "device.h"
+#include "emul.h"
+#include "machine.h"
+#include "memory.h"
+#include "misc.h"
+
+#include "thirdparty/mvme187.h"
+#include "thirdparty/mvme_memcreg.h"
+#include "thirdparty/m8820x.h"
+
+
+struct mvme187_data {
+	struct memcreg		memcreg;
+	/*  mvme187memcoob: once-per-device announce latches.
+	    DEVINIT memsets this struct, so they start at 0.  Keep
+	    them directly after memcreg: regress/mvme187_memc_probe.py
+	    detects a return of the old indexed read by reading these
+	    bytes back at +0x7c (rows R3 and R8).  */
+	int			warned_memconf;
+	int			warned_default;
+};
+
+
+DEVICE_ACCESS(mvme187_memc)
+{
+	uint64_t idata = 0, odata = 0;
+	struct mvme187_data *d = (struct mvme187_data *) extra;
+
+	/*  Controller 1 (offsets 0x100-0x1ff) presents the same
+	    register image as controller 0: DEVINIT derives one size
+	    code from RAM/2 for both, and the model keeps one image.
+	    The number is reported in the notices below.  */
+	int controller = 0;
+
+	if (writeflag == MEM_WRITE)
+		idata = memory_readmax64(cpu, data, len);
+
+	if (relative_addr & 0x100) {
+		controller = 1;
+		relative_addr &= ~0x100;
+	}
+
+	/*  mvme187memcoob: struct memcreg is 124 bytes, but after the
+	    fold relative_addr is 0..0xff.  The old code indexed the
+	    struct with it before the switch for every access: for
+	    0x7c..0xff an out-of-bounds read in the C source, whose
+	    value the exiting default arm never used, so the compiler
+	    could omit it (no AddressSanitizer report on the old build
+	    at -O3).  Once the exit was removed it forwarded whatever
+	    byte sits at that offset in the device struct: at
+	    +0x7c..+0x83 the two announce latches, and beyond the
+	    struct's end, memory outside the allocation (measured on an
+	    x86_64 host with the indexed read reinstated: after a
+	    memconf store, a load of +0x7c returns 0x1, the first byte
+	    of warned_memconf).  No indexed read remains: the three
+	    served arms read their own fields and the default arm
+	    reads none.  */
+	switch (relative_addr) {
+
+	case 0x00:	/*  chipid  */
+		odata = d->memcreg.memc_chipid;
+		break;
+
+	case 0x04:	/*  chiprev  */
+		odata = d->memcreg.memc_chiprev;
+		break;
+
+	case 0x08:	/*  memconf  */
+		odata = d->memcreg.memc_memconf;
+		if (writeflag == MEM_WRITE) {
+			/*  Bits 0-2 hold the size code that DEVINIT fixes
+			    from the configured RAM; no other bit of this
+			    register is modelled, so a store has nothing to
+			    change and is not kept: the register keeps the
+			    value DEVINIT gave it.  Announced once per
+			    device; it used to end the emulator.  */
+			if (!d->warned_memconf) {
+				fatal("[ mvme187_memc: memconf write 0x%x"
+				    " (controller %i) ignored, not modelled"
+				    " (once) ]\n", (int)idata, controller);
+				d->warned_memconf = 1;
+			}
+		}
+		break;
+
+	default:
+		/*  No register is modelled at this offset.  A read
+		    returns 0, which is also the value DEVINIT leaves in
+		    every byte of the image other than chipid, chiprev
+		    and memconf; a write is not kept.  Announced once
+		    per device; it used to end the emulator.  */
+		if (!d->warned_default) {
+			fatal("[ mvme187_memc: unimplemented %s offset 0x%x"
+			    " (controller %i)", writeflag == MEM_WRITE ?
+			    "write to" : "read from", (int)relative_addr,
+			    controller);
+			if (writeflag == MEM_WRITE)
+				fatal(": 0x%x", (int)idata);
+			fatal(" (once) ]\n");
+			d->warned_default = 1;
+		}
+		break;
+	}
+
+	if (writeflag == MEM_READ)
+		memory_writemax64(cpu, data, len, odata);
+
+	return 1;
+}
+
+
+DEVINIT(mvme187)
+{
+	struct mvme187_data *d;
+	char tmpstr[300];
+	struct m8820x_cmmu *cmmu;
+	int size_per_memc, r;
+
+	CHECK_ALLOCATION(d = (struct mvme187_data *) malloc(sizeof(struct mvme187_data)));
+	memset(d, 0, sizeof(struct mvme187_data));
+
+
+	/*
+	 *  Two memory controllers per MVME187 machine:
+	 */
+
+	size_per_memc = devinit->machine->physical_ram_in_mb / 2 * 1048576;
+	for (r=0; ; r++) {
+		if (MEMC_MEMCONF_RTOB(r) > size_per_memc) {
+			r--;
+			break;
+		}
+	}
+
+	d->memcreg.memc_chipid = MEMC_CHIPID;
+	d->memcreg.memc_chiprev = 1;
+	d->memcreg.memc_memconf = r;
+
+	memory_device_register(devinit->machine->memory, devinit->name,
+	    MVME187_MEM_CTLR, 0x200, dev_mvme187_memc_access, (void *)d,
+	    DM_DEFAULT, NULL);
+
+
+	/*  Instruction CMMU:  */
+	CHECK_ALLOCATION(cmmu = (struct m8820x_cmmu *) malloc(sizeof(struct m8820x_cmmu)));
+	memset(cmmu, 0, sizeof(struct m8820x_cmmu));
+
+	devinit->machine->cpus[devinit->machine->bootstrap_cpu]->
+	    cd.m88k.cmmu[0] = cmmu;
+	/*  This is a 88200, revision 9:  */
+	cmmu->reg[CMMU_IDR] = (M88200_ID << 21) | (9 << 16);
+	snprintf(tmpstr, sizeof(tmpstr),
+	    "m8820x addr=0x%x addr2=0", MVME187_SBC_CMMU_I);
+	device_add(devinit->machine, tmpstr);
+
+	/*  ... and data CMMU:  */
+	CHECK_ALLOCATION(cmmu = (struct m8820x_cmmu *) malloc(sizeof(struct m8820x_cmmu)));
+	memset(cmmu, 0, sizeof(struct m8820x_cmmu));
+
+	devinit->machine->cpus[devinit->machine->bootstrap_cpu]->
+	    cd.m88k.cmmu[1] = cmmu;
+	/*  This is also a 88200, revision 9:  */
+	cmmu->reg[CMMU_IDR] = (M88200_ID << 21) | (9 << 16);
+	cmmu->batc[8] = BATC8;
+	cmmu->batc[9] = BATC9;
+	snprintf(tmpstr, sizeof(tmpstr),
+	    "m8820x addr=0x%x addr2=1", MVME187_SBC_CMMU_D);
+	device_add(devinit->machine, tmpstr);
+
+
+	return 1;
+}
+

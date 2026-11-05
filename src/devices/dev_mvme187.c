@@ -46,6 +46,13 @@
 
 struct mvme187_data {
 	struct memcreg		memcreg;
+	/*  mvme187memcoob: once-per-device announce latches.
+	    DEVINIT memsets this struct, so they start at 0.  Keep
+	    them directly after memcreg: regress/mvme187_memc_probe.py
+	    detects a return of the old indexed read by reading these
+	    bytes back at +0x7c (rows R3 and R8).  */
+	int			warned_memconf;
+	int			warned_default;
 };
 
 
@@ -54,7 +61,10 @@ DEVICE_ACCESS(mvme187_memc)
 	uint64_t idata = 0, odata = 0;
 	struct mvme187_data *d = (struct mvme187_data *) extra;
 
-	// TODO: not used yet
+	/*  Controller 1 (offsets 0x100-0x1ff) presents the same
+	    register image as controller 0: DEVINIT derives one size
+	    code from RAM/2 for both, and the model keeps one image.
+	    The number is reported in the notices below.  */
 	int controller = 0;
 
 	if (writeflag == MEM_WRITE)
@@ -65,29 +75,66 @@ DEVICE_ACCESS(mvme187_memc)
 		relative_addr &= ~0x100;
 	}
 
-	odata = ((uint8_t*)&d->memcreg)[relative_addr];
-
+	/*  mvme187memcoob: struct memcreg is 124 bytes, but after the
+	    fold relative_addr is 0..0xff.  The old code indexed the
+	    struct with it before the switch for every access: for
+	    0x7c..0xff an out-of-bounds read in the C source, whose
+	    value the exiting default arm never used, so the compiler
+	    could omit it (no AddressSanitizer report on the old build
+	    at -O3).  Once the exit was removed it forwarded whatever
+	    byte sits at that offset in the device struct: at
+	    +0x7c..+0x83 the two announce latches, and beyond the
+	    struct's end, memory outside the allocation (measured on an
+	    x86_64 host with the indexed read reinstated: after a
+	    memconf store, a load of +0x7c returns 0x1, the first byte
+	    of warned_memconf).  No indexed read remains: the three
+	    served arms read their own fields and the default arm
+	    reads none.  */
 	switch (relative_addr) {
 
-	case 0x00:	/* chipid */
-	case 0x04:	/* chiprev */
+	case 0x00:	/*  chipid  */
+		odata = d->memcreg.memc_chipid;
+		break;
+
+	case 0x04:	/*  chiprev  */
+		odata = d->memcreg.memc_chiprev;
 		break;
 
 	case 0x08:	/*  memconf  */
+		odata = d->memcreg.memc_memconf;
 		if (writeflag == MEM_WRITE) {
-			fatal("mvme187_memc: Write to relative_addr %i (controller %i) not yet"
-			    " implemented!\n", (int)relative_addr, controller);
-			exit(1);
+			/*  Bits 0-2 hold the size code that DEVINIT fixes
+			    from the configured RAM; no other bit of this
+			    register is modelled, so a store has nothing to
+			    change and is not kept: the register keeps the
+			    value DEVINIT gave it.  Announced once per
+			    device; it used to end the emulator.  */
+			if (!d->warned_memconf) {
+				fatal("[ mvme187_memc: memconf write 0x%x"
+				    " (controller %i) ignored, not modelled"
+				    " (once) ]\n", (int)idata, controller);
+				d->warned_memconf = 1;
+			}
 		}
 		break;
 
-	default:fatal("[ mvme187_memc: unimplemented %s offset 0x%x",
-		    writeflag == MEM_WRITE? "write to" : "read from",
-		    (int) relative_addr);
-		if (writeflag == MEM_WRITE)
-			fatal(": 0x%x", (int)idata);
-		fatal(" ]\n");
-		exit(1);
+	default:
+		/*  No register is modelled at this offset.  A read
+		    returns 0, which is also the value DEVINIT leaves in
+		    every byte of the image other than chipid, chiprev
+		    and memconf; a write is not kept.  Announced once
+		    per device; it used to end the emulator.  */
+		if (!d->warned_default) {
+			fatal("[ mvme187_memc: unimplemented %s offset 0x%x"
+			    " (controller %i)", writeflag == MEM_WRITE ?
+			    "write to" : "read from", (int)relative_addr,
+			    controller);
+			if (writeflag == MEM_WRITE)
+				fatal(": 0x%x", (int)idata);
+			fatal(" (once) ]\n");
+			d->warned_default = 1;
+		}
+		break;
 	}
 
 	if (writeflag == MEM_READ)

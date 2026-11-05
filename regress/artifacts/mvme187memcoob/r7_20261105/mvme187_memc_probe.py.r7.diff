@@ -1,0 +1,164 @@
+--- artifacts/mvme187memcoob/r7_20261105/mvme187_memc_probe.py.pre_r7	2026-11-05 05:54:47.428472600 -0600
++++ mvme187_memc_probe.py	2026-11-05 07:07:20.679328000 -0600
+@@ -23,8 +23,8 @@
+ carrying the value.  R6: the six served reads through both controllers; no announce.  R7: through controller 1, a default load, a
+ memconf load (3) and a memconf store; two announces, both naming controller 1.  R8: a memconf store and a default load set both
+ latches, then the twelve bytes +0x7c..+0x87 are read one by one; every one reads 0.  Every notice fragment a row matches runs to the
+-notice's closing " (once) ]".  Row names are at most 16 characters (the gate's two-space anchor).  The multi-access sessions are fifteen:
+-R3 to R17.  msession() reads r2 and r4..r31 (R16 sends loads up to r27).
++notice's closing " (once) ]".  Row names are at most 16 characters (the gate's two-space anchor).  The multi-access sessions are sixteen:
++R3 to R18.  msession() reads r2 and r4..r31 (R16 sends loads up to r27).
+ 
+ REPAIR 5 (p4_20261105/CONS_MYTHOS_local.md section 4; 148 -> 206 rows).  The two announce latches (M = warned_memconf, D =
+ warned_default) are observed only at memconf stores and default accesses, so the latch states form four phases (M, D) = 00, 10,
+@@ -40,19 +40,30 @@
+ in phase 10 (R16's phase-10 memconf store is ST_B(0,3,0x108), controller 1), no controller-1 default store occurs in phase 11, and
+ no chipid or chiprev readback follows R16's phase-11 tail (adj_p5_20261105/ADJ_MYTHOS_local.md, R1).
+ 
++REPAIR 6 (regress_20261105/REG_MYTHOS_local.md section 2(d); 206 -> 213 rows).  R18: three default stores to +0x18 (0x01, 0x01,
++0x00) and the load back, then three memconf stores (0x01, 0x01, 0x00) and the memconf load; one announce per category, both
++naming 0x1.  It rows the eight own-latch cells table 5 left green -- L_MB_M_xori_any, L_ME_M_xori_any, L_DB_D_xori_any,
++L_DA_D_xori_any, L_MT_M_xori_M, L_MW_M_xori_M, L_DT_D_xori_D and L_DT_D_idat_W.D: 206/206 each in table 5 (r5_20261105/table5/
++SCORES.txt:2916-2919, :2931, :2936-2937, :2990) and again before R18 (r7_20261105/step1/SCORES.txt:2-9); in table 6 each is red
++on R18 lines alone (r7_20261105/table6/SCORES.txt:9-16).  Table 6 measured 16 more of table 5's green representatives red
++(PRETABLE_6.out lists all 24).
++
+ CONTRACT (adj_p5_20261105/ADJ_MYTHOS_local.md section 2, checked line by line against PRETABLE_5.out's survivor summary at
+-:9460-9697 and tightened where the summary contradicted it: r6_20261105/RECORDS6_NOTE.md).  The FLOOR of this fix is each repair
++:9460-9697 and tightened where the summary contradicted it: r6_20261105/RECORDS6_NOTE.md; repair 6: r7_20261105/).  The FLOOR of
++this fix is each repair
+ path's own guard crossed with the state that path reads: the memconf path's {write, !M} x {memconf, M}; the default path's {default
+ arm, !D} x {D}; each served arm x its own field.  `controller`, len, idata and the offset bits are NOT floor predicates: the fold
+ rejoins before the switch (dev_mvme187.c:73-76) and no body tests a bit of idata (it is printed at :115 and :133, never tested).
+-Table 5 (clause (e) below) leaves NO surviving cell in the floor.  COVERED (red in table 5, except the cells disclosed below): any
++Table 5 left eight of those cells green, the own-latch cells REPAIR 6 names (regress_20261105/REG_MYTHOS_local.md section
++2(d)); R18 rows them.  COVERED (red in table 5 or table 6, except the cells disclosed below): any
+ NONVACUOUS single statement inserted at any of the walk's eleven positions that sets, clears, toggles or value-assigns either announce
+ latch, or keeps a store into any served field, under no gate or under a conjunction of the position's own tests (direction; controller;
+ the latch the position's arm reads) or under a single store-value or offset bit the probe's values drive; every NONVACUOUS
+ single-literal gating or widening of the two latch tests and sets and of the notice's value and direction predicates (identities
+ such as `!M || !M` are VACUOUS: walked, discarded, never built -- memc_variants_5.py:736-746).  DISCLOSED, NOT CLAIMED --
+-the five debt families (665 variants green in table 5, every one predicted; filed in r6_20261105/FILING_memccoverdebt.md with the
+-rows that would close each; a future green variant inside one of them is OUTSIDE this contract, one inside the floor is a breach):
++six families (table 5 left 665 variants green, every one predicted; table 6 re-ran them on these 213 rows: 24 red, 641 green,
++every one as PRETABLE_6 predicted; (1)-(5) are filed in r6_20261105/FILING_memccoverdebt.md with the rows that would close each; a
++future green variant inside one of them is OUTSIDE this contract, one inside the floor is a breach):
+ (1) UNFIRED IN-BOUND -- any gate that reads a latch the position's arm does not read (the memconf path never reads D, the default
+ path never reads M; the served arms, the head and the tail read neither), including the two contexts no row drives: a controller-0
+ memconf store in state (M, D) = (1, 0) and a controller-1 default store in state (1, 1); and, in the walk's SUPPLEMENTARY alphabet
+@@ -61,35 +72,43 @@
+ (0x07 then 0x00; 0xff then 0x00 -- a lone 0x00 is the `|=`/`^=` identity, a lone 0xff the `&=` identity) and word stores of
+ 0xffffffff and 0xffffff00 to +0x00 and +0x04 in two latch states (FILING item 1).  (2) UNOBSERVED -- a kept store into a field the arm does not read, or a latch written from an arm that does not read
+ it, when gated on a latch or on controller; a `^= idata` or `^= 1` toggle whose selected stores are even in number before the next
+-observation (R17's two word default stores at +0x1c and +0x11c; R12's and R16's paired served stores), or which lands on a set latch
+-(1 ^ v is truthy for every store value the rows use: 0x05, 0x07, 0x5a, 0xff, 0xffffffff), or whose only odd driver is R10's 0x5a
++observation (R17's two word default stores at +0x1c and +0x11c; R12's and R16's paired served stores), or which lands on a set latch,
++or whose only odd driver is R10's 0x5a
+ default store, after which no memconf store observes M; and `M = idata` at the memconf arm's end under `writeflag == MEM_WRITE &&
+ !controller` (W.nC, equivalently W.nC.M) -- the WRITE test is part of the survivor: the arm's end lies after the write block
+ (dev_mvme187.c:105-119), so without it a controller-0 memconf READ (idata 0) clears M and the variant is red (SCORES.txt:570
+-L_ME_M_idat_nC 201/206 against :2999 L_ME_M_idat_W.nC 206/206) -- whose clearing stores -- the 0x00 controller-0 stores of R3, R7
+-and R9 -- are each the last memconf store of their session (PRETABLE_5.out:9637, :9639; a group the ruling's own (b) list did not
++L_ME_M_idat_nC 201/206 against :2999 L_ME_M_idat_W.nC 206/206) -- whose clearing stores -- the 0x00 controller-0 stores of R3, R7,
++R9 and R18 -- are each the last memconf store of their session (PRETABLE_5.out:9637, :9639; a group the ruling's own (b) list did not
+ name).  Remedies: chipid and chiprev readbacks at the tails of R5, R7, R9, R13,
+ R15 and R17 and after R16's phase-11 tail; a memconf store after R10's 0x5a; an odd count of word default stores in R17; a memconf
+ store after a controller-0 0x00 store.  (3) NB3 -- a first controller-1 memconf store ORed or XORed into chipid or chiprev: a gate
+ (controller) x position (first store) x operator three-way joint.  Remedy: chipid and
+ chiprev readbacks at R7's tail.  (4) NB4 -- `&=` under !controller at the first memconf store, which every controller-0 first store
+-of 0x07, 0xff or 0xffffffff leaves unchanged on chiprev (0x01) and memconf (0x03): probe-relative only, a 0x00 first store would zero
++of 0x07, 0xff or 0xffffffff leaves unchanged on chiprev (0x01) and memconf (0x03), and R18's first store of 0x01 on chiprev
++(K_MB_memconf_and_D, the memconf form, is red in table 6): probe-relative only, a 0x00 first store would zero
+ both.  Remedy: a controller-0 first memconf store of 0x00 followed by chiprev and memconf readbacks.  (5) TO WIDENINGS -- a
+ widening of either latch test (`!M || G`, `!D || G`) whose G conjoins the other latch (TO_M nC.nD and kin; TO_D W.C.M, W.C.M.D);
+-every nonvacuous single-literal widening is red.  Remedy: family (1)'s two store pairs.  Also disclosed -- WALKED BUT NOT CLOSED:
++every nonvacuous single-literal widening is red.  Remedy: family (1)'s two store pairs.  (6) NOCHANGE -- every cell PRETABLE_5
++classes NOCHANGE (fired on the 206 rows, state unchanged; 148 representatives, its `exact: none -- NOCHANGE` lines, :7789 to
++:8574, NB4's two among them), except the representatives table 6 measured red (16, the eight own-latch cells among them).  Also
++disclosed -- WALKED BUT NOT CLOSED:
+ the supplementary alphabet named under (1) (idata bits 8..31 at the chipid and chiprev arms; the ME position, the walk's addition,
+ carries the `M = idata` group under (2)); and the cross-call caveat -- VACUOUS in the walk means no-op under the Boolean-latch
+ abstraction for ONE access, so `if (idata & 2) D ^= idata` after the default test was walked and DISCARDED as vacuous although
+-across calls D goes 1 -> 2 -> 0 over default stores of 0x03 then 0x02 and the next default access re-announces; the ungated
+-`M ^= idata` at the memconf arm's end was BUILT (L_ME_M_xori_any, classed NOCHANGE, 206/206: PRETABLE_5.out:7792, SCORES.txt:2917)
+-and escapes the same way (M goes 1 -> 2 -> 0 over memconf stores of 0x03 then 0x02).  Neither is a semantic no-op (FILING item 6).
++across calls D goes 1 -> 2 -> 0 over default stores of 0x03 then 0x02 and the next default access re-announces; it is not a
++semantic no-op (FILING item 6).
+ NOT WALKED: disjunctions other than the TO widenings and other non-conjunctive gates, multi-bit masks, len.  WHY L IS WIDER THAN
+ THE FLOOR: L inserts new side effects and new reads of foreign state at any position; the floor is the repair path's own guard
+ crossed with its own state, and CONS section 3's "closed enumeration" was a coverage walk, not the floor.
+ 
+-CLAUSE (e) -- catches.  TABLE 5, the record (artifacts/mvme187memcoob/r5_20261105/table5/SCORES.txt; PRETABLE_5.out written before
+-it): 3,575 variants on these 206 rows -- table 4's 112 and 3,463 L-walk representatives (2,798 red representatives standing for
+-26,999 predicted-red cells; 665 green, every one predicted and every one in a debt family disclosed in the CONTRACT above); every
++CLAUSE (e) -- catches.  TABLE 6, the record for repair 6 (artifacts/mvme187memcoob/r7_20261105/table6/SCORES.txt; PRETABLE_6.out
++written before it): on these 213 rows the legs and table 5's 665 green variants -- 24 variants red, 641 green, every variant as
++predicted; one leg missed its prediction: B3 also reddened R17 f3 r2, whose load at +0xf3 reads, under B3, a byte 111 bytes past
++the device struct's 132-byte allocation -- 0x0 in table 5, 0xd8 in table 6, 0x66, 0x34 and 0x15 on three runs of one B3 binary
++(r7_20261105/table6/VERDICT.md, r7_20261105/b3repeat/).
++TABLE 5 (artifacts/mvme187memcoob/r5_20261105/table5/SCORES.txt; PRETABLE_5.out written before it): 3,575 variants on the then
++206 rows -- table 4's 112 and 3,463 L-walk representatives (2,798 red representatives standing for
++26,999 predicted-red cells; 665 green, every one predicted); every
+ table-4 variant red again; 3,518 variants PRED=match, 56 PRED=atleast-ok, one PRED=MISS (D7_fold, detected 175/206: a stale
+ carry-forward of R7 lines, not an escape).  TABLE 4 (r4_20261105/table4/SCORES.txt, PRETABLE_4.out before it; all 112 of 112
+ variants red on the then 148-row probe): table 3's 63 (below), the repair-pass-3 seats' 34 measured escapes
+@@ -118,8 +137,9 @@
+ r3_20261105/table3/) caught all 19, 29 and 63 of theirs.  THE CELLS CLAIMED (change 7), each enumerated: the first default
+ announces sit at offsets {0x0c, 0x18, 0x7c, 0xe7, 0xff} (every bit 0-7 both set and clear among them); the first default STORES at
+ {0x18, 0xe7} (a complement pair) and +0x118 (controller 1); the first store of each notice category is driven at 0x00 (R9, R14),
+-0xff (R3, R5) and 0xffffffff (R12, R13); non-first stores at 0x05, 0xff and 0xffffffff (R3, R5, R9); every store category
+-{memconf, default, chipid, chiprev} through each controller is followed by readbacks of the three served fields.  Stores to the
++0xff (R3, R5) and 0xffffffff (R12, R13); non-first stores at 0x05, 0xff and 0xffffffff (R3, R5, R9); R18 adds a
++first store of 0x01 and non-first stores of 0x01 and 0x00 in both categories; every store category {memconf, default, chipid,
++chiprev} through each controller is followed by readbacks of the three served fields.  Stores to the
+ served offsets +0x00 and +0x04 are dropped silently (R12: chipid and chiprev read 0x80 and 0x1 after a store of 0xff and a store
+ of 0x00, through both controllers).
+   discloses, not claimed: multi-axis joints beyond those cells -- three-way joints of a gate, a position (first or non-first) and an
+@@ -129,17 +149,21 @@
+ load), +0x08 (a word store, a halfword load), +0x108 and +0x118 (word stores); +0x180 reaches the function only because DEVINIT
+ registers a 0x200-byte window (read at memory_device_register); R8's catch of the reinstated indexed read (B3) holds while the two latches begin within
+ 4 bytes after memcreg -- the struct comment pins that, and the gate's source check (no `memcreg)[` and no `[relative_addr]` in
+-dev_mvme187.c) covers latches moved before it; and the sanitizer legs (artifacts/mvme187memcoob/det_20261104/asan/, READING.md with
++dev_mvme187.c) covers latches moved before it, for the read in its old spelling;
++and the sanitizer legs (artifacts/mvme187memcoob/det_20261104/asan/, READING.md with
+ its errata).  Measured: with the indexed read reinstated (B3), the loads at +0x7c and +0xff produce 0 sanitizer reports on both
+ sanitizer builds.  At +0x7c..+0x83 the byte lies inside the 132-byte allocation, on the latches, so no sanitizer can report it.  At
+ +0xff the byte lies 123 bytes past the allocation; that it goes unreported is REASONED, not measured (it lands in a neighbouring heap
+ chunk whose poisoning depends on allocator state, and no shadow dump exists for that access).  R8's loads at +0x84..+0x87 lie in the
+ allocation's partial granule and are expected to report under ASan on the offline legs (REASONED).  On the plain build the catches
+-for B3 are R3 7c r4, R8 7c r4, R8 80 r8 and R11 180 r4 (table 4; the same four in table 5, SCORES.txt:8).  MVME187_MEMC_ASAN=n
++for B3 are R3 7c r4, R8 7c r4, R8 80 r8 and R11 180 r4 (table 4; the same four in table 5, SCORES.txt:8, and in table 6, with R17
++f3 r2 as well on a run-to-run value: TABLE 6 above).  MVME187_MEMC_ASAN=n
+ counts one per "ERROR: AddressSanitizer" or "runtime error:" line; it is informational, read by the offline legs, and no row.  On
+-these 206 rows the pre-fix build scores 29 of 206 with the symptom PRESENT (33 of the then 148-row probe, 31 of the 118), and the
+-three null media -- /bin/true 27/206, an absent binary 4/206, /bin/false 5/206 -- each CONTROL=FAIL (r5_20261105/table5/
+-SCORES.txt:1-5; on the 148 rows 25, 4 and 5, r4_20261105/table4/SCORES.txt).
++these 213 rows the pre-fix build scores 29 of 213 with the symptom PRESENT (29 of the then 206-row probe, 33 of the 148, 31 of the
++118), and the three null media -- /bin/true 28/213, an absent binary 4/213, /bin/false 5/213 -- each CONTROL=FAIL (r7_20261105/
++table6/SCORES.txt:2-5; on the 206 rows 27, 4 and 5, r5_20261105/table5/SCORES.txt:1-5; on the 148 rows 25, 4 and 5,
++r4_20261105/table4/SCORES.txt).  Clause (c): measured at r7_20261105/table6/SCORES.txt:3-5 (binary media: /bin/true, an absent
++binary, /bin/false); a build without the device was not run.
+ 
+ Sentinel: MVME187_MEMC_PROBE_DONE (plus MVME187_MEMC_RESULT=n/N, MVME187_MEMC_CONTROL=OK|FAIL, MVME187_MEMC_SYMPTOM=PRESENT|ABSENT,
+ MVME187_MEMC_RED=none|<names>, and the informational MVME187_MEMC_ASAN=n).  Session transcripts go to the optional [workdir].
+@@ -656,6 +680,20 @@
+ row("R17 7d r15", hx(r, "r15"), hex(0), "phase 11: the default read at +0x7d after the memconf stores reads 0")
+ row("R17 08b r16", hx(r, "r16"), hex(0x3), "phase 11: memconf after the 0x07 and 0x00 stores: still 3")
+ row("R17 pc", hx(r, "pc"), hex(CODE + 84), "twenty-one instructions retired")
++#  R18 (repair 6, NEW; regress_20261105/REG_MYTHOS_local.md section 2(d)): three default stores to +0x18 (0x01, 0x01, 0x00) and the
++#  load back, then three memconf stores (0x01, 0x01, 0x00) and the memconf load -- one announce per category, both naming 0x1.
++r, T, how, nl = msession("R18", [ST_B(5, 3, 0x18), ST_B(5, 3, 0x18), ST_B(0, 3, 0x18), LD_BU(2, 3, 0x18), ST_B(5, 3, 0x08),
++                                 ST_B(5, 3, 0x08), ST_B(0, 3, 0x08), LD_BU(4, 3, 0x08)],
++                         [("r2", SENT), ("r4", SENT), ("r5", 0x01)])
++row("R18 session", how, "exit0", "default and memconf stores of 0x01, 0x01, 0x00: survives")
++row("R18 18 r2", hx(r, "r2"), hex(0), "the default load after the three stores reads 0")
++row("R18 08 r4", hx(r, "r4"), hex(0x3), "memconf after its 0x01, 0x01, 0x00 stores: still 3")
++row("R18 pc", hx(r, "pc"), hex(CODE + 32), "eight instructions retired")
++row("R18 lines", nl, "2", "one announce per category; the later stores are silent")
++row("R18 def line", has(T, "unimplemented write to offset 0x18 (controller 0): 0x1 (once) ]"), "yes",
++    "the first default store, 0x01, is announced with its value")
++row("R18 cnf line", has(T, "memconf write 0x1 (controller 0) ignored, not modelled (once) ]"), "yes",
++    "the first memconf store, 0x01, is announced")
+ n_ok = sum(1 for _, ok in rows if ok)
+ red = [n for n, ok in rows if not ok]
+ print("elapsed %.1fs" % (time.time() - t0))

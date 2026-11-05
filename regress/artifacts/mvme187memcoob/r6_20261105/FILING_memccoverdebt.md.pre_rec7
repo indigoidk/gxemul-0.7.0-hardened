@@ -1,0 +1,65 @@
+# FILING for OUTSTANDING_BUGS.md -- `memccoverdebt` (the main loop files it at landing)
+
+Written 2026-11-05 (records 6, r6_20261105) from adj_p5_20261105/ADJ_MYTHOS_local.md (CLOSE-AFTER-RECORDS: zero floor families,
+five debt families) and PRETABLE_5.out's survivor summary (:9460-9697), checked group by group against the probe's instruction
+lists.  Row sketches use the probe's own encoders (LD_BU/ST_B/ST_W(reg, 3, offset)); msession() already reads r2 and r4..r31; names
+are at most 16 characters and unique against the 206.  None of these rows is owed in-round: every family lies outside the fix's
+floor (the repair path's own guard crossed with its own state), and the standing rule says a filter may not demand coverage.
+
+* **`memccoverdebt` (LOW, coverage debt on a closed round) -- new.**  `#NNN` mvme187memcoob's 206-row detector
+  (`regress/mvme187_memc_probe.py`) leaves 665 of table 5's 3,575 test variants green (`regress/artifacts/mvme187memcoob/
+  r5_20261105/table5/`, every one predicted green by PRETABLE_5.out before the table ran).  Pass 5 ruled all of them clause-(e)
+  coverage debt, none a floor breach: each inserted statement either reads a latch its arm does not read, writes state its arm
+  does not read, toggles by an even count, or is gated on a value bit no body tests.  The probe's CONTRACT discloses them by
+  family; this row carries the untested contexts and the rows that would close each.  Six items (the ruling's five families and
+  the cross-call caveat the ruling attached to its VACUOUS count):
+  1. **UNFIRED in-bound (58 groups; TO widenings ride here too).**  Untested contexts: a controller-0 memconf store in latch state
+     (M, D) = (1, 0) -- R16's phase-10 memconf store is `ST_B(0,3,0x108)`, controller 1, and R3's, R7's and R9's second
+     controller-0 stores all follow a default access -- and a controller-1 default store in state (1, 1): R16's phase-11 default
+     accesses are LD 0x83, ST_W 0x1c (controller 0), LD 0x10c, LD 0x1c.  Rows (both in R16): after `LD_BU(17,3,0x108)` insert
+     `ST_B(0,3,0x08)` (controller 0, 0x00, silent) and `LD_BU(28,3,0x08)` -> `R16 08e r28` want 0x3; after `LD_BU(25,3,0x10c)`
+     insert `ST_B(5,3,0x118)` (controller 1, 0xff, silent) -- the existing `LD_BU(26,3,0x1c)` then observes D and the existing
+     `ST_W(9,3,0x08)` observes M; `R16 lines` stays "2", `R16 pc` moves by +8 (0x100b4 -> 0x100bc), seed r28 with SENT.  The same
+     two stores close family 5 (TO_M `!M || (!C && !D)` re-announces on the first, TO_D `!D || (W && C && M)` on the second) and
+     the `M = idata`-under-`!controller` group of item 2.  Outside the alphabet but in the walk's superset: 48 groups at the chipid
+     and chiprev arms under idata bits 8..31 -- no row makes a WORD store to +0x00/+0x04; `ST_W(9,3,0x00)` and `ST_W(9,3,0x04)`
+     (0xffffffff) with byte readbacks (want 0x80, 0x1) in R12 after its byte pairs would close them.
+  2. **UNOBSERVED (411 groups): state changed, nothing read it or the change cancelled.**  (i) Keeps into chipid/chiprev from
+     arms that do not read them, gated on a latch or on controller: the sessions whose first memconf store is made with D set
+     (R5, R7, R13, R17), R9's controller-1 stores and R16's phase-11 tail are never followed by a chipid/chiprev read; chiprev
+     accesses with D set are never followed by a chipid read.  Rows: `LD_BU(n,3,0x00)` want 0x80 and `LD_BU(n,3,0x04)` want 0x1
+     at the END of R5 (r12, r13), R7 (r8, r9), R9 (r10, r11), R13 (r10, r11), R15 (r8, r9), R17 (r17, r18) and after R16's
+     phase-11 tail (r29, r30); pc rows move accordingly.  (ii) A latch written from an arm that does not read it under its own
+     gates (`L_DT_M_idat` under nC.D and kin): closed by the same readbacks plus item 1's stores.  (iii) `M ^= idata` at
+     DT/DA/H/TL under idata bits 0, 2, 5 or 7 CLEAR: the only odd driver is R10's 0x5a default store (bits 0, 2, 5, 7 clear) and
+     no memconf store follows it.  Row: at R10's end `ST_B(11,3,0x08)` with r11 = 0x07 (+0x08 is controller 0; it must
+     announce: `R10 cnf line` has "memconf write 0x7 (controller 0) ignored, not modelled (once) ]" and `R10 lines` becomes "2";
+     under the escape M is already 0x5a and the store is silent) and `LD_BU(12,3,0x08)` -> `R10 08b r12` want 0x3.  (iv) `M ^= idata` / `D ^= idata` /
+     `memconf ^= idata` under offset bit 2 set or bit 3 clear or bit 4 clear: R17's two word default stores at +0x1c/+0x11c toggle
+     twice and cancel; R12's and R16's paired served stores likewise.  Row: a THIRD `ST_W(9,3,0x1c)` in R17 after `ST_W(9,3,0x11c)`
+     (silent; `R17 lines` stays "2"), so the toggle count is odd before `ST_B(6,3,0x08)` observes M.  (v) `D = 0` / `D ^= 1` at
+     the default latch body under W.nC.M: R15's first default access (`ST_W(6,3,0x1c)`, M set) is its last.  Row: `LD_BU(10,3,0x1c)`
+     after it -> `R15 1c r10` want 0, silent (r8, r9 are taken by 2(i)'s readbacks).  (vi) `d->warned_memconf = idata` at the
+     memconf arm's end under `!controller`
+     (PRETABLE_5.out:9637, :9639): every controller-0 0x00 memconf store (R3's second, R7's second, R9's third) is the last memconf
+     store of its session.  Closed by item 1's phase-10 store (R16's later `ST_W(9,3,0x08)` then re-announces) and by item 4's
+     session.
+  3. **NB3: a first controller-1 memconf store ORed or XORed into chipid or chiprev** (PRETABLE_5.out:8167-8178; gate x first-store x
+     operator).  R9's 0x00 first controller-1 store is the OR/XOR identity; R7's 0x07 first controller-1 store is followed only by
+     default and memconf reads.  Rows: item 2(i)'s R7 readbacks -- `|=` gives chipid 0x87 / chiprev 0x07, `^=` gives 0x87 / 0x06.
+  4. **NB4: `&=` into chiprev or memconf at the first memconf store under `!controller`** (PRETABLE_5.out:8199, :8211, NOCHANGE).
+     Every controller-0 first memconf store the rows make is 0x07, 0xff or 0xffffffff, and 0x01 & 0x07 = 0x01, 0x03 & 0x07 = 0x03.
+     Row: a new session R18 -- `ST_B(0,3,0x08)` (controller 0, 0x00, FIRST: announces "memconf write 0x0 (controller 0) ignored,
+     not modelled (once) ]"), `LD_BU(2,3,0x04)` -> `R18 04 r2` want 0x1, `LD_BU(4,3,0x08)` -> `R18 08 r4` want 0x3, `LD_BU(5,3,0x00)`
+     -> `R18 00 r5` want 0x80, then `ST_B(6,3,0x08)` with r6 = 0x07 (silent) and `LD_BU(7,3,0x08)` -> `R18 08b r7` want 0x3;
+     `R18 lines` "1"; `R18 pc` CODE + 24.  The second store also closes item 2(vi).
+  5. **TO widenings** (`!M || (nC && nD)`, `!D || (W && C && M)` and the equivalents at PRETABLE_5.out:9513-9518): closed by item 1.
+  6. **The cross-call caveat (inside the 6,676 VACUOUS, not inside the 665).**  semantic_vacuous judges ONE access over Boolean
+     latch states, so `if (idata & 2) d->warned_default ^= idata;` after the default test and `d->warned_memconf ^= idata;` at
+     the memconf arm's end are discarded although across calls the latch goes 1 -> 2 -> 0 and the category re-announces.  Rows:
+     a new session R19 -- `ST_B(5,3,0x18)` (0x03, announces), `ST_B(6,3,0x18)` (0x02, silent), `LD_BU(2,3,0x18)` -> `R19 18 r2` want 0
+     and `R19 lines` "1" (the escape gives "2"); then `ST_B(5,3,0x08)` (0x03, announces), `ST_B(6,3,0x08)` (0x02), `ST_B(7,3,0x08)`
+     (0x07, silent) -> `R19 lines` "2" on the fix, "3" under the escape; `R19 pc` CODE + 24.
+  Also disclosed and not rowed (unchanged from clause (e)): disjunctions and other non-conjunctive gates, multi-bit value and offset
+  masks, len, and controller x phase x operator three-way joints beyond NB3.  Closing all six items would be repair 6 -- coverage,
+  not floor -- and must re-run table 5's 665 green representatives (`memc_variants_5.py list | apply`) against the widened probe.

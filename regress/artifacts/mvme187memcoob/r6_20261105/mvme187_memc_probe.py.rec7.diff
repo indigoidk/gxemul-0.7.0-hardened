@@ -1,0 +1,68 @@
+--- artifacts/mvme187memcoob/r6_20261105/mvme187_memc_probe.py.pre_rec7	2026-11-05 05:08:33.069107400 -0600
++++ mvme187_memc_probe.py	2026-11-05 05:32:09.703025700 -0600
+@@ -29,7 +29,7 @@
+ REPAIR 5 (p4_20261105/CONS_MYTHOS_local.md section 4; 148 -> 206 rows).  The two announce latches (M = warned_memconf, D =
+ warned_default) are observed only at memconf stores and default accesses, so the latch states form four phases (M, D) = 00, 10,
+ 01, 11.  R16 (memconf first: phases 00 -> 10 -> 11) and R17 (a default read at +0xf3 first: phase 01) make, in each of their
+-phases, served byte stores of 0x00 and 0xff with one readback per field and memconf reads through both controllers, with a first
++phases, served byte stores of 0x00 and 0xff with one readback per field per controller and memconf reads through both controllers, with a first
+ memconf store of 0x07 (controller 0), a controller-1 memconf store of 0x00 and a first default WORD store of 0xffffffff between
+ R16's phases; R5, R7, R9, R12, R13 and R15 gain tails: a second memconf store after a first store of 0x07 (R7, R15) and of
+ 0xffffffff (R12), a second default access after a first read at 0x0c (R12) and at 0x10c (R7) and after a first word store at 0x118
+@@ -48,20 +48,27 @@
+ Table 5 (clause (e) below) leaves NO surviving cell in the floor.  COVERED (red in table 5, except the cells disclosed below): any
+ single statement inserted at any of the walk's eleven positions that sets, clears, toggles or value-assigns either announce latch,
+ or keeps a store into any served field, under no gate or under a conjunction of the position's own tests (direction; controller;
+-the latch the position's arm reads) or under a single store-value or offset bit the probe's values drive; every single-literal
+-gating or widening of the two latch tests and sets and of the notice's value and direction predicates.  DISCLOSED, NOT CLAIMED --
++the latch the position's arm reads) or under a single store-value or offset bit the probe's values drive; every NONVACUOUS
++single-literal gating or widening of the two latch tests and sets and of the notice's value and direction predicates (identities
++such as `!M || !M` are VACUOUS: walked, discarded, never built -- memc_variants_5.py:736-746).  DISCLOSED, NOT CLAIMED --
+ the five debt families (665 variants green in table 5, every one predicted; filed in r6_20261105/FILING_memccoverdebt.md with the
+ rows that would close each; a future green variant inside one of them is OUTSIDE this contract, one inside the floor is a breach):
+ (1) UNFIRED IN-BOUND -- any gate that reads a latch the position's arm does not read (the memconf path never reads D, the default
+ path never reads M; the served arms, the head and the tail read neither), including the two contexts no row drives: a controller-0
+-memconf store in state (M, D) = (1, 0) and a controller-1 default store in state (1, 1).  Remedy: those two stores in R16's phases
+-10 and 11.  (2) UNOBSERVED -- a kept store into a field the arm does not read, or a latch written from an arm that does not read
++memconf store in state (M, D) = (1, 0) and a controller-1 default store in state (1, 1); and, in the walk's SUPPLEMENTARY alphabet
++(walked, not in the ruling's), gates on idata bits 8..31 at the chipid and chiprev arms -- no row makes a word store to +0x00 or
+++0x04 (44 UNFIRED representatives, PRETABLE_5.out:9461-9508).  Remedy: complementary store pairs in those two contexts in R16
++(0x07 then 0x00; 0xff then 0x00 -- a lone 0x00 is the `|=`/`^=` identity, a lone 0xff the `&=` identity) and word stores of
++0xffffffff and 0xffffff00 to +0x00 and +0x04 in two latch states (FILING item 1).  (2) UNOBSERVED -- a kept store into a field the arm does not read, or a latch written from an arm that does not read
+ it, when gated on a latch or on controller; a `^= idata` or `^= 1` toggle whose selected stores are even in number before the next
+ observation (R17's two word default stores at +0x1c and +0x11c; R12's and R16's paired served stores), or which lands on a set latch
+ (1 ^ v is truthy for every store value the rows use: 0x05, 0x07, 0x5a, 0xff, 0xffffffff), or whose only odd driver is R10's 0x5a
+-default store, after which no memconf store observes M; and a controller-0 `M = idata` at the memconf arm's end, whose clearing
+-stores -- the 0x00 controller-0 stores of R3, R7 and R9 -- are each the last memconf store of their session (PRETABLE_5.out:9637,
+-:9639; a group the ruling's own (b) list did not name).  Remedies: chipid and chiprev readbacks at the tails of R5, R7, R9, R13,
++default store, after which no memconf store observes M; and `M = idata` at the memconf arm's end under `writeflag == MEM_WRITE &&
++!controller` (W.nC, equivalently W.nC.M) -- the WRITE test is part of the survivor: the arm's end lies after the write block
++(dev_mvme187.c:105-119), so without it a controller-0 memconf READ (idata 0) clears M and the variant is red (SCORES.txt:570
++L_ME_M_idat_nC 201/206 against :2999 L_ME_M_idat_W.nC 206/206) -- whose clearing stores -- the 0x00 controller-0 stores of R3, R7
++and R9 -- are each the last memconf store of their session (PRETABLE_5.out:9637, :9639; a group the ruling's own (b) list did not
++name).  Remedies: chipid and chiprev readbacks at the tails of R5, R7, R9, R13,
+ R15 and R17 and after R16's phase-11 tail; a memconf store after R10's 0x5a; an odd count of word default stores in R17; a memconf
+ store after a controller-0 0x00 store.  (3) NB3 -- a first controller-1 memconf store ORed or XORed into chipid or chiprev: a gate
+ (controller) x position (first store) x operator three-way joint; R9's 0x00 first store exposes only `=`.  Remedy: chipid and
+@@ -69,12 +76,15 @@
+ of 0x07, 0xff or 0xffffffff leaves unchanged on chiprev (0x01) and memconf (0x03): probe-relative only, a 0x00 first store would zero
+ both.  Remedy: a controller-0 first memconf store of 0x00 followed by chiprev and memconf readbacks.  (5) TO WIDENINGS -- a
+ widening of either latch test (`!M || G`, `!D || G`) whose G conjoins the other latch (TO_M nC.nD and kin; TO_D W.C.M, W.C.M.D);
+-every single-literal widening is red.  Remedy: family (1)'s two stores.  Also outside the walk and disclosed: gates on idata bits
+-8..31 at the chipid and chiprev arms (no row makes a word store to +0x00 or +0x04); disjunctions and other non-conjunctive gates,
+-multi-bit masks, len; controller x phase x operator three-way joints; and the cross-call caveat -- VACUOUS in the walk means no-op
+-under the Boolean-latch abstraction for ONE access, so `if (idata & 2) D ^= idata` after the default test (D goes 1 -> 2 -> 0 over
+-default stores of 0x03 then 0x02, and the next default access re-announces) and `M ^= idata` at the memconf arm's end are
+-undetected escapes of the NOCHANGE class, not semantic no-ops.  WHY L IS WIDER THAN THE FLOOR: L inserts new side effects and new
++every nonvacuous single-literal widening is red.  Remedy: family (1)'s two store pairs.  Also disclosed -- WALKED BUT NOT CLOSED:
++the supplementary alphabet named under (1) (idata bits 8..31 at the chipid and chiprev arms; the ME position, the walk's addition,
++carries the `M = idata` group under (2)); and the cross-call caveat -- VACUOUS in the walk means no-op under the Boolean-latch
++abstraction for ONE access, so `if (idata & 2) D ^= idata` after the default test was walked and DISCARDED as vacuous although
++across calls D goes 1 -> 2 -> 0 over default stores of 0x03 then 0x02 and the next default access re-announces; the ungated
++`M ^= idata` at the memconf arm's end was BUILT (L_ME_M_xori_any, classed NOCHANGE, 206/206: PRETABLE_5.out:7792, SCORES.txt:2917)
++and escapes the same way (M goes 1 -> 2 -> 0 over memconf stores of 0x03 then 0x02).  Neither is a semantic no-op (FILING item 6).
++NOT WALKED: disjunctions other than the TO widenings and other non-conjunctive gates, multi-bit masks, len; controller x phase x
++operator three-way joints beyond NB3.  WHY L IS WIDER THAN THE FLOOR: L inserts new side effects and new
+ reads of foreign state at any position; the floor is the repair path's own guard crossed with its own state, and CONS section 3's
+ "closed enumeration" was a coverage walk, not the floor.
+ 

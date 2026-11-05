@@ -1,0 +1,59 @@
+PRETABLE -- mvme187memcoob detector, test-variant table 1.  Written BEFORE the table runs (this file's mtime precedes table1/'s).
+Instrument: legs56/probe56_frozen.py (56 rows; -E mvme88k -e mvme187 -M 64 unmodified).  Baseline: the round's post-fix working set
+(legs56/dev_mvme187.c.fix).  Floor legs measured first (legs56/SCORES.txt).  R1/R2 (the sanitizer builds) are a separate leg set.
+
+SIBLING PARITY -- the fix's arms, by observable channel:
+  chipid / chiprev: each reads its own field (was: the indexed read, then break).  Channels: R6 00/04/100/104 values, the ctl rows.
+  memconf: reads its field; a store is not kept and announced once per device (was: exit).  Channels: R3 cnf r2, R3 lines/texts.
+  default: reads 0, a store is not kept, announced once per device with the direction and (for a store) the value (was: exit).
+      Channels: R4 values/pc/lines/text, R5 r2/lines/text, R7 text.
+  The asymmetry: the memconf notice and the default notice have SEPARATE latches -- R3 is the one session that drives both.
+
+CLAIM -> ROW (each comment sentence of the diff asserting an observable):
+  'DEVINIT memsets this struct, so they start at 0'          -> R3/R4/R5/R7 lines (each session's first access announces)
+  'Controller 1 ... presents the same register image'         -> R6 100/104/108, ctl ctl1id
+  'The number is reported in the notices below'               -> R7 line text (ADDED for this sentence: R3-R5 latch every controller-1
+                                                                  access silent, so no other row could see the number)
+  'No indexed read remains: each arm reads its own field'     -> R6 values; the asan reports row on the sanitizer builds (R1/R2)
+  'a store has nothing to change and is not kept'             -> R3 cnf r2 (3 after a store of 7)
+  'Announced once per device; it used to end the emulator'    -> R3 lines, R3 no 0x5; every session row's exit status
+  'A read returns 0'                                          -> R4 values, R7 r2
+  'a write is not kept'                                       -> R5 r2
+
+GUARD FIELD vs BODY FIELD (and the partition each body induces):
+  fold: relative_addr & 0x100 {clear, set}; body writes controller and relative_addr.  Both cells: R6 (0x0xx and 0x1xx), R4 10c, R7.
+  memconf store: writeflag {read, write}; body reads warned_memconf, idata.  Both: R3 (stores) and R6 08 (a read, no notice).
+  warned_memconf {0, 1}: both cells in R3 (the first and the second store).  warned_default {0, 1}: both cells in R4 (first, later).
+  default notice: writeflag {read, write} picks the direction text and the value print: R4/R7 (read), R5 (write).
+  controller {0, 1} at a notice: R3-R5 (0), R7 (1).
+
+CHANNEL per row group (the variant each kills and the observable that differs under it):
+  session/prompt rows and later rows of a session  -- B1, B2 (exit status; the rows after the exit read `none`)
+  R3 cnf r2                                        -- A_cnf_accept (7), D10 (0); B1
+  R3 7c r4                                         -- B3 (the over-read returns the memconf latch byte, 1)
+  R3/R4/R5/R7 lines and line texts                 -- D1-D6, D11, D13, D14, D8 (R7 only)
+  R4 values and pc                                 -- F_def_fault (a bus error: the load does not retire)
+  R5 r2                                            -- D12 (0x5a read back)
+  R6 values                                        -- D7, D9, D10
+  asan reports                                     -- B3 on the sanitizer builds only (a plain build reads garbage silently)
+
+VARIANTS (name, what, predicted red rows):
+   B1_cnf_exit     (b) the memconf store's fatal()+exit(1), verbatim            red: R3 session pc lines cnf r2 7c r4 cnf line 7c line; wr cnf session prompt
+   B2_def_exit     (b) the default arm's fatal()+exit(1), verbatim              red: rd 0x0c/0x7c/0xff session+prompt; R3-R5, R7 sessions and their later rows
+   B3_idx_read     (b) the indexed read before the switch, verbatim             red: R3 7c r4 (reads the memconf latch byte: 1); asan reports on the sanitizer build
+   A_cnf_accept    ACCEPT: the memconf store is kept                            red: R3 cnf r2 (0x7, not 0x3)
+   F_def_fault     FAULT: the default arm fails the access                      red: R4 pc and every R4 load; R3/R5/R7 pc; rd 0x0c/0x7c/0xff (a bus error instead of a decline)
+   D1_mlatch_inv   (d) the memconf latch test inverted                          red: R3 lines (1), R3 cnf line
+   D2_mlatch_noset (d) the memconf latch never set                              red: R3 lines (3), R3 no 0x5
+   D3_shared_latch (d) one shared latch for both categories                     red: R3 lines (1), R3 7c line
+   D4_dlatch_inv   (d) the default latch test inverted                          red: R3/R4/R5/R7 lines and line texts
+   D5_dlatch_noset (d) the default latch never set                              red: R4 lines (4), R5 lines, R3 lines
+   D6_dlatch_ctrl  (d) the default latch made per-controller (controller 1 alwa red: R4 lines (2), R5 lines (2)
+   D7_fold         (d) the fold mask narrowed                                   red: R6 100/104/108, ctl ctl1id r2; R4 10c/R5/R7 line texts
+   D8_ctrl_drop    (d) the controller number never set                          red: R7 line text only (controller 0 named for a controller-1 access)
+   D9_chiprev_swap mis-split field read: chiprev returns chipid                 red: R6 04/104, ctl chiprev r2
+   D10_cnf_noread  memconf's read arm loses its field read                      red: R6 08/108, R3 cnf r2, ctl memconf r2
+   D11_cnf_on_read (d) the memconf announce keyed on reads, not writes          red: R6 lines (1), R3 lines, R3 cnf line
+   D12_def_store   a default-arm store kept and read back (backed accept)       red: R5 r2 (0x5a, not 0)
+   D13_def_noval   the write notice drops its value                             red: R5 line text
+   D14_rw_swap     (d) the notice's direction swapped                           red: R4, R5, R7 line texts

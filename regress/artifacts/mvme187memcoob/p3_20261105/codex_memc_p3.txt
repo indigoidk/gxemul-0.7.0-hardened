@@ -1,0 +1,308 @@
+CODEXP3MEMC
+model: GPT-6 (Codex)
+VERDICT: REPAIR. The recorded 63 variants are detected, but I find 27 additional, source-derived surviving edit cases in the explicitly enumerated 100-case sweep below.
+
+1. FLOOR
+
+I read the packet in full and checked GXEMUL-SEC’s access function, register definition, complete probe, gate block, table3/SCORES.txt, and variant generator. I did not edit, build, or execute the project. Historical execution, sanitizer, timestamp, and backup-identity claims remain supplied evidence, not independently reproduced measurements.
+
+Every survivor below predicts 118/118 and also leaves the gate’s indexed-read source check green. These are derivations, not newly measured scores.
+
+Counting convention: a “cell swept” is one specified source-site/partition/edit-shape case. The packet limits sites and operands but supplies no finite grammar for every possible C edit. My denominator therefore identifies the finite sweep actually performed; it does not claim exhaustive enumeration of arbitrary source rewrites.
+
+In the following templates, F ranges over the explicitly named fields. Each substitution is a separate single edit.
+
+B1. First default store corrupts a served field: three cases.
+
+Immediately inside the existing if (!d->warned_default), insert:
+
+    if (writeflag == MEM_WRITE) d->memcreg.F = idata;
+
+F = memc_chipid, memc_chiprev, memc_memconf.
+
+R5 executes the insertion on its first store of 0x5a, but subsequently reads only the default offset. R10’s preceding default reads have already set the latch, so its store cannot execute the insertion. No other session contains a default store.
+
+Catch: immediately after R5’s first store, read +0x00, +0x04, +0x08, expecting 0x80, 0x1, 0x3. The corresponding mutant returns 0x5a.
+
+B2. Controller-0 default store corrupts a served field: three cases.
+
+Before the default latch block, insert:
+
+    if (writeflag == MEM_WRITE && !controller) d->memcreg.F = idata;
+
+F = memc_chipid, memc_chiprev, memc_memconf.
+
+R5 supplies the controller-0 store but no served-field readback. R10 supplies those readbacks but only a controller-1 store. Other sessions have no default stores.
+
+Catch: the same three readbacks after R5’s first store.
+
+B3. Served stores retain bits through OR or XOR: four cases.
+
+In each corresponding served case, insert:
+
+    if (writeflag == MEM_WRITE) d->memcreg.F |= idata;
+
+or:
+
+    if (writeflag == MEM_WRITE) d->memcreg.F ^= idata;
+
+The four cases are chipid/OR, chipid/XOR, chiprev/OR, chiprev/XOR.
+
+R12 supplies the only stores to these registers, both with value zero. OR and XOR with zero preserve every observed value. No notice or latch changes.
+
+Catch: store 0xff to each register and read it back. Expected values remain 0x80 and 0x1. OR produces 0xff; XOR produces 0x7f and 0xfe respectively. These are observable at the existing configuration, unlike the disclosed memconf OR equivalence.
+
+B4. Controller-1 served stores are retained: two cases.
+
+In case 0x00 or 0x04, respectively, insert:
+
+    if (writeflag == MEM_WRITE && controller) d->memcreg.F = idata;
+
+F = memc_chipid or memc_chiprev.
+
+No session stores to +0x100 or +0x104. R12 stores only through controller 0.
+
+Catch: controller-1 stores of zero followed by chipid/chiprev readbacks. Expected 0x80/0x1; mutant returns zero.
+
+B5. A chipid or chiprev access prematurely sets the memconf latch: two cases.
+
+Insert into case 0x00 or case 0x04:
+
+    d->warned_memconf = 1;
+
+The controls perform one access. R4/R6 read these fields but perform no subsequent memconf store. R3/R12 have already announced their memconf store before reaching these fields. R7 reads neither field. The remaining sessions do not observe a subsequent memconf announcement after these accesses.
+
+Catch: separate cold sessions containing LD chipid followed by ST memconf, and LD chiprev followed by ST memconf. Require one complete memconf notice.
+
+These are destination-latch mirrors of T2_dlatch_rd00/04.
+
+B6. A served store prematurely sets the default latch: two cases.
+
+Insert into case 0x00 or case 0x04:
+
+    if (writeflag == MEM_WRITE) d->warned_default = 1;
+
+Only R12 performs these stores, and R12 never subsequently accesses a default offset.
+
+Catch: separate cold sessions containing ST chipid or ST chiprev, followed by LD +0x0c. Require the default notice and one announcement.
+
+B7. Controller-1 default-write values are omitted: one case.
+
+At line 132, change the value-print guard to:
+
+    if (writeflag == MEM_WRITE && !controller)
+
+The only checked, emitted default-write notice is R5’s controller-0 store. Controller-1 stores in R5 and R10 occur after the default latch is set. Controller-1 first accesses in R7/R10 are reads.
+
+Catch: a cold ST_B of 0x5a to +0x118, requiring:
+
+    unimplemented write to offset 0x18 (controller 1): 0x5a (once) ]
+
+The mutant omits “: 0x5a”.
+
+B8. A zero default store loses its value or is called a read: two cases.
+
+First edit: replace line 132’s guard with:
+
+    if (idata)
+
+Second edit: replace the default prefix’s direction condition:
+
+    writeflag == MEM_WRITE ? "write to" : "read from"
+
+with:
+
+    idata ? "write to" : "read from"
+
+All reads have idata zero. The only announced default store uses 0x5a. Thus both edits preserve all existing observations.
+
+Catch: a cold default store of zero, requiring both “write to” and “: 0x0”.
+
+B9. A zero default store fails to latch: one case.
+
+Replace the default latch assignment with:
+
+    d->warned_default = writeflag == MEM_WRITE ? idata : 1;
+
+Every first default read sets one. The sole first default write stores nonzero 0x5a, which also behaves as a set latch. Consequently every existing announcement count is unchanged.
+
+Catch: a cold default store of zero followed by another default access. Expected one announcement; mutant emits two.
+
+B10. Store values are truncated before announcement: two cases.
+
+Replace line 71 with either:
+
+    idata = (uint8_t)memory_readmax64(cpu, data, len);
+
+or:
+
+    idata = (uint16_t)memory_readmax64(cpu, data, len);
+
+The tested store values enumerate to 0x00, 0x05, 0x07, 0x5a, 0xff. R12’s word store is 0x000000ff. Both truncations preserve every tested value.
+
+Catch: a first word store of 0x123456ff to memconf, requiring that complete value in the notice. The mutants print 0xff and 0x56ff.
+
+This is a change at the same in-function input-decoding site admitted for RLEN1; testing access length does not establish preservation of the value’s upper bits.
+
+B11. Default stores retain an unexercised input bit: three cases.
+
+Before the default latch block, insert:
+
+    if (writeflag == MEM_WRITE) d->memcreg.F |= idata & 0x04;
+
+F = memc_chipid, memc_chiprev, memc_memconf.
+
+Every default store uses 0x5a. Its set bits are exactly 1, 3, 4, 6; bit 2 is clear. Therefore each insertion performs OR with zero.
+
+Catch: store 0xff to a default offset, then read all three served fields. The corresponding mutant returns 0x84, 0x05, or 0x07 instead of 0x80, 0x01, or 0x03.
+
+These are concrete mask-form siblings of the already admitted retained-store variants.
+
+B12. A first controller-1 memconf store corrupts another served field: two cases.
+
+Inside the existing if (!d->warned_memconf), insert:
+
+    if (controller) d->memcreg.F = idata;
+
+F = memc_chipid or memc_chiprev.
+
+R3’s first memconf store is controller 0; its later controller-1 store skips the latched block. R7’s first controller-1 store is its final instruction. R9’s first store writes zero into the selected field, but R9 subsequently reads only memconf. R8/R12 and the standalone memconf-store session first store through controller 0.
+
+Catch: append chipid/chiprev readbacks to R9. Expected 0x80/0x1; mutant returns zero.
+
+DENOMINATOR
+
+The predicates examined are the input write guard, fold test, switch selection, memconf write guard, both latch tests, default direction/value guards, and final read write-back guard. Store and latch insertions remain inside this function and use its existing controller, direction, selector, and latch distinctions.
+
+The counted cases are:
+
+    Recorded table cases                                      63
+    Additional fold-test widenings, bits 0,1,2,3,4,5,6           7
+    Plain replacement stores in chipid and chiprev cases         2
+    Unconditional default-store mis-target into chiprev          1
+    B1–B12 survivors                                           27
+    TOTAL                                                     100
+
+The last 27 enumerate as:
+
+    B1 3, B2 3, B3 4, B4 2, B5 2, B6 2,
+    B7 1, B8 2, B9 1, B10 2, B11 3, B12 2.
+
+The seven additional fold-test edits are detected by R11’s first +0xff notice. The two plain served replacements are detected by R12. The unconditional default-store/chiprev replacement is detected by R10 04 r10.
+
+2. ENUMERATION
+
+The claimed closure is incomplete.
+
+The eight controller/latch-operation cells have witnesses for their stated controller-qualified test/set shapes:
+
+    memconf: controller 0 test/set — R3
+    memconf: controller 1 test/set — R9
+    default: controller 0 test/set — R4
+    default: controller 1 test/set — R10
+
+That does not cover the different latch side effects in B5/B6 or zero-default-store behavior in B9.
+
+The store/readback closure has two concrete omissions:
+
+    Controller-0 default store:
+      R5 has the store but no served-field readbacks — B1/B2.
+
+    First controller-1 memconf store:
+      R9 reads only memconf; R7 ends with the store — B12.
+
+R3’s intervening controller-0 store and already-set latch cannot establish the latter first-store cell.
+
+The address-bit enumeration does hold for the specified shapes:
+
+    Bit   Fold-clear witness   Selector-drop witness
+     0          +0x101               +0x01
+     1          +0x102               +0x0a
+     2          +0x104               +0x04
+     3          +0x108               +0x08
+     4          +0x118               +0x18
+     5          +0x120               +0x20
+     6          +0x140               +0x40
+     7          +0x180               +0x80
+
+Fold-test widening by each of bits 0,1,2,3,4,5,6,7 changes R11’s first +0xff notice to controller 1. I independently checked that the registered length is 0x200, so +0x180 reaches the function.
+
+R12 detects the two hard-coded-length variants. Its small word-store value leaves B10 open. R9 closes the memconf zero-first-value gate; it does not close the separate default-value and default-latch cells in B8/B9.
+
+3. RECORDS
+
+I identify four false records, distinguishing measured contradictions from source-derived ones.
+
+R1. Clause (e):
+
+    “no single edit distinguishes it: the notice is one call”
+
+False against the checked source: the default notice uses a prefix call, a separately guarded value call, and a closing call. B7 is the distinguishing single edit.
+
+Correction: a first controller-1 default write is untested and has an independently mutable value-print guard.
+
+R2. Clause (e):
+
+    “a served case that kept its store would red them -- DERIVED, no variant of that shape ran.”
+
+The derivation holds for unconditional replacement stores. Its unqualified scope is false: B3 and B4 survive.
+
+Correction: R12 detects unconditional replacement stores of its tested zero values through controller 0. OR/XOR retention and controller-1 stores remain untested.
+
+R3. R3 cnf r2 note:
+
+    “memconf still reads 3: no bit of 0xff was kept”
+
+Directly refuted by the measured N6_keep1, N6_keep2, and N6_keep3 red sets: this row remains green under all three. N6_keep1 reddens only R3_cnf0_r11.
+
+Correction: “memconf remains 3 after 0xff”; complementary-value readbacks distinguish the low-bit mask keeps.
+
+R4. Retained probe documentation, present in the diff context:
+
+    “The multi-access sessions are six: R3, R4, R5, R6, R7 and R8.”
+
+There are ten: R3, R4, R5, R6, R7, R8, R9, R10, R11, R12.
+
+The gate’s updated ten-session description is correct.
+
+I found no contradiction in the table’s numerical verdict. Its enumeration is:
+
+    Old cases: 5 B/A/F + 14 D + 10 T2 = 29.
+    New cases: 19 named N/length/idata + 8 SEL + 7 FCL = 34.
+    Exact predictions: 19 + 5 SEL + 4 FCL = 28.
+    At-least predictions: 29 + 3 SEL + 3 FCL = 35.
+    Total: 63.
+
+The row count also checks:
+
+    21 witness + 13 R3 + 10 R4 + 5 R5 + 9 R6 + 7 R7
+    + 15 R8 + 7 R9 + 9 R10 + 13 R11 + 9 R12 = 118.
+
+Thus the table’s success is valid evidence for its named variants, not closure of the broader classes.
+
+4. ACCEPTED DISPOSITIONS
+
+(1) Uphold. Supersets satisfy the six “at least” predictions.
+
+(2) Narrow. “DERIVED, no variant run” accurately describes the unconditional replacement cases. The broader claim that served retained stores would necessarily redden R12 is wrong, as B3/B4 demonstrate.
+
+(3) Uphold. At initial memconf value 3, OR-ing idata & 3 cannot change the register. This disclosed equivalence does not excuse observable OR retention in other fields or bits.
+
+(4) Overturn. B7 is a single in-bound guard edit. Both the “one call” premise and the claimed absence of a distinguishing edit are false.
+
+5. VERDICT
+
+REPAIR, in this severity order:
+
+    Persistent register corruption: B1, B2, B3, B4, B11, B12
+    — 17 surviving edit cases.
+
+    Incorrect announcement-latch state: B5, B6, B9
+    — 5 surviving edit cases.
+
+    Incorrect notice direction/value or value truncation: B7, B8, B10
+    — 5 surviving edit cases.
+
+The existing product implementation is not shown defective by these hypothetical edits. The detector’s claimed closure is: all 27 edits would violate its contract while preserving the current composite checks.
+
+CODEXP3MEMC: 100 CELLS SWEPT 27 BREACHES 4 FALSE RECORDS VERDICT:REPAIR

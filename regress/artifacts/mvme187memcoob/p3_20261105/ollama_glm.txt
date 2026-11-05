@@ -1,0 +1,98 @@
+GLMP3MEMC
+model: GLM-4.6
+VERDICT: REPAIR — the 118-row composite and the 63-variant table are internally consistent (I reconciled every exact score and re-derived red sets), but five single edits inside the bound keep all 118 rows green, one of them sits behind a disclosure whose stated premise the inlined code refutes, and one claimed-derived catch is false for gated keeps.
+
+## 1. FLOOR — green single edits inside the bound, then the denominator
+
+All derivations below are REASONED from the inlined code (section 1) and the inlined session access lists (sections 3/4a); row/session facts are READ.
+
+**Breach 1 — the controller-1 default *write* notice is unrowed; the "no single edit" disclosure is false.**
+Edit: line 132 `if (writeflag == MEM_WRITE)` → `if (writeflag == MEM_WRITE && controller == 0)`. (Same hole, same repair: line 129's ternary → `writeflag == MEM_WRITE && controller == 0 ? "write to" : "read from"`.)
+Derivation: the value fragment prints only on a default-write notice. The only session whose first default access is a default write is R5, at +0x18 — controller 0, gate passes. R10's default store (+0x118, controller 1) is its third access, after the +0x10c read has set `warned_default`, so its notice is suppressed. R3/R4/R7/R8/R11 default accesses are reads; R12 has none; line counts are unchanged. All 118 green, unconditionally (even if R8's unshown setter is a ctl1 write, R8 has no line-text row).
+Catch: a session whose first default access is a controller-1 write with a text row — e.g. move R10's ST +0x118 ahead of its two loads and re-point "R10 line text" at `unimplemented write to offset 0x18 (controller 1): 0x5a (once) ]` (R7 keeps the ctl1 read notice pinned; the readback and latch-quiet cells survive the reorder).
+
+**Breach 2 — the width axis is unrowed on the default announce (the N15 shape, unapplied to the default arm).**
+Edit: line 127 `if (!d->warned_default)` → `if (!d->warned_default && len == 1)`.
+Derivation: every default access in all eleven sessions is a byte access (LD_BU/ST_B; R12's wide accesses are at served offsets only). The conjunct passes on every driven access; no announce, count, or text changes. Reachable difference: a word load at an unnamed offset announces under the fix, silently under the variant. This is exactly the class the adjudicator itself overturned a disclosure for ("len is an input of the access function, so the closure's own rule makes access width a cell to row, not a disclosure").
+Catch: make one session's *first* default access wide — e.g. R4's +0x0c load as LD_W (want still 0; R4 lines still 1; line text unchanged); under the gate R4 lines goes to 0. One probe edit, zero new rows.
+
+**Breach 3 — gated keeps on the served arms; the "would red them" derivation covers only the ungated keep.**
+Edits: in case 0x00 (likewise 0x04): `if (writeflag == MEM_WRITE && idata) d->memcreg.memc_chipid = idata;` (idata gate), and the same with `&& controller == 1` (controller gate).
+Derivation: the only stores to +0x00/+0x04 anywhere are R12's two byte stores from r0, value 0, through controller 0 (READ: R12's msession). The idata gate never fires (stores are 0), so R12 00 r2 still reads 0x80 and R12 04 r4 still 0x1; the controller gate never fires (no served store through controller 1 exists in any session). Nothing else writes those fields in the shipped fix. All 118 green.
+Catch: make R12's served stores nonzero (closes the idata gate and re-confirms the ungated keep at no row cost); add one served store through +0x100/+0x104, nonzero, read back (closes the controller gate). Note a keep gated on `!warned_memconf` is also green (R12's served stores follow the memconf store); a served store placed before any memconf announce closes it.
+
+**Breach 4 — the {controller 0 × default store} readback cell is open; the closure's own 2×2 is not delivered.**
+Edit: in the default arm: `if (writeflag == MEM_WRITE && controller == 0) d->memcreg.memc_chipid = idata;` (chiprev/memconf likewise).
+Derivation: R5's +0x18 store is the suite's only controller-0 default write, and R5 reads back only +0x18 (READ: three accesses), which the mis-target does not touch — R5 r2 still reads 0. R10's default store is through controller 1; the gate fails. R3's default access is a read; R8's rows read only +0x7c..+0x87. No row reads a served field after a controller-0 default store. All 118 green.
+Catch: add LD +0x00/+0x04/+0x08 (want 0x80/0x1/0x3) after R5's store — three rows.
+
+**Breach 5 — truncation of the printed store value.**
+Edit: the memconf notice's `(int)idata` → `(int)(idata & 0xff)` (and/or line 133's).
+Derivation: every driven store value is ≤ 0xff — 0xff, 0x05, 0x00, 0x07, 0x5a, and R12's word 0x000000ff (READ: the session value lists). The mask is the identity on all of them; every value-pinned text row stays green. Reachable difference: a word store of 0x000012ff prints 0x12ff under the fix, 0xff under the variant.
+Catch: change R12's word-store constant to a value above 0xff (e.g. 0x000012ff — RLEN1 still reads the 0x00 lane and stays red); for the default-notice member, the wide default store of breach 2's repair with a >0xff value closes it.
+
+**Conditional breach 6 — offset-bit gate on the default announce (one fact unsettleable from the packet).**
+Edit: line 127 → `if (!d->warned_default && (relative_addr & 0x08))`.
+Derivation: every rowed first-announce offset — +0x7c (R3 7c line), +0x0c (R4, R7, R10 line text), +0x18 (R5 line text), +0xff (R11 line text) — has bit 3 set; their bitwise intersection is exactly 0x08, so this is the unique single-bit gate passing all rowed announces; post-latch accesses are quiet regardless. NOT SETTLEABLE FROM THE PACKET: R8's default latch-setter offset (its msession call is not inlined). If that setter lacks bit 3, R8 lines (want 2) catches the edit; if it carries bit 3 (e.g. +0x0c/+0x18/+0x7c), the edit is green and is a breach. The single settling fact: the setter's offset in R8's msession. Catch if green: a bit-3-less first announce, e.g. R4's first default load at +0x40 with the text row.
+
+**FILED (not breaches; disclose, don't fix now):**
+- Fold test/clear widened into bit 9 (`& 0x300`, `&= ~0x300`) and the `>= 0x100` form of the fold test: equivalent on *every* reachable access — the window is 0x200 bytes (READ: the inlined memory_device_register call), so bit 9 is never set. Stronger than the OR-keep disclosure (which is config-limited); deserves the same one-line treatment.
+- The memconf announce gated off for controller-1 wide stores (`&& !(controller && len > 1)`): the (ctl1, wide) point of the memconf notice matrix is undriven (R7/R9 stores are bytes; R12's wide store is ctl0). Catch: widen R7's store to a word (its printed value, 0x7, is unchanged).
+- The notice prefix `[ mvme187_memc: ` is pinned by no row — but a string-literal edit is outside the enumerated edit shapes (predicates, masks, operand swaps, keeps, widths), so filed as scope.
+
+**DENOMINATOR (cells swept; a zero is checkable against this):**
+
+```
+axis                                                     cells   status
+{ctl0,ctl1} x {test,set} x {memconf,default} latches         8   closed (R3 no 0x5/0x0, R9, R4, R10)
+fold test: narrowed, widened b0-b7, bit 9, >=0x100 form     10   closed on b0-b7 by R11 line text
+                                                                 (+0xff carries every bit; N5's own argument);
+                                                                 bit 9 / >=0x100 equivalent (filed)
+fold clear: narrowed, widened b0-b7, bit 9                   10   closed (FCL_b0-b6, N4; rows R11/R10/R6/R7);
+                                                                 bit 9 equivalent (filed)
+selector: drop b0-b7, word-granular, case-label edits/adds   12   closed (ctl rows, R4 0c, R11, R8, N21, SEL_*)
+read/write lengths hard-coded; wide reads at served offsets    6   closed (RLEN1, WLEN1, R12 w00/h08)
+width x default announce                                      1   OPEN -- breach 2
+default notice x controller x direction (ctl1 write-first)   1   OPEN -- breach 1
+width x controller x memconf notice                          1   open -- filed
+keeps: {memconf,default,served} x {ungated, bit-mask, ctl0,   21   memconf closed (A, T2, N6, N7, N19);
+ ctl1, latch-set, latch-unset, idata}                               default closed (D12, N8, N9c/d, R5/R10
+                                                                   values); served OPEN on idata and ctl1
+                                                                   -- breach 3; latch-unset filed
+mis-targets x {ungated, ctl0-only}                          10   ungated closed (N9a-d); ctl0-only on
+                                                                   default OPEN -- breach 4
+printed store value {<=0xff, >0xff} x {memconf, default}      4   >0xff undriven -- breach 5
+printed offset {folded, unfolded}                             2   closed (R10 line text: +0x10c prints 0xc)
+default announce x offset-bit gates                           8   bit 3 passes all rowed announces --
+                                                                   conditional breach 6
+operand swaps (idata/odata/controller/offset/len in the       8   closed (ctl rows, text rows, R3 cnf line)
+ two memory calls and the prints)
+notice strings: pinned fragments vs prefix                   —   prefix unpinned (filed, out of shape)
+                                                   total    102
+```
+
+## 2. ENUMERATION — the class closure against the code
+
+READ/REASONED, cell by cell:
+- The 8 latch cells {ctl0,ctl1}×{test,set}×{memconf,default}: all delivered and rowed — memconf set ctl0 (R3 cnf line), test ctl0 (R3 no 0x0), set ctl1 (R9 cnf line), test ctl1 (R3 no 0x5); default set ctl0 (R4), test ctl0 (R4's later ctl0 default loads, lines=1), set ctl1 (R10 line text), test ctl1 (R10's second load, lines=1). Closed.
+- Fold clear bits 0-7: all eight rowed (0,1,5,6 at R11 101/102/120/140; 4 at R10 118; 2 at R6 104/R7 r2; 3 at R6 108/R3 108; 7 at R11 180). Closed. Fold test: the +0xff first access with a controller-0 text row closes the whole widening axis, beyond the ruling's bit-7 claim. Selector bits 0-7: all rowed. Closed.
+- Width and idata==0: rowed as claimed (R12; R9's 0x00-first). Closed *at the driven points*.
+- OPEN CELLS: (i) {ctl0 × default store × served-field readback} — the section-0 claim "{controller 0, 1} x {memconf store, default store} -> every served field read back after each store category (R3, R9, R10, R12)" lists no controller-0 default store with served readback; R5 (the only one) reads back only +0x18. Breach 4 lives here. (ii) The served-store category's {idata, controller} spans: R12's served stores are zero-valued and ctl0-only, so the keep gates on those axes are unexercised (breach 3). (iii) The notice matrix points (ctl1, write, default) and (ctl1, wide, memconf) are undriven (breach 1; filed). (iv) The default announce's len and offset-bit conjuncts are undriven (breaches 2 and 6).
+
+## 3. RECORDS
+
+By the 63-variant measurements: none refuted. I reconciled all 28 exact predictions against SCORES.txt (N1 116, N2 116, N3 117, N4 117, N5 117, N6k3 116, N6k1 117, N6k2 116, N7 114, N8 117, N9a 116, N9b 115, N9c 117, N9d 117, N19 114, N21 114, WLEN1 116, RLEN1 117, IDATA_GATE 116, SEL_b0/b1/b5/b6 116, SEL_b7 115, FCL_b0/b1/b5/b6 117) and re-derived red sets for N21, SEL_b7, N9a-d, N6_keep1/2/3, N1/N2/N3, IDATA_GATE, FCL_b4 — all match. The six 'at least' newcomers and the 29 table-2 sets are each red on supersets, as declared in advance. Row counts reconcile: 118 rows = 21 + 97; 44 new = R3's 5 + R7 pc + 9 + 9 + 13 + 9; 63 = 29 + 28 exact + 6 at-least.
+
+Refuted by the packet's own inlined code and rows (not by the table — no such variant ran, which is precisely the point):
+- Clause (e): "a write notice whose first default access is through controller 1 (no single edit distinguishes it: the notice is one call)". FALSE — READ: lines 128-134 show *three* fatal() calls, and the value fragment has its own predicate (line 132); the single edit `&& controller == 0` there keeps all 118 rows green (breach 1). Correction: the cell is distinguishable and rowable; row it.
+- Clause (e): "a served case that kept its store would red them -- DERIVED, no variant of that shape ran". TRUE only for the ungated (and latch-set-gated) keep; FALSE as a closure of the category — the idata-gated and ctl1-gated keeps are green because R12's served stores are zero and ctl0-only (breach 3). Correction: derive per gate, or run the shape.
+
+## 4. THE WRONG ACCEPTED DISPOSITION
+
+(4) is wrong, flatly: its premise ("the notice is one call" → "no single edit distinguishes it") is refuted by the code in section 1, and the missing cell is cheaply rowable (breach 1). (2) is wrong as worded: the DERIVED catch is sound for the ungated keep, but accepting it closed the served-store category is a mistake — the gated keeps are green (breach 3), so "no variant of that shape ran" left real members unmeasured *and* unrowed. (1) stands: the at-least convention was declared in PRETABLE_3 before the runs and each is satisfied on a superset. (3) stands: memconf reads 0x3 at this configuration (READ: ctl memconf r2), so bits 0-1 are already set and an OR-keep is unobservable — the disclosure matches ruling N6.
+
+## 5. VERDICT
+
+REPAIR. By severity: breach 4 (a reachable silent state-corruption cell the closure's own 2×2 claims closed — three rows in R5); breach 1 (a standing disclosure is false; the notice is the model's only contract at unmodelled offsets — a reorder plus one text row); breach 2 (the adjudicator's own N15 rule, unapplied to the default arm — one instruction-width change); breach 3 (two constants plus one ctl1 served store); breach 5 (one constant). Settle breach 6 with one fact (R8's setter offset); add the two equivalence disclosures (bit-9 masks, `>=0x100` form). All repairs are additive rows or constant changes; nothing needs undoing.
+
+GLMP3MEMC: 102 CELLS SWEPT 5 BREACHES 2 FALSE RECORDS VERDICT:REPAIR

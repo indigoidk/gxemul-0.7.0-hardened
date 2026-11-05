@@ -3459,6 +3459,104 @@ MANIFEST = {
         (CLASS_RESEARCH, "#575: the 70-row detector frozen for test-variant table 3 (SCORES.txt: base 70/70, HEAD 60/70, 51 "
                          "variants as predicted, the equivalent g2 and u9 green); the shipped probe equals it but for printed text "
                          "(PROBE_IDENTITY.md at the landing), preserved as evidence"),
+    #  #581 mvme187memcoob: the MVME187 memory controller ended the emulator on a memconf store and on any unnamed offset, and
+    #  indexed its 124-byte register struct with the folded offset before its switch.  The SHIPPING detector is CLASS_DETECTOR and
+    #  gated in gate_arm.sh (gate 14) in the same commit; its wiring is DERIVED, not asserted here.  The artifact scripts below are
+    #  evidence preserved beside the round's witness and six test-variant tables, run by no gate on purpose.
+    "mvme187_memc_probe.py":
+        (CLASS_DETECTOR, "#581 mvme187memcoob: each served memory-controller offset reads its own field, a memconf store and any "
+                         "other offset's access are not kept, each category is announced once per device, and no indexed read "
+                         "remains -- 213 rows over cold -E mvme88k -e mvme187 -M 64 sessions (one guest ld.bu/st.b per step, and "
+                         "sixteen multi-access sessions R3-R18); gate_arm.sh pins RESULT 213/213 by EQUALITY and every row by "
+                         "name.  Witness artifacts/mvme187memcoob/witness_20261104/ (13/21 on the committed build, "
+                         "SYMPTOM=PRESENT); test-variant tables det_20261104/table1/, table2/, r3_20261105/table3/, "
+                         "r4_20261105/table4/, r5_20261105/table5/ and r7_20261105/table6/ (table 6: base 213/213; of table 5's "
+                         "665 green variants, 24 red and 641 green)."),
+    "artifacts/mvme187memcoob/witness_20261104/probe_frozen.py":
+        (CLASS_WITNESS, "#581: the rung-3 witness as run (21 rows, frozen): 13/21 on the committed build with the symptom PRESENT "
+                        "(prefix_head.out), /bin/true 8/21 and a missing binary 0/21, each CONTROL=FAIL (null.out, nobin.out); "
+                        "ungated by design."),
+    "artifacts/mvme187memcoob/witness_20261104/try1_negdefect/probe_frozen.py":
+        (CLASS_RESEARCH, "#581: the witness's first run, whose negative control passed `-e` and so still constructed the machine "
+                         "(witness_20261104/WITNESS.md, apparatus fact 2); preserved as evidence"),
+    "artifacts/mvme187memcoob/draft_20261104/patch_mvme187.py":
+        (CLASS_RESEARCH, "#581: the measure seat's byte-level patcher for the draft variants A1-A3 (draft_20261104/), preserved as "
+                         "evidence"),
+    "artifacts/mvme187memcoob/det_20261104/probe52_draft_frozen.py":
+        (CLASS_RESEARCH, "#581: the 52-row first detector frozen as drafted, preserved as evidence"),
+    "artifacts/mvme187memcoob/det_20261104/probe52_frozen.py":
+        (CLASS_RESEARCH, "#581: the 52-row first detector frozen for its legs (det_20261104/SCORES.txt: base 52/52, HEAD 26/52), "
+                         "preserved as evidence"),
+    "artifacts/mvme187memcoob/det_20261104/legs56/probe56_frozen.py":
+        (CLASS_RESEARCH, "#581: the 56-row probe frozen for test-variant table 1 (det_20261104/table1/SCORES.txt: base 56/56, 19 "
+                         "variants, every one red), preserved as evidence"),
+    "artifacts/mvme187memcoob/det_20261104/memc_variants.py":
+        (CLASS_RESEARCH, "#581: table 1's variant set (19 variants on the 56-row probe), preserved as evidence"),
+    "artifacts/mvme187memcoob/det_20261104/memc_variants_2.py":
+        (CLASS_RESEARCH, "#581: table 2's variant set (29 variants on the 74-row probe, every one red: "
+                         "det_20261104/table2/SCORES.txt), preserved as evidence"),
+    "artifacts/mvme187memcoob/det_20261104/table2/probe74_frozen.py":
+        (CLASS_RESEARCH, "#581: the 74-row probe frozen for test-variant table 2 (det_20261104/table2/SCORES.txt: base 74/74), "
+                         "preserved as evidence"),
+    "artifacts/mvme187memcoob/r3_20261105/memc_variants_3.py":
+        (CLASS_RESEARCH, "#581: table 3's variant set (63 variants on the 118-row probe, every one red: "
+                         "r3_20261105/table3/SCORES.txt), preserved as evidence"),
+    "artifacts/mvme187memcoob/r3_20261105/table3/probe118_frozen.py":
+        (CLASS_RESEARCH, "#581: the 118-row probe frozen for test-variant table 3 (r3_20261105/table3/SCORES.txt: base 118/118), "
+                         "preserved as evidence"),
+    "artifacts/mvme187memcoob/p3_20261105/p3_variants.py":
+        (CLASS_RESEARCH, "#581: the repair-pass-3 seats' findings as test variants on the 118-row probe "
+                         "(p3_20261105/table_p3/SCORES.txt: 34 variants, every one green), carried into table 4, where all 112 "
+                         "variants are red (r4_20261105/table4/SCORES.txt); preserved as evidence"),
+    "artifacts/mvme187memcoob/p3_20261105/table_p3/probe118_p3.py":
+        (CLASS_RESEARCH, "#581: the 118-row probe frozen for the pass-3 measurement (p3_20261105/table_p3/SCORES.txt: base "
+                         "118/118), preserved as evidence"),
+    "artifacts/mvme187memcoob/r4_20261105/memc_variants_4.py":
+        (CLASS_RESEARCH, "#581: table 4's variant set (112 variants on the 148-row probe, every one red: "
+                         "r4_20261105/table4/SCORES.txt), preserved as evidence"),
+    "artifacts/mvme187memcoob/r4_20261105/table4/probe148_frozen.py":
+        (CLASS_RESEARCH, "#581: the 148-row probe frozen for test-variant table 4 (r4_20261105/table4/SCORES.txt: base 148/148), "
+                         "preserved as evidence"),
+    "artifacts/mvme187memcoob/r5_20261105/memc_variants_5.py":
+        (CLASS_RESEARCH, "#581: table 5's walker and variant set (3,575 variants on the 206-row probe, 665 of them green: "
+                         "r5_20261105/table5/TALLY.txt), preserved as evidence"),
+    "artifacts/mvme187memcoob/r5_20261105/base206/probe206_run.py":
+        (CLASS_RESEARCH, "#581: the 206-row probe as run for repair 5's base leg (r5_20261105/IMPL_NOTE.md, base206/), preserved "
+                         "as evidence"),
+    "artifacts/mvme187memcoob/r5_20261105/table5/probe206_frozen.py":
+        (CLASS_RESEARCH, "#581: the 206-row probe frozen for test-variant table 5 (r5_20261105/table5/SCORES.txt: base 206/206), "
+                         "preserved as evidence"),
+    "artifacts/mvme187memcoob/r6_20261105/textonly_check.py":
+        (CLASS_TOOL, "#581: the text-only proof for the records corrections (r6_20261105/TEXTONLY_PROOF.txt; "
+                     "r7_20261105/TEXTONLY_PROOF_r7.txt and TEXTONLY_PROOF_p6rec.out), preserved as run"),
+    "artifacts/mvme187memcoob/r7_20261105/step1/probe206_frozen.py":
+        (CLASS_RESEARCH, "#581: the 206-row probe frozen for repair 6's step 1, which measured the regress review's eight "
+                         "own-latch variants green on it (r7_20261105/step1/SCORES.txt), preserved as evidence"),
+    "artifacts/mvme187memcoob/r7_20261105/memc_pretable_6.py":
+        (CLASS_RESEARCH, "#581: repair 6's predictions for table 6 (r7_20261105/PRETABLE_6.out, table6/PRED_MAP_6.txt), written "
+                         "before the table; preserved as evidence"),
+    "artifacts/mvme187memcoob/r7_20261105/memc_members_213.py":
+        (CLASS_RESEARCH, "#581: repair 6's MODEL-ONLY analysis of table 5's green cells against session R18 "
+                         "(r7_20261105/MEMBERS_213.txt; no measurement), preserved as evidence"),
+    "artifacts/mvme187memcoob/r7_20261105/sim_gate_memc.py":
+        (CLASS_RESEARCH, "#581: repair 6's replay of the 213-row gate block over table 6's banked logs "
+                         "(r7_20261105/SIM_GATE_MEMC.out), preserved as evidence"),
+    "artifacts/mvme187memcoob/r7_20261105/table6/probe213_frozen.py":
+        (CLASS_RESEARCH, "#581: the 213-row probe frozen for test-variant table 6 (r7_20261105/table6/SCORES.txt: base 213/213; of "
+                         "table 5's 665 green variants, 24 red and 641 green); the shipped probe equals it but for printed text "
+                         "(landing_20261105/PROBE_IDENTITY_memc213.md)"),
+    "artifacts/mvme187memcoob/r7_20261105/memc_reg2_check.py":
+        (CLASS_RESEARCH, "#581: MODEL-ONLY checks of the regress follow-up's record items B and C on the 213-row instrument "
+                         "(r7_20261105/REG2_CHECK.txt; no measurement), preserved as evidence"),
+    "artifacts/mvme187memcoob/r7_20261105/memc_reg2_c2.py":
+        (CLASS_RESEARCH, "#581: MODEL-ONLY follow-up to memc_reg2_check.py for item C (r7_20261105/REG2_CHECK.txt; no "
+                         "measurement), preserved as evidence"),
+    "artifacts/mvme187memcoob/r7_20261105/apply_r7_records.py":
+        (CLASS_TOOL, "#581: repair 6's text-only edits to the probe's docstring (r7_20261105/IMPL_NOTE.md, step 5), preserved "
+                     "as run"),
+    "artifacts/mvme187memcoob/r7_20261105/apply_r7_records_b.py":
+        (CLASS_TOOL, "#581: repair 6's second text-only pass on the probe's docstring (r7_20261105/IMPL_NOTE.md, step 5), "
+                     "preserved as run"),
 }
 
 #  DATED, NAMED DEBT -- not a count and not a silent allowlist.  gate_offline.sh MEASURED that

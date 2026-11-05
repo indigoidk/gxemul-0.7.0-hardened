@@ -1,0 +1,11 @@
+Private list: (1) the apply-check count, which arrives as a background-task notification; (2) T5_PREP.md, which depends on (1). Nothing else is outstanding, so I'll wait for the notification rather than poll.
+
+MYTHOSPREPMEMC5
+VERDICT: TABLE 5 PREPARED, 3,575 variants (112 old / 3,463 new), all 3,575 apply exactly once; the L-walk predicts 517 survivors inside the ruling's denominator, so the table is expected to show the 206 rows do not close class L.
+
+- Denominator: 37,974 cells walked = class L of section 3 (11 positions: the ruling's ten plus ME, the memconf twin of DA; latch ops x2 targets, keep ops x3 fields; gates = all 81 conjunctions over W/C/M/D, 64 idata-bit tests, 16 offset-bit tests at H/DT/DB/DA/TL; plus gated sets GS, gated tests TA/TO, gated notice predicates NV/ND). 6,676 are vacuous (semantic no-ops, not built). Of 31,298 mutants: 26,999 predicted red in 2,686 observable traces -> 2,798 built; 4,299 predicted green -> 665 built (106 UNFIRED, 411 UNOBSERVED, 148 NOCHANGE representatives).
+- Not made into variants: the vacuous cells, 24,201 red cells equivalent to a built one (same trace on every probe access) and 935 NOCHANGE cells (one build per statement); each is listed under its representative in PRETABLE_5.out.
+- Predictions are exact for every new cell and for 55 old variants plus HEAD and the null media: the frozen probe runs against a modelled device; calibration `check4` reproduces all 60 table-4 measurements and the base-206 output column for column. The 57 remaining old variants carry table 4's measured sets as "at least" minus the ten re-wanted rows.
+- Finding: phase 10 has no controller-0 memconf store and phase 11 no controller-1 default store (UNFIRED, 58 groups in-bound; 48 more are the CI/CR word-store superset outside the ruling's alphabet); 411 UNOBSERVED groups are mis-targeted keeps and toggles never read back (details in T5_PREP.md and the SURVIVOR SUMMARY of PRETABLE_5.out).
+- Files written in r5_20261105/: memc_variants_5.py, PRETABLE_5.out (02:32:32, before any table5 output), table5/probe206_frozen.py (cmp-identical to the in-tree probe), table5_memc.sh (bash -n clean; scores PRED=match/MISS per variant), T5_APPLY_CHECK.txt, T5_PREP.md.
+- Expected run time about 75-90 minutes (1.26 s per leg measured on table 4). Nothing was built, run or edited outside that directory.
