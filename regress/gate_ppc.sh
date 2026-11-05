@@ -284,6 +284,42 @@ else
     check "ppc_llsc rows red"   "$llscbad" 0
 fi
 
+# ---- ppccrandcorc (#575): crandc and crorc computed NAND and NOR -- its 70-row rung-3 detector ---------------------------------------
+# X(crandc) and X(crorc) set CR[BT] on !(CR[BA] & CR[BB]) and !(CR[BA] | CR[BB]); PowerPC Book I v2.01 defines CR[BA] & ~CR[BB] and
+# CR[BA] | ~CR[BB].  `-E bareppc -M 64` (PPC970) and `-C PPC603` run each CR logical instruction on a real guest through the real
+# decoder, CR seeded from the debugger; the truth-table, edge and `hi' rows pre-set the destination to the INVERSE of the
+# architectural result, two round-2 rows pre-set it EQUAL (the only way a BB read of CR[BT] shows), and the four round-3 rows
+# compare the whole CR (round 3 corrected "every destination pre-set to the INVERSE": pass 3, R7); the five correct siblings run
+# the same table as controls; edge rows pin BT 0 and 31; two rows pin the BA/BB field masks with every submask alias seeded
+# opposite; four round-2 rows close every field mask 0..30, the BB read of CR[BT] and the read-before-clear order (the closure by
+# simulation: regress/artifacts/ppccrandcorc/r2_20261105/CLOSURE.md, 239 cells); four round-3 whole-CR rows close the read-mask
+# constants and the set literals (r3_20261105/CLOSURE3.md, 453 cells: 56 escaped the 66 rows; on the 70, 0 undetected beyond 36
+# EQUIVALENT and 1 DISCLOSED -- the regress review, R1, corrected "0 escape the 70").  BEFORE the NetBSD
+# prerequisite, like the blocks above.  Test-variant tables: regress/artifacts/ppccrandcorc/table1_20261105/, r2_20261105/ and
+# r3_20261105/ (the pass-1 ruling: regress/artifacts/ppccrandcorc/adj_p1_20261105/).
+CLLOG=$LOGDIR/ppc_crlogic.log
+python3 -u ppc_crlogic_probe.py "$PMAX" gate > "$CLLOG" 2>&1 || true
+if [ "$(grep -cx 'PPC_CRLOGIC_PROBE_DONE' "$CLLOG")" != 1 ]; then
+    note "ppc_crlogic: completion sentinel missing or duplicated; last lines follow"
+    tail -5 "$CLLOG" | sed 's/^/       /'
+    check "ppc_crlogic probe completed" "no" "yes"
+else
+    check "ppc_crlogic probe completed" "yes" "yes"
+    check "ppc_crlogic sentinel is the last line" "$(tail -n 1 "$CLLOG")" "PPC_CRLOGIC_PROBE_DONE"
+    for k in RESULT CONTROL; do
+        check "ppc_crlogic $k= lines" "$(grep -c "^PPC_CRLOGIC_$k=" "$CLLOG")" "1"
+    done
+    check "ppc_crlogic RESULT=70/70" "$(grep -cx 'PPC_CRLOGIC_RESULT=70/70' "$CLLOG")" "1"
+    check "ppc_crlogic CONTROL=OK"   "$(grep -cx 'PPC_CRLOGIC_CONTROL=OK' "$CLLOG")" "1"
+    for v in "ctl session" "ctl live" "ctl seed holds" "ctl cr seed" "ctl mfcr" "neg apparatus" "64 session" "64 crandc 00" "64 crandc 01" "64 crandc 10" "64 crandc 11" "64 crorc 00" "64 crorc 01" "64 crorc 10" "64 crorc 11" "64 others" "64 mfcr" "64 disasm" "s64 session" "s64 crand 00" "s64 crand 01" "s64 crand 10" "s64 crand 11" "s64 cror 00" "s64 cror 01" "s64 cror 10" "s64 cror 11" "s64 crnor 00" "s64 crnor 01" "s64 crnor 10" "s64 crnor 11" "s64 creqv 00" "s64 creqv 01" "s64 creqv 10" "s64 creqv 11" "s64 crxor 00" "s64 crxor 01" "s64 crxor 10" "s64 crxor 11" "s64 others" "s64 mfcr" "s64 disasm" "edge session" "edge crandc bt0" "edge crorc bt31" "edge others" "edge mfcr" "edge disasm" "64 crandc hi" "64 crorc hi" "64 crandc bbmask" "64 crandc order" "64 crorc bamask" "64 crorc bbmask" "64 crorc baread" "64 crorc bbread" "64 crandc setbits" "64 crorc setbits" "32 session" "32 crandc 00" "32 crandc 01" "32 crandc 10" "32 crandc 11" "32 crorc 00" "32 crorc 01" "32 crorc 10" "32 crorc 11" "32 others" "32 mfcr" "32 disasm"; do
+        check "ppc_crlogic row: $v" "$(count "$CLLOG" "^$v  .*ok$")" "1"
+    done
+    clok=$(count "$CLLOG" " ok$"); clbad=$(count "$CLLOG" " FAIL$"); clrun=$((clok + clbad))
+    check "ppc_crlogic rows run"   "$clrun" 70
+    check "ppc_crlogic rows green" "$clok" 70
+    check "ppc_crlogic rows red"   "$clbad" 0
+fi
+
 need_file "$IMAGES/netbsd401-macppc-GENERIC"
 
 note "binary : $PMAX"

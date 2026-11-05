@@ -1,0 +1,1725 @@
+Reading additional input from stdin...
+OpenAI Codex v0.166.0
+--------
+workdir: C:\DocumentNoSnc\CC\GXEMUL
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: ultra
+reasoning summaries: none
+session id: 01a1aaa7-90ee-7b23-bc25-f2665f7c2e5f
+--------
+user
+Read the file C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/cloud_r3/P2_R575_CODEX.md in full -- a review packet for a software-correctness hardening project on the GXemul emulator (correct results and regression tests in its own C code) -- and answer it exactly as its own YOUR QUESTIONS section directs, beginning with its token CODEXP2R575.  The repository under review is C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC (read only: do not edit, build or run anything); ignore any other src/ directory under C:/DocumentNoSnc/cc/GXEMUL, which is pristine 2021 upstream and not this fork.
+codex
+I’ll read the full review packet, then inspect only GXEMUL-SEC as needed. I won’t edit, build, or run repository code.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-Content -Raw -LiteralPath 'C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/cloud_r3/P2_R575_CODEX.md'" in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 110ms:
+Begin your answer with the token CODEXP2R575 on its own line, then `model: <your model name>`, then your verdict line.  Answer in
+plain text; do not write files.  You may READ GXEMUL-SEC/ to check a premise (read only: do not edit, build or run); say which premises you checked.
+
+## PROJECT FRAMING -- a defensive software-robustness project
+
+GXemul is a computer-architecture emulator: a developer tool that runs legacy operating systems in a software sandbox for research
+and preservation.  This fork is a HARDENING effort -- ordinary software-correctness engineering on the emulator's own C code: finding
+and fixing out-of-bounds array accesses, missing bounds checks, unchecked lengths and crash-on-malformed-input defects in the emulated
+device models, and shipping regression tests that keep them fixed.  There is no attack, no target system and no affected third party;
+the 'guest' is an operating-system image under test inside the emulator, and the 'host' is the emulator process on the developer's own
+machine.  A 'test variant' is a deliberately broken copy of a fix used in mutation testing to measure whether the regression suite
+notices the breakage; 'detect' means a regression row turns red.  Every question below is about making this emulator's code correct
+and its tests complete.
+
+# #575 ppccrandcorc PASS 2 -- the round's diff (two product lines, four rows, the gate block, the records)
+
+## READ THIS FIRST -- PLEASE DO NOT SIMPLY RATIFY
+
+A recent panel had seven of nine seats confirm a premise its brief stated wrongly.  **Check the premises, not just the
+derivations.**  Where I state something as fact, ask whether it is true; a seat that re-derives a premise from something this
+packet did NOT give it is worth more than a seat that agrees.  **The tree under review is `GXEMUL-SEC/src/`** (the hardened
+fork); pristine 2021-upstream copies of GXemul exist elsewhere and are NOT this fork.  Every fact you need is inlined; name any
+premise you cannot settle from this packet rather than guessing.  Where an arithmetic claim appears (an offset, a count, a
+range), ENUMERATE it rather than reasoning about it.  **VERDICT LINE FIRST.**
+
+## 0. What this pass reviews
+
+The defect: X(crandc) and X(crorc) set CR[BT] on !(CR[BA] & CR[BB]) and !(CR[BA] | CR[BB]) (NAND, NOR); Book I v2.01 (section 3)
+defines CR[BA] & ~CR[BB] and CR[BA] | ~CR[BB].  The round was held at pass 1 from 2026-10-30 and released on 2026-11-05; the pass-1
+ruling (Mythos 5.1, APPLY-WITH-CHANGES; its rulings R1-R10 verbatim in section 5) was implemented as written: the two expression
+edits only; four owed rows (62 total); the gate-13 block pinned at 62/62; table 1 with the nine ruled variants plus the field-mask
+weakenings the owed rows exist for.  The fix was propagated to est/, build/, build-asan/ and /tmp/gxsec-build and passes the
+two-part clearance on every build tree; the probe scored 62/62 on build/.  Table 1 (section 4): base 62/62, HEAD 52/62, all 15
+variants red, 17 of 17 runs EXACTLY as the PRETABLE predicted (its predictions were computed by a simulator of the probe's sessions).
+
+## 1. The seven CR logical handlers as they now stand, and the opcode-19 decode (src/cpus/cpu_ppc_instr.c)
+
+```
+2720: X(crand) {
+2721:     uint32_t iword = ic->arg[0]; int bt = (iword >> 21) & 31;
+2722:     int ba = (iword >> 16) & 31, bb = (iword >> 11) & 31;
+2723:     ba = (cpu->cd.ppc.cr >> (31-ba)) & 1;
+2724:     bb = (cpu->cd.ppc.cr >> (31-bb)) & 1;
+2725:     cpu->cd.ppc.cr &= ~(1 << (31-bt));
+2726:     if (ba & bb)
+2727:         cpu->cd.ppc.cr |= (1 << (31-bt));
+2728: }
+2729: X(crandc) {
+2730:     uint32_t iword = ic->arg[0]; int bt = (iword >> 21) & 31;
+2731:     int ba = (iword >> 16) & 31, bb = (iword >> 11) & 31;
+2732:     ba = (cpu->cd.ppc.cr >> (31-ba)) & 1;
+2733:     bb = (cpu->cd.ppc.cr >> (31-bb)) & 1;
+2734:     cpu->cd.ppc.cr &= ~(1 << (31-bt));
+2735:     if (ba & !bb)   /*  #575: CR[BA] & ~CR[BB] (Book I); this was NAND  */
+2736:         cpu->cd.ppc.cr |= (1 << (31-bt));
+2737: }
+2738: X(creqv) {
+2739:     uint32_t iword = ic->arg[0]; int bt = (iword >> 21) & 31;
+2740:     int ba = (iword >> 16) & 31, bb = (iword >> 11) & 31;
+2741:     ba = (cpu->cd.ppc.cr >> (31-ba)) & 1;
+2742:     bb = (cpu->cd.ppc.cr >> (31-bb)) & 1;
+2743:     cpu->cd.ppc.cr &= ~(1 << (31-bt));
+2744:     if (!(ba ^ bb))
+2745:         cpu->cd.ppc.cr |= (1 << (31-bt));
+2746: }
+2747: X(cror) {
+2748:     uint32_t iword = ic->arg[0]; int bt = (iword >> 21) & 31;
+2749:     int ba = (iword >> 16) & 31, bb = (iword >> 11) & 31;
+2750:     ba = (cpu->cd.ppc.cr >> (31-ba)) & 1;
+2751:     bb = (cpu->cd.ppc.cr >> (31-bb)) & 1;
+2752:     cpu->cd.ppc.cr &= ~(1 << (31-bt));
+2753:     if (ba | bb)
+2754:         cpu->cd.ppc.cr |= (1 << (31-bt));
+2755: }
+2756: X(crorc) {
+2757:     uint32_t iword = ic->arg[0]; int bt = (iword >> 21) & 31;
+2758:     int ba = (iword >> 16) & 31, bb = (iword >> 11) & 31;
+2759:     ba = (cpu->cd.ppc.cr >> (31-ba)) & 1;
+2760:     bb = (cpu->cd.ppc.cr >> (31-bb)) & 1;
+2761:     cpu->cd.ppc.cr &= ~(1 << (31-bt));
+2762:     if (ba | !bb)   /*  #575: CR[BA] | ~CR[BB] (Book I); this was NOR  */
+2763:         cpu->cd.ppc.cr |= (1 << (31-bt));
+2764: }
+2765: X(crnor) {
+2766:     uint32_t iword = ic->arg[0]; int bt = (iword >> 21) & 31;
+2767:     int ba = (iword >> 16) & 31, bb = (iword >> 11) & 31;
+2768:     ba = (cpu->cd.ppc.cr >> (31-ba)) & 1;
+2769:     bb = (cpu->cd.ppc.cr >> (31-bb)) & 1;
+2770:     cpu->cd.ppc.cr &= ~(1 << (31-bt));
+2771:     if (!(ba | bb))
+2772:         cpu->cd.ppc.cr |= (1 << (31-bt));
+2773: }
+2774: X(crxor) {
+2775:     uint32_t iword = ic->arg[0]; int bt = (iword >> 21) & 31;
+2776:     int ba = (iword >> 16) & 31, bb = (iword >> 11) & 31;
+2777:     ba = (cpu->cd.ppc.cr >> (31-ba)) & 1;
+2778:     bb = (cpu->cd.ppc.cr >> (31-bb)) & 1;
+2779:     cpu->cd.ppc.cr &= ~(1 << (31-bt));
+2780:     if (ba ^ bb)
+2781:         cpu->cd.ppc.cr |= (1 << (31-bt));
+2782: }
+...
+4623:             bfa = (iword >> 18) & 7;
+4624:             ic->arg[0] = 28 - 4*bf;
+4625:             ic->arg[1] = 28 - 4*bfa;
+4626:             ic->f = instr(mcrf);
+4627:             break;
+4628:
+4629:         case PPC_19_CRAND:
+4630:         case PPC_19_CRANDC:
+4631:         case PPC_19_CREQV:
+4632:         case PPC_19_CROR:
+4633:         case PPC_19_CRORC:
+4634:         case PPC_19_CRNOR:
+4635:         case PPC_19_CRXOR:
+4636:             switch (xo) {
+4637:             case PPC_19_CRAND:  ic->f = instr(crand); break;
+4638:             case PPC_19_CRANDC: ic->f = instr(crandc); break;
+4639:             case PPC_19_CREQV:  ic->f = instr(creqv); break;
+4640:             case PPC_19_CROR:   ic->f = instr(cror); break;
+4641:             case PPC_19_CRORC:  ic->f = instr(crorc); break;
+4642:             case PPC_19_CRNOR:  ic->f = instr(crnor); break;
+4643:             case PPC_19_CRXOR:  ic->f = instr(crxor); break;
+4644:             }
+4645:             ic->arg[0] = iword;
+4646:             break;
+4647:
+4648:         default:goto bad;
+4649:         }
+4650:         break;
+4651:
+4652:     case PPC_HI6_RLWNM:
+```
+
+## 2. The diff (each against its pre-#575 backup)
+
+### 2a. src/cpus/cpu_ppc_instr.c (#575's two hunks; the file's other uncommitted change is another round's)
+
+```diff
+--- a/src/cpus/cpu_ppc_instr.c
++++ b/src/cpus/cpu_ppc_instr.c
+@@ -2733,5 +2733,5 @@
+     bb = (cpu->cd.ppc.cr >> (31-bb)) & 1;
+     cpu->cd.ppc.cr &= ~(1 << (31-bt));
+-    if (!(ba & bb))
++    if (ba & !bb)   /*  #575: CR[BA] & ~CR[BB] (Book I); this was NAND  */
+         cpu->cd.ppc.cr |= (1 << (31-bt));
+ }
+@@ -2760,5 +2760,5 @@
+     bb = (cpu->cd.ppc.cr >> (31-bb)) & 1;
+     cpu->cd.ppc.cr &= ~(1 << (31-bt));
+-    if (!(ba | bb))
++    if (ba | !bb)   /*  #575: CR[BA] | ~CR[BB] (Book I); this was NOR  */
+         cpu->cd.ppc.cr |= (1 << (31-bt));
+ }
+```
+
+### 2b. regress/ppc_crlogic_probe.py (four rows, the records)
+
+```diff
+--- a/regress/ppc_crlogic_probe.py
++++ b/regress/ppc_crlogic_probe.py
+@@ -24,10 +24,24 @@
+ cror, crnor, creqv, crxor) run the same table as controls of the oracle and the encoder.
+
+-CLAUSE (e) -- what this instrument does not cover:
++CLAUSE (e) -- what this instrument catches (test-variant table 1, regress/artifacts/ppccrandcorc/table1_20261105/table1/
++SCORES.txt, PRETABLE.out written before it with predictions computed by its v575.py simulator; 15 variants on these 62 rows,
++all 15 red, each exactly as predicted): each handler's defect restored (b1, b2); both bodies made identity (c, the ruled null
++medium of the handlers); the complement moved to BA, dropped, or the operator crossed between the two edited lines (d1-d6);
++the BA/BB field mask weakened to & 7 or & 15 (m1-m4: the `hi' rows alone); the BT field mask weakened to & 7 (t1, t2).  The
++pre-fix build scores 52/62 (the ten DISC rows); /bin/true 5/62 and /bin/false 1/62 score CONTROL=FAIL, and an absent binary
++stops the probe before any row with no sentinel.
++  and does not cover:
+   (1) crnand (19/225) is not decoded at HEAD and stops the CPU; it is filed separately as
+       `ppccrnandundec' and is not run here.
+   (2) The dyntrans fast path for these handlers is the handler itself (no separate
+       translation), so one cold run per instruction exercises it.
+-  (3) The edge rows pin destination bits 0 and 31; the BA/BB edges are not separately rowed.
++  (3) The edge rows pin destination bits 0 and 31 and the `hi' rows pin the BA/BB field masks (BA, BB >= 16 with every
++      submask alias holding the opposite value); an input at index 0 or 31 is not separately rowed.
++  (4) The signed shift `1 << (31-bt)' at bt = 0 (all seven handlers) is `ppccrlogicshift', filed separately: on this
++      toolchain it gives the architectural result, so no row here can see it (the pass-1 ruling, R2).
++  (5) Not claimed (the pass-1 ruling: recommended, not owed): an extra CLEAR of a bit that is neither a source nor a
++      destination -- the table seeds hold no ones there, so `others' sees only extra sets; and a body that TOGGLES the
++      destination instead of clearing it -- every row pre-sets the destination to the inverse of the result, and toggling
++      the inverse gives the right value; a row pre-setting the destination EQUAL to a result of 0 would see it.
+
+ Sentinel: PPC_CRLOGIC_PROBE_DONE (plus PPC_CRLOGIC_RESULT=n/N, PPC_CRLOGIC_CONTROL=OK|FAIL)
+@@ -244,4 +258,32 @@
+ row("edge others", hex(ecr & ~emask & 0xFFFFFFFF) if ecr >= 0 else "none",
+     hex(eseed & ~emask & 0xFFFFFFFF), "no CR bit but bits 0 and 31 moved")
++#  The edge session runs mfcr and captures its disassembly like the table sessions; both are scored (pass-1 ruling R4: `edge
++#  disasm` is the only encoder pin at the BT field extremes).
++row("edge mfcr", hex(eregs.get(10, -1)), hex(ecr) if ecr >= 0 else "none", "mfcr r10 reads the same CR (second channel)")
++enames = [m for _, m, _ in edis[:2]]
++row("edge disasm", "%d/2" % sum(1 for i, op in enumerate(("crandc", "crorc")) if i < len(enames) and enames[i] == op), "2/2",
++    "the disassembler names both edge encodings", control=True)
++
++# =========================================== FIELD-MASK PINS (BA, BB >= 16; pass-1 ruling R4) ==
++#  Every table row uses BA in {0,1,2,4} and BB in {0,1,2,3,5}, so a decode mask weakened from `& 31` to `& 15`, `& 7`, `& 3` or
++#  `& 1` scored 58/58.  Here BA and BB are >= 16 and every proper-submask alias of each (index & 15, & 7, & 3, & 1) holds the
++#  OPPOSITE value, so a weakened mask reads a flipped input and the result flips.  crandc: BA=31 (1), BB=30 (0) -> 1, its aliases
++#  15, 7, 3, 1 = 0 and 14, 6, 2, 0 = 1, BT=20 pre-set 0.  crorc: BA=29 (0), BB=28 (1) -> 0, its aliases 13, 5, 1 = 1 and 12, 4, 0
++#  = 0, BT=21 pre-set 1.  Two sessions: the two alias sets disagree at bits 0 and 1.
++def hi_row(name, op, bt, ba, bb, ones, zeros, want):
++    seed = 0
++    for n in ones:
++        seed = setbit(seed, n, 1)
++    for n in zeros:
++        seed = setbit(seed, n, 0)
++    seed = setbit(seed, bt, 1 - want)
++    hregs, _, _, hhow = session(seed, [XL(op, bt, ba, bb), MFCR(10)])
++    hcr = hregs.get("cr", -1)
++    row(name, crbit(hcr, bt) if (hhow == "exit0" and hcr >= 0) else -1, want,
++        "BA=%d BB=%d BT=%d, every submask alias opposite" % (ba, bb, bt))
++
++
++hi_row("64 crandc hi", "crandc", 20, 31, 30, ones=[31, 14, 6, 2, 0], zeros=[30, 15, 7, 3, 1], want=1)
++hi_row("64 crorc hi", "crorc", 21, 29, 28, ones=[28, 13, 5, 1], zeros=[29, 12, 4, 0], want=0)
+
+ # ================================================ THE TWO HANDLERS, 32-BIT ===
+```
+
+### 2c. regress/gate_ppc.sh (the new block)
+
+```diff
+--- a/regress/gate_ppc.sh
++++ b/regress/gate_ppc.sh
+@@ -325,0 +326,30 @@
++fi
++
++# ---- ppccrandcorc (#575): crandc and crorc computed NAND and NOR -- its 62-row rung-3 detector ---------------------------------------
++# X(crandc) and X(crorc) set CR[BT] on !(CR[BA] & CR[BB]) and !(CR[BA] | CR[BB]); PowerPC Book I v2.01 defines CR[BA] & ~CR[BB] and
++# CR[BA] | ~CR[BB].  `-E bareppc -M 64` (PPC970) and `-C PPC603` run each CR logical instruction on a real guest through the real
++# decoder, CR seeded from the debugger and every destination pre-set to the INVERSE of the architectural result; the five correct
++# siblings run the same table as controls; edge rows pin BT 0 and 31; two rows pin the BA/BB field masks with every submask alias
++# seeded opposite.  BEFORE the NetBSD prerequisite, like the blocks above.  Test-variant table:
++# regress/artifacts/ppccrandcorc/table1_20261105/ (the pass-1 ruling: regress/artifacts/ppccrandcorc/adj_p1_20261105/).
++CLLOG=$LOGDIR/ppc_crlogic.log
++python3 -u ppc_crlogic_probe.py "$PMAX" gate > "$CLLOG" 2>&1 || true
++if [ "$(grep -cx 'PPC_CRLOGIC_PROBE_DONE' "$CLLOG")" != 1 ]; then
++    note "ppc_crlogic: completion sentinel missing or duplicated; last lines follow"
++    tail -5 "$CLLOG" | sed 's/^/       /'
++    check "ppc_crlogic probe completed" "no" "yes"
++else
++    check "ppc_crlogic probe completed" "yes" "yes"
++    check "ppc_crlogic sentinel is the last line" "$(tail -n 1 "$CLLOG")" "PPC_CRLOGIC_PROBE_DONE"
++    for k in RESULT CONTROL; do
++        check "ppc_crlogic $k= lines" "$(grep -c "^PPC_CRLOGIC_$k=" "$CLLOG")" "1"
++    done
++    check "ppc_crlogic RESULT=62/62" "$(grep -cx 'PPC_CRLOGIC_RESULT=62/62' "$CLLOG")" "1"
++    check "ppc_crlogic CONTROL=OK"   "$(grep -cx 'PPC_CRLOGIC_CONTROL=OK' "$CLLOG")" "1"
++    for v in "ctl session" "ctl live" "ctl seed holds" "ctl cr seed" "ctl mfcr" "neg apparatus" "64 session" "64 crandc 00" "64 crandc 01" "64 crandc 10" "64 crandc 11" "64 crorc 00" "64 crorc 01" "64 crorc 10" "64 crorc 11" "64 others" "64 mfcr" "64 disasm" "s64 session" "s64 crand 00" "s64 crand 01" "s64 crand 10" "s64 crand 11" "s64 cror 00" "s64 cror 01" "s64 cror 10" "s64 cror 11" "s64 crnor 00" "s64 crnor 01" "s64 crnor 10" "s64 crnor 11" "s64 creqv 00" "s64 creqv 01" "s64 creqv 10" "s64 creqv 11" "s64 crxor 00" "s64 crxor 01" "s64 crxor 10" "s64 crxor 11" "s64 others" "s64 mfcr" "s64 disasm" "edge session" "edge crandc bt0" "edge crorc bt31" "edge others" "edge mfcr" "edge disasm" "64 crandc hi" "64 crorc hi" "32 session" "32 crandc 00" "32 crandc 01" "32 crandc 10" "32 crandc 11" "32 crorc 00" "32 crorc 01" "32 crorc 10" "32 crorc 11" "32 others" "32 mfcr" "32 disasm"; do
++        check "ppc_crlogic row: $v" "$(count "$CLLOG" "^$v  .*ok$")" "1"
++    done
++    clok=$(count "$CLLOG" " ok$"); clbad=$(count "$CLLOG" " FAIL$"); clrun=$((clok + clbad))
++    check "ppc_crlogic rows run"   "$clrun" 62
++    check "ppc_crlogic rows green" "$clok" 62
++    check "ppc_crlogic rows red"   "$clbad" 0
+```
+
+## 3. PowerPC Book I v2.01 (_scratchpad/ppc_uisa_book1_v201.txt, lines 1850-1915)
+
+```
+1850:    19     BT      BA      BB      193     /                     19     BT      BA      BB      225     /
+1851:
+1852: 0      6      11      16      21          31              0         6      11      16      21          31
+1853:
+1854: CRBT  CRBA  CRBB                                          CRBT  A�(CRBA & CRBB)
+1855:
+1856: The bit in the Condition Register specified by BA is      The bit in the Condition Register specified by BA is
+1857: XORed with the bit in the Condition Register specified    ANDed with the bit in the Condition Register specified
+1858: by BB, and the result is placed into the bit in the Con-  by BB, and the complemented result is placed into the
+1859: dition Register specified by BT.                          bit in the Condition Register specified by BT.
+1860:
+1861: Special Registers Altered:                                Special Registers Altered:
+1862:       CR BT                                                     CR BT
+1863:
+1864: Extended Mnemonics:
+1865:
+1866: Example of extended mnemonics for Condition Reg-
+1867: ister XOR:
+1868:
+1869:    Extended:              Equivalent to:
+1870:    crclr Bx               crxor Bx,Bx,Bx
+1871:
+1872: 26 PowerPC User Instruction Set Architecture
+1873: Version 2.01
+1874:
+1875: Condition Register NOR XL-form                           Condition Register Equivalent XL-form
+1876:
+1877: crnor      BT,BA,BB                                      creqv     BT,BA,BB
+1878:
+1879:    19      BT       BA      BB      33      /               19     BT      BA      BB      289     /
+1880:
+1881: 0       6       11      16      21          31           0      6      11      16      21          31
+1882:
+1883: CRBT  A�(CRBA | CRBB)                                     CRBT  CRBA  CRBB
+1884:
+1885: The bit in the Condition Register specified by BA is     The bit in the Condition Register specified by BA is
+1886: ORed with the bit in the Condition Register specified    XORed with the bit in the Condition Register specified
+1887: by BB, and the complemented result is placed into the    by BB, and the complemented result is placed into the
+1888: bit in the Condition Register specified by BT.           bit in the Condition Register specified by BT.
+1889:
+1890: Special Registers Altered:                               Special Registers Altered:
+1891:       CR BT                                                    CR BT
+1892:
+1893: Extended Mnemonics:                                      Extended Mnemonics:
+1894: Example of extended mnemonics for Condition Reg-         Example of extended mnemonics for Condition Reg-
+1895: ister NOR:                                               ister Equivalent:
+1896:
+1897:    Extended:                Equivalent to:                  Extended:              Equivalent to:
+1898:    crnot Bx,By              crnor Bx,By,By                  crset Bx               creqv Bx,Bx,Bx
+1899:
+1900: Condition Register AND with                              Condition Register OR with Complement
+1901: Complement XL-form                                       XL-form
+1902:
+1903: crandc     BT,BA,BB                                      crorc     BT,BA,BB
+1904:
+1905:    19      BT       BA      BB      129     /               19     BT      BA      BB      417     /
+1906:
+1907: 0       6       11      16      21          31           0      6      11      16      21          31
+1908:
+1909: CRBT  CRBA & A�CRBB                                       CRBT  CRBA | A�CRBB
+1910:
+1911: The bit in the Condition Register specified by BA is     The bit in the Condition Register specified by BA is
+1912: ANDed with the complement of the bit in the Condi-       ORed with the complement of the bit in the Condition
+1913: tion Register specified by BB, and the result is placed  Register specified by BB, and the result is placed into
+1914: into the bit in the Condition Register specified by BT.  the bit in the Condition Register specified by BT.
+1915:
+```
+
+## 4. Test-variant table 1
+
+### 4a. PRETABLE.out
+
+```
+PRETABLE -- #575 ppccrandcorc, test-variant table 1 (62 rows).  Written BEFORE table 1 runs (its mtime precedes every file
+in table1/).  Instrument: table1/probe62_frozen.py (the in-tree probe after apply_r575.py).  Baseline: the fix (GXEMUL-SEC
+src/cpus/cpu_ppc_instr.c).  Every prediction below is EXACT and COMPUTED by v575.py's simulator of the probe's sessions;
+rows reading the debugger, the disassembler or mfcr are predicted green on every variant.  The base and HEAD legs check the
+simulator itself.  Null media (/bin/true, an absent binary, /bin/false): CONTROL=FAIL.  c_identity is the ruled null medium
+of the two handlers (identity bodies).
+
+ROW MANIFEST (session: seed; instructions as op BT,BA,BB; rows):
+  64           seed=0x50d40000  crandc 8,0,2  crandc 9,0,1  crandc 10,1,0  crandc 11,1,3  crorc 12,0,2  crorc 13,0,1  crorc 14,1,0  crorc 15,1,3
+               rows: 64 crandc 00, 64 crandc 01, 64 crandc 10, 64 crandc 11, 64 crorc 00, 64 crorc 01, 64 crorc 10, 64 crorc 11, 64 others
+  s64          seed=0x50e87690  crand 8,0,2  crand 9,0,1  crand 10,1,0  crand 11,1,3  cror 12,0,2  cror 13,0,1  cror 14,1,0  cror 15,1,3  crnor 16,0,2  crnor 17,0,1  crnor 18,1,0  crnor 19,1,3  creqv 20,0,2  creqv 21,0,1  creqv 22,1,0  creqv 23,1,3  crxor 24,0,2  crxor 25,0,1  crxor 26,1,0  crxor 27,1,3
+               rows: s64 crand 00, s64 crand 01, s64 crand 10, s64 crand 11, s64 cror 00, s64 cror 01, s64 cror 10, s64 cror 11, s64 crnor 00, s64 crnor 01, s64 crnor 10, s64 crnor 11, s64 creqv 00, s64 creqv 01, s64 creqv 10, s64 creqv 11, s64 crxor 00, s64 crxor 01, s64 crxor 10, s64 crxor 11, s64 others
+  edge         seed=0x8c000000  crandc 0,2,3  crorc 31,4,5
+               rows: edge crandc bt0, edge crorc bt31, edge others
+  64 crandc hi seed=0xa2020001  crandc 20,31,30
+               rows: 64 crandc hi
+  64 crorc hi  seed=0x44040408  crorc 21,29,28
+               rows: 64 crorc hi
+  32           seed=0x50d40000  crandc 8,0,2  crandc 9,0,1  crandc 10,1,0  crandc 11,1,3  crorc 12,0,2  crorc 13,0,1  crorc 14,1,0  crorc 15,1,3
+               rows: 32 crandc 00, 32 crandc 01, 32 crandc 10, 32 crandc 11, 32 crorc 00, 32 crorc 01, 32 crorc 10, 32 crorc 11, 32 others
+
+VARIANTS (exact red sets):
+   base                    0 red: none
+   HEAD                   10 red: 64_crandc_00,64_crandc_01,64_crorc_10,64_crorc_11,edge_crandc_bt0,edge_crorc_bt31,32_crandc_00,32_crandc_01,32_crorc_10,32_crorc_11
+   b1_crandc_nand          5 red: 64_crandc_00,64_crandc_01,edge_crandc_bt0,32_crandc_00,32_crandc_01
+   b2_crorc_nor            5 red: 64_crorc_10,64_crorc_11,edge_crorc_bt31,32_crorc_10,32_crorc_11
+   c_identity             20 red: 64_crandc_00,64_crandc_01,64_crandc_10,64_crandc_11,64_crorc_00,64_crorc_01,64_crorc_10,64_crorc_11,edge_crandc_bt0,edge_crorc_bt31,64_crandc_hi,64_crorc_hi,32_crandc_00,32_crandc_01,32_crandc_10,32_crandc_11,32_crorc_00,32_crorc_01,32_crorc_10,32_crorc_11
+   d1_crandc_nba_and_b     5 red: 64_crandc_01,64_crandc_10,64_crandc_hi,32_crandc_01,32_crandc_10
+   d2_crorc_nba_or_b       5 red: 64_crorc_01,64_crorc_10,64_crorc_hi,32_crorc_01,32_crorc_10
+   d3_crandc_and           5 red: 64_crandc_10,64_crandc_11,64_crandc_hi,32_crandc_10,32_crandc_11
+   d4_crorc_or             5 red: 64_crorc_00,64_crorc_01,64_crorc_hi,32_crorc_00,32_crorc_01
+   d5_crandc_crossed       5 red: 64_crandc_00,64_crandc_11,edge_crandc_bt0,32_crandc_00,32_crandc_11
+   d6_crorc_crossed        5 red: 64_crorc_00,64_crorc_11,edge_crorc_bt31,32_crorc_00,32_crorc_11
+   m1_crandc_mask7         1 red: 64_crandc_hi
+   m2_crorc_mask7          1 red: 64_crorc_hi
+   m3_crandc_mask15        1 red: 64_crandc_hi
+   m4_crorc_mask15         1 red: 64_crorc_hi
+   t1_crandc_btmask7      13 red: 64_crandc_00,64_crandc_01,64_crandc_10,64_crandc_11,64_crorc_01,64_others,64_crandc_hi,32_crandc_00,32_crandc_01,32_crandc_10,32_crandc_11,32_crorc_01,32_others
+   t2_crorc_btmask7       13 red: 64_crorc_00,64_crorc_01,64_crorc_10,64_crorc_11,64_others,edge_crorc_bt31,edge_others,64_crorc_hi,32_crorc_00,32_crorc_01,32_crorc_10,32_crorc_11,32_others
+```
+
+### 4b. table1/SCORES.txt
+
+```
+base [62 rows] 62/62 CONTROL=OK DONE=1 RED=none
+HEAD [62 rows] 52/62 CONTROL=OK DONE=1 RED=64_crandc_00,64_crandc_01,64_crorc_10,64_crorc_11,edge_crandc_bt0,edge_crorc_bt31,32_crandc_00,32_crandc_01,32_crorc_10,32_crorc_11
+null_true [62 rows] 5/62 CONTROL=FAIL DONE=1 RED=ctl_live,ctl_seed_holds,ctl_cr_seed,ctl_mfcr,neg_apparatus,64_crandc_00,64_crandc_01,64_crandc_10,64_crandc_11,64_crorc_00,64_crorc_01,64_crorc_10,64_crorc_11,64_others,64_mfcr,64_disasm,s64_crand_00,s64_crand_01,s64_crand_10,s64_crand_11,s64_cror_00,s64_cror_01,s64_cror_10,s64_cror_11,s64_crnor_00,s64_crnor_01,s64_crnor_10,s64_crnor_11,s64_creqv_00,s64_creqv_01,s64_creqv_10,s64_creqv_11,s64_crxor_00,s64_crxor_01,s64_crxor_10,s64_crxor_11,s64_others,s64_mfcr,s64_disasm,edge_crandc_bt0,edge_crorc_bt31,edge_others,edge_mfcr,edge_disasm,64_crandc_hi,64_crorc_hi,32_crandc_00,32_crandc_01,32_crandc_10,32_crandc_11,32_crorc_00,32_crorc_01,32_crorc_10,32_crorc_11,32_others,32_mfcr,32_disasm
+null_absent [62 rows] none CONTROL=none DONE=0 RED=none
+null_false [62 rows] 1/62 CONTROL=FAIL DONE=1 RED=ctl_session,ctl_live,ctl_seed_holds,ctl_cr_seed,ctl_mfcr,64_session,64_crandc_00,64_crandc_01,64_crandc_10,64_crandc_11,64_crorc_00,64_crorc_01,64_crorc_10,64_crorc_11,64_others,64_mfcr,64_disasm,s64_session,s64_crand_00,s64_crand_01,s64_crand_10,s64_crand_11,s64_cror_00,s64_cror_01,s64_cror_10,s64_cror_11,s64_crnor_00,s64_crnor_01,s64_crnor_10,s64_crnor_11,s64_creqv_00,s64_creqv_01,s64_creqv_10,s64_creqv_11,s64_crxor_00,s64_crxor_01,s64_crxor_10,s64_crxor_11,s64_others,s64_mfcr,s64_disasm,edge_session,edge_crandc_bt0,edge_crorc_bt31,edge_others,edge_mfcr,edge_disasm,64_crandc_hi,64_crorc_hi,32_session,32_crandc_00,32_crandc_01,32_crandc_10,32_crandc_11,32_crorc_00,32_crorc_01,32_crorc_10,32_crorc_11,32_others,32_mfcr,32_disasm
+b1_crandc_nand [62 rows] 57/62 CONTROL=OK DONE=1 RED=64_crandc_00,64_crandc_01,edge_crandc_bt0,32_crandc_00,32_crandc_01
+b2_crorc_nor [62 rows] 57/62 CONTROL=OK DONE=1 RED=64_crorc_10,64_crorc_11,edge_crorc_bt31,32_crorc_10,32_crorc_11
+c_identity [62 rows] 42/62 CONTROL=OK DONE=1 RED=64_crandc_00,64_crandc_01,64_crandc_10,64_crandc_11,64_crorc_00,64_crorc_01,64_crorc_10,64_crorc_11,edge_crandc_bt0,edge_crorc_bt31,64_crandc_hi,64_crorc_hi,32_crandc_00,32_crandc_01,32_crandc_10,32_crandc_11,32_crorc_00,32_crorc_01,32_crorc_10,32_crorc_11
+d1_crandc_nba_and_b [62 rows] 57/62 CONTROL=OK DONE=1 RED=64_crandc_01,64_crandc_10,64_crandc_hi,32_crandc_01,32_crandc_10
+d2_crorc_nba_or_b [62 rows] 57/62 CONTROL=OK DONE=1 RED=64_crorc_01,64_crorc_10,64_crorc_hi,32_crorc_01,32_crorc_10
+d3_crandc_and [62 rows] 57/62 CONTROL=OK DONE=1 RED=64_crandc_10,64_crandc_11,64_crandc_hi,32_crandc_10,32_crandc_11
+d4_crorc_or [62 rows] 57/62 CONTROL=OK DONE=1 RED=64_crorc_00,64_crorc_01,64_crorc_hi,32_crorc_00,32_crorc_01
+d5_crandc_crossed [62 rows] 57/62 CONTROL=OK DONE=1 RED=64_crandc_00,64_crandc_11,edge_crandc_bt0,32_crandc_00,32_crandc_11
+d6_crorc_crossed [62 rows] 57/62 CONTROL=OK DONE=1 RED=64_crorc_00,64_crorc_11,edge_crorc_bt31,32_crorc_00,32_crorc_11
+m1_crandc_mask7 [62 rows] 61/62 CONTROL=OK DONE=1 RED=64_crandc_hi
+m2_crorc_mask7 [62 rows] 61/62 CONTROL=OK DONE=1 RED=64_crorc_hi
+m3_crandc_mask15 [62 rows] 61/62 CONTROL=OK DONE=1 RED=64_crandc_hi
+m4_crorc_mask15 [62 rows] 61/62 CONTROL=OK DONE=1 RED=64_crorc_hi
+t1_crandc_btmask7 [62 rows] 49/62 CONTROL=OK DONE=1 RED=64_crandc_00,64_crandc_01,64_crandc_10,64_crandc_11,64_crorc_01,64_others,64_crandc_hi,32_crandc_00,32_crandc_01,32_crandc_10,32_crandc_11,32_crorc_01,32_others
+t2_crorc_btmask7 [62 rows] 49/62 CONTROL=OK DONE=1 RED=64_crorc_00,64_crorc_01,64_crorc_10,64_crorc_11,64_others,edge_crorc_bt31,edge_others,64_crorc_hi,32_crorc_00,32_crorc_01,32_crorc_10,32_crorc_11,32_others
+restored [62 rows] 62/62 CONTROL=OK DONE=1 RED=none
+```
+
+### 4c. table1/VERDICT.md
+
+# #575 ppccrandcorc -- test-variant TABLE 1 (62 rows), 2026-11-05 07:4xZ (01:4x local)
+
+Driver `../table1_575.run.sh` (frozen copy), WSL scratch clone /tmp/gx575t under a clone-local .MUTANT sentinel; restored, cmp-clean
+against GXEMUL-SEC, rebuilt fresh, sentinel cleared (TABLE.log, last lines).  Instrument `probe62_frozen.py` == the in-tree probe after
+apply_r575.py (cmp-identical to base62/probe62_run.py, which scored 62/62 on build/).  `../PRETABLE.out` was written before the driver
+(the only older file here is the frozen probe, copied first); its predictions are EXACT and were COMPUTED by `../v575.py`, a simulator of
+the probe's sessions.  Scores: SCORES.txt (red sets read off each run's FAIL rows; the probe prints no RED line).
+
+* base 62/62, CONTROL=OK.  HEAD (impl_20261105/cpu_ppc_instr.c.pre575) 52/62, CONTROL=OK: exactly the ten predicted rows (64/32 crandc
+  00, 01; 64/32 crorc 10, 11; edge crandc bt0; edge crorc bt31) -- the same ten as the 10-29 witness (witness_20261029/WITNESS_head.out).
+* All 15 variants scored EXACTLY their predicted red sets (17 of 17 including base and HEAD):
+  b1 crandc NAND restored, b2 crorc NOR restored -- 5 each; c identity bodies (the ruled null medium of the two handlers) -- 20;
+  d1-d6 (operand complement moved, dropped, operator crossed) -- 5 each, the four the ruling listed per variant plus a hi row on d1-d4;
+  m1-m4 (BA/BB mask & 7 and & 15) -- 1 each, the hi row of that handler ONLY (the owed rows' whole reason: 58/58 before them);
+  t1, t2 (BT mask & 7) -- 13 each.
+* Null media: /bin/true 5/62 CONTROL=FAIL; /bin/false 1/62 CONTROL=FAIL; an absent binary raises FileNotFoundError in the probe before
+  any row and prints no sentinel (probe_null_absent.out) -- the gate's first check (the completion sentinel) reds it.
+
+## 5. The pass-1 ruling's rulings R1-R10 (verbatim)
+
+[R1] The exact changes: line 2735 becomes `if (ba & !bb)` and line 2762 becomes `if (ba | !bb)`. Nothing else in either handler changes. `ba`/`bb` are masked to 0/1 at 2732-2733 and 2759-2760, so `!bb` is the exact complement and the walk gives the arch column on all four rows. Reads precede the clear (2732-2734), so BT==BA or BT==BB aliasing is order-safe. Decode is reached only via `:4638` and `:4641`; CRNAND (225, `opcodes_ppc.h:59`) is absent from the case list at 4629-4635 and falls to `default: goto bad` at 4648. There is no POWER-mode path: `cpu_ppc.c:96` sets `mode = MODE_PPC` unconditionally and the `power` flag at `cpu_ppc.c:608` lives only in the disassembler. P2 is settled.
+
+Second defect: yes, latent. `1 << (31-bt)` at bt=0 is a signed `1 << 31`, undefined under C11 6.5.7p4, at 14 sites across all seven handlers (2725-2727 through 2779-2781); `cr` is `uint32_t` (`cpu_ppc.h:126`). On the gcc build it behaves (the witness's edge rows ran at bt=0 and bt=31).
+
+[R2] `ppccrlogicshift`: FILED. Same device, yes. Same semantic class, no: representation hygiene versus a wrong boolean function. Same detector, no: the un-fixed shift produces the architectural result on this toolchain, so no row of this probe can red under its reinstatement; its instrument is `-fsanitize=shift` or an unsigned-type review, not a CR truth table. Two of three legs fail. The fix must NOT switch just these two handlers to `1u <<` (codex's "unnamed alternative"); that would partially repair a 14-site defect inside this round and spoil the other round's witness. Deepseek's in-round ruling is rejected on the same grounds. `ppccrnandundec` stays out as the brief says (CPU-STOP class, xo 225 not run here, `ppc_crlogic_probe.py:27-29`).
+
+2. THE DETECTOR
+
+The 58-row probe is the right instrument in kind: real decoder, real guest, two widths (the second copy is the same source compiled with `DYNTRANS_DUALMODE_32`), inverse pre-set so a pass requires a write. The 58 is real: 6 apparatus + 12 (64 table) + 24 (siblings) + 4 (edge) + 12 (32 table), and 48 = 6 + 8 PIN + 24 + 2 + 8, matching `WITNESS_head.out` line by line.
+
+[R3] GLM's finding that the crandc edge row aliases its destination with BA is FALSE. The edge row is `XL("crandc", 0, 2, 3)` at `ppc_crlogic_probe.py:238`: BT=0, BA=2, BB=3, as the comment at 231-232 says. GLM applied the truth-table pick (BA=0 for a=0) to a row that does not use it. 58/58 is reachable on the fixed build.
+
+[R4] Rows OWED (4):
+- `64 crandc hi` and `64 crorc hi`: one row per handler with BA, BB >= 16 and every proper-submask alias bit (indices `& 15`, `& 7`, `& 3`, `& 1`) seeded to the opposite value. Every current row uses BA in {0,1,2,4} and BB in {0,1,2,3,5} (`:162`, `:238`), so a one-character mask weakening `& 31` to `& 7` at 2731 or 2758 scores 58/58 today. Four seats found this independently. One width suffices; the 32-bit copy is the same source.
+- `edge mfcr` and `edge disasm`: the brief's A3 claims an mfcr row and a disasm row per session. The edge session runs `MFCR(10)` and captures `edis` (`:238`) but scores neither (`:240-245`). Either the rows are added or the premise is withdrawn; I rule they are added, since `edge disasm` is the only encoder pin at the BT field extremes.
+
+VACUOUS by construction (channel cannot vary under the named variant):
+- Under every variant in the floor: the 20 sibling rows, 6 apparatus controls, 4 session rows, 3 disasm rows (disassembler is `cpu_ppc.c:823-830`, untouched), 3 mfcr rows (both channels read the one `uint32_t`; they agreed on HEAD's wrong values too, witness line 21), and 3 others rows (no floor variant writes outside BT).
+- Under (d) complement-swap and under complement-drop: both edge rows. Inputs (0,0) and (1,1) are fixed points of those mutations (walked: `!0&0=0`, `0&0=0`; `!1|1=1`, `1|1=1`).
+- Under a single-site (b): every row of the other handler, and the two PIN rows of the restored handler.
+
+Null medium: identity bodies for both handlers (brief A5c) is correct. Predicted 18 red (16 truth + 2 edge), 40/58; the owed hi rows, pre-set inverse, make that 20 red of 62. It also doubles as the proof of P4: a row reds under the null exactly because the pre-set is the inverse. Grok's narrowing is right and harmless: on HEAD the DISC rows (including both edges) cannot distinguish "wrong write" from "no write"; post-fix every row can.
+
+Controls: the six apparatus rows (`:213-222`), the session rows, the disasm rows and the 20 sibling rows (all `control=True`) feed `PPC_CRLOGIC_CONTROL`; `others`, `mfcr` and edge rows are scored but not controls (`:194-197`, `:241-245`). That split is right.
+
+Recommended, not owed: seed background ones in bits that are neither sources nor destinations so `others` can see an extra clear (today it sees only extra sets, since the seed is 0x50000000 outside the destinations; grok's `& ~1u` escape); one preset-true row per handler to catch codex's toggle escape `cr ^= (1 << (31-bt))`; the other-diagonal edge rows (crandc bt31, crorc bt0) belong to `ppccrlogicshift`, which needs a bt=0 set-path pin that this probe lacks.
+
+3. THE TEST-VARIANT TABLE (bounded to lines 2729-2737 and 2756-2764)
+
+[R5] Nine variants, each from the fixed build, red rows on the 58-row denominator (the owed rows stay green under all nine):
+
+| # | variant | red rows | n |
+|---|---|---|---|
+| b1 | crandc `!(ba & bb)` restored | 64/32 crandc 00, 01; edge crandc bt0 | 5 |
+| b2 | crorc `!(ba \| bb)` restored | 64/32 crorc 10, 11; edge crorc bt31 | 5 |
+| c | both bodies identity | 16 truth + 2 edge | 18 |
+| d1 | crandc `!ba & bb` | 64/32 crandc 01, 10 | 4 |
+| d2 | crorc `!ba \| bb` | 64/32 crorc 01, 10 | 4 |
+| d3 | crandc `ba & bb` (complement dropped, collapses to crand) | 64/32 crandc 10, 11 | 4 |
+| d4 | crorc `ba \| bb` (collapses to cror) | 64/32 crorc 00, 01 | 4 |
+| d5 | crandc `ba \| !bb` (operator crossed with crorc) | 64/32 crandc 00, 11; edge bt0 | 5 |
+| d6 | crorc `ba & !bb` (operator crossed with crandc) | 64/32 crorc 00, 11; edge bt31 | 5 |
+
+d3/d4 are kimi's addition and are the defect's own class (a handler computing a sibling's function). d5/d6 are the copy-paste risk between two lines edited in one round. No predicate dominates either edited line (the `if` is the only branch), so clause 1 of the bound at `tools/CLAUDE.md:1448-1451` adds nothing. Clause 2 bt-substitutions (`bt & !bb`, `ba & !bt`, `bt | !bb`, `ba | !bt`) each red an existing row by enumeration (64/32 crandc 10 for the first two; 64/32 crorc 01 and 00 for the last two); list them in PRETABLE as predicted, not built. GLM's `~bb` is not a variant for crandc: `ba & ~bb` with 0/1 operands equals `ba & !bb` on all four rows, so it has no channel; for crorc it is caught by row 01.
+
+4. SEAT FINDINGS AND FALSE PREMISES
+
+Right: the two expressions (all six seats, by enumeration); the 58 census (codex, grok); the PIN overcount (codex, grok); the edge session's unscored mfcr/disasm (codex, `:238-245`); the field-mask escape (codex, grok, GLM, minimax); the complement-drop variant (kimi); `others` blind to extra clears and the toggle escape (grok, codex); the shift is real but a different class (codex, grok, GLM, kimi, minimax); POWER mode settled from `cpu_ppc.c:96` (codex, grok).
+
+Wrong: GLM's aliased-edge finding (R3) and GLM's claim that crandc `ba & ~bb` fails at (1,0): `1 & ~0 = 1`. Minimax's claim that `!ba | bb` gives 0,1,0,1 and reds three rows: `!0 | 0 = 1`, so it reds exactly 01 and 10, and the brief's A5d prediction stands. Minimax's 50-or-70 denominator: the witness shows 58. Deepseek's in-round shift fix (R2) and its `bt != 15` mutant: BT=15 is `64 crorc 11` (witness line 19), which reds it. Kimi's ledger arithmetic is right in spirit but its 40/50 totals omit the four session rows.
+
+[R6] False premises in the brief: (a) "the four PIN rows of each handler at each width" is two per handler per width, eight total (witness 14-17, 54-57); (b) "an mfcr row per session" and "a disasm row per session" are false for the edge session; (c) the A3 passing census omits the four session rows and does not sum to 48 as written. P1, P2 and P4 hold. P3 is not settleable read-only; the measurement to name is the post-fix full battery with every other gate unchanged green. Also note for the dependent round: `ppccrnandundec`'s draft sketches `!(ba & bb)` as the crnand body, which is today's crandc; it must not alias `instr(crandc)` once this lands.
+
+5. VERDICT
+
+[R7] Gate 13: keep the parse-before-score shape, CONTROL=OK and the sentinel, and equality on both halves, but re-pin at the new total (62/62) after the four owed rows land; 58 is not the number to freeze. [R8] Write PRETABLE.out with the row manifest (BT, BA, BB, seed per row) and the nine-variant table before any variant is built. [R9] Correct the three A3 premises in the brief. [R10] Ship the two expression edits exactly as proposed, with no other source change.
+
+APPLY-WITH-CHANGES: the design stands; the changes are the four owed rows, the four added variants, the re-pin, and the census corrections.
+
+## YOUR QUESTIONS (answer in this order)
+
+1. FLOOR on the composite: a single edit to X(crandc) or X(crorc) (their decode, the read of BA/BB, the clear, the condition, the
+   set) that keeps all 62 rows green and is not among table 1's variants or the probe's stated non-coverage (clause (e) (1)-(5))?
+   Edit, derivation from section 1, the row that would red it.  Then your DENOMINATOR (sites x edit shapes swept).
+2. THE DIFF: are the two product lines exactly the ruled ones and right against Book I?  Does each new row (the two `hi' rows, `edge
+   mfcr', `edge disasm') measure what its note claims?  Is any sentence of the new records (clause (e), the gate comment) false
+   against sections 1-5?
+3. Is anything the pass-1 ruling required missing from the diff?
+4. VERDICT: CLOSE (zero floor breaches, zero false records, with the denominator) or REPAIR (each item).
+
+Final line, exactly: `CODEXP2R575: <c> CELLS SWEPT <b> BREACHES <r> FALSE RECORDS VERDICT:<CLOSE|REPAIR>`
+
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg --files -g AGENTS.md -g CLAUDE.md 'C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC'; Get-Content -Raw -LiteralPath 'C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/ppc_crlogic_probe.py'" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-ChildItem -Force -LiteralPath 'C:/DocumentNoSnc/cc/GXEMUL' | Select-Object Mode,Name; Get-ChildItem -Force -LiteralPath 'C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC' | Select-Object Mode,Name" in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 263ms:
+C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC\tools\CLAUDE.md
+#!/usr/bin/env python3
+"""ppccrandcorc -- RUNG-3 DETECTOR for the PowerPC Condition Register logical instructions.
+
+DEFECT (#575).  src/cpus/cpu_ppc_instr.c, X(crandc) and X(crorc), computed
+
+    crandc:  CR[BT] = !(CR[BA] & CR[BB])      (that is crnand)
+    crorc:   CR[BT] = !(CR[BA] | CR[BB])      (that is crnor)
+
+ARCHITECTURE, PowerPC Book I v2.01 (_scratchpad/ppc_uisa_book1_v201.txt:1909-1914):
+
+    crandc BT,BA,BB    CR[BT] <- CR[BA] & ~CR[BB]
+    crorc  BT,BA,BB    CR[BT] <- CR[BA] | ~CR[BB]
+
+CR bits are numbered 0..31 from the most significant end, as the handlers do with
+(cr >> (31-n)) & 1.
+
+WHAT THE ROWS MEASURE.  Each row runs one CR logical instruction on a real guest through
+the real decoder (`-E bareppc`, unmodified in-tree machine; PPC970 at 64 bits and PPC603 at
+32 bits), with CR seeded from the debugger, and reads CR back.  The truth-table rows give
+every (CR[BA], CR[BB]) combination; the destination bit is pre-set to the INVERSE of the
+architectural result, so a row passes only if the instruction wrote the right value.  The
+`others' rows check that no CR bit except the destinations changed, and the `mfcr' rows read
+CR through a second channel (a guest mfcr into a GPR).  The five correct siblings (crand,
+cror, crnor, creqv, crxor) run the same table as controls of the oracle and the encoder.
+
+CLAUSE (e) -- what this instrument catches (test-variant table 1, regress/artifacts/ppccrandcorc/table1_20261105/table1/
+SCORES.txt, PRETABLE.out written before it with predictions computed by its v575.py simulator; 15 variants on these 62 rows,
+all 15 red, each exactly as predicted): each handler's defect restored (b1, b2); both bodies made identity (c, the ruled null
+medium of the handlers); the complement moved to BA, dropped, or the operator crossed between the two edited lines (d1-d6);
+the BA/BB field mask weakened to & 7 or & 15 (m1-m4: the `hi' rows alone); the BT field mask weakened to & 7 (t1, t2).  The
+pre-fix build scores 52/62 (the ten DISC rows); /bin/true 5/62 and /bin/false 1/62 score CONTROL=FAIL, and an absent binary
+stops the probe before any row with no sentinel.
+  and does not cover:
+  (1) crnand (19/225) is not decoded at HEAD and stops the CPU; it is filed separately as
+      `ppccrnandundec' and is not run here.
+  (2) The dyntrans fast path for these handlers is the handler itself (no separate
+      translation), so one cold run per instruction exercises it.
+  (3) The edge rows pin destination bits 0 and 31 and the `hi' rows pin the BA/BB field masks (BA, BB >= 16 with every
+      submask alias holding the opposite value); an input at index 0 or 31 is not separately rowed.
+  (4) The signed shift `1 << (31-bt)' at bt = 0 (all seven handlers) is `ppccrlogicshift', filed separately: on this
+      toolchain it gives the architectural result, so no row here can see it (the pass-1 ruling, R2).
+  (5) Not claimed (the pass-1 ruling: recommended, not owed): an extra CLEAR of a bit that is neither a source nor a
+      destination -- the table seeds hold no ones there, so `others' sees only extra sets; and a body that TOGGLES the
+      destination instead of clearing it -- every row pre-sets the destination to the inverse of the result, and toggling
+      the inverse gives the right value; a row pre-setting the destination EQUAL to a result of 0 would see it.
+
+Sentinel: PPC_CRLOGIC_PROBE_DONE (plus PPC_CRLOGIC_RESULT=n/N, PPC_CRLOGIC_CONTROL=OK|FAIL)
+"""
+
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import time
+
+if len(sys.argv) < 2:
+    sys.stderr.write("usage: ppc_crlogic_probe.py <gxemul> [label]\n")
+    sys.exit(2)
+
+BIN = sys.argv[1]
+LABEL = sys.argv[2] if len(sys.argv) > 2 else "local"
+_TMPDIR = tempfile.mkdtemp(prefix="ppc_crlogic_")
+DUMMY = os.path.join(_TMPDIR, "dummy.bin")
+open(DUMMY, "wb").write(b"\x00\x00\x00\x00")
+
+CODE = 0x10000
+SENT = 0x5A5A5A5A5A5A5A5A
+
+rows = []
+controls = []
+
+
+def row(name, got, want, note="", control=False):
+    assert name not in [n for n, _ in rows], "DUPLICATE ROW NAME %r" % name
+    assert len(name) <= 18, name
+    ok = (got == want)
+    rows.append((name, ok))
+    if control:
+        controls.append((name, ok))
+    print("%-19s %-12s %-12s %-50s %s" % (name, str(got), str(want), note,
+                                          "ok" if ok else "FAIL"))
+    return ok
+
+
+# ----------------------------------------------------------------- architecture
+#  Book I v2.01:1854-1914 -- one function per instruction, written from the manual.
+ARCH = {
+    "crand":  lambda a, b: a & b,
+    "crandc": lambda a, b: a & (1 - b),
+    "creqv":  lambda a, b: 1 - (a ^ b),
+    "cror":   lambda a, b: a | b,
+    "crorc":  lambda a, b: a | (1 - b),
+    "crnor":  lambda a, b: 1 - (a | b),
+    "crxor":  lambda a, b: a ^ b,
+}
+XO = {"crand": 257, "crandc": 129, "creqv": 289, "cror": 449, "crorc": 417,
+      "crnor": 33, "crxor": 193}
+
+
+def crbit(cr, n):
+    return (cr >> (31 - n)) & 1
+
+
+def setbit(cr, n, v):
+    m = 1 << (31 - n)
+    return (cr | m) if v else (cr & ~m & 0xFFFFFFFF)
+
+
+# -------------------------------------------------------------------- encodings
+def XL(op, bt, ba, bb):
+    """Opcode 19 XL-form CR logical (Book I:1850 layout)."""
+    assert op in XO and 0 <= bt <= 31 and 0 <= ba <= 31 and 0 <= bb <= 31
+    return ((19 << 26) | (bt << 21) | (ba << 16) | (bb << 11) | (XO[op] << 1)) & 0xFFFFFFFF
+
+
+def LI(rd, simm):
+    return ((14 << 26) | (rd << 21) | (simm & 0xFFFF)) & 0xFFFFFFFF
+
+
+def MFCR(rt):
+    return ((31 << 26) | (rt << 21) | (19 << 1)) & 0xFFFFFFFF
+
+
+NOP = (24 << 26)  # ori r0,r0,0
+
+
+# ---------------------------------------------------------------------- sessions
+def session(cr_seed, insns, timeout=90, machine="bareppc", cpu=None):
+    """Seed CR (and r30), place `insns' at CODE, step them all, dump the registers."""
+    cmds = ["cr=0x%x" % cr_seed, "r30=0x%x" % SENT]
+    for i, w in enumerate(insns):
+        cmds.append("put w 0x%x, 0x%08x" % (CODE + 4 * i, w))
+    cmds.append("unassemble 0x%x 0x%x" % (CODE, CODE + 4 * len(insns)))
+    cmds.append("pc=0x%x" % CODE)
+    cmds.append("step %d" % len(insns))
+    cmds.append("reg")
+    argv = [BIN, "-V", "-x", "-E", machine, "-M", "64"]
+    if cpu:
+        argv += ["-C", cpu]
+    argv += ["0x%x:%s" % (CODE, DUMMY)]
+    inp = ("\n".join(cmds + ["quit"]) + "\n").encode("latin-1")
+    try:
+        p = subprocess.run(argv, input=inp, stdout=subprocess.PIPE,
+                           stderr=subprocess.STDOUT, timeout=timeout)
+    except subprocess.TimeoutExpired as e:
+        out = (e.output or b"").decode("latin-1", "replace").replace("\r", "")
+        return {}, [], out, "TIMEOUT"
+    t = p.stdout.decode("latin-1", "replace").replace("\r", "")
+    rc = p.returncode
+    how = ("sig%d" % -rc) if rc < 0 else ("exit%d" % rc)
+    idx = t.rfind("GXemul> reg")
+    regs = {}
+    if idx >= 0:
+        for m in re.finditer(r"\br(\d\d) = (0x[0-9a-fA-F]+)", t[idx:]):
+            regs[int(m.group(1))] = int(m.group(2), 16)
+        m_cr = re.search(r"\bcr\s*=\s*(0x[0-9a-fA-F]+)", t[idx:])
+        if m_cr:
+            regs["cr"] = int(m_cr.group(1), 16)
+    dis = []
+    di = t.find("GXemul> unassemble")
+    if di >= 0:
+        end = t.find("GXemul> pc=", di)
+        seg = t[di:end if end > 0 else len(t)]
+        for m in re.finditer(r"^[0-9a-f]{8,16}: ([0-9a-f]{8})\s*(?:<- )?(\S+)(?:\t(\S+))?", seg, re.M):
+            dis.append((int(m.group(1), 16), m.group(2), m.group(3) or ""))
+    return regs, dis, t, how
+
+
+def table(tag, ops, first_bt, cpu=None):
+    """One session: every op in `ops' over the four (a, b) cases, BA/BB from CR bits 0..3.
+
+    CR bits 0..3 hold the inputs 0,1,0,1 (bit 0 = 0, bit 1 = 1, bit 2 = 0, bit 3 = 1), so
+    (a, b) = (0,0) uses BA=0,BB=2; (0,1) BA=0,BB=1; (1,0) BA=1,BB=0; (1,1) BA=1,BB=3.
+    Each destination bit is pre-set to the INVERSE of the architectural result."""
+    pick = {(0, 0): (0, 2), (0, 1): (0, 1), (1, 0): (1, 0), (1, 1): (1, 3)}
+    seed = 0
+    seed = setbit(seed, 1, 1)
+    seed = setbit(seed, 3, 1)
+    plan, bt = [], first_bt
+    for op in ops:
+        for ab in [(0, 0), (0, 1), (1, 0), (1, 1)]:
+            want = ARCH[op](*ab)
+            seed = setbit(seed, bt, 1 - want)
+            plan.append((op, ab, bt, want))
+            bt += 1
+    insns = [XL(op, b, pick[ab][0], pick[ab][1]) for op, ab, b, _ in plan] + [MFCR(10)]
+    regs, dis, T, how = session(seed, insns, cpu=cpu)
+    cr = regs.get("cr", -1)
+    return seed, plan, regs, dis, how, cr
+
+
+#  What the pre-#575 handlers computed, used ONLY to label rows DISC (the defect changes the
+#  result) or PIN (the same either way); never used as a want.
+DEFECT = {"crandc": lambda a, b: 1 - (a & b), "crorc": lambda a, b: 1 - (a | b)}
+
+
+def score_table(prefix, seed, plan, regs, dis, how, cr, control):
+    row(prefix + " session", how, "exit0", "the session ran to `quit'", control=True)
+    mask = 0
+    for op, ab, bt, want in plan:
+        mask |= 1 << (31 - bt)
+        kind = "PIN"
+        if op in DEFECT and DEFECT[op](*ab) != want:
+            kind = "DISC"
+        row("%s %s %d%d" % (prefix, op, ab[0], ab[1]), crbit(cr, bt) if cr >= 0 else -1, want,
+            "%s BT=%d: Book I %s(a=%d,b=%d)" % (kind, bt, op, ab[0], ab[1]), control=control)
+    row(prefix + " others", hex(cr & ~mask & 0xFFFFFFFF) if cr >= 0 else "none",
+        hex(seed & ~mask & 0xFFFFFFFF), "no CR bit but the destinations moved")
+    row(prefix + " mfcr", hex(regs.get(10, -1)), hex(cr) if cr >= 0 else "none",
+        "mfcr r10 reads the same CR (second channel)")
+    names = [m for _, m, _ in dis[:len(plan)]]
+    good = sum(1 for i, (op, _, _, _) in enumerate(plan) if i < len(names) and names[i] == op)
+    row(prefix + " disasm", "%d/%d" % (good, len(plan)), "%d/%d" % (len(plan), len(plan)),
+        "the tree's disassembler names each encoding", control=True)
+
+
+print("ppccrandcorc RUNG-3 DETECTOR -- binary=%s label=%s" % (BIN, LABEL))
+print("machine: -E bareppc (UNMODIFIED in-tree; PPC970 64-bit, and -C PPC603 32-bit)")
+print("wants from PowerPC Book I v2.01:1854-1914")
+print("%-19s %-12s %-12s %-50s %s" % ("row", "got", "want", "note", ""))
+t0 = time.time()
+
+# ============================================================ CONTROL SESSION ==
+CTL_CR = 0x12345678
+regs, dis, T, how = session(CTL_CR, [LI(9, 0x1234), NOP, MFCR(10)])
+row("ctl session", how, "exit0", "the control session ran to `quit'", control=True)
+row("ctl live", hex(regs.get(9, -1)), hex(0x1234), "li r9 -- the guest executes", control=True)
+row("ctl seed holds", hex(regs.get(30, -1)), hex(SENT), "r30 seeded, never written", control=True)
+row("ctl cr seed", hex(regs.get("cr", -1)), hex(CTL_CR), "the CR seed reads back", control=True)
+row("ctl mfcr", hex(regs.get(10, -1)), hex(CTL_CR), "mfcr r10 = the seeded CR", control=True)
+
+# ================================================ NEGATIVE APPARATUS CONTROL ==
+nregs, _, _, nhow = session(CTL_CR, [LI(9, 0x1234)], machine="nosuchmachine", timeout=60)
+row("neg apparatus", "%s/%s" % (nhow, hex(nregs.get(9, -1))), "exit1/-0x1",
+    "a bogus machine runs no guest", control=True)
+
+# ================================================ THE TWO HANDLERS, 64-BIT ===
+score_table("64", *table("64", ["crandc", "crorc"], 8), control=False)
+
+# ======================================= THE FIVE CORRECT SIBLINGS (controls) ==
+score_table("s64", *table("s64", ["crand", "cror", "crnor", "creqv", "crxor"], 8), control=True)
+
+# ============================================ DESTINATION EDGES (bits 0 and 31) ==
+#  crandc BT=0 from (a,b)=(0,0) -> 0 (the old code gave 1); crorc BT=31 from (1,1) -> 1 (the
+#  old code gave 0).  Inputs at CR bits 2,3 = 0,0 and 4,5 = 1,1; destinations pre-set inverse.
+eseed = 0
+eseed = setbit(eseed, 4, 1)
+eseed = setbit(eseed, 5, 1)
+eseed = setbit(eseed, 0, 1)
+eseed = setbit(eseed, 31, 0)
+eregs, edis, _, ehow = session(eseed, [XL("crandc", 0, 2, 3), XL("crorc", 31, 4, 5), MFCR(10)])
+ecr = eregs.get("cr", -1)
+row("edge session", ehow, "exit0", "the edge session ran to `quit'", control=True)
+row("edge crandc bt0", crbit(ecr, 0) if ecr >= 0 else -1, 0, "DISC BT=0 (the CR's top bit)")
+row("edge crorc bt31", crbit(ecr, 31) if ecr >= 0 else -1, 1, "DISC BT=31 (the CR's low bit)")
+emask = (1 << 31) | 1
+row("edge others", hex(ecr & ~emask & 0xFFFFFFFF) if ecr >= 0 else "none",
+    hex(eseed & ~emask & 0xFFFFFFFF), "no CR bit but bits 0 and 31 moved")
+#  The edge session runs mfcr and captures its disassembly like the table sessions; both are scored (pass-1 ruling R4: `edge
+#  disasm` is the only encoder pin at the BT field extremes).
+row("edge mfcr", hex(eregs.get(10, -1)), hex(ecr) if ecr >= 0 else "none", "mfcr r10 reads the same CR (second channel)")
+enames = [m for _, m, _ in edis[:2]]
+row("edge disasm", "%d/2" % sum(1 for i, op in enumerate(("crandc", "crorc")) if i < len(enames) and enames[i] == op), "2/2",
+    "the disassembler names both edge encodings", control=True)
+
+# =========================================== FIELD-MASK PINS (BA, BB >= 16; pass-1 ruling R4) ==
+#  Every table row uses BA in {0,1,2,4} and BB in {0,1,2,3,5}, so a decode mask weakened from `& 31` to `& 15`, `& 7`, `& 3` or
+#  `& 1` scored 58/58.  Here BA and BB are >= 16 and every proper-submask alias of each (index & 15, & 7, & 3, & 1) holds the
+#  OPPOSITE value, so a weakened mask reads a flipped input and the result flips.  crandc: BA=31 (1), BB=30 (0) -> 1, its aliases
+#  15, 7, 3, 1 = 0 and 14, 6, 2, 0 = 1, BT=20 pre-set 0.  crorc: BA=29 (0), BB=28 (1) -> 0, its aliases 13, 5, 1 = 1 and 12, 4, 0
+#  = 0, BT=21 pre-set 1.  Two sessions: the two alias sets disagree at bits 0 and 1.
+def hi_row(name, op, bt, ba, bb, ones, zeros, want):
+    seed = 0
+    for n in ones:
+        seed = setbit(seed, n, 1)
+    for n in zeros:
+        seed = setbit(seed, n, 0)
+    seed = setbit(seed, bt, 1 - want)
+    hregs, _, _, hhow = session(seed, [XL(op, bt, ba, bb), MFCR(10)])
+    hcr = hregs.get("cr", -1)
+    row(name, crbit(hcr, bt) if (hhow == "exit0" and hcr >= 0) else -1, want,
+        "BA=%d BB=%d BT=%d, every submask alias opposite" % (ba, bb, bt))
+
+
+hi_row("64 crandc hi", "crandc", 20, 31, 30, ones=[31, 14, 6, 2, 0], zeros=[30, 15, 7, 3, 1], want=1)
+hi_row("64 crorc hi", "crorc", 21, 29, 28, ones=[28, 13, 5, 1], zeros=[29, 12, 4, 0], want=0)
+
+# ================================================ THE TWO HANDLERS, 32-BIT ===
+score_table("32", *table("32", ["crandc", "crorc"], 8, cpu="PPC603"), control=False)
+
+# ===================================================================== RESULT ==
+n_ok = sum(1 for _, ok in rows if ok)
+ctl_ok = all(ok for _, ok in controls)
+print("elapsed %.1fs" % (time.time() - t0))
+print("PPC_CRLOGIC_RESULT=%d/%d" % (n_ok, len(rows)))
+print("PPC_CRLOGIC_CONTROL=%s" % ("OK" if ctl_ok else "FAIL"))
+print("PPC_CRLOGIC_PROBE_DONE")
+
+
+ succeeded in 334ms:
+
+Mode   Name                 
+----   ----                 
+d----- .claude              
+d----- build                
+d----- build-asan           
+d----- est                  
+d----- GXEMUL-SEC           
+d----- gxemul_arc_rig       
+d----- gxemul_pmax_rig      
+d----- harness              
+d----- _archive             
+d----- _guest-src-openbsd22 
+d----- _images              
+d----- _scratchpad          
+d----- _wsl-gentoo          
+-a---- adjudicate.sh        
+-a---- CLAUDE.md            
+-a---- diff_dis_sync_ovl    
+-a---- diff_dis_sync_ovl.map
+-a---- FIRST-RUN-CHECK.sh   
+-a---- grep.exe.stackdump   
+-a---- nightly_battery.sh   
+-a---- nightly_check.sh     
+-a---- panel.sh             
+-a---- panel_ollama.py      
+-a---- PIPELINE.md          
+-a---- precommit_check.sh   
+d----- .claude              
+d----- .git                 
+d----- battery              
+d----- demos                
+d----- doc                  
+d----- experiments          
+d----- GXEMUL-SEC           
+d----- man                  
+d----- regress              
+d----- src                  
+d----- test                 
+d----- tools                
+d----- _scratchpad          
+-a---- .gitignore           
+-a---- CHANGELOG.md         
+-a---- CHANGES.patch        
+-a---- config.h             
+-a---- configure            
+-a---- diff_dis_sync_ovl    
+-a---- diff_dis_sync_ovl.map
+-a---- grep.exe.stackdump   
+-a---- gxemul               
+-a---- HISTORY              
+-a---- LICENSE              
+-a---- Makefile             
+-a---- Makefile.skel        
+-a---- OUTSTANDING_BUGS.md  
+-a---- README               
+-a---- README.md            
+-a---- REVIEW_FINDINGS.md   
+
+
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$paths = @('"'C:/AGENTS.md','C:/DocumentNoSnc/AGENTS.md','C:/DocumentNoSnc/cc/AGENTS.md','C:/DocumentNoSnc/cc/GXEMUL/AGENTS.md','C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/AGENTS.md'); foreach ("'$path in $paths) { if (Test-Path -LiteralPath $path) { Get-Content -Raw -LiteralPath $path } }; $lines = Get-Content -LiteralPath '"'C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/CLAUDE.md'; "'$lines[1420..1470]' in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -A 75 -B 5 'X\\(crand\\)' 'C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c'; rg -n -A 40 -B 12 'case PPC_19_CRAND:' 'C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c'; rg -n -A 45 -B 10 'ppccrandcorc \\(#575\\)' 'C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_ppc.sh'" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-ChildItem -LiteralPath 'C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/ppccrandcorc/table1_20261105'; Get-Content -Raw -LiteralPath 'C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/ppccrandcorc/table1_20261105/PRETABLE.out'; Get-Content -Raw -LiteralPath 'C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/ppccrandcorc/table1_20261105/v575.py'" in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 165ms:
+2715-/*
+2716- *  crand, crxor etc:  Condition Register operations
+2717- *
+2718- *  arg[0] = copy of the instruction word
+2719- */
+2720:X(crand) {
+2721-	uint32_t iword = ic->arg[0]; int bt = (iword >> 21) & 31;
+2722-	int ba = (iword >> 16) & 31, bb = (iword >> 11) & 31;
+2723-	ba = (cpu->cd.ppc.cr >> (31-ba)) & 1;
+2724-	bb = (cpu->cd.ppc.cr >> (31-bb)) & 1;
+2725-	cpu->cd.ppc.cr &= ~(1 << (31-bt));
+2726-	if (ba & bb)
+2727-		cpu->cd.ppc.cr |= (1 << (31-bt));
+2728-}
+2729-X(crandc) {
+2730-	uint32_t iword = ic->arg[0]; int bt = (iword >> 21) & 31;
+2731-	int ba = (iword >> 16) & 31, bb = (iword >> 11) & 31;
+2732-	ba = (cpu->cd.ppc.cr >> (31-ba)) & 1;
+2733-	bb = (cpu->cd.ppc.cr >> (31-bb)) & 1;
+2734-	cpu->cd.ppc.cr &= ~(1 << (31-bt));
+2735-	if (ba & !bb)	/*  #575: CR[BA] & ~CR[BB] (Book I); this was NAND  */
+2736-		cpu->cd.ppc.cr |= (1 << (31-bt));
+2737-}
+2738-X(creqv) {
+2739-	uint32_t iword = ic->arg[0]; int bt = (iword >> 21) & 31;
+2740-	int ba = (iword >> 16) & 31, bb = (iword >> 11) & 31;
+2741-	ba = (cpu->cd.ppc.cr >> (31-ba)) & 1;
+2742-	bb = (cpu->cd.ppc.cr >> (31-bb)) & 1;
+2743-	cpu->cd.ppc.cr &= ~(1 << (31-bt));
+2744-	if (!(ba ^ bb))
+2745-		cpu->cd.ppc.cr |= (1 << (31-bt));
+2746-}
+2747-X(cror) {
+2748-	uint32_t iword = ic->arg[0]; int bt = (iword >> 21) & 31;
+2749-	int ba = (iword >> 16) & 31, bb = (iword >> 11) & 31;
+2750-	ba = (cpu->cd.ppc.cr >> (31-ba)) & 1;
+2751-	bb = (cpu->cd.ppc.cr >> (31-bb)) & 1;
+2752-	cpu->cd.ppc.cr &= ~(1 << (31-bt));
+2753-	if (ba | bb)
+2754-		cpu->cd.ppc.cr |= (1 << (31-bt));
+2755-}
+2756-X(crorc) {
+2757-	uint32_t iword = ic->arg[0]; int bt = (iword >> 21) & 31;
+2758-	int ba = (iword >> 16) & 31, bb = (iword >> 11) & 31;
+2759-	ba = (cpu->cd.ppc.cr >> (31-ba)) & 1;
+2760-	bb = (cpu->cd.ppc.cr >> (31-bb)) & 1;
+2761-	cpu->cd.ppc.cr &= ~(1 << (31-bt));
+2762-	if (ba | !bb)	/*  #575: CR[BA] | ~CR[BB] (Book I); this was NOR  */
+2763-		cpu->cd.ppc.cr |= (1 << (31-bt));
+2764-}
+2765-X(crnor) {
+2766-	uint32_t iword = ic->arg[0]; int bt = (iword >> 21) & 31;
+2767-	int ba = (iword >> 16) & 31, bb = (iword >> 11) & 31;
+2768-	ba = (cpu->cd.ppc.cr >> (31-ba)) & 1;
+2769-	bb = (cpu->cd.ppc.cr >> (31-bb)) & 1;
+2770-	cpu->cd.ppc.cr &= ~(1 << (31-bt));
+2771-	if (!(ba | bb))
+2772-		cpu->cd.ppc.cr |= (1 << (31-bt));
+2773-}
+2774-X(crxor) {
+2775-	uint32_t iword = ic->arg[0]; int bt = (iword >> 21) & 31;
+2776-	int ba = (iword >> 16) & 31, bb = (iword >> 11) & 31;
+2777-	ba = (cpu->cd.ppc.cr >> (31-ba)) & 1;
+2778-	bb = (cpu->cd.ppc.cr >> (31-bb)) & 1;
+2779-	cpu->cd.ppc.cr &= ~(1 << (31-bt));
+2780-	if (ba ^ bb)
+2781-		cpu->cd.ppc.cr |= (1 << (31-bt));
+2782-}
+2783-
+2784-
+2785-/*
+2786- *  mfspr: Move from SPR
+2787- *
+2788- *  arg[0] = pointer to destination register
+2789- *  arg[1] = pointer to source SPR
+2790- */
+2791-X(mfspr) {
+2792-	/*  TODO: Check permission  */
+2793-	reg(ic->arg[0]) = reg(ic->arg[1]);
+2794-}
+2795-X(mfspr_pmc1) {
+4617-		case PPC_19_RFID:
+4618-			ic->f = instr(rfid);
+4619-			break;
+4620-
+4621-		case PPC_19_MCRF:
+4622-			bf = (iword >> 23) & 7;
+4623-			bfa = (iword >> 18) & 7;
+4624-			ic->arg[0] = 28 - 4*bf;
+4625-			ic->arg[1] = 28 - 4*bfa;
+4626-			ic->f = instr(mcrf);
+4627-			break;
+4628-
+4629:		case PPC_19_CRAND:
+4630-		case PPC_19_CRANDC:
+4631-		case PPC_19_CREQV:
+4632-		case PPC_19_CROR:
+4633-		case PPC_19_CRORC:
+4634-		case PPC_19_CRNOR:
+4635-		case PPC_19_CRXOR:
+4636-			switch (xo) {
+4637:			case PPC_19_CRAND:  ic->f = instr(crand); break;
+4638-			case PPC_19_CRANDC: ic->f = instr(crandc); break;
+4639-			case PPC_19_CREQV:  ic->f = instr(creqv); break;
+4640-			case PPC_19_CROR:   ic->f = instr(cror); break;
+4641-			case PPC_19_CRORC:  ic->f = instr(crorc); break;
+4642-			case PPC_19_CRNOR:  ic->f = instr(crnor); break;
+4643-			case PPC_19_CRXOR:  ic->f = instr(crxor); break;
+4644-			}
+4645-			ic->arg[0] = iword;
+4646-			break;
+4647-
+4648-		default:goto bad;
+4649-		}
+4650-		break;
+4651-
+4652-	case PPC_HI6_RLWNM:
+4653-	case PPC_HI6_RLWINM:
+4654-		ra = (iword >> 16) & 31;
+4655-		mb = (iword >> 6) & 31;
+4656-		me = (iword >> 1) & 31;   
+4657-		rc = iword & 1;
+4658-		mask = 0;
+4659-		for (;;) {
+4660-			mask |= ((uint32_t)0x80000000 >> mb);
+4661-			if (mb == me)
+4662-				break;
+4663-			mb ++; mb &= 31;
+4664-		}
+4665-		switch (main_opcode) {
+4666-		case PPC_HI6_RLWNM:
+4667-			ic->f = rc? instr(rlwnm_dot) : instr(rlwnm); break;
+4668-		case PPC_HI6_RLWINM:
+4669-			ic->f = rc? instr(rlwinm_dot) : instr(rlwinm); break;
+4670-		}
+4671-		ic->arg[0] = (size_t)(&cpu->cd.ppc.gpr[ra]);
+4672-		ic->arg[1] = mask;
+4673-		ic->arg[2] = (uint32_t)iword;
+4674-		break;
+4675-
+4676-	case PPC_HI6_RLWIMI:
+4677-		rs = (iword >> 21) & 31;
+318-    check "ppc_ifetch RED=none"        "$(grep -cx 'PPC_IFETCH_RED=none' "$IFLOG")" "1"
+319-    for v in "ctl session" "ctl live" "ctl srr0 kept" "neg apparatus" "isi session" "isi srr0" "isi pc" "isi text" "isi nonex" "isi1 session" "isi1 srr0" "isi1 pc" "isi1 nonex" "noT session" "noT pc" "noT srr0 kept" "noT unimpl" "noT chkstop" "T cont session" "T cont text" "T cont prompt" "T cont pc" "T cont srr0" "T cont nonex" "T cont unimpl" "T cont exc" "T cont chkstop" "T cont msr" "T step session" "T step text" "T step prompt" "T step pc" "T step srr0" "T step nonex" "T step unimpl" "T step exc" "T step chkstop" "T step msr" "T me session" "T me pc" "T me srr0" "T me nonex" "T me text" "T me exc" "T me unimpl" "T me chkstop" "T me msr" "again session" "again pc" "again srr0" "again nonex" "again text" "again unimpl" "again exc" "again chkstop" "again prompt" "again msr" "T ra session" "T ra pc" "T ra nonex" "T ra addr" "T ra stopped" "T ra msr" "T ra chkstop" "T ra srr0" "T ra me session" "T ra me pc" "T ra me nonex" "T ra me chkstop" "T ra me msr" "T ra me srr0" "T blr session" "T blr pc" "T blr nonex" "T blr srr0" "T blr msr" "T blr chkstop" "T blr unimpl" "T blr lr"; do
+320-        check "ppc_ifetch row: $v" "$(count "$IFLOG" "^$v  .*ok$")" "1"
+321-    done
+322-    ifok=$(count "$IFLOG" " ok$"); ifbad=$(count "$IFLOG" " FAIL$"); ifrun=$((ifok + ifbad))
+323-    check "ppc_ifetch rows run"   "$ifrun" 79
+324-    check "ppc_ifetch rows green" "$ifok" 79
+325-    check "ppc_ifetch rows red"   "$ifbad" 0
+326-fi
+327-
+328:# ---- ppccrandcorc (#575): crandc and crorc computed NAND and NOR -- its 62-row rung-3 detector ---------------------------------------
+329-# X(crandc) and X(crorc) set CR[BT] on !(CR[BA] & CR[BB]) and !(CR[BA] | CR[BB]); PowerPC Book I v2.01 defines CR[BA] & ~CR[BB] and
+330-# CR[BA] | ~CR[BB].  `-E bareppc -M 64` (PPC970) and `-C PPC603` run each CR logical instruction on a real guest through the real
+331-# decoder, CR seeded from the debugger and every destination pre-set to the INVERSE of the architectural result; the five correct
+332-# siblings run the same table as controls; edge rows pin BT 0 and 31; two rows pin the BA/BB field masks with every submask alias
+333-# seeded opposite.  BEFORE the NetBSD prerequisite, like the blocks above.  Test-variant table:
+334-# regress/artifacts/ppccrandcorc/table1_20261105/ (the pass-1 ruling: regress/artifacts/ppccrandcorc/adj_p1_20261105/).
+335-CLLOG=$LOGDIR/ppc_crlogic.log
+336-python3 -u ppc_crlogic_probe.py "$PMAX" gate > "$CLLOG" 2>&1 || true
+337-if [ "$(grep -cx 'PPC_CRLOGIC_PROBE_DONE' "$CLLOG")" != 1 ]; then
+338-    note "ppc_crlogic: completion sentinel missing or duplicated; last lines follow"
+339-    tail -5 "$CLLOG" | sed 's/^/       /'
+340-    check "ppc_crlogic probe completed" "no" "yes"
+341-else
+342-    check "ppc_crlogic probe completed" "yes" "yes"
+343-    check "ppc_crlogic sentinel is the last line" "$(tail -n 1 "$CLLOG")" "PPC_CRLOGIC_PROBE_DONE"
+344-    for k in RESULT CONTROL; do
+345-        check "ppc_crlogic $k= lines" "$(grep -c "^PPC_CRLOGIC_$k=" "$CLLOG")" "1"
+346-    done
+347-    check "ppc_crlogic RESULT=62/62" "$(grep -cx 'PPC_CRLOGIC_RESULT=62/62' "$CLLOG")" "1"
+348-    check "ppc_crlogic CONTROL=OK"   "$(grep -cx 'PPC_CRLOGIC_CONTROL=OK' "$CLLOG")" "1"
+349-    for v in "ctl session" "ctl live" "ctl seed holds" "ctl cr seed" "ctl mfcr" "neg apparatus" "64 session" "64 crandc 00" "64 crandc 01" "64 crandc 10" "64 crandc 11" "64 crorc 00" "64 crorc 01" "64 crorc 10" "64 crorc 11" "64 others" "64 mfcr" "64 disasm" "s64 session" "s64 crand 00" "s64 crand 01" "s64 crand 10" "s64 crand 11" "s64 cror 00" "s64 cror 01" "s64 cror 10" "s64 cror 11" "s64 crnor 00" "s64 crnor 01" "s64 crnor 10" "s64 crnor 11" "s64 creqv 00" "s64 creqv 01" "s64 creqv 10" "s64 creqv 11" "s64 crxor 00" "s64 crxor 01" "s64 crxor 10" "s64 crxor 11" "s64 others" "s64 mfcr" "s64 disasm" "edge session" "edge crandc bt0" "edge crorc bt31" "edge others" "edge mfcr" "edge disasm" "64 crandc hi" "64 crorc hi" "32 session" "32 crandc 00" "32 crandc 01" "32 crandc 10" "32 crandc 11" "32 crorc 00" "32 crorc 01" "32 crorc 10" "32 crorc 11" "32 others" "32 mfcr" "32 disasm"; do
+350-        check "ppc_crlogic row: $v" "$(count "$CLLOG" "^$v  .*ok$")" "1"
+351-    done
+352-    clok=$(count "$CLLOG" " ok$"); clbad=$(count "$CLLOG" " FAIL$"); clrun=$((clok + clbad))
+353-    check "ppc_crlogic rows run"   "$clrun" 62
+354-    check "ppc_crlogic rows green" "$clok" 62
+355-    check "ppc_crlogic rows red"   "$clbad" 0
+356-fi
+357-
+358-need_file "$IMAGES/netbsd401-macppc-GENERIC"
+359-
+360-note "binary : $PMAX"
+361-note "machine: macppc/G4, NetBSD kernel loaded so the machine constructs; never executed"
+362-note "cold debugger; big-endian (dump renders value order); msr=0x2000 required for FP"
+363-
+364-python3 ppc_rounding_probe.py "$PMAX" "$IMAGES" > "$LOG" 2>&1 || true
+365-
+366-if ! grep -q "PPC_CONV_RESULT=" "$LOG"; then
+367-    note "probe produced no result line; last lines follow"
+368-    tail -5 "$LOG" | sed 's/^/       /'
+369-    gate_skip "probe did not complete"
+370-fi
+371-
+372-grep -E " ok$| FAIL$" "$LOG" | sed 's/^/       /'
+373-
+
+ succeeded in 207ms:
+> because its fix happened to ADD a predicate (an alignment mask) for the mutant to weaken.
+>
+> **Reading it as DEPENDS ON fixes both cases at once**, and it is why this now replaces a
+> narrower deletion-only rule written earlier the same day: that rule was a special case of
+> this gap, and two overlapping statements of one rule is the accumulation this carrier is
+> supposed to refuse.
+>
+> **The two shapes, once the enumeration is right:**
+> * **fix ADDS a predicate** -> weaken the added one (unchanged; the original rule).
+> * **fix adds none** -> the (d) mutant reroutes an EXISTING guard's repair. For a
+>   de-fatalisation: **swap the guard's operand for a field the guarded BODY reads.**
+>   For a pure deletion: **re-introduce the removed behaviour under a DIFFERENT predicate**
+>   -- not the same one widened, which is (b) wearing (d)'s clothes.
+>
+> *** THE MEASURED CASE, and it is why this matters rather than being tidy: ***
+> `#462` de-fatalised two arms. Its guard reads `d->data`; the body it guards reads
+> `d->data` AND `d->data_len`; the two are set together in one place and cleared in two
+> places that touch only ONE of them. Swapping the guard's operand to `d->data_len == 0`
+> **scored a CLEAN SWEEP on a 52-row detector that had just passed twelve mutants**, and
+> restored a NULL-pointer read of 408 bytes. Under the old wording that was coverage debt;
+> under DEPENDS ON it is a **floor breach, L2, fix in-round** -- which is what the round
+> did, before the wording was corrected.
+>
+> #### *** THE BOUND, and it is not optional: "DEPENDS ON" INVITES TRANSITIVE DATA-FLOW
+> #### CHASING, which is unbounded and is how this becomes `#392`. Named 2026-08-24 by the
+> #### adjudicating seat, in the same breath as upholding the correction. ***
+>
+> > **DEPENDS ON enumerates exactly two things: (1) the predicates DOMINATING the diff's
+> > edited lines, walked up only to the ENCLOSING FUNCTION BOUNDARY -- never into callees
+> > or callers; and (2) for operand-swap forms, swaps drawn ONLY from fields the guarded
+> > BODY reads (the guard-field/body-field grep the pre-table check already mandates).**
+>
+> That is finite, derivable from the diff by reading, and **it provably contains the
+> measured case**: the `d->data == NULL` guard dominates the edited decline (clause 1), and
+> `data_len` is a body-read field (clause 2), so `M11` falls out mechanically rather than
+> by inspiration. It cannot become `#392` because the enumeration stays closed over the
+> diff's own hunks -- the same closure the INTRODUCED wording had, without the empty-set
+> defect that made INTRODUCED enumerate nothing for a de-fatalisation.
+>
+> #### *** JOINT CELLS -- adjudicated 2026-09-04 on `pcc2widthkills` pass 10 by the flagship seat, after
+> #### a measuring seat's CONJUNCTION of two body-read counts escaped 190/190 AND THE SAME SEAT ARGUED IT
+> #### WAS NOT A BREACH.  Both proposed bounds were rejected; the one adopted came from neither. ***
+>
+> > **DEPENDS-ON enumerates JOINT cells over the guard's operands and the body-read lvalues EXACTLY
+> > WHEN THE GUARDED BODY'S OWN CODE DISTINGUISHES THEM.**  For each lvalue take the PARTITION the
+> > body's own tests induce (`pending > 0` gives {0, >0}; `relative_addr == PCCTWO_T1ICR` gives
+> > {T1, T2}); the enumerated cells are the CROSS-PRODUCT of those partitions -- never arbitrary
+> > boolean functions of the read-set.  A mutant exempting a single cell whose reachability is
+> > MEASURED is a floor breach; close the whole cross-product in ONE diff and write into the
+> > contract which cells are rowed.  A value or combination the body never tests as a case
+> > (`idata == k`; a byte no conditional distinguishes; both counts >= 2 where the body tests `> 0`)
+
+ succeeded in 207ms:
+
+
+    Directory: C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC\regress\artifacts\ppccrandcorc\table1_20261105
+
+
+Mode                 LastWriteTime         Length Name                                                                 
+----                 -------------         ------ ----                                                                 
+d-----         11/5/2026   1:36 AM                base62                                                               
+d-----         11/5/2026   1:39 AM                table1                                                               
+d-----         11/5/2026   1:33 AM                variants                                                             
+-a----         11/5/2026   1:36 AM           4109 PRETABLE.out                                                         
+-a----         11/5/2026   1:36 AM           2838 table1_575.run.sh                                                    
+-a----         11/5/2026   1:33 AM           2838 table1_575.sh                                                        
+-a----         11/5/2026   1:38 AM           3494 table1_run.log                                                       
+-a----         11/5/2026   1:32 AM           8856 v575.py                                                              
+PRETABLE -- #575 ppccrandcorc, test-variant table 1 (62 rows).  Written BEFORE table 1 runs (its mtime precedes every file
+in table1/).  Instrument: table1/probe62_frozen.py (the in-tree probe after apply_r575.py).  Baseline: the fix (GXEMUL-SEC
+src/cpus/cpu_ppc_instr.c).  Every prediction below is EXACT and COMPUTED by v575.py's simulator of the probe's sessions;
+rows reading the debugger, the disassembler or mfcr are predicted green on every variant.  The base and HEAD legs check the
+simulator itself.  Null media (/bin/true, an absent binary, /bin/false): CONTROL=FAIL.  c_identity is the ruled null medium
+of the two handlers (identity bodies).
+
+ROW MANIFEST (session: seed; instructions as op BT,BA,BB; rows):
+  64           seed=0x50d40000  crandc 8,0,2  crandc 9,0,1  crandc 10,1,0  crandc 11,1,3  crorc 12,0,2  crorc 13,0,1  crorc 14,1,0  crorc 15,1,3
+               rows: 64 crandc 00, 64 crandc 01, 64 crandc 10, 64 crandc 11, 64 crorc 00, 64 crorc 01, 64 crorc 10, 64 crorc 11, 64 others
+  s64          seed=0x50e87690  crand 8,0,2  crand 9,0,1  crand 10,1,0  crand 11,1,3  cror 12,0,2  cror 13,0,1  cror 14,1,0  cror 15,1,3  crnor 16,0,2  crnor 17,0,1  crnor 18,1,0  crnor 19,1,3  creqv 20,0,2  creqv 21,0,1  creqv 22,1,0  creqv 23,1,3  crxor 24,0,2  crxor 25,0,1  crxor 26,1,0  crxor 27,1,3
+               rows: s64 crand 00, s64 crand 01, s64 crand 10, s64 crand 11, s64 cror 00, s64 cror 01, s64 cror 10, s64 cror 11, s64 crnor 00, s64 crnor 01, s64 crnor 10, s64 crnor 11, s64 creqv 00, s64 creqv 01, s64 creqv 10, s64 creqv 11, s64 crxor 00, s64 crxor 01, s64 crxor 10, s64 crxor 11, s64 others
+  edge         seed=0x8c000000  crandc 0,2,3  crorc 31,4,5
+               rows: edge crandc bt0, edge crorc bt31, edge others
+  64 crandc hi seed=0xa2020001  crandc 20,31,30
+               rows: 64 crandc hi
+  64 crorc hi  seed=0x44040408  crorc 21,29,28
+               rows: 64 crorc hi
+  32           seed=0x50d40000  crandc 8,0,2  crandc 9,0,1  crandc 10,1,0  crandc 11,1,3  crorc 12,0,2  crorc 13,0,1  crorc 14,1,0  crorc 15,1,3
+               rows: 32 crandc 00, 32 crandc 01, 32 crandc 10, 32 crandc 11, 32 crorc 00, 32 crorc 01, 32 crorc 10, 32 crorc 11, 32 others
+
+VARIANTS (exact red sets):
+   base                    0 red: none
+   HEAD                   10 red: 64_crandc_00,64_crandc_01,64_crorc_10,64_crorc_11,edge_crandc_bt0,edge_crorc_bt31,32_crandc_00,32_crandc_01,32_crorc_10,32_crorc_11
+   b1_crandc_nand          5 red: 64_crandc_00,64_crandc_01,edge_crandc_bt0,32_crandc_00,32_crandc_01
+   b2_crorc_nor            5 red: 64_crorc_10,64_crorc_11,edge_crorc_bt31,32_crorc_10,32_crorc_11
+   c_identity             20 red: 64_crandc_00,64_crandc_01,64_crandc_10,64_crandc_11,64_crorc_00,64_crorc_01,64_crorc_10,64_crorc_11,edge_crandc_bt0,edge_crorc_bt31,64_crandc_hi,64_crorc_hi,32_crandc_00,32_crandc_01,32_crandc_10,32_crandc_11,32_crorc_00,32_crorc_01,32_crorc_10,32_crorc_11
+   d1_crandc_nba_and_b     5 red: 64_crandc_01,64_crandc_10,64_crandc_hi,32_crandc_01,32_crandc_10
+   d2_crorc_nba_or_b       5 red: 64_crorc_01,64_crorc_10,64_crorc_hi,32_crorc_01,32_crorc_10
+   d3_crandc_and           5 red: 64_crandc_10,64_crandc_11,64_crandc_hi,32_crandc_10,32_crandc_11
+   d4_crorc_or             5 red: 64_crorc_00,64_crorc_01,64_crorc_hi,32_crorc_00,32_crorc_01
+   d5_crandc_crossed       5 red: 64_crandc_00,64_crandc_11,edge_crandc_bt0,32_crandc_00,32_crandc_11
+   d6_crorc_crossed        5 red: 64_crorc_00,64_crorc_11,edge_crorc_bt31,32_crorc_00,32_crorc_11
+   m1_crandc_mask7         1 red: 64_crandc_hi
+   m2_crorc_mask7          1 red: 64_crorc_hi
+   m3_crandc_mask15        1 red: 64_crandc_hi
+   m4_crorc_mask15         1 red: 64_crorc_hi
+   t1_crandc_btmask7      13 red: 64_crandc_00,64_crandc_01,64_crandc_10,64_crandc_11,64_crorc_01,64_others,64_crandc_hi,32_crandc_00,32_crandc_01,32_crandc_10,32_crandc_11,32_crorc_01,32_others
+   t2_crorc_btmask7       13 red: 64_crorc_00,64_crorc_01,64_crorc_10,64_crorc_11,64_others,edge_crorc_bt31,edge_others,64_crorc_hi,32_crorc_00,32_crorc_01,32_crorc_10,32_crorc_11,32_others
+
+#!/usr/bin/env python3
+"""v575.py -- #575 ppccrandcorc test-variant TABLE 1 (2026-11-05): the variant sources, and EXACT predictions computed by simulating the
+probe's sessions (regress/ppc_crlogic_probe.py, 62 rows) under each variant's handler semantics.  The simulator copies the probe's
+session plans (table(), the edge session, the two field-mask rows); rows that read the debugger, the disassembler or mfcr are predicted
+green on every variant (no variant touches them).  Its base and HEAD predictions are checked against the measured runs, which is what
+licenses the rest.  Variants: the pass-1 ruling's nine (b1 b2 c d1-d6, regress/artifacts/ppccrandcorc/adj_p1_20261105/MYTHOS_local.md
+R5) plus the field-mask weakenings the owed hi rows exist for (m1-m4: BA/BB mask & 7 and & 15) and the BT mask (t1, t2: & 7).
+  v575.py write | pretable"""
+import io
+import os
+import sys
+
+T, NL = chr(9), chr(10)
+HERE = os.path.dirname(os.path.abspath(__file__))
+FIXF = "C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c"
+FIX = io.open(FIXF, encoding="latin-1", newline="").read()
+
+# ------------------------------------------------------------------------------------------------ the simulator
+def crbit(cr, n):
+    return (cr >> (31 - n)) & 1
+
+
+def setbit(cr, n, v):
+    m = 1 << (31 - n)
+    return (cr | m) if v else (cr & ~m & 0xFFFFFFFF)
+
+
+ARCH = {"crand": lambda a, b: a & b, "crandc": lambda a, b: a & (1 - b), "creqv": lambda a, b: 1 - (a ^ b),
+        "cror": lambda a, b: a | b, "crorc": lambda a, b: a | (1 - b), "crnor": lambda a, b: 1 - (a | b), "crxor": lambda a, b: a ^ b}
+
+
+def run(cr, insns, fns, masks):
+    for op, bt, ba, bb in insns:
+        mbt, mab = masks.get(op, (31, 31))
+        bt, ba, bb = bt & mbt, ba & mab, bb & mab
+        if fns[op] is None:
+            continue
+        cr = setbit(cr, bt, fns[op](crbit(cr, ba), crbit(cr, bb)))
+    return cr
+
+
+def sessions():
+    """Yields (session, seed, insns, [(row, kind, bt-or-mask, want)]) in the probe's row order (rows read off the final CR)."""
+    pick = {(0, 0): (0, 2), (0, 1): (0, 1), (1, 0): (1, 0), (1, 1): (1, 3)}
+
+    def table(prefix, ops):
+        seed = setbit(setbit(0, 1, 1), 3, 1)
+        plan, bt = [], 8
+        for op in ops:
+            for ab in ((0, 0), (0, 1), (1, 0), (1, 1)):
+                want = ARCH[op](*ab)
+                seed = setbit(seed, bt, 1 - want)
+                plan.append((op, ab, bt, want))
+                bt += 1
+        insns = [(op, b, pick[ab][0], pick[ab][1]) for op, ab, b, _ in plan]
+        rows = [("%s %s %d%d" % (prefix, op, ab[0], ab[1]), "bit", b, w) for op, ab, b, w in plan]
+        mask = 0
+        for _, _, b, _ in plan:
+            mask |= 1 << (31 - b)
+        rows.append((prefix + " others", "others", mask, seed & ~mask & 0xFFFFFFFF))
+        return (prefix, seed, insns, rows)
+    yield table("64", ["crandc", "crorc"])
+    yield table("s64", ["crand", "cror", "crnor", "creqv", "crxor"])
+    eseed = setbit(setbit(setbit(setbit(0, 4, 1), 5, 1), 0, 1), 31, 0)
+    emask = (1 << 31) | 1
+    yield ("edge", eseed, [("crandc", 0, 2, 3), ("crorc", 31, 4, 5)],
+           [("edge crandc bt0", "bit", 0, 0), ("edge crorc bt31", "bit", 31, 1),
+            ("edge others", "others", emask, eseed & ~emask & 0xFFFFFFFF)])
+    for name, op, bt, ba, bb, ones, zeros, want in (
+            ("64 crandc hi", "crandc", 20, 31, 30, [31, 14, 6, 2, 0], [30, 15, 7, 3, 1], 1),
+            ("64 crorc hi", "crorc", 21, 29, 28, [28, 13, 5, 1], [29, 12, 4, 0], 0)):
+        seed = 0
+        for n in ones:
+            seed = setbit(seed, n, 1)
+        for n in zeros:
+            seed = setbit(seed, n, 0)
+        seed = setbit(seed, bt, 1 - want)
+        yield (name, seed, [(op, bt, ba, bb)], [(name, "bit", bt, want)])
+    yield table("32", ["crandc", "crorc"])
+
+
+def predict(fns, masks):
+    red = []
+    for _, seed, insns, rows in sessions():
+        cr = run(seed, insns, fns, masks)
+        for name, kind, arg, want in rows:
+            got = crbit(cr, arg) if kind == "bit" else (cr & ~arg & 0xFFFFFFFF)
+            if got != want:
+                red.append(name.replace(" ", "_"))
+    return red
+
+
+def F(**over):
+    d = dict(ARCH)
+    d.update(over)
+    return d
+
+
+NAND, NOR = (lambda a, b: 1 - (a & b)), (lambda a, b: 1 - (a | b))
+SPEC = {   # name: (fns, masks, C edit)
+    "base": (F(), {}, None),
+    "HEAD": (F(crandc=NAND, crorc=NOR), {}, None),
+    "b1_crandc_nand": (F(crandc=NAND), {}, ("crandc", "if", "if (!(ba & bb))")),
+    "b2_crorc_nor": (F(crorc=NOR), {}, ("crorc", "if", "if (!(ba | bb))")),
+    "c_identity": (F(crandc=None, crorc=None), {}, ("both", "identity", None)),
+    "d1_crandc_nba_and_b": (F(crandc=lambda a, b: (1 - a) & b), {}, ("crandc", "if", "if (!ba & bb)")),
+    "d2_crorc_nba_or_b": (F(crorc=lambda a, b: (1 - a) | b), {}, ("crorc", "if", "if (!ba | bb)")),
+    "d3_crandc_and": (F(crandc=lambda a, b: a & b), {}, ("crandc", "if", "if (ba & bb)")),
+    "d4_crorc_or": (F(crorc=lambda a, b: a | b), {}, ("crorc", "if", "if (ba | bb)")),
+    "d5_crandc_crossed": (F(crandc=lambda a, b: a | (1 - b)), {}, ("crandc", "if", "if (ba | !bb)")),
+    "d6_crorc_crossed": (F(crorc=lambda a, b: a & (1 - b)), {}, ("crorc", "if", "if (ba & !bb)")),
+    "m1_crandc_mask7": (F(), {"crandc": (31, 7)}, ("crandc", "abmask", "7")),
+    "m2_crorc_mask7": (F(), {"crorc": (31, 7)}, ("crorc", "abmask", "7")),
+    "m3_crandc_mask15": (F(), {"crandc": (31, 15)}, ("crandc", "abmask", "15")),
+    "m4_crorc_mask15": (F(), {"crorc": (31, 15)}, ("crorc", "abmask", "15")),
+    "t1_crandc_btmask7": (F(), {"crandc": (7, 31)}, ("crandc", "btmask", "7")),
+    "t2_crorc_btmask7": (F(), {"crorc": (7, 31)}, ("crorc", "btmask", "7")),
+}
+
+LINE = {"crandc": T + "if (ba & !bb)" + T + "/*  #575: CR[BA] & ~CR[BB] (Book I); this was NAND  */" + NL,
+        "crorc": T + "if (ba | !bb)" + T + "/*  #575: CR[BA] | ~CR[BB] (Book I); this was NOR  */" + NL}
+HD = lambda op: ("X(" + op + ") {" + NL + T + "uint32_t iword = ic->arg[0]; int bt = (iword >> 21) & 31;" + NL +
+                 T + "int ba = (iword >> 16) & 31, bb = (iword >> 11) & 31;" + NL)
+CLR = T + "cpu->cd.ppc.cr &= ~(1 << (31-bt));" + NL
+SET = T + T + "cpu->cd.ppc.cr |= (1 << (31-bt));" + NL
+
+
+def one(s, old, new):
+    assert s.count(old) == 1, (old[:70], s.count(old))
+    return s.replace(old, new)
+
+
+def source(edit):
+    op, kind, arg = edit
+    s = FIX
+    if kind == "if":
+        return one(s, LINE[op], T + arg + NL)
+    if kind == "identity":
+        for o in ("crandc", "crorc"):
+            s = one(s, CLR + LINE[o] + SET, T + "(void) bt; (void) ba; (void) bb;" + NL)
+        return s
+    if kind == "abmask":
+        return one(s, HD(op), HD(op).replace("(iword >> 16) & 31, bb = (iword >> 11) & 31;",
+                                             "(iword >> 16) & %s, bb = (iword >> 11) & %s;" % (arg, arg)))
+    if kind == "btmask":
+        return one(s, HD(op), HD(op).replace("int bt = (iword >> 21) & 31;", "int bt = (iword >> 21) & %s;" % arg))
+    raise ValueError(kind)
+
+
+def write():
+    out = os.path.join(HERE, "variants")
+    os.makedirs(out, exist_ok=True)
+    n = 0
+    for name, (_, _, edit) in SPEC.items():
+        if edit:
+            t = source(edit)
+            assert t != FIX
+            io.open(os.path.join(out, name + ".c"), "w", encoding="latin-1", newline="").write(t)
+            n += 1
+    print("%d variants written" % n)
+
+
+def pretable():
+    L = ["PRETABLE -- #575 ppccrandcorc, test-variant table 1 (62 rows).  Written BEFORE table 1 runs (its mtime precedes every file",
+         "in table1/).  Instrument: table1/probe62_frozen.py (the in-tree probe after apply_r575.py).  Baseline: the fix (GXEMUL-SEC",
+         "src/cpus/cpu_ppc_instr.c).  Every prediction below is EXACT and COMPUTED by v575.py's simulator of the probe's sessions;",
+         "rows reading the debugger, the disassembler or mfcr are predicted green on every variant.  The base and HEAD legs check the",
+         "simulator itself.  Null media (/bin/true, an absent binary, /bin/false): CONTROL=FAIL.  c_identity is the ruled null medium",
+         "of the two handlers (identity bodies).",
+         "", "ROW MANIFEST (session: seed; instructions as op BT,BA,BB; rows):"]
+    for sess, seed, insns, rows in sessions():
+        L.append("  %-12s seed=0x%08x  %s" % (sess, seed, "  ".join("%s %d,%d,%d" % i for i in insns)))
+        L.append("               rows: " + ", ".join(r[0] for r in rows))
+    L += ["", "VARIANTS (exact red sets):"]
+    for name, (fns, masks, _) in SPEC.items():
+        red = predict(fns, masks)
+        L.append("   %-22s %2d red: %s" % (name, len(red), ",".join(red) or "none"))
+    return NL.join(L) + NL
+
+
+if __name__ == "__main__":
+    if sys.argv[1:] == ["write"]:
+        write()
+    elif sys.argv[1:] == ["pretable"]:
+        sys.stdout.write(pretable())
+    else:
+        sys.exit(__doc__)
+
+
+
+
+codex
+I found a coverage gap: every tested destination differs from both sources, so moving a handler’s clear before its source reads would still pass all 62 rows. I’m also checking the field-mask claims and whether the records include every prediction required by pass 1.
+codex
+The two product expressions are correct. The review has identified nine surviving edits: five field-mask changes, two wrong-source reads, and two clear-order changes. PRETABLE also omits the four predicted-only substitutions required by R5, and several coverage statements need correction.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -A 25 -B 8 'case PPC_19_CRAND:' 'C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc.c'; rg -n 'MODE_PPC|DYNTRANS_DUALMODE_32|uint32_t.*cr;' 'C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc.c' 'C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c' 'C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/cpu_ppc.h'" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-Content -Raw -LiteralPath 'C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/ppccrandcorc/table1_20261105/table1/VERDICT.md'; Get-Content -Raw -LiteralPath 'C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/ppccrandcorc/table1_20261105/table1/SCORES.txt'; Get-Item -LiteralPath 'C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/ppccrandcorc/table1_20261105/PRETABLE.out','C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/ppccrandcorc/table1_20261105/table1/probe62_frozen.py' | Select-Object Name,@{Name='LastWriteTimeUtc';Expression={"'$_.LastWriteTimeUtc.ToString('"'o')}}" in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 130ms:
+803-			}
+804-			debug("%s%s%s\t%i,%i,%i", mnem, lk_bit? "l" : "",
+805-			    bh? (bh==3? "+" : (bh==2? "-" : "?")) : "",
+806-			    bo, bi, bh);
+807-			break;
+808-		case PPC_19_ISYNC:
+809-			debug("%s", power? "ics" : "isync");
+810-			break;
+811:		case PPC_19_CRAND:
+812-		case PPC_19_CRXOR:
+813-		case PPC_19_CROR:
+814-		case PPC_19_CRNAND:
+815-		case PPC_19_CRNOR:
+816-		case PPC_19_CRANDC:
+817-		case PPC_19_CREQV:
+818-		case PPC_19_CRORC:
+819-			bt = (iword >> 21) & 31;
+820-			ba = (iword >> 16) & 31;
+821-			bb = (iword >> 11) & 31;
+822-			switch (xo) {
+823:			case PPC_19_CRAND:	mnem = "crand"; break;
+824-			case PPC_19_CRXOR:	mnem = "crxor"; break;
+825-			case PPC_19_CROR:	mnem = "cror"; break;
+826-			case PPC_19_CRNAND:	mnem = "crnand"; break;
+827-			case PPC_19_CRNOR:	mnem = "crnor"; break;
+828-			case PPC_19_CRANDC:	mnem = "crandc"; break;
+829-			case PPC_19_CREQV:	mnem = "creqv"; break;
+830-			case PPC_19_CRORC:	mnem = "crorc"; break;
+831-			}
+832-			debug("%s\t%i,%i,%i", mnem, bt, ba, bb);
+833-			break;
+834-		default:
+835-			debug("unimplemented hi6_19, xo = 0x%x", xo);
+836-		}
+837-		break;
+838-	case PPC_HI6_RLWNM:
+839-	case PPC_HI6_RLWIMI:
+840-	case PPC_HI6_RLWINM:
+841-		rs = (iword >> 21) & 31;
+842-		ra = (iword >> 16) & 31;
+843-		sh = (iword >> 11) & 31;	/*  actually rb for rlwnm  */
+844-		mb = (iword >> 6) & 31;
+845-		me = (iword >> 1) & 31;
+846-		rc = iword & 1;
+847-		switch (hi6) {
+848-		case PPC_HI6_RLWNM:
+C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/cpu_ppc.h:39:#define	MODE_PPC		0
+C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/cpu_ppc.h:119:	int		mode;		/*  MODE_PPC or MODE_POWER  */
+C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/cpu_ppc.h:126:	uint32_t	cr;		/*  Condition Register  */
+C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/cpu_ppc.h:127:	uint32_t	fpscr;		/*  FP Status and Control Register  */
+C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc.c:53:#define	DYNTRANS_DUALMODE_32
+C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc.c:96:	cpu->cd.ppc.mode     = MODE_PPC;	/*  TODO  */
+C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc.c:254:	    cpu->cd.ppc.mode == MODE_PPC ? "PPC" : "POWER",
+C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc.c:1842: *  cpu_ppc_instr.c: that file is compiled twice (DYNTRANS_DUALMODE_32), so a
+C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc.c:1892:	uint32_t f = cpu->cd.ppc.fpscr;
+
+ succeeded in 232ms:
+# #575 ppccrandcorc -- test-variant TABLE 1 (62 rows), 2026-11-05 07:4xZ (01:4x local)
+
+Driver `../table1_575.run.sh` (frozen copy), WSL scratch clone /tmp/gx575t under a clone-local .MUTANT sentinel; restored, cmp-clean
+against GXEMUL-SEC, rebuilt fresh, sentinel cleared (TABLE.log, last lines).  Instrument `probe62_frozen.py` == the in-tree probe after
+apply_r575.py (cmp-identical to base62/probe62_run.py, which scored 62/62 on build/).  `../PRETABLE.out` was written before the driver
+(the only older file here is the frozen probe, copied first); its predictions are EXACT and were COMPUTED by `../v575.py`, a simulator of
+the probe's sessions.  Scores: SCORES.txt (red sets read off each run's FAIL rows; the probe prints no RED line).
+
+* base 62/62, CONTROL=OK.  HEAD (impl_20261105/cpu_ppc_instr.c.pre575) 52/62, CONTROL=OK: exactly the ten predicted rows (64/32 crandc
+  00, 01; 64/32 crorc 10, 11; edge crandc bt0; edge crorc bt31) -- the same ten as the 10-29 witness (witness_20261029/WITNESS_head.out).
+* All 15 variants scored EXACTLY their predicted red sets (17 of 17 including base and HEAD):
+  b1 crandc NAND restored, b2 crorc NOR restored -- 5 each; c identity bodies (the ruled null medium of the two handlers) -- 20;
+  d1-d6 (operand complement moved, dropped, operator crossed) -- 5 each, the four the ruling listed per variant plus a hi row on d1-d4;
+  m1-m4 (BA/BB mask & 7 and & 15) -- 1 each, the hi row of that handler ONLY (the owed rows' whole reason: 58/58 before them);
+  t1, t2 (BT mask & 7) -- 13 each.
+* Null media: /bin/true 5/62 CONTROL=FAIL; /bin/false 1/62 CONTROL=FAIL; an absent binary raises FileNotFoundError in the probe before
+  any row and prints no sentinel (probe_null_absent.out) -- the gate's first check (the completion sentinel) reds it.
+
+base [62 rows] 62/62 CONTROL=OK DONE=1 RED=none
+HEAD [62 rows] 52/62 CONTROL=OK DONE=1 RED=64_crandc_00,64_crandc_01,64_crorc_10,64_crorc_11,edge_crandc_bt0,edge_crorc_bt31,32_crandc_00,32_crandc_01,32_crorc_10,32_crorc_11
+null_true [62 rows] 5/62 CONTROL=FAIL DONE=1 RED=ctl_live,ctl_seed_holds,ctl_cr_seed,ctl_mfcr,neg_apparatus,64_crandc_00,64_crandc_01,64_crandc_10,64_crandc_11,64_crorc_00,64_crorc_01,64_crorc_10,64_crorc_11,64_others,64_mfcr,64_disasm,s64_crand_00,s64_crand_01,s64_crand_10,s64_crand_11,s64_cror_00,s64_cror_01,s64_cror_10,s64_cror_11,s64_crnor_00,s64_crnor_01,s64_crnor_10,s64_crnor_11,s64_creqv_00,s64_creqv_01,s64_creqv_10,s64_creqv_11,s64_crxor_00,s64_crxor_01,s64_crxor_10,s64_crxor_11,s64_others,s64_mfcr,s64_disasm,edge_crandc_bt0,edge_crorc_bt31,edge_others,edge_mfcr,edge_disasm,64_crandc_hi,64_crorc_hi,32_crandc_00,32_crandc_01,32_crandc_10,32_crandc_11,32_crorc_00,32_crorc_01,32_crorc_10,32_crorc_11,32_others,32_mfcr,32_disasm
+null_absent [62 rows] none CONTROL=none DONE=0 RED=none
+null_false [62 rows] 1/62 CONTROL=FAIL DONE=1 RED=ctl_session,ctl_live,ctl_seed_holds,ctl_cr_seed,ctl_mfcr,64_session,64_crandc_00,64_crandc_01,64_crandc_10,64_crandc_11,64_crorc_00,64_crorc_01,64_crorc_10,64_crorc_11,64_others,64_mfcr,64_disasm,s64_session,s64_crand_00,s64_crand_01,s64_crand_10,s64_crand_11,s64_cror_00,s64_cror_01,s64_cror_10,s64_cror_11,s64_crnor_00,s64_crnor_01,s64_crnor_10,s64_crnor_11,s64_creqv_00,s64_creqv_01,s64_creqv_10,s64_creqv_11,s64_crxor_00,s64_crxor_01,s64_crxor_10,s64_crxor_11,s64_others,s64_mfcr,s64_disasm,edge_session,edge_crandc_bt0,edge_crorc_bt31,edge_others,edge_mfcr,edge_disasm,64_crandc_hi,64_crorc_hi,32_session,32_crandc_00,32_crandc_01,32_crandc_10,32_crandc_11,32_crorc_00,32_crorc_01,32_crorc_10,32_crorc_11,32_others,32_mfcr,32_disasm
+b1_crandc_nand [62 rows] 57/62 CONTROL=OK DONE=1 RED=64_crandc_00,64_crandc_01,edge_crandc_bt0,32_crandc_00,32_crandc_01
+b2_crorc_nor [62 rows] 57/62 CONTROL=OK DONE=1 RED=64_crorc_10,64_crorc_11,edge_crorc_bt31,32_crorc_10,32_crorc_11
+c_identity [62 rows] 42/62 CONTROL=OK DONE=1 RED=64_crandc_00,64_crandc_01,64_crandc_10,64_crandc_11,64_crorc_00,64_crorc_01,64_crorc_10,64_crorc_11,edge_crandc_bt0,edge_crorc_bt31,64_crandc_hi,64_crorc_hi,32_crandc_00,32_crandc_01,32_crandc_10,32_crandc_11,32_crorc_00,32_crorc_01,32_crorc_10,32_crorc_11
+d1_crandc_nba_and_b [62 rows] 57/62 CONTROL=OK DONE=1 RED=64_crandc_01,64_crandc_10,64_crandc_hi,32_crandc_01,32_crandc_10
+d2_crorc_nba_or_b [62 rows] 57/62 CONTROL=OK DONE=1 RED=64_crorc_01,64_crorc_10,64_crorc_hi,32_crorc_01,32_crorc_10
+d3_crandc_and [62 rows] 57/62 CONTROL=OK DONE=1 RED=64_crandc_10,64_crandc_11,64_crandc_hi,32_crandc_10,32_crandc_11
+d4_crorc_or [62 rows] 57/62 CONTROL=OK DONE=1 RED=64_crorc_00,64_crorc_01,64_crorc_hi,32_crorc_00,32_crorc_01
+d5_crandc_crossed [62 rows] 57/62 CONTROL=OK DONE=1 RED=64_crandc_00,64_crandc_11,edge_crandc_bt0,32_crandc_00,32_crandc_11
+d6_crorc_crossed [62 rows] 57/62 CONTROL=OK DONE=1 RED=64_crorc_00,64_crorc_11,edge_crorc_bt31,32_crorc_00,32_crorc_11
+m1_crandc_mask7 [62 rows] 61/62 CONTROL=OK DONE=1 RED=64_crandc_hi
+m2_crorc_mask7 [62 rows] 61/62 CONTROL=OK DONE=1 RED=64_crorc_hi
+m3_crandc_mask15 [62 rows] 61/62 CONTROL=OK DONE=1 RED=64_crandc_hi
+m4_crorc_mask15 [62 rows] 61/62 CONTROL=OK DONE=1 RED=64_crorc_hi
+t1_crandc_btmask7 [62 rows] 49/62 CONTROL=OK DONE=1 RED=64_crandc_00,64_crandc_01,64_crandc_10,64_crandc_11,64_crorc_01,64_others,64_crandc_hi,32_crandc_00,32_crandc_01,32_crandc_10,32_crandc_11,32_crorc_01,32_others
+t2_crorc_btmask7 [62 rows] 49/62 CONTROL=OK DONE=1 RED=64_crorc_00,64_crorc_01,64_crorc_10,64_crorc_11,64_others,edge_crorc_bt31,edge_others,64_crorc_hi,32_crorc_00,32_crorc_01,32_crorc_10,32_crorc_11,32_others
+restored [62 rows] 62/62 CONTROL=OK DONE=1 RED=none
+
+
+Name              LastWriteTimeUtc            
+----              ----------------            
+PRETABLE.out      2026-11-05T07:36:56.2780788Z
+probe62_frozen.py 2026-11-05T07:36:56.1924505Z
+
+
+
+codex
+CODEXP2R575
+model: GPT-6 (Codex)
+REPAIR: 76 cells swept; 9 floor breaches; 7 false record claims; required R5 predictions missing.
+
+1. FLOOR
+
+Nine independently surviving edits, grouped below. These are read-only derivations, not newly measured results. Each edit preserves all 62 current observations and falls outside table 1 and the stated exclusions.
+
+B1-B2: Read BT instead of BB.
+
+At cpu_ppc_instr.c:2733 or :2760, change:
+    bb = (cpu->cd.ppc.cr >> (31-bb)) & 1;
+to:
+    bb = (cpu->cd.ppc.cr >> (31-bt)) & 1;
+
+Let r be the architectural result. Every exercised destination still holds 1-r when its instruction starts. The substituted read therefore makes !bb equal r. The resulting functions are a & r = r for crandc and a | r = r for crorc. Both edited handlers consequently produce the expected destination and preserve every other bit.
+
+Rows that detect these separate edits:
+    crandc BT=8, BA=1, BB=2, seed=0x40800000: expected 1; variant writes 0.
+    crorc  BT=8, BA=1, BB=2, seed=0x00800000: expected 1; variant writes 0.
+
+These are wrong-source reads, not the excluded toggle edit.
+
+B3-B4: Move the clear before both source-value reads.
+
+Move statement :2734 above :2732, or :2761 above :2759. Every current instruction has BT distinct from BA and BB:
+
+    crandc table: (8,0,2), (9,0,1), (10,1,0), (11,1,3)
+    crandc edge/hi: (0,2,3), (20,31,30)
+    crorc table: (12,0,2), (13,0,1), (14,1,0), (15,1,3)
+    crorc edge/hi: (31,4,5), (21,29,28)
+
+The 32-bit table repeats those table triples. Clearing early therefore changes none of their source values.
+
+Rows that detect the edits, with all unlisted seed bits zero:
+    crandc BT=7, BA=6, BB=7; seed ones {6,7}: expected 0; early clear produces 1.
+    crorc  BT=7, BA=6, BB=7; seed ones {7}: expected 0; early clear produces 1.
+
+Both retain inverse destination presets. Destination/source aliasing is not a stated exclusion.
+
+B5-B9: Individual field-mask weakenings.
+
+Change only the indicated &31 occurrence:
+
+    B5: crandc BB -> &29
+    B6: crandc BB -> &27
+    B7: crandc BB -> &23
+    B8: crorc  BA -> &29
+    B9: crorc  BB -> &29
+
+Enumeration of why they survive:
+
+    B5: Table BB indices 2->0 and 3->1 preserve values 0 and 1.
+        Edge BB 3->1 preserves 0.
+        Hi BB 30->28 preserves 0.
+    B6: Only hi BB changes: 30->26; both bits hold 0.
+    B7: Only hi BB changes: 30->22; both bits hold 0.
+    B8: Exercised BA indices {0,1,4,29} are all unchanged by &29.
+    B9: Table BB indices 2->0 and 3->1 preserve their values.
+        Edge BB=5 and hi BB=28 remain unchanged.
+
+Two additional rows detect all five, with unlisted seed bits zero:
+
+    crandc BT=9, BA=7, BB=14; seed ones {7,9,14}; expected 0.
+    BB14 maps to 12,10,6 under masks 29,27,23 respectively.
+    Each alias holds 0, so each variant writes 1.
+
+    crorc BT=9, BA=6, BB=10; seed ones {4,9,10}; expected 0.
+    BA6 &29 ->4, whose value is 1.
+    BB10 &29 ->8, whose value is 0.
+    Either separate edit makes the result 1.
+
+DENOMINATOR: 76 explicitly bounded site/edit-shape cells.
+
+    Decode: 2 dispatch assignments x 6 alternative existing CR-logical handlers = 12.
+    Field masks: 6 sites (BT,BA,BB per handler) x masks {30,29,27,23,15} = 30.
+    Source reads: 4 sites x {use the other operand variable, use BT} = 8.
+    Source bit numbering: 4 sites x {replace 31-index with index} = 4.
+    Clear: 2 sites x {delete, replace clear with XOR, move before source reads} = 6.
+    Condition: 2 sites x {restore defect, move complement, drop complement,
+                          cross operator, replace BA with BT, replace BB with BT} = 12.
+    Set: 2 sites x {delete, replace OR with XOR} = 4.
+
+    12 + 30 + 8 + 4 + 6 + 12 + 4 = 76.
+    63 detected + 9 breaches + 2 stated toggle exclusions + 2 equivalent set edits = 76.
+
+For auditability, the complete 30-cell mask sweep follows. Entries identify an existing detecting row; PASS identifies a breach. Unqualified truth rows mean the 64-bit table.
+
+                         &30          &29          &27          &23          &15
+    crandc BT            crandc01     crandc10     crandc hi    crandc00     crandc hi
+    crandc BA            crandc10     edge bt0     crandc hi    crandc hi    crandc hi
+    crandc BB            crandc11     PASS         PASS         PASS         crandc hi
+    crorc BT             crorc01      crorc10      crorc00      crorc00      edge bt31
+    crorc BA             crorc11      PASS         edge bt31    crorc hi     crorc hi
+    crorc BB             crorc01      PASS         crorc hi     crorc hi     crorc hi
+
+The sequential edge matters: crandc clears CR[0] before crorc executes. Thus crorc BA &27 maps BA4 to an already-cleared CR[0] and is detected.
+
+The remaining classifications are independently checkable:
+
+    Decode replacements are detected because the seven truth vectors, ordered
+    00,01,10,11, are distinct:
+    crand=0001; crandc=0010; creqv=1001; cror=0111;
+    crorc=1011; crnor=1000; crxor=0110.
+
+    Read substitutions:
+    crandc BA->BB: detects 10; BA->BT: detects 00.
+    crandc BB->BA: detects 10; BB->BT: survives.
+    crorc BA->BB: detects 01; BA->BT: detects 01.
+    crorc BB->BA: detects 01; BB->BT: survives.
+    At the BB read, BA already contains its Boolean value; this does not
+    change those witnesses.
+
+    Reversed source numbering:
+    crandc BA: detects 10; crandc BB: detects 11;
+    crorc BA: detects 11; crorc BB: detects 01.
+
+    Deleted clears: detected by crandc00 and crorc01.
+    XOR clears: the two stated exclusions.
+    Early clears: the two breaches above.
+    All twelve condition edits: detected.
+    Deleted sets: detected by crandc10 and crorc00.
+    XOR sets: equivalent after the destination has been cleared.
+
+This denominator is a finite enumerated sweep, not a claim about every possible C edit.
+
+2. THE DIFF
+
+The two product expressions exactly match R1/R10 and the supplied Book I text:
+
+    BA BB    crandc: BA & !BB    crorc: BA | !BB
+     0  0             0                  1
+     0  1             0                  0
+     1  0             1                  1
+     1  1             0                  1
+
+Both operands are normalized to 0/1 before these expressions. The current implementation reads both sources before clearing the destination, so its alias behavior is correct.
+
+The new hi rows work for the explicitly listed masks:
+
+    Masks:             15   7   3   1
+    crandc BA31 ->     15   7   3   1    alias values 0,0,0,0; source value 1
+    crandc BB30 ->     14   6   2   0    alias values 1,1,1,1; source value 0
+    crorc BA29 ->      13   5   1   1    alias values 1,1,1,1; source value 0
+    crorc BB28 ->      12   4   0   0    alias values 0,0,0,0; source value 1
+
+Their destination presets are respectively BT20=0 and BT21=1. Either individual operand weakening, or simultaneous weakening, to one of those four masks flips the corresponding result. Those four masks do not exhaust proper submasks of 31.
+
+“edge mfcr” measures exactly the channel agreement its note describes: GPR10 equals final debugger CR. It is not an independent architectural-result oracle.
+
+“edge disasm” correctly measures the narrower row note: both mnemonics are named correctly. It does not check BT, BA or BB.
+
+The row census and gate checks are correct:
+
+    Rows 1-6:   apparatus
+    Rows 7-18:  64-bit table
+    Rows 19-42: siblings
+    Rows 43-48: edge
+    Rows 49-50: hi
+    Rows 51-62: 32-bit table
+
+    6 + 12 + 24 + 6 + 2 + 12 = 62.
+
+The gate lists all 62 names, checks exact result/control records, sentinel uniqueness and final position, and green/red counts. It precedes the NetBSD prerequisite.
+
+I count seven false record claims, counting distinct claims once and including the new table records:
+
+F1. Clause (e)(3) says an input at index 31 is not separately rowed. The separate crandc hi row explicitly uses BA31. Describe the remaining operand/index gaps instead.
+
+F2. The new FIELD-MASK comment says &1 previously scored 58/58. In the old crandc edge row, simultaneous masking gives BA2&1=0 and BB3&1=1. Before that instruction, CR[0]=1 and CR[1]=0. The variant computes 1 & !0 = 1, whereas the row expects 0. It was already detected.
+
+F3. The edge comment calls “edge disasm” an encoder pin at the BT extremes. The scorer discards the encoded word and operand text and compares only mnemonic strings. Changing BT while preserving the opcode preserves that score. Either narrow the claim to mnemonic checking or compare the decoded operands.
+
+F4. PRETABLE predicts CONTROL=FAIL for an absent binary. The probe raises before producing a CONTROL record; SCORES correctly reports CONTROL=none and DONE=0.
+
+F5. PRETABLE says its mtime precedes every file in table1/. The frozen probe is older:
+    probe62_frozen.py: 2026-11-05T07:36:56.1924505Z
+    PRETABLE.out:     2026-11-05T07:36:56.2780788Z
+VERDICT already acknowledges that exception. Correct PRETABLE without changing the historical timestamps.
+
+F6. VERDICT says the ruling listed four rows per d1-d6 variant. It listed four for d1-d4 and five for d5-d6. The correct account is four plus hi for d1-d4, and five unchanged for d5-d6.
+
+F7. PRETABLE says rows reading the debugger are predicted green on every variant. The semantic rows themselves read debugger CR, and its own HEAD prediction lists ten such rows red. Name the apparatus controls rather than all debugger-reading rows.
+
+The inherited R5 parenthetical that the owed rows stay green under all nine variants is also wrong: identity and d1-d4 fail hi rows. The current score table correctly contradicts that parenthetical. I do not count this inherited ruling error as a new false record.
+
+3. MISSING PASS-1 REQUIREMENTS
+
+R5 explicitly required four predicted-only BT substitutions in PRETABLE. Neither the actual PRETABLE nor its generator includes them. Their complete predicted red sets on the current 62 rows are:
+
+    crandc: bt & !bb
+        64 crandc 10; 64 crandc hi; 32 crandc 10
+
+    crandc: ba & !bt
+        64 crandc 10; 64 crandc hi; 32 crandc 10
+
+    crorc: bt | !bb
+        64 crorc 01; 64 crorc hi; 32 crorc 01
+
+    crorc: ba | !bt
+        64 crorc 00; 32 crorc 00
+
+They were required as predictions, not additional builds. Preserve the original PRETABLE and add a dated correction.
+
+The four owed rows, two expression edits and 62/62 gate pin are present. R9’s corrected original brief is not exhibited in the supplied diff or reviewed artifacts; its completion is unverified, rather than proved absent.
+
+4. VERDICT
+
+REPAIR. Keep the two product expressions. Add coverage for B1-B9, correct F1-F7, supply the four missing R5 predictions, and update the gate total after the added rows are finalized.
+
+Premises checked directly in GXEMUL-SEC: handler expressions and read/clear order; dispatch assignments; probe seeds, instruction triples and scoring; disassembler operand output; gate placement and assertions; PRETABLE, its generator, SCORES, VERDICT and the two relevant timestamps. The CR type is uint32_t and CPU initialization selects MODE_PPC.
+
+I did not edit, build or execute repository code, or inspect another src tree. Build propagation and full-battery clearance remain reported evidence, not independently reproduced measurements.
+
+CODEXP2R575: 76 CELLS SWEPT 9 BREACHES 7 FALSE RECORDS VERDICT:REPAIR
+tokens used
+63,352

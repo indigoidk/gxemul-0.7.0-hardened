@@ -1,0 +1,113 @@
+CODEXP4R575
+model: GPT-6 (Codex)
+VERDICT: REPAIR — 453 cells swept; 0 confirmed floor breaches; 5 false records.
+
+1. VERIFY THE ENUMERATION
+
+The 453 listed cells check out. The full constant-space coverage at the four read-mask sites and two unsigned set-literal sites also checks out. However, CLOSURE3’s additional claim that this proves every field-mask constant equivalent or covered is false. Consequently, I cannot endorse its broad completeness claim as written.
+
+I independently checked the actual GXEMUL-SEC handlers, CR’s uint32_t declaration, decoder, probe, simulator’s statement order and enumeration, CLOSURE3, gate block, and prediction/score records. I read the entire packet. I did not edit, build, or execute repository code.
+
+The six constant-space proofs can be stated exhaustively:
+
+- crandc BA: odd masks preserve the only bit consumed by ba & !bb and are equivalent. Every even mask forces that condition false and fails “64 crandc 10”.
+- crandc BB: any mask containing a bit above bit 0 fails “64 crandc bbmask”. Of the remaining masks, 0 fails “64 crandc 11”; 1 is unchanged.
+- crorc BA: any mask containing a bit above bit 0 fails “64 crorc baread”. Of the remaining masks, 0 fails “64 crorc 11”; 1 is unchanged.
+- crorc BB: any mask containing a bit numbered 2 or higher fails “64 crorc bbread”. The remaining masks are exactly {0,1,2,3}: 0 fails “64 crorc 01”; 2 and 3 fail “64 crorc 00”; 1 is unchanged.
+- crandc set literal: its setbits row produces 2 | C and expects 3. Exactly C={1,3} pass that row. C=3 fails “64 crandc 01” by re-setting CR[9]. Thus every C!=1 is detected.
+- crorc set literal: its setbits row produces C and expects 1. Every C!=1 fails directly.
+
+These arguments cover all 2^32 values at each of those six sites without assuming that testing individual added bits establishes arbitrary combinations.
+
+The field-mask extrapolation does not follow. The C code masks raw shifted instruction words. For opcode 19:
+
+iword >> 21 = (19 << 5) | BT
+iword >> 16 = (19 << 10) | (BT << 5) | BA
+iword >> 11 = (19 << 15) | (BT << 10) | (BA << 5) | BB
+
+Therefore replacing the BT mask with 63 produces BT+32; BA mask 63 imports BT’s low bit; BB mask 63 imports BA’s low bit. Those are not universally equivalent decodes. They can produce invalid C shift counts. v575c.py:94 instead masks already extracted indices, which hides this distinction.
+
+I do not count those examples as demonstrated all-70-green breaches: their compiled behavior is not established by this read-only review. They invalidate the stated equivalence/completeness proof.
+
+No additional, non-excluded all-70-green breach was established. All 36 explicitly enumerated EQUIVALENT cells are genuinely equivalent under the intended integer semantics. The probe’s separate mislabeling of the disclosed toggle is addressed below.
+
+DENOMINATOR:
+
+Field-mask values:
+{0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30}.
+
+Added read-mask k values:
+{2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31}.
+
+Set-literal k values are that set plus {1}.
+
+The independently checked partition is:
+
+186 field-mask cells: 186 detected.
+8 source substitutions: 8 detected.
+144 read-mask cells, comprising 8 old plus 136 added: 112 detected, 32 equivalent.
+6 clear cells: 5 detected, 1 disclosed.
+4 set-operation cells: 2 detected, 2 equivalent.
+62 set-literal cells: 62 detected.
+16 structural cells: 14 detected, 2 equivalent.
+15 condition/identity cells: 15 detected.
+12 dispatch cells: 12 detected.
+
+Total: 453 = 416 detected + 36 equivalent + 1 disclosed.
+
+For the field-mask sweep, both BT families fail their respective setbits row; crandc BB fails bbmask; crorc BA fails baread; crorc BB fails bbmask. For crandc BA, masks 0 through 29 fail setbits, while mask 30 fails “64 crandc 10”. Thus all 186 have concrete witnesses.
+
+This is a static sweep of the 453 specified representatives, with analytical extensions at the six constant sites—not a claim that arbitrary single edits were enumerated.
+
+2. THE DIFF
+
+All four new architectural wants are correct:
+
+64 crorc baread:  0xfffffffe & ~0x00004000 = 0xffffbffe.
+64 crorc bbread:  0xfffffffc | 0x00000002 = 0xfffffffe.
+64 crandc setbits: 0x00000002 | 0x00000001 = 0x00000003.
+64 crorc setbits:  0x00000000 | 0x00000001 = 0x00000001.
+
+cr_row checks successful completion, agreement between the register dump and mfcr, and the whole architectural CR. The rows detect the claimed families.
+
+I count five distinct false records, counting repeated copies of a claim once:
+
+F1. CLOSURE3’s field-mask constant-space proof.
+
+“A mask with bits above 4 is the fix” is false for the raw instruction-word expressions, as demonstrated above. Correct the proof and its scope; the simulator’s extracted-index model cannot support that extrapolation.
+
+F2. The new baread row’s printed note.
+
+ppc_crlogic_probe.py:384 says “a=0 for every mask”. With the stated seed and BA=31, read mask 3 gives a=2. A BA field mask of 16 gives a=CR[16]=1. The baseline a is zero; the mutations are detected precisely because they make it nonzero.
+
+F3. The disclosed crandc toggle is placed under “EQUIVALENT, proved”.
+
+ppc_crlogic_probe.py:55–56 includes “the crandc toggle of (5)” in that list. It is not equivalent. For crandc 31,0,1 over CR=0, the correct final CR is 0; replacing the clear with a toggle produces 1. CLOSURE3 correctly classifies this cell as disclosed. Separate that classification in the docstring. Its existing exclusion means this is a false record, not a newly owed detector row.
+
+F4. “C without bit 0” is not “red on every result-1 row”.
+
+CLOSURE3:732 overlooks later instructions in a session. With crorc set literal C=2u, the BT=14 instruction sets CR[13], and the subsequent BT=15 instruction sets CR[14]. Consequently, “64 crorc 10” and “32 crorc 10” pass despite their own instruction failing to set its destination. Other rows detect the mutation. The direct setbits proof above repairs this statement.
+
+F5. A multi-instruction session need not cost additional apparatus rows.
+
+The statement following “WHY FOUR AND NO FEWER” is false under the new whole-CR comparison method. One session can use:
+
+seed CR = 0x00000002
+crandc 31,30,31
+crorc 30,30,0
+mfcr r10
+one cr_row-style comparison against 0x00000003
+
+The crandc set-literal survivors’ extra bits survive the second instruction, which rewrites only CR[30]. The crorc set-literal survivors at k=26 and k=27 set CR[4] and CR[3], respectively, both otherwise zero. Thus this one row detects both set-literal survivor families. Together with baread and bbread, three added rows suffice when multiple instructions per session are allowed.
+
+The four-row minimum under the explicitly stated single-instruction restriction remains defensible. Correcting the additional cost claim does not require replacing the four measured rows.
+
+R1–R7 were substantively corrected: R1’s mask-16 hole, R2’s merged crandc witness, R3’s distinct values 2 and 6, R4’s three removed bits in mask 17, R5’s earliest-file identity, R6’s real control seed, and R7’s equal presets. My latest read of gate_ppc.sh shows the 70-row block applied, including the four new names and 70/70 checks.
+
+The 53 recorded prediction sets match their corresponding score sets; the score file has 57 lines. This corroborates the records, not a fresh execution of the variants.
+
+3. VERDICT
+
+REPAIR F1–F5. The four added rows and the six read-mask/set-literal coverage results survive review. No new floor breach was established within the 453-cell denominator, but five false records prevent CLOSE. The disclosed toggle, extra-clear exclusion, and previously filed signed-shift issue remain outside newly required detector repairs.
+
+CODEXP4R575: 453 CELLS SWEPT 0 BREACHES 5 FALSE RECORDS VERDICT:REPAIR

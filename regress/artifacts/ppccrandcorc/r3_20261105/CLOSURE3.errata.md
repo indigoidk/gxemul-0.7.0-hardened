@@ -1,0 +1,111 @@
+# #575 ppccrandcorc -- ERRATA to CLOSURE3.md (round 3), written 2026-11-05 after pass 4
+
+Source of the corrections: p4_20261105/codex_codex_r575_p4.txt (F1-F5) and p4_20261105/DISPOSITION.md.  CLOSURE3.md itself is NOT
+rewritten; this file sits beside it and supersedes the three sentences quoted below.  Each correction was re-checked against
+src/cpus/cpu_ppc_instr.c and the probe before it was written here (the seat that wrote CLOSURE3 wrote this too, and a correction is
+not safer than the thing it corrects).  F2 and F3 were corrected in the probe itself, not in CLOSURE3: see RECORDS4_NOTE.md.
+
+The fix, the four measured rows, the 70-row gate block, table 3 (table3/SCORES.txt, PRETABLE_3.out) and the 453-cell partition
+(416 detected, 36 equivalent, 1 disclosed) are unchanged by these errata.  No row, seed, instruction or want changes.
+
+## F1 -- the field-mask "closed over every constant" sentence (CLOSURE3.md:736-737, section PROOF)
+
+CORRECTS:  "The field masks `& 31' (:2730-2731, :2757-2758) are closed over 0..30 by enumeration; a mask with bits above 4 is the
+            fix (the field is 5 bits), so the mask sites are closed over every constant too."
+
+WHY IT IS FALSE.  The handlers mask RAW shifted instruction words, not extracted indices (cpu_ppc_instr.c:2730-2731 and
+:2757-2758: `bt = (iword >> 21) & 31; ba = (iword >> 16) & 31, bb = (iword >> 11) & 31`).  For opcode 19 the shifted words are
+
+    iword >> 21 = (19 << 5)  | BT
+    iword >> 16 = (19 << 10) | (BT << 5) | BA
+    iword >> 11 = (19 << 15) | (BT << 10) | (BA << 5) | BB
+
+so a mask with a bit above bit 4 MAY import the neighbouring field (or the opcode) -- it does wherever it keeps a bit the neighbour
+or the opcode sets (0x8000001f adds only bit 31 to the field's five bits, and bit 31 is clear in the shifted word, so it decodes
+exactly): BT mask 63 gives BT + 32 (19 = 0b10011 has bit 0
+set), BA mask 63 imports BT's low bit, BB mask 63 imports BA's low bit.  Such a decode is not the fix; it can also produce a shift
+count `31 - bt' outside 0..31 at :2734/:2736.  The simulator cannot see this: v575c.py:94 masks the ALREADY EXTRACTED indices
+(`bt & V.get("mbt", 31)`), so in its model a mask m acts as `index & m` -- the identity on every index exactly when (m & 31) == 31
+(m = 32 maps every index to 0) -- a property of the model, not of the C.
+
+CORRECTED CLAIM.  The field-mask sites are closed over m = 0..30 by enumeration only: those 186 cells (m = 0..30 at BT, BA, BB in
+both handlers) are all DETECTED (table 3 / codex's pass-4 partition: 186 of 186; the BT families on their `setbits' row, crandc BB
+on `64 crandc bbmask', crorc BA on `64 crorc baread', crorc BB on `64 crorc bbmask', crandc BA m = 0..29 on `64 crandc setbits'
+and m = 30 on `64 crandc 10').  Field masks with any bit above bit 4 (m >= 32) act on the raw shifted word, may import neighbouring
+fields, and are OUTSIDE the 453-cell denominator: DISCLOSED here, not proved and not simulated (their compiled behaviour, including
+the out-of-range shift counts, is not modelled).  The PROOF section's six constant-space arguments (the four read masks, the two
+set literals; CLOSURE3.md:720-735 as corrected by F4 below) stand: they act on `cr >> (31-x)` and `C << (31-BT)`, whose operands
+ARE the extracted values.
+
+## F4 -- "C without bit 0 ... red on every result-1 row" (CLOSURE3.md:732, section PROOF)
+
+CORRECTS:  "C without bit 0: CR[BT] is never set, red on every result-1 row."
+
+WHY IT IS FALSE.  CR[BT] is indeed never set, but a table session runs several instructions, and a later instruction's misplaced
+literal can land on an earlier destination.  crorc set literal C = 2 in the 64-bit table session (PRETABLE_3.out:12: crorc 12,0,2;
+crorc 13,0,1; crorc 14,1,0; crorc 15,1,3): `C << (31-BT)` sets CR[BT-1], so crorc 14 sets CR[13] and crorc 15 sets CR[14].  CR[14]
+is the destination of `64 crorc 10' (want 1): that row PASSES although its own instruction never set its bit; so does `32 crorc 10'.
+The mutant is still red -- on twelve rows, of which this sentence first named four (the regress-review correction at the end of
+this file quotes the original parenthetical and lists all twelve) -- but not on EVERY result-1 row.
+
+CORRECTED CLAIM.  The setbits rows detect every incorrect set literal except crandc C = 3, which `64 crandc 01' detects: there BT = 31,
+the shift is 0, and the final CR is 2 | C on `64 crandc setbits' (want 3) and C on `64 crorc setbits' (want 1).  crorc: every
+C != 1 is red on `64 crorc setbits'.  crandc: exactly C in {1, 3} pass `64 crandc setbits'; C = 3 is red on `64 crandc 01' (crandc
+10,1,0 re-sets CR[9]; CLOSURE3.md:706).  So every C != 1 is detected in both handlers (C = 0 is `set deleted'), which is what the
+contract claims; the clause about "every result-1 row" is withdrawn.
+
+## F5 -- the cost of a multi-instruction session (CLOSURE3.md:714-715, "WHY FOUR AND NO FEWER")
+
+CORRECTS:  "So no single instruction serves two families, and 4 rows is the minimum; a multi-instruction session would cost more
+            rows (session/others/mfcr/disasm), as the edge session shows."
+
+WHY IT IS FALSE.  Under the round-3 whole-CR method a row is self-contained: cr_row (ppc_crlogic_probe.py:374-383; :372-381 in table3/probe70_frozen.py) scores exit0,
+the register dump's agreement with mfcr r10, and the whole CR in ONE row, so a multi-instruction session costs no apparatus rows.
+And one such row does serve two families.  Session: seed CR = 0x00000002; crandc 31,30,31; crorc 30,30,0; mfcr r10; compare the
+whole CR with 0x00000003.  Correct handlers: crandc 31,30,31 reads a = CR[30] = 1, b = CR[31] = 0 and sets CR[31] (CR = 0x3);
+crorc 30,30,0 reads a = CR[30] = 1, b = CR[0] = 0, clears and re-sets CR[30] (CR = 0x3).  The crandc set literal 1+2^k, k = 2..31,
+also sets CR[31-k], a zero that the second instruction (which rewrites only CR[30]) leaves set: red (k = 1 lands on CR[30] and is
+red on `64 crandc 01' as before).  The crorc set literal 1+2^k at the k = 26, 27 survivors, shifted by 31-30 = 1, sets CR[4] and
+CR[3] respectively, both zero: red.  With `64 crorc baread' and `64 crorc bbread' this makes THREE added rows sufficient when a
+session may hold more than one instruction.
+
+CORRECTED CLAIM.  Four is the minimum under the SINGLE-instruction restriction the round chose (the first sentence of "WHY FOUR AND
+NO FEWER", the four families' incompatible seeds, stands as the argument for that case); with multi-instruction sessions three rows
+suffice, at no extra apparatus cost.  The four measured rows (`baread', `bbread', `crandc setbits', `crorc setbits') stay as they
+are: table 3 measured them, and the gate's 70-row block names them.
+
+## Not corrected here
+
+  - F2 (the `64 crorc baread' printed note "a=0 for every mask") and F3 (the probe docstring's placement of the crandc toggle under
+    "EQUIVALENT, proved") live in ppc_crlogic_probe.py and were corrected there, text only: RECORDS4_NOTE.md.  CLOSURE3.md's own
+    classification of the toggle (:684-685, :742, :756) is correct and unchanged.
+  - CLOSURE3.md:12 ("PROVES the rest of the 2^32-constant space at each site") refers to the six read-mask / set-literal sites of
+    the PROOF section, which pass 4 endorsed; it is not the F1 sentence and is left as written.
+
+## SECOND-READING CORRECTIONS (2026-11-05, main loop, from GPT-6 Astra's second reading: ../rec4_20261105/codex_codex_r575_rec4.txt)
+
+The second reading accepted F3 and F5 and found three of THESE corrections making new universal claims; each is now qualified in place
+above (the pre-correction text is kept as CLOSURE3.errata.md.pre_2nd):
+* F1, "a mask with a bit above bit 4 imports the neighbouring field" -> MAY import (0x8000001f decodes exactly); "a mask with bits
+  above 4 is indeed the identity" in the simulator -> the identity exactly when (m & 31) == 31 (m = 32 maps every index to 0); and
+  "act on the raw shifted word, import neighbouring fields" -> may import.
+* F4, "closed by the `setbits' rows directly, with no appeal to the table rows" -> the setbits rows detect every incorrect set literal
+  except crandc C = 3, which `64 crandc 01' detects (as the paragraph already went on to say).
+The exclusion of unenumerated masks (m >= 32) from the denominator is unchanged; no detector gap follows from any of this.
+
+## REGRESS-REVIEW CORRECTION (2026-11-05, the Fable-only regress review's R3: ../regress_20261105/REG_MYTHOS_local.md)
+
+F4's paragraph said: "The mutant is still red (`64 crorc 00', `64 crorc 01', `64 crorc 11', and the `setbits' row), but not on EVERY result-1 row."  The parenthetical is not the red set.  For crorc C = 2 in the 64-bit table session,
+crorc 12 (result 1) sets `2 << 19`, i.e. CR[11] -- the destination of `64 crandc 11` (want 0), which ran earlier in the session --
+and crorc 14 sets CR[13], the destination of `64 crorc 01` (want 0); in the edge session crorc 31 sets CR[30] instead of CR[31];
+on `64 crorc bbread` the set lands on CR[29], already 1, and CR[30] stays 0.  The round's own simulator, run at the landing
+(`v575c.py` `predict({"crorc": {"set_lit": 2}}, 70)`), gives TWELVE red rows: `64 crandc 11`, `64 crorc 00`, `64 crorc 01`, `64 crorc 11`, `edge crorc bt31`, `edge others`, `64 crorc bbread`, `64 crorc setbits`, `32 crandc 11`, `32 crorc 00`, `32 crorc 01`, `32 crorc 11`.  That is a prediction of the
+simulator that predicted all 51 of table 3's built variants exactly; C = 2 itself was never built.  (For the record, the same
+call for crandc C = 3 gives `64 crandc 01` and `32 crandc 01`; F4's corrected claim names the first, which is all it needs.)
+
+The paragraph's conclusion stands -- not every result-1 row is red (`64 crorc 10` and `32 crorc 10` pass), and the setbits proof
+is the correct statement.  The second reading (../rec4_20261105/) did not catch the parenthetical.  The F4 sentence above now points
+here; its pre-correction text is the quotation in this section (the kit kept the file as found: md5 68f9ffe72e66eb95670ee4cc01a9d8d2).
+No row, seed, want, instruction or score changes.
+
+*Corrected 2026-11-05 (main loop): this file's time-of-day stamps (removed: ~09:5xZ) were GUESSES that ran up to 3.5 hours AHEAD of the clock; the qhs landing-kit agent found them by checking against the files' own timestamps.  The file's own timestamps are the record: created 09:20Z, last written 10:48Z before this note (UTC).*

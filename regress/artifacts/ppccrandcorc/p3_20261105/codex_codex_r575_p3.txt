@@ -1,0 +1,122 @@
+CODEXP3R575
+model: GPT-6 (Codex)
+VERDICT: REPAIR — 447 cells swept; 54 non-equivalent survivors; 7 false records.
+
+1. THE CLOSURE
+
+No. The 239-cell enumeration covers its stated mutation vocabulary, but that vocabulary does not exhaust the bound. In particular, restricting read masks to 3 and 7 misses additional single-constant edits. The set-mask literal also has uncovered edits.
+
+The following 54 distinct single edits preserve all 66 rows. These are static derivations, not newly executed mutation runs.
+
+B1 — crorc BB read: 29 survivors.
+
+At cpu_ppc_instr.c:2760, replace &1 with a constant equal to 1 | (1u << k), for:
+k = {2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30}.
+
+The only shipped crorc case where a=0 and b=0 is table 00. Its BB=2 read, before masking, equals 2. None of these masks retains bit 1, so bb remains zero. Cases with b=1 retain that low bit; cases with a=1 already force the result to one.
+
+These edits are not equivalent. For each listed k, execute crorc 30,0,31 with seed 1u << k. Architectural a=b=0 gives result 1; the widened BB read becomes nonzero and gives result 0.
+
+B2 — crorc BA read: one survivor.
+
+At :2759, replace &1 with &0x8001.
+
+The table BA indices 0/1, edge BA=4, and bbmask BA=5 cannot expose read-result bit 15. The hi row’s BA=29 exposes CR[14], which is zero. The bamask row’s BA=31 exposes CR[16], also zero.
+
+Counterexample: crorc 17,31,5 with seed 0x04008000. CR[31]=0 and CR[5]=1 require result 0. The mutant reads ba=0x8000 and writes 1.
+
+B3 — crandc set mask: 22 survivors.
+
+At :2736, replace the set expression’s literal 1 with the unsigned literal whose value is 1+2^k, for:
+k = {7,9,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30}.
+
+In the truth tables, crandc sets only BT=10. For k=7/9, the extra set hits already-one CR[3]/CR[1]. For k>10, the extra bit shifts out of the unsigned 32-bit value. The edge and order cases produce zero. The hi and bbmask sessions check only the destination, so their additional changed bits escape.
+
+For every listed k, crandc 31,0,31 with seed 0x80000000 distinguishes the mutant: it incorrectly also sets CR[31-k].
+
+B4 — crorc set mask: two survivors.
+
+At :2763, make the same unsigned-literal replacement for k={26,27}: 0x04000001u or 0x08000001u.
+
+These extra bits shift out at table destinations 12,14,15. At edge BT=31 they set CR[5]/CR[4], which are already one. The remaining crorc sessions produce zero.
+
+Counterexample for both: crorc 31,0,31 over zero CR should set only CR[31]; the mutants additionally set CR[5]/CR[4].
+
+These are extra SET defects. The disclosed extra-CLEAR exclusion does not exempt them.
+
+The four stated EQUIVALENT cells are equivalent:
+
+- crandc BA &3: with q the shifted CR, (q & 3) & !bb equals (q & 1) & !bb because !bb is zero or one.
+- crandc BA &7: identically, (q & 7) & !bb equals (q & 1) & !bb.
+- crandc set |= to ^=: the preceding clear leaves the destination zero; either operation sets it to one when the condition holds.
+- crorc set |= to ^=: the same argument applies independently to this handler.
+
+DENOMINATOR: 447 distinct cells, enumerated as follows.
+
+- Original 239: 186 field masks, 8 source substitutions, 8 read masks, 6 clear edits, 4 set edits, 15 condition/body edits, 12 dispatch substitutions.
+- 116 additional read-mask cells: all four read sites with masks 1+2^k, k=1 through 30; 120 cells minus the four &3 cells already counted.
+- 16 additional read-mask cells: constants {0,2,4,6} at each of four read sites.
+- 16 additional structural cells: eight clear/set bt→ba/bb substitutions; four clear/set (31-bt)→bt substitutions; two moves of the clear between the reads; two swaps of the read statements.
+- 60 additional set-literal cells: two handlers, each with unsigned literal 1+2^k for k=1 through 30.
+
+Partition: 357 detected, 35 equivalent, 54 breaches, and one previously disclosed exclusion. The 35 equivalents comprise the original four, 29 additional crandc BA read masks, and two read-statement swaps. This is a finite audited denominator, not a claim to exhaust arbitrary C edits.
+
+2. THE DIFF
+
+The four new rows perform their principal advertised checks:
+
+- crandc bbmask detects every BB field mask 0–30, BB reading BT, and BB read masks 3/7.
+- crandc order detects the clear before the reads.
+- crorc bamask detects BA field masks except 16, BB reading BT, and clear-to-toggle. Existing “64 crorc 11” detects mask 16.
+- crorc bbmask detects every BB field mask 0–30 and the clear before the reads.
+
+Seven distinct false records remain; repeated statements of the same false fact count once.
+
+R1. The uniform-seed/EVERY-mask claim is false for crorc bamask.
+
+Probe clause (e)(3) and the row note overstate this. Seed 0xffff7ffe has CR[16]=CR[31]=0. BA mask 16 therefore does not flip the input. The detailed comment acknowledges the exception; the broader claims must also acknowledge it.
+
+R2. Four added rows are not the minimum.
+
+Replace the two crandc additions with one row:
+crandc 16,16,31; seed=0xfffffffe; want=1.
+
+It detects every BB mask alias, BB←BT, and BB read masks 3/7. It also detects early clear: BT=BA=16, so clearing before the reads changes a from one to zero.
+
+Keeping the two existing crorc additions therefore closes the same enumerated cells with three added rows. The argument excluding BT=BA incorrectly carries the inverse-preset restriction into a design that now permits equal presets.
+
+R3. The crandc bbmask comment gives the wrong &7 value.
+
+For 0xfffffffe shifted by zero, &3 gives 2 and &7 gives 6. Both correctly produce !bb=0, but they do not both produce bb=2.
+
+R4. Table 2 incorrectly calls m5–m10 single-bit field masks.
+
+m10 changes 31 to 17: 11111 becomes 10001. It removes three bits, with values 2,4,8.
+
+R5. Table 2 incorrectly identifies MD5.txt as its earliest file.
+
+Checked UTC modification times:
+PRETABLE_2.out: 08:08:00.006
+probe66_frozen.py: 08:10:35.403
+cpu_ppc_instr.c.fix575: 08:10:46.645
+MD5.txt: 08:10:46.732
+
+The prediction file still predates these files. The earliest-file parenthetical is false.
+
+R6. PRETABLE_2’s control-session seed is wrong.
+
+Its manifest says seed=0x00000000. The actual probe uses CTL_CR=0x12345678. A simulator placeholder must be distinguished from the executed session’s seed.
+
+R7. The gate’s universal inverse-preset statement is stale.
+
+gate_ppc.sh:333 still says “every destination pre-set to the INVERSE.” The two new equal-preset rows contradict it.
+
+Pass 2’s original F1–F7 propositions were substantively corrected. The four required R5 predictions were supplied correctly: respectively 3,3,3,2 red rows on the old 62, and 4,4,5,2 on the new 66. The 27 listed table-2 variant red sets agree with their listed predictions; that agreement does not establish completeness beyond those variants.
+
+Premises checked against GXEMUL-SEC: the handler bodies and dispatch assignments; CR’s uint32_t declaration; actual probe seeds, instruction plans and scoring; the simulator’s edit enumeration and sequential source-read semantics; CLOSURE’s cell inventory; gate checks; errata; and the cited timestamps. In particular, the simulator correctly models BB←BA using the already-overwritten ba value. No repository code was edited, built or executed.
+
+3. VERDICT
+
+REPAIR. Address the 54 uncovered cells in B1–B4 and correct R1–R7. The two product conditions remain correct. The previously adjudicated crandc toggle exclusion is retained and is not counted as a new breach.
+
+CODEXP3R575: 447 CELLS SWEPT 54 BREACHES 7 FALSE RECORDS VERDICT:REPAIR

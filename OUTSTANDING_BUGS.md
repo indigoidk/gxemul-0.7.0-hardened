@@ -36,7 +36,8 @@
 >    ~~design owed~~ -- shipped: opcodes 58 and 62 decode their five forms by XO with the displacement DS||00, the reserved encodings and the RA = 0 update forms stop the cpu, with a 39-row rung-3 detector in gate 13; see the second 2026-10-24 section at the end.
 > 5. `m88kbuserrregs` (MED, FIXED by `#570` on 2026-10-24, held for Fable) -- 88K bus errors carry no PFSR/PFAR; the carrier of the reopened PFAR item.  T36;
 >    ~~before any 88K fault round~~ -- shipped: the refused-device arm writes PFSR/PFAR on the faulting CMMU and the LUNA probe address faults through it, with a 31-row rung-3 detector in gate 14; see the 2026-10-24 section at the end.
-> 6. `ppccrandcorc` (MED, new) -- crandc/crorc compute NAND/NOR.  T18.
+> 6. `ppccrandcorc` (MED, FIXED by `#575` on 2026-11-05, closed) -- crandc/crorc compute NAND/NOR.  T18; shipped: `ba & !bb` and
+>    `ba | !bb`, with a 70-row rung-3 detector in gate 13.
 > 7. `mipsprimundec` (MED, FIXED by `#580` on 2026-11-04, closed) -- MIPS primary opcodes with no case stop the CPU,
 >    from user mode.  T120; shipped: each word raises Reserved Instruction or Coprocessor Unusable per CPU level as ruled,
 >    with a 122-row rung-3 detector in gate 16.
@@ -23416,7 +23417,7 @@ batch 3f, `devjazz:F4` -- `regress/artifacts/astraretro_20260926/DISPOSITIONS.md
 * `M1_sh4latchleak` -- L2 OBLIGATION (CHANGELOG.md:3124-3133 at 7440e129), never discharged: sh4_chcr_probe.py stores once per tested channel (only channel 0 repeats), so the (1,set) and (7,set) latch cells have no row (batch 1a)  [sev corrected: Astra afile_01: the missed behaviour is a repeated diagnostic (dev_sh4.c:785-792); title corrected: Astra afile_01; corrected by Astra afile_05: the dispositions' :2896-2903 is that block's place at the reviewed commit]
 * `sh4chcrdualdiag` (test coverage) -- sh4_chcr_probe.py R7/L0 count only VAL_RE, so a mutant turning an RS-switch `return` into `break` (illegal RS + IE set -> decline PLUS a spurious IE_RE) would escape... (batch 1a)  [also covers the harness review's group 14 hgateshrounding:F1 (the id `sh4chcrrsfall`, consolidated here)]
 * `armuserpageshift` -- copyin/copyout evaluate signed `1 << (index & 31)` before their decline guards (batch 2a)
-* `ppccrlogicshift` -- seven CR logical handlers evaluate signed `1 << (31-bt)`; bt=0 gives 1<<31 (batch 2a)
+* `ppccrlogicshift` -- seven CR logical handlers evaluate signed `1 << (31-bt)`; bt=0 gives 1<<31 (batch 2a)  [`#575`, 2026-11-05: kept out of that round by its ruling's R2; its 70-row probe cannot see the shift on this toolchain -- see the `#575` section]
 * `badfmtlatchrow` (test coverage) -- #279's two one-shot latches have no committed row that fires them (batch 2b)
 * `ftrvfourstores` (test coverage) -- only the fr0 store of `ftrv`'s four is observed (sh_rounding_probe.py:94-98) (batch 2b)
 * `mipscvtsdlive` (test coverage) -- AMENDED (Astra): the gap is the `cvt.s.d` RN/RZ CONTRAST specifically; the nearest-mode single-store wiring IS observed live (mips_rounding_probe.py:63, the `cvt.s.l`... (batch 2b)
@@ -25334,6 +25335,7 @@ are in its ledger `state_note`.
 * **`ppccrandcorc` (MED, open)** -- new.  cpus/cpu_ppc_instr.c:X(crandc), X(crorc) -- crandc computes NAND and crorc
   computes NOR instead of BA AND NOT BB / BA OR NOT BB (Book I) -- WRONG-RESULT (wrong condition bits in compiled code).
   TRIAGE.md T18; report rows A4-14, A4-15, A(c)#4; port: yes (rs6000 241f5e2, rs6000 0685c8d).  Batch 6 of 10.
+**[`#575`, 2026-11-05: FIXED -- witness 48/58 on the committed build, the 70-row detector in gate 13; the pass-1 ruling, passes 2-4 with repairs 2 and 3, the records correction and its second reading, and the regress review complete.  See the `#575` section at the end of this file.]**
 * **`ppcintentrymsr` (MED, open)** -- new.  cpus/cpu_ppc.c:ppc_exception -- interrupt entry clears only EE, RI and PR;
   IR, DR, FP, SE, BE, FE0, FE1 and POW stay set and LE is not taken from ILE -- WRONG-RESULT (handlers run translated
   with FP/trace state of the interrupted context).  TRIAGE.md T19; report rows A4-18; port: yes (rs6000 9bcc860, rs6000
@@ -25618,6 +25620,8 @@ are in its ledger `state_note`.
   defined in opcodes_ppc.h) -- CPU-STOP.  TRIAGE.md T123; report rows A4-8; port: yes (rs6000 8bcf95a, rs6000 3cdc32f).
 * **`ppccrnandundec` (MED, open)** -- new.  cpus/cpu_ppc_instr.c XL decode -- crnand (19/225) is defined but missing
   from the CR case list -- CPU-STOP.  TRIAGE.md T124; report rows A4-9; port: yes (rs6000 2ec64fd).
+  [`#575`, 2026-11-05: crandc is now `ba & !bb`; a crnand body of `!(ba & bb)` is the OLD crandc, so crnand needs its own handler
+  and must not alias `instr(crandc)` -- #575's pass-1 ruling.]
 * **`ppcdcbiundec` (MED, open)** -- new.  cpus/cpu_ppc_instr.c cache-op group -- dcbi (31/470) is undecoded, including
   in user mode where it is a privileged instruction -- CPU-STOP.  TRIAGE.md T125; report rows A4-11; port: yes (rs6000
   3762e12, rs6000 3cdc32f).
@@ -26519,3 +26523,10 @@ src/devices/dev_dec5800.c:359-367 at 987cb596: The DEC 5800 CPU-mask registers a
 * **Landed** as `68c0d60b` (2026-11-04); the records commit after it names it.
 * **Filed at the hash follow-up (LOW):** `seatsreadstemcollide` -- section G truncates a cited panel path to its timestamp stem, so the four same-second wsf panels (01:49:13) are never scanned (the landing's pretest showed it).
 * **Filed, new (all LOW):** `mipscpuconstruct` (the R6000, Allegrex and VR5432 exit 1 at construction on testmips), `mpuprobetmpdir` (the probe's mkdtemp directory is never removed), `mpupcsyncrow` (a free-running PC-sync row in cloud Fable's shape).  The ruling of record's filings (a) and (b) ride `mipsr5900lqsq` and `mipscop3pmaxstop`; the #309 comment gap rides `mipssynci`.
+
+## 2026-11-05 -- `#575` ppccrandcorc: crandc and crorc compute CR[BA] AND NOT CR[BB] and CR[BA] OR NOT CR[BB], not NAND and NOR
+
+* **FIXED** -- `ppccrandcorc` (MED): `src/cpus/cpu_ppc_instr.c`, `X(crandc)` and `X(crorc)` set CR[BT] on `!(ba & bb)` and `!(ba | bb)`; Book I v2.01 defines `CR[BA] & ~CR[BB]` and `CR[BA] | ~CR[BB]`.  Now `if (ba & !bb)` and `if (ba | !bb)`, as the pass-1 ruling ordered (`regress/artifacts/ppccrandcorc/adj_p1_20261105/MYTHOS_local.md`, R1/R10).  Witness (rung 3, unmodified `-E bareppc`): 48/58 on the committed build before any edit.  Detector: `regress/ppc_crlogic_probe.py`, 70 rows, gate 13 (HEAD 60/70, fix 70/70); three test-variant tables (15, 27 and 51 variants, every red set as predicted); the repair chain closed on pass 4 with zero floor breaches over 453 cells.  See the `#575` round block in CHANGELOG.md.
+* **Filed, new (both LOW, from the regress review):** `ppccrdecodeshift` (no variant edits the handlers' decode shift counts `>> 21`, `>> 16`, `>> 11`; outside the bound as the round drew it) and `ppccrr5predict` (the pass-1 ruling's four BT-substitution variants were predicted and never built -- the chain's one unmeasured cell).
+* **Cross-references, no new row:** `ppccrlogicshift` (the signed `1 << (31-bt)` in all seven handlers) was already filed as an `astraretrolow` member (2026-10-02, batch 2a) and gains the round's cross-reference; `ppccrnandundec` gains the ruling's note that a crnand body must not alias `instr(crandc)`.
+* **Uncommitted beside it:** `qhslowifetch`'s read-failure block in the same file and its gate block stay in the working tree; the landing committed `#575`'s two lines and its gate block only.

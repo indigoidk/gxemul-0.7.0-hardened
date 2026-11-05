@@ -2732,7 +2732,7 @@ X(crandc) {
 	ba = (cpu->cd.ppc.cr >> (31-ba)) & 1;
 	bb = (cpu->cd.ppc.cr >> (31-bb)) & 1;
 	cpu->cd.ppc.cr &= ~(1 << (31-bt));
-	if (!(ba & bb))
+	if (ba & !bb)	/*  #575: CR[BA] & ~CR[BB] (Book I); this was NAND  */
 		cpu->cd.ppc.cr |= (1 << (31-bt));
 }
 X(creqv) {
@@ -2759,7 +2759,7 @@ X(crorc) {
 	ba = (cpu->cd.ppc.cr >> (31-ba)) & 1;
 	bb = (cpu->cd.ppc.cr >> (31-bb)) & 1;
 	cpu->cd.ppc.cr &= ~(1 << (31-bt));
-	if (!(ba | bb))
+	if (ba | !bb)	/*  #575: CR[BA] | ~CR[BB] (Book I); this was NOR  */
 		cpu->cd.ppc.cr |= (1 << (31-bt));
 }
 X(crnor) {

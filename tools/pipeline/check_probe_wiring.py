@@ -3415,6 +3415,50 @@ MANIFEST = {
     "artifacts/mipsprimundec/killtable_20261104/d31_20261104/mpu_variants2.py":
         (CLASS_RESEARCH, "#580: the supplement's variant builder, frozen beside the D31 driver (it applied D31), preserved as "
                          "evidence"),
+    #  #575 ppccrandcorc: the PowerPC crandc / crorc handlers computed NAND / NOR.  The SHIPPING detector is CLASS_DETECTOR and gated
+    #  in gate_ppc.sh (gate 13) in the same commit; its wiring is DERIVED, not asserted here.  Every artifact script below is
+    #  CLASS_RESEARCH: evidence preserved beside the round's three test-variant tables, run by no gate on purpose.
+    "ppc_crlogic_probe.py":
+        (CLASS_DETECTOR, "#575 ppccrandcorc: crandc computes CR[BA] & ~CR[BB] and crorc CR[BA] | ~CR[BB] (Book I v2.01), not NAND "
+                         "and NOR -- 70 rows over cold -E bareppc -M 64 sessions (PPC970) and a -C PPC603 leg: the two handlers' "
+                         "truth tables, the five correct siblings as controls, destination edges, field-mask pins and four "
+                         "whole-CR rows; gate_ppc.sh pins RESULT 70/70 by EQUALITY and every row by name.  Witness "
+                         "artifacts/ppccrandcorc/witness_20261029/ (48/58 on the committed build); test-variant tables "
+                         "artifacts/ppccrandcorc/table1_20261105/, r2_20261105/ and r3_20261105/ (table 3: 51 variants, every red "
+                         "set as predicted)."),
+    "artifacts/ppccrandcorc/witness_20261029/ppc_crlogic_probe.py":
+        (CLASS_RESEARCH, "#575: the rung-3 witness as run on 2026-10-29, the 58-row first form of the detector (frozen, md5 "
+                         "35b9c248): 48/58 on the committed build 987cb596, CONTROL=OK, exactly the ten DISC rows red "
+                         "(WITNESS_head.out).  It asserts the repaired property (a detector's shape), so it is preserved as "
+                         "evidence rather than classified a witness; ungated by design."),
+    "artifacts/ppccrandcorc/table1_20261105/v575.py":
+        (CLASS_RESEARCH, "#575: the simulator of the probe's sessions that computed table 1's predictions (PRETABLE.out, written "
+                         "before the table), preserved as evidence"),
+    "artifacts/ppccrandcorc/table1_20261105/base62/probe62_run.py":
+        (CLASS_RESEARCH, "#575: the 62-row detector as run for table 1's base leg (probe_base62.out: 62/62 on build/), preserved "
+                         "as evidence"),
+    "artifacts/ppccrandcorc/table1_20261105/table1/probe62_frozen.py":
+        (CLASS_RESEARCH, "#575: the 62-row detector frozen for test-variant table 1 (SCORES.txt: base 62/62, HEAD 52/62, 15 "
+                         "variants red as predicted), preserved as evidence"),
+    "artifacts/ppccrandcorc/r2_20261105/v575b.py":
+        (CLASS_RESEARCH, "#575: repair 2's extended simulator, the 239-cell closure (CLOSURE.md) and table 2's predictions "
+                         "(PRETABLE_2.out), preserved as evidence"),
+    "artifacts/ppccrandcorc/r2_20261105/base66/probe66_run.py":
+        (CLASS_RESEARCH, "#575: the 66-row detector as run for repair 2's base leg (probe_base66.out: 66/66 on build/), preserved "
+                         "as evidence"),
+    "artifacts/ppccrandcorc/r2_20261105/table2/probe66_frozen.py":
+        (CLASS_RESEARCH, "#575: the 66-row detector frozen for test-variant table 2 (SCORES.txt: base 66/66, HEAD 56/66, 27 "
+                         "variants as predicted, the equivalent g2 green), preserved as evidence"),
+    "artifacts/ppccrandcorc/r3_20261105/v575c.py":
+        (CLASS_RESEARCH, "#575: repair 3's simulator, the 453-cell closure (CLOSURE3.md) and table 3's predictions "
+                         "(PRETABLE_3.out), preserved as evidence"),
+    "artifacts/ppccrandcorc/r3_20261105/base70/probe70_run.py":
+        (CLASS_RESEARCH, "#575: the 70-row detector as run for repair 3's base leg (probe_base70.out: 70/70 on build/), preserved "
+                         "as evidence"),
+    "artifacts/ppccrandcorc/r3_20261105/table3/probe70_frozen.py":
+        (CLASS_RESEARCH, "#575: the 70-row detector frozen for test-variant table 3 (SCORES.txt: base 70/70, HEAD 60/70, 51 "
+                         "variants as predicted, the equivalent g2 and u9 green); the shipped probe equals it but for printed text "
+                         "(PROBE_IDENTITY.md at the landing), preserved as evidence"),
 }
 
 #  DATED, NAMED DEBT -- not a count and not a silent allowlist.  gate_offline.sh MEASURED that

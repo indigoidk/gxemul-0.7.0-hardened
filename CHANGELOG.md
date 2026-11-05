@@ -1,3 +1,143 @@
+# `#575` (2026-11-05) -- `ppccrandcorc`: the PowerPC crandc and crorc handlers compute CR[BA] AND NOT CR[BB] and CR[BA] OR NOT CR[BB] instead of NAND and NOR
+
+**The defect.**  `src/cpus/cpu_ppc_instr.c`, `X(crandc)` and `X(crorc)`: each reads CR[BA] and CR[BB] as 0/1, clears CR[BT] and sets it
+on `!(ba & bb)` and `!(ba | bb)` -- NAND and NOR; `X(crorc)`'s body was byte-identical to `X(crnor)`'s.  PowerPC Book I v2.01 defines
+`CR[BT] <- CR[BA] & ~CR[BB]` and `CR[BT] <- CR[BA] | ~CR[BB]`, the complement on BB in the formula and in the prose
+(`_scratchpad/ppc_uisa_book1_v201.txt` :1909-1914).  The functions differ on two input pairs each: crandc at (0,0) and (0,1), crorc at
+(1,0) and (1,1).  Wrong condition bits from one guest instruction at any privilege level, in both translators (`cpu_ppc_instr.c` is
+compiled a second time under `DYNTRANS_DUALMODE_32`); there is no POWER-mode path (`cpu_ppc.c:96` sets `MODE_PPC` unconditionally).
+Filed 2026-10-22 from the external-fixes research (`regress/artifacts/research_20261022/TRIAGE.md` row T18; external-research batch 6
+of 10; rs6000 241f5e2 and 0685c8d fix the same two handlers).
+
+**The witness (rung 3).**  `regress/artifacts/ppccrandcorc/witness_20261029/`: the probe's 58-row first form (frozen, md5 `35b9c248`)
+on unmodified `-E bareppc -M 64` (PPC970) and `-C PPC603`, the cold debugger, run on 2026-10-29 against the committed build -- a WSL
+scratch clone built from `git archive` of `987cb596`, `cpu_ppc_instr.c` md5 `2015e243` = that HEAD's blob (the file's only later
+change, `#579`'s `X(llsc)`, does not touch these handlers): `regress/artifacts/ppccrandcorc/witness_20261029/WITNESS_head.out`,
+`PPC_CRLOGIC_RESULT=48/58`, `CONTROL=OK`, exactly the ten rows where the functions differ red (`64 crandc 00` and `01`, `64 crorc 10`
+and `11`, the same four at 32 bits, `edge crandc bt0` and `edge crorc bt31`).  The Opus 5.5 pass-1 seat re-ran it on the same binary:
+48/58 (`_scratchpad/r575_ppccrandcorc/opus_pass1/opus575_check.out`).  Every truth row pre-sets its destination to the INVERSE of the
+Book I result, so a green row proves a write; on HEAD the PIN rows (the cells where NAND/NOR agree with Book I) flip, which is what shows
+the wrong function rather than a missing write.  Liveness and signature: `li r9,0x1234` reads back, an r30 seed holds, the seeded CR reads
+back through the debugger and through a guest `mfcr`, the tree's disassembler names each table encoding, and a bogus
+`-E nosuchmachine` runs no guest.  The same script before and after the fix at each size: 52/62 and 62/62
+(`regress/artifacts/ppccrandcorc/table1_20261105/table1/SCORES.txt`), 56/66 and 66/66
+(`regress/artifacts/ppccrandcorc/r2_20261105/table2/SCORES.txt`), 60/70 and 70/70
+(`regress/artifacts/ppccrandcorc/r3_20261105/table3/SCORES.txt`), the same ten rows red each time.  The round was held at pass 1
+from 2026-10-30 and resumed on 2026-11-05, so the witness predates the edit by six days.
+
+**The pass-1 ruling** (Claude Mythos 5.1 in the fable5 slot, run locally on the owner's 11-05 release;
+`regress/artifacts/ppccrandcorc/adj_p1_20261105/MYTHOS_local.md`: 10 rulings, 4 rows owed, 9 variants, APPLY-WITH-CHANGES).  R1/R10 the two expression edits and
+nothing else (both operands are masked to 0/1 first, and the reads precede the clear, so the fix is alias-safe); R2 `ppccrlogicshift`
+-- the signed `1 << (31-bt)` at BT 0, fourteen sites across all seven handlers -- stays FILED, and switching only these two handlers to
+`1u <<` is refused (same device, a different class and a different detector: on this toolchain the shift gives the architectural result,
+so no row of this probe can see it); `ppccrnandundec` stays out; R3 GLM's "58/58 unreachable" is wrong (the edge row's BA is 2, its BB
+3); R4 four rows owed -- `64 crandc hi` and `64 crorc hi` (every table row used BA in {0,1,2,4} and BB in {0,1,2,3,5}, so a field mask
+weakened from `& 31` to `& 7` scored 58/58) and `edge mfcr` / `edge disasm`; R5 nine variants, the four BT substitutions as
+predictions; R6 three false premises in the brief (two PIN rows per handler per width, not four; the edge session scored neither mfcr
+nor disasm; the passing census omitted the four session rows); R7 re-pin gate 13 at the new total; R8 PRETABLE first.  It names six
+seats -- codex, Grok, GLM, kimi, deepseek, minimax -- and never the Opus seat.  **Three pass-1 answers -- codex, Grok and the Opus
+seat -- had named the read-before-clear hole** (no row aliases BT with a source, so moving the clear above the two reads scored 58/58);
+the ruling ordered no row for it (its R1 says the FIX's order is alias-safe, which is a different claim), and pass 2 found it again as
+a floor breach (codex B3-B4, GLM's breach 1).  The Opus answer had been written to its transcript only; it is banked at this landing
+(`opus_p1_20261029/OPUS_P1.md`) and recorded on the row: an unread review, found because the landing read every answer.
+
+**The fix** (1 file, 2 lines).  `X(crandc)`: `if (!(ba & bb))` -> `if (ba & !bb)`; `X(crorc)`: `if (!(ba | bb))` -> `if (ba | !bb)`; each
+carries a `/*  #575: ... */` comment naming Book I and the function it replaces.  The decoder, the five correct siblings, the signed shift
+(R2) and the missing `crnand` are untouched.  **The commit carries only these two lines of the file and only the `#575` block of
+`regress/gate_ppc.sh`**: the working tree also holds `qhslowifetch`'s uncommitted read-failure block in `X(to_be_translated)` and its gate
+block, both left out (`landing_20261105/STAGED_DIFFS.md`: the staged file against HEAD is the two lines, against the working copy one
+hunk, the qhs block).  For the commit, est/, build/, build-asan/ and WSL /tmp/gxsec-build were set to the staged file and the three build trees rebuilt (part 1 cmp-clean against the staged file on all four, part 2 binary newer on the three; compiler warnings 0 0 0), and the shipped probe scored 70/70 with CONTROL=OK on the rebuilt build/ -- exactly the committed source (`regress/artifacts/ppccrandcorc/landing_20261105/SWAP575.out`); the trees are restored to the working copy after the commit.
+
+**The detector.**  `regress/ppc_crlogic_probe.py`, 70 rows over sixteen cold sessions: a control and a bogus-machine negative control;
+the two handlers' truth tables at 64 bits (PPC970) and at 32 bits (`-C PPC603`), each with an `others` row (no CR bit but the
+destinations moved), an `mfcr` row (the guest's second channel agrees with the debugger) and a `disasm` row; the five correct siblings
+(crand, cror, crnor, creqv, crxor) over the same table as controls of the oracle and the encoder; destination edges at BT 0 and 31; the
+two `hi` field-mask pins; four round-2 pins (`64 crandc bbmask`, `64 crandc order`, `64 crorc bamask`, `64 crorc bbmask`: every field
+mask 0..30 at the index-31 sources, the BB read of CR[BT] -- two of them pre-set the destination EQUAL to the result, the only way that
+read shows -- and read-before-clear); and four round-3 rows comparing the WHOLE CR (`64 crorc baread`, `64 crorc bbread`, 
+`64 crandc setbits`, `64 crorc setbits`: every read-mask constant and every set literal).  Wired into `regress/gate_ppc.sh` (gate 13) as the `#575`
+block before the NetBSD prerequisite: the completion sentinel once and last, the RESULT and CONTROL keys once each, RESULT pinned at
+70/70 by equality, CONTROL=OK, every row by name, and the denominator pinned unquoted (`ppc_crlogic rows run` 70, `rows green` 70,
+`rows red` 0) in the form `check_score_claims.py` reads; `tools/precommit_check.sh` SCORE_CLAIMS_MANIFEST 45 -> 46;
+`tools/pipeline/check_probe_wiring.py` MANIFEST entries for the probe and the ten artifact scripts.  The fix 70/70 on `build/`
+(`regress/artifacts/ppccrandcorc/r3_20261105/base70/probe_base70.out`;
+`regress/artifacts/ppccrandcorc/r3_20261105/CLEARANCE.txt` both parts), HEAD 60/70, `/bin/true` 5/70 and `/bin/false` 1/70 with
+CONTROL=FAIL, an absent binary stops the probe before any row with no sentinel, and the handlers' own null medium -- both bodies identity,
+the ruled form -- 44/70 (`regress/artifacts/ppccrandcorc/r3_20261105/table3/SCORES.txt`).  Gate 13's `#575` block replayed over table 3's banked logs, the probe call replaced by each log (`regress/artifacts/ppccrandcorc/landing_20261105/DRYRUN575.out`): base (the fix) green; HEAD red (13 of 79 checks); identity bodies red (29 of 79 checks); /bin/true red (69 of 79 checks); /bin/false red (73 of 79 checks); absent binary red (1 of 1 checks).
+
+**Test-variant tables** (WSL scratch clones of `build/` under clone-local `.MUTANT` sentinels, each cleared only after a `cmp`-verified,
+rebuilt restore; every prediction COMPUTED by a simulator of the probe's sessions and written before its table).  Table 1
+(`table1_20261105/`, `v575.py`): 15 variants on the 62 rows, all 15 red, 17 of 17 legs exactly as predicted.  Table 2
+(`r2_20261105/table2/`, `v575b.py`): 27 variants on the 66 rows, 26 red and g2 (crandc's BA read mask `& 3`) green as predicted EQUIVALENT, 29 of 29
+runs exactly as predicted.  Table 3 (`r3_20261105/table3/`, `v575c.py`): 51 variants on the 70 rows, 49 red and g2 and u9 (crorc's reads
+swapped) green as predicted EQUIVALENT, 53 of 53 predicted lines exact.  Each table re-ran the previous one's variants.  **Floor**:
+(a) the pre-fix build 52/62, 56/66, 60/70; (b) b1 and b2 restore each removed function verbatim -- 5 red each on every table; (c)
+`/bin/true`, `/bin/false` and an absent binary on every table, and the identity bodies (c_identity, 20, 22 and 26 red); (d) the DEPENDS-ON
+closure as a class -- 453 cells (`r3_20261105/CLOSURE3.md`: 416 detected, 36 proved EQUIVALENT, 1 DISCLOSED, the crandc clear replaced by a
+toggle, which every pre-set row hides; with the six constant sites -- the four read masks and the two set literals -- proved over their
+whole 2^32 value space); (e) the contract in the docstring, catches and the deliberately uncovered cells by class; (f) the rows pin
+WHICH bit changed (the edge rows and the whole-CR rows), not only that something did.  Every one of these tables measured a source that
+also carried qhs's uncommitted block (the scratch clones copied `build/`, whose source matched the working tree); the committed source
+differs from the measured one in that block only.
+
+**The repair chain** -- a pass on each repair, closing on the first valid pass with zero breaches.  Pass 2 on the diff
+(`p2_20261105/`): GPT-6 Astra 76 cells, 9 floor breaches, 7 false records (B1-B2 the BB read of CR[BT], which the inverse pre-set hides;
+B3-B4 the clear moved before the reads; B5-B9 single field-mask weakenings the `hi` rows miss; F1-F7; the four R5 predictions missing
+from PRETABLE); GLM 5.3 263 cells, 4 breaches (read-before-clear, and crandc's read masks `& 1` -> `& 3`, whose BA cell repair 2
+proved equivalent), 1 false record (R5's "the owed rows stay green under all nine"); Gemini 4 Argon twice, REPAIR (one answer found R5's
+missing predictions, the other called a provably equivalent edit a breach and found codex's F1).  **Repair 2** (Mythos 5.1, run locally
+as an implementer; `r2_20261105/IMPL_NOTE.md`): every pass-2 cell enumerated -- 239 (`r2_20261105/CLOSURE.md`), the 62 rows missed 25 --
+four rows added (N = 66, base 66/66), F1-F7 corrected (F1-F3 in the probe's docstring, the rest in dated errata beside the table-1
+files), table 2.  Pass 3 (`p3_20261105/`): Astra 447 cells, 54 breaches, 7 false records -- the 239-cell vocabulary was narrower than the classes it had put in scope (crorc's BB read
+`& (1|1<<k)` for k = 2..30, crorc's BA read `& 0x8001`, the set literal `1 + 2^k`: 22 in crandc, 2 in crorc); Argon twice, CLOSE, each
+accepting the 239-cell enumeration as the packet stated it, so their agreement on the brief's own premise is no evidence
+(`p3_20261105/DISPOSITION.md`).  Two consecutive passes had found the same classes open, so **repair 3** owed the class closure
+(Mythos 5.1, locally; `r3_20261105/IMPL_NOTE.md`): codex's 54 survivors and 35 equivalents confirmed by simulation, none refuted; the
+FULL single-constant space at those sites closed and proved; four whole-CR rows (N = 70, base 70/70); R1-R7 corrected in place and in
+errata; table 3.  **Pass 4, the closing pass** (`p4_20261105/`): Astra 453 cells, 0 breaches, 5 false records, with its own partition of
+the 453 (416 / 36 / 1) and the six constant-site proofs re-derived; Argon twice, CLOSE.  A valid pass -- the diff delivered, the roster's
+misses named, the zero carried with its denominator -- so the chain closed.  Its five false records were corrected by Mythos 5.1, the
+seat that wrote CLOSURE3 (`r3_20261105/RECORDS4_NOTE.md`, `r3_20261105/CLOSURE3.errata.md`; the probe edited in text only, its syntax
+tree with strings normalised equal to table 3's frozen instrument), and the corrections were read again (`rec4_20261105/`): Astra
+accepted F3 and F5 and found new universal claims in F1, F2 and F4, each qualified in place (the pre-correction copies `*.pre_2nd`
+kept); Argon accepted all five as first written -- including F1's overbroad sentence Astra had refuted with a counterexample -- so its
+agreement weighs as no argument (`rec4_20261105/DISPOSITION.md`).  The regress review then read the qualified sentences: F1, F2, F4's
+corrected claim and F5 hold as qualified, and it found one residue the second reading missed (its R3, below).
+
+**Seats.**  Every answer is recorded on the row, one entry each, read whole before it was written; the non-firings and seat failures are recorded by name, each with its own reason.  Pass 1 (research): agy 1, codex 1, deepseek 1, fable5 1, glm 1, grok 1, kimi 1, minimax 1, opus5 1 entries -- the 2026-10-29 panel (`_scratchpad/panel_20261029_233757/`: GPT-6 Astra, Grok 4.7, GLM 5.3, deepseek, minimax and the kimi-k3:cloud substitute; the kimi CLI walled, agy held by the owner), the Opus 5.5 Agent seat the same night, and the ruling.  Review (passes 2-4 and the second reading): agy 7, codex 4, deepseek 1, fable5 3, glm 2, grok 1, kimi 1, minimax 1, opus5 1 entries -- GPT-6 Astra on every pass, GLM 5.3 on pass 2, Gemini 4 Argon twice on each pass and once on the reading, and Mythos 5.1's three implementer runs (repairs 2 and 3, the records correction), recorded as such and not as reviews; Grok 4.7 (a 402 billing wall) and GLM after pass 2 (the Ollama monthly limit) are seat failures; deepseek, minimax, kimi and Opus were not fired.  The packets are `_scratchpad/cloud_r3/P2_R575_*.md`, `P3_R575_*.md`, `P4_R575_*.md` and `REC4_R575_*.md`; every review-stage answer is banked in the round's artifacts dir, the pass-1 answers stay in their panel dir, and the Opus pass-1 answer is banked at this landing.
+
+**The regress review** (the Fable-only stage; Claude Mythos 5.1 in the fable5 slot, run locally, `regress/artifacts/ppccrandcorc/regress_20261105/REG_MYTHOS_local.md`): MYTHOSREG575: 41 CHECKS 0 FLOOR-BREACHES 3 RECORD-FINDINGS VERDICT:REGRESS-WITH-FINDINGS.  It found the floor discharged clause by clause against the tree (the pre-fix build red on exactly the ten DISC rows; b1 and b2 each with its own red set; both dead binaries and the identity bodies red; every Boolean function of (a, b) but the architectural one reds a truth row, so the two condition sites close without enumeration; the CLOSURE3 PROOF section's six constant-site arguments re-derived), gate 13's `#575` block red under a dead probe, a lost row, an added row and a missing RESULT line, no row vacuous for its variant and no detection credited to the wrong row, the 36 EQUIVALENT cells proved and the crandc toggle rightly DISCLOSED, the qualified F1, F2, F4 and F5 sentences sound, and none of the main loop's dispositions wrong.  Its three record findings, all L4 and text-only, are applied at the landing, each quoting what it replaces (`landing_20261105/REG_FIXES.md`): R1 the gate comment's "0 escape the 70" becomes "0 undetected beyond 36 EQUIVALENT and 1 DISCLOSED"; R2 the probe docstring's clause (5), whose "the round-3 whole-CR rows carry ones only where the set-literal cells need zeros" is true of the two setbits rows only; R3 the F4 erratum's red-set parenthetical, which named four of the twelve rows the round's own simulator gives for crorc C = 2 -- the residue the second reading missed.  It FILED two items, both now LOW rows: `ppccrdecodeshift` (the decode shift counts, outside the bound as the round drew it) and `ppccrr5predict` (the four R5 BT substitutions, predicted and never built -- the chain's one unmeasured cell).
+
+**Landing edits, none changing code.**  The probe's docstring carries seven score-shaped strings in words (`52/62` and its siblings, and
+crnand's `19/225`), because `check_score_claims.py` reads every `N/M` in a gated probe's docstring as a claim against the 70-row pin; the
+syntax tree minus the docstring is unchanged (`landing_20261105/PROBE_IDENTITY.md`).  Banked at the landing from where they sat
+unbanked: the Opus pass-1 answer (`opus_p1_20261029/OPUS_P1.md`, from its subagent transcript) and Argon's two pass-2 answers
+(`p2_20261105/gemini_p2_r575.md`, `p2_20261105/gemini_p2_r575_r2.md`).  The regress review's R1-R3, text only, each quoting what it
+replaces (`landing_20261105/REG_FIXES.md`): R1 in the staged gate's comment (the working tree's copy of that block takes it from
+the kit's patch once another round's edit of the same file is done), R2 in the probe's docstring (string-masked syntax tree
+unchanged), R3 in `r3_20261105/CLOSURE3.errata.md` as a dated correction.  The gate's `gate_begin` title is HEAD's: the commit adds
+exactly the `#575` block to `regress/gate_ppc.sh`.  The citation gate cannot select this block (`check_cited_artifacts.py` keys on `## Round <digits>` headings: `citeprefixblind`, filed by `#554`); its own resolver, run over the block by hand at the landing, resolves all 9 citations to this round's files or the sources it names.
+
+**Assessed, not changed.**  deepseek's call to switch these two handlers to `1u <<` in this round (R2: a fourteen-site defect is not
+half-repaired here).  GLM's aliased-edge row and minimax's crorc complement-swap prediction (both refuted by enumeration in the ruling).
+The Opus seat's encoder point -- the five siblings are symmetric in BA and BB, so they cannot see the probe's encoder swap them -- holds
+for the siblings only: the crandc and crorc rows are asymmetric and run through the same encoder, so a swap reds them (reasoned).  An
+extra CLEAR of a bit that is neither a source nor a destination is not claimed (the ruling: recommended, not owed; the docstring's (5)).
+The four round-2 rows are not the minimum (pass 3, R2) and four is the minimum only for single-instruction sessions (pass 4, F5); the
+measured rows stay.  Field masks with a bit above bit 4 act on the raw shifted instruction word and may import a neighbouring field; they
+are outside the 453-cell denominator and disclosed (F1).  That no gate or guest depends on the old functions rests on readings (the Opus
+seat's sweep of `regress/`: gate 13 boots no PowerPC OS -- its NetBSD kernel is loaded and never executed -- and no other script builds an
+opcode-19 CR word); the measurement is the weekly battery.
+
+**Filed, not fixed here.**  Two LOW test-coverage rows from the regress review: `ppccrdecodeshift` -- no variant edits the handlers'
+decode shift counts (`>> 21`, `>> 16`, `>> 11`), a class outside the bound as the round drew it, which the review reasons every table
+row would catch -- and `ppccrr5predict` -- the pass-1 ruling's four BT-substitution variants were predicted on every table and never
+built, the chain's one unmeasured cell.  `ppccrlogicshift` was already filed -- a member of the `astraretrolow` class row (LOW,
+2026-10-02, `#554` batch 2a, beside `shiftubcensus`) -- and gains this round's cross-reference: R2's ruling, the probe's disclosure (4),
+and the Opus seat's untested prediction that the ASAN tree, built with `-fsanitize=address,undefined`, would flag `1 << 31` on the probe's
+`edge crandc bt0` row.  `ppccrnandundec` gains the ruling's note: its draft body `!(ba & bb)` is the old crandc, so it must not alias
+`instr(crandc)` now that crandc is fixed.
+
 # `#580` Records (follow-up, 2026-11-04): `mipsprimundec` names its landing commit `68c0d60b`; the committed-tree proofs; the pass-2 receipt
 
 `git ls-tree 68c0d60b`, md5s hashed in Python from the committed bytes: `src/cpus/cpu_mips_instr.c` blob `0df67fd9e38a`, md5 `c35bf86a5114`; `regress/mips_primundec_probe.py` blob `6adba356a8d8`, md5 `dae62682d838`; `regress/gate_mips_folds.sh` blob `83275c9b67fd`, md5 `a4e3546e4da2`.  The working tree matches each (cpu_mips_instr.c same, mips_primundec_probe.py same, gate_mips_folds.sh same).

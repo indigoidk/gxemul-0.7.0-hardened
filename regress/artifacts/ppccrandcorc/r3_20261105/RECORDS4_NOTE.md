@@ -1,0 +1,99 @@
+# #575 ppccrandcorc -- RECORDS CORRECTION after pass 4 (2026-11-05, Mythos 5.1, the seat that wrote CLOSURE3)
+
+Pass 4 (p4_20261105/codex_codex_r575_p4.txt, `CODEXP4R575: 453 CELLS SWEPT 0 BREACHES 5 FALSE RECORDS VERDICT:REPAIR`;
+p4_20261105/DISPOSITION.md F1-F5) closed the repair chain with zero floor breaches and five false records.  This note records
+where each was corrected.  No source, gate, build, run of the probe, table or git action; CLOSURE3.md, PRETABLE_3.out and table3/
+are untouched.  Files written: this note, CLOSURE3.errata.md, ppc_crlogic_probe.py.pre_rec4 (all in r3_20261105/); file edited:
+regress/ppc_crlogic_probe.py (text only, proof below).
+
+## The five records
+
+F1  CLOSURE3.md:736-737 (PROOF) -- corrected in CLOSURE3.errata.md.
+    BEFORE: "a mask with bits above 4 is the fix (the field is 5 bits), so the mask sites are closed over every constant too."
+    AFTER:  field masks are closed over m = 0..30 by enumeration (186 cells, all detected); masks with a bit above bit 4 act on the
+            RAW shifted instruction word (cpu_ppc_instr.c:2730-2731, :2757-2758) and may import a neighbouring field (BT mask 63 ->
+            BT + 32; BA mask 63 imports BT's low bit; BB mask 63 imports BA's low bit); v575c.py:94 masks extracted indices and
+            cannot model them; they are OUTSIDE the denominator and DISCLOSED, not proved.
+    Probe: no copy of this claim.  The docstring's field-mask scope is "every field mask 0..30" (:38, :62-64) and its "all 2^32 m"
+    sentence (:52) is about the READ masks, which pass 4 endorsed.  Nothing to change there.
+
+F2  ppc_crlogic_probe.py:384 (now :386), the `64 crorc baread' row's printed note -- corrected IN PLACE.
+    BEFORE: "BA=31 over 0xfffffffe, whole CR: a=0 for every mask"
+    AFTER:  "BA=31 over 0xfffffffe, whole CR: a=0 at the fix; a!=0 is red"
+    Why: a = CR[31] = 0 under the fix's decode and read mask.  Read mask 3 gives a = 0xfffffffe & 3 = 2; BA field mask 16
+    gives a = CR[16] = 1.  The row is red exactly because those mutations make a nonzero (read mask 0 keeps a = 0 and is red on
+    `64 crorc 11' instead, CLOSURE3.md:728 -- which is why the new note does not say "every other mask").  The comment block above
+    the row (:362-364 frozen, :364-366 now) already stated this correctly and is unchanged.
+
+F3  ppc_crlogic_probe.py:54-56 (now :54-58), docstring clause (e), ROUND 3 paragraph -- corrected IN PLACE.
+    BEFORE: "DELIBERATELY UNCOVERED (EQUIVALENT, proved): crandc BA read masks with bit 0 set (`ba & !bb' sees only bit 0 of ba);
+             `|=' -> `^=' at either set (after the clear); the two read statements swapped; and the crandc toggle of (5)."
+    AFTER:  "DELIBERATELY UNCOVERED, in two classes.  EQUIVALENT, proved: crandc BA read masks with bit 0 set (`ba & !bb' sees only
+             bit 0 of ba); `|=' -> `^=' at either set (after the clear); the two read statements swapped.  DISCLOSED, NOT
+             equivalent: the crandc toggle of (5) (crandc 31,0,1 over CR 0 must leave 0; the toggle leaves 1) -- no row sees it,
+             for the reason (5) gives.  (Pass 4, F3: round 3 had listed the toggle under "EQUIVALENT, proved";
+             r3_20261105/RECORDS4_NOTE.md.)"
+    Why: crandc 31,0,1 over CR = 0 reads a = b = 0, result 0; the fix clears CR[31] (CR stays 0), a toggle sets it (CR = 1).  Not
+    equivalent; it is the one DISCLOSED cell, as CLOSURE3.md:684-685 and :742 classify it (CLOSURE3's contract text :755-757 lists
+    it without the EQUIVALENT label and needed no change).  The round-2 paragraph (:42-43) already lists it apart from the "four
+    EQUIVALENT cells" and is unchanged.
+
+F4  CLOSURE3.md:732 (PROOF) -- corrected in CLOSURE3.errata.md.
+    BEFORE: "C without bit 0: CR[BT] is never set, red on every result-1 row."
+    AFTER:  not every result-1 row: in a table session a later instruction's misplaced literal can land on an earlier destination
+            (crorc C = 2 sets CR[BT-1]: crorc 15 sets CR[14], so `64 crorc 10' and `32 crorc 10' pass).  The set-literal sites are
+            closed by the `setbits' rows directly (final CR = 2 | C, want 3; final CR = C, want 1): every C != 1 is red there, bar
+            crandc C = 3, red on `64 crandc 01'.
+    Probe: no copy (the docstring's "every set literal C != 1 in both handlers", :53, is the covered claim and stands).
+
+F5  CLOSURE3.md:714-715 ("WHY FOUR AND NO FEWER") -- corrected in CLOSURE3.errata.md.
+    BEFORE: "4 rows is the minimum; a multi-instruction session would cost more rows (session/others/mfcr/disasm), as the edge
+             session shows."
+    AFTER:  four is the minimum under the single-instruction restriction only; a cr_row-style row scores exit0, mfcr agreement and
+            the whole CR itself, so a multi-instruction session costs no apparatus rows, and one such row (seed 0x2; crandc
+            31,30,31; crorc 30,30,0; mfcr; want 0x3) catches both set-literal survivor families: three rows suffice.  The four
+            measured rows stay.
+    Probe: no copy (the round-3 comment block :357-371 frozen makes no minimality claim; the round-2 "NOT the minimum" remark at
+    :333-336 is pass 3's R2, a different sentence).
+
+## Text-only proof of the probe edit
+
+Backup: r3_20261105/ppc_crlogic_probe.py.pre_rec4, md5 772576e7f1795ff8006c5884148e0fa8 = table3/probe70_frozen.py (table3/MD5.txt
+line 1) = the in-tree probe before this edit.  After the edit the in-tree probe is 400 lines (was 398), md5 55523a4198d42cc1b412584897eb9d35,
+maximum line width 143 (unchanged; the edited lines are 90..133 wide).
+
+Command (run from GXEMUL-SEC/regress, Python 3.12.10, `-I`):
+
+    python -I -c '
+    import ast, sys
+    def strip(path):
+        t = ast.parse(open(path, encoding="utf-8").read())
+        if t.body and isinstance(t.body[0], ast.Expr) and isinstance(t.body[0].value, ast.Constant) \
+                and isinstance(t.body[0].value.value, str):
+            t.body.pop(0)                                   # drop the module docstring
+        for n in ast.walk(t):
+            if isinstance(n, ast.Constant) and isinstance(n.value, str):
+                n.value = "<STR>"                           # every string constant -> placeholder
+        return ast.dump(t)
+    a, b = strip(sys.argv[1]), strip(sys.argv[2])
+    print("ast.dump equal (docstring dropped, every str constant -> <STR>):", a == b, "len", len(a), len(b))
+    ' ppc_crlogic_probe.py artifacts/ppccrandcorc/r3_20261105/table3/probe70_frozen.py
+
+Result:
+
+    ast.dump equal (docstring dropped, every str constant -> <STR>): True len 53679 53679
+
+`diff table3/probe70_frozen.py ppc_crlogic_probe.py` shows exactly two hunks: docstring lines 54-56 -> 54-58 (F3) and line 384 ->
+386 (F2); `python -I -m py_compile` accepts the file.  Every row's name, seed, instruction, want and order, every function body and
+every non-string constant are identical to the frozen instrument.  The in-tree probe now differs from table 3's frozen instrument
+(table3/probe70_frozen.py) in PRINTED TEXT ONLY: one row note and the module docstring.  Table 3's scores are unaffected (the gate's
+70-row block, gate_ppc.sh:357, matches row NAMES and does not read note text), so the difference is recorded here, not re-tabled.
+
+Second reading: per DISPOSITION.md, one Gemini reading of the corrected sentences (CLOSURE3.errata.md and the two probe hunks) is
+owed before landing; this note does not claim it.
+
+SECOND READING (2026-11-05): GPT-6 Astra accepted F3 and F5 and qualified three new universal claims in these corrections
+(F1's import and identity claims, F2's "only under", F4's "no appeal to the table rows"); all qualified in place here and in
+CLOSURE3.errata.md (pre-correction copies: *.pre_2nd; the reading: ../rec4_20261105/codex_codex_r575_rec4.txt).
+
+*Corrected 2026-11-05 (main loop): this file's time-of-day stamp(s) (removed: ~09:5xZ) were GUESSES from the main loop's wrong clock -- later than this file's own creation time, so impossible as written.  The file's own timestamps are the record: created 09:21Z, last written 09:27Z before this note (UTC).*

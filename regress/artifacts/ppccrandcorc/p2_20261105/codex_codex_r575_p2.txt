@@ -1,0 +1,215 @@
+CODEXP2R575
+model: GPT-6 (Codex)
+REPAIR: 76 cells swept; 9 floor breaches; 7 false record claims; required R5 predictions missing.
+
+1. FLOOR
+
+Nine independently surviving edits, grouped below. These are read-only derivations, not newly measured results. Each edit preserves all 62 current observations and falls outside table 1 and the stated exclusions.
+
+B1-B2: Read BT instead of BB.
+
+At cpu_ppc_instr.c:2733 or :2760, change:
+    bb = (cpu->cd.ppc.cr >> (31-bb)) & 1;
+to:
+    bb = (cpu->cd.ppc.cr >> (31-bt)) & 1;
+
+Let r be the architectural result. Every exercised destination still holds 1-r when its instruction starts. The substituted read therefore makes !bb equal r. The resulting functions are a & r = r for crandc and a | r = r for crorc. Both edited handlers consequently produce the expected destination and preserve every other bit.
+
+Rows that detect these separate edits:
+    crandc BT=8, BA=1, BB=2, seed=0x40800000: expected 1; variant writes 0.
+    crorc  BT=8, BA=1, BB=2, seed=0x00800000: expected 1; variant writes 0.
+
+These are wrong-source reads, not the excluded toggle edit.
+
+B3-B4: Move the clear before both source-value reads.
+
+Move statement :2734 above :2732, or :2761 above :2759. Every current instruction has BT distinct from BA and BB:
+
+    crandc table: (8,0,2), (9,0,1), (10,1,0), (11,1,3)
+    crandc edge/hi: (0,2,3), (20,31,30)
+    crorc table: (12,0,2), (13,0,1), (14,1,0), (15,1,3)
+    crorc edge/hi: (31,4,5), (21,29,28)
+
+The 32-bit table repeats those table triples. Clearing early therefore changes none of their source values.
+
+Rows that detect the edits, with all unlisted seed bits zero:
+    crandc BT=7, BA=6, BB=7; seed ones {6,7}: expected 0; early clear produces 1.
+    crorc  BT=7, BA=6, BB=7; seed ones {7}: expected 0; early clear produces 1.
+
+Both retain inverse destination presets. Destination/source aliasing is not a stated exclusion.
+
+B5-B9: Individual field-mask weakenings.
+
+Change only the indicated &31 occurrence:
+
+    B5: crandc BB -> &29
+    B6: crandc BB -> &27
+    B7: crandc BB -> &23
+    B8: crorc  BA -> &29
+    B9: crorc  BB -> &29
+
+Enumeration of why they survive:
+
+    B5: Table BB indices 2->0 and 3->1 preserve values 0 and 1.
+        Edge BB 3->1 preserves 0.
+        Hi BB 30->28 preserves 0.
+    B6: Only hi BB changes: 30->26; both bits hold 0.
+    B7: Only hi BB changes: 30->22; both bits hold 0.
+    B8: Exercised BA indices {0,1,4,29} are all unchanged by &29.
+    B9: Table BB indices 2->0 and 3->1 preserve their values.
+        Edge BB=5 and hi BB=28 remain unchanged.
+
+Two additional rows detect all five, with unlisted seed bits zero:
+
+    crandc BT=9, BA=7, BB=14; seed ones {7,9,14}; expected 0.
+    BB14 maps to 12,10,6 under masks 29,27,23 respectively.
+    Each alias holds 0, so each variant writes 1.
+
+    crorc BT=9, BA=6, BB=10; seed ones {4,9,10}; expected 0.
+    BA6 &29 ->4, whose value is 1.
+    BB10 &29 ->8, whose value is 0.
+    Either separate edit makes the result 1.
+
+DENOMINATOR: 76 explicitly bounded site/edit-shape cells.
+
+    Decode: 2 dispatch assignments x 6 alternative existing CR-logical handlers = 12.
+    Field masks: 6 sites (BT,BA,BB per handler) x masks {30,29,27,23,15} = 30.
+    Source reads: 4 sites x {use the other operand variable, use BT} = 8.
+    Source bit numbering: 4 sites x {replace 31-index with index} = 4.
+    Clear: 2 sites x {delete, replace clear with XOR, move before source reads} = 6.
+    Condition: 2 sites x {restore defect, move complement, drop complement,
+                          cross operator, replace BA with BT, replace BB with BT} = 12.
+    Set: 2 sites x {delete, replace OR with XOR} = 4.
+
+    12 + 30 + 8 + 4 + 6 + 12 + 4 = 76.
+    63 detected + 9 breaches + 2 stated toggle exclusions + 2 equivalent set edits = 76.
+
+For auditability, the complete 30-cell mask sweep follows. Entries identify an existing detecting row; PASS identifies a breach. Unqualified truth rows mean the 64-bit table.
+
+                         &30          &29          &27          &23          &15
+    crandc BT            crandc01     crandc10     crandc hi    crandc00     crandc hi
+    crandc BA            crandc10     edge bt0     crandc hi    crandc hi    crandc hi
+    crandc BB            crandc11     PASS         PASS         PASS         crandc hi
+    crorc BT             crorc01      crorc10      crorc00      crorc00      edge bt31
+    crorc BA             crorc11      PASS         edge bt31    crorc hi     crorc hi
+    crorc BB             crorc01      PASS         crorc hi     crorc hi     crorc hi
+
+The sequential edge matters: crandc clears CR[0] before crorc executes. Thus crorc BA &27 maps BA4 to an already-cleared CR[0] and is detected.
+
+The remaining classifications are independently checkable:
+
+    Decode replacements are detected because the seven truth vectors, ordered
+    00,01,10,11, are distinct:
+    crand=0001; crandc=0010; creqv=1001; cror=0111;
+    crorc=1011; crnor=1000; crxor=0110.
+
+    Read substitutions:
+    crandc BA->BB: detects 10; BA->BT: detects 00.
+    crandc BB->BA: detects 10; BB->BT: survives.
+    crorc BA->BB: detects 01; BA->BT: detects 01.
+    crorc BB->BA: detects 01; BB->BT: survives.
+    At the BB read, BA already contains its Boolean value; this does not
+    change those witnesses.
+
+    Reversed source numbering:
+    crandc BA: detects 10; crandc BB: detects 11;
+    crorc BA: detects 11; crorc BB: detects 01.
+
+    Deleted clears: detected by crandc00 and crorc01.
+    XOR clears: the two stated exclusions.
+    Early clears: the two breaches above.
+    All twelve condition edits: detected.
+    Deleted sets: detected by crandc10 and crorc00.
+    XOR sets: equivalent after the destination has been cleared.
+
+This denominator is a finite enumerated sweep, not a claim about every possible C edit.
+
+2. THE DIFF
+
+The two product expressions exactly match R1/R10 and the supplied Book I text:
+
+    BA BB    crandc: BA & !BB    crorc: BA | !BB
+     0  0             0                  1
+     0  1             0                  0
+     1  0             1                  1
+     1  1             0                  1
+
+Both operands are normalized to 0/1 before these expressions. The current implementation reads both sources before clearing the destination, so its alias behavior is correct.
+
+The new hi rows work for the explicitly listed masks:
+
+    Masks:             15   7   3   1
+    crandc BA31 ->     15   7   3   1    alias values 0,0,0,0; source value 1
+    crandc BB30 ->     14   6   2   0    alias values 1,1,1,1; source value 0
+    crorc BA29 ->      13   5   1   1    alias values 1,1,1,1; source value 0
+    crorc BB28 ->      12   4   0   0    alias values 0,0,0,0; source value 1
+
+Their destination presets are respectively BT20=0 and BT21=1. Either individual operand weakening, or simultaneous weakening, to one of those four masks flips the corresponding result. Those four masks do not exhaust proper submasks of 31.
+
+“edge mfcr” measures exactly the channel agreement its note describes: GPR10 equals final debugger CR. It is not an independent architectural-result oracle.
+
+“edge disasm” correctly measures the narrower row note: both mnemonics are named correctly. It does not check BT, BA or BB.
+
+The row census and gate checks are correct:
+
+    Rows 1-6:   apparatus
+    Rows 7-18:  64-bit table
+    Rows 19-42: siblings
+    Rows 43-48: edge
+    Rows 49-50: hi
+    Rows 51-62: 32-bit table
+
+    6 + 12 + 24 + 6 + 2 + 12 = 62.
+
+The gate lists all 62 names, checks exact result/control records, sentinel uniqueness and final position, and green/red counts. It precedes the NetBSD prerequisite.
+
+I count seven false record claims, counting distinct claims once and including the new table records:
+
+F1. Clause (e)(3) says an input at index 31 is not separately rowed. The separate crandc hi row explicitly uses BA31. Describe the remaining operand/index gaps instead.
+
+F2. The new FIELD-MASK comment says &1 previously scored 58/58. In the old crandc edge row, simultaneous masking gives BA2&1=0 and BB3&1=1. Before that instruction, CR[0]=1 and CR[1]=0. The variant computes 1 & !0 = 1, whereas the row expects 0. It was already detected.
+
+F3. The edge comment calls “edge disasm” an encoder pin at the BT extremes. The scorer discards the encoded word and operand text and compares only mnemonic strings. Changing BT while preserving the opcode preserves that score. Either narrow the claim to mnemonic checking or compare the decoded operands.
+
+F4. PRETABLE predicts CONTROL=FAIL for an absent binary. The probe raises before producing a CONTROL record; SCORES correctly reports CONTROL=none and DONE=0.
+
+F5. PRETABLE says its mtime precedes every file in table1/. The frozen probe is older:
+    probe62_frozen.py: 2026-11-05T07:36:56.1924505Z
+    PRETABLE.out:     2026-11-05T07:36:56.2780788Z
+VERDICT already acknowledges that exception. Correct PRETABLE without changing the historical timestamps.
+
+F6. VERDICT says the ruling listed four rows per d1-d6 variant. It listed four for d1-d4 and five for d5-d6. The correct account is four plus hi for d1-d4, and five unchanged for d5-d6.
+
+F7. PRETABLE says rows reading the debugger are predicted green on every variant. The semantic rows themselves read debugger CR, and its own HEAD prediction lists ten such rows red. Name the apparatus controls rather than all debugger-reading rows.
+
+The inherited R5 parenthetical that the owed rows stay green under all nine variants is also wrong: identity and d1-d4 fail hi rows. The current score table correctly contradicts that parenthetical. I do not count this inherited ruling error as a new false record.
+
+3. MISSING PASS-1 REQUIREMENTS
+
+R5 explicitly required four predicted-only BT substitutions in PRETABLE. Neither the actual PRETABLE nor its generator includes them. Their complete predicted red sets on the current 62 rows are:
+
+    crandc: bt & !bb
+        64 crandc 10; 64 crandc hi; 32 crandc 10
+
+    crandc: ba & !bt
+        64 crandc 10; 64 crandc hi; 32 crandc 10
+
+    crorc: bt | !bb
+        64 crorc 01; 64 crorc hi; 32 crorc 01
+
+    crorc: ba | !bt
+        64 crorc 00; 32 crorc 00
+
+They were required as predictions, not additional builds. Preserve the original PRETABLE and add a dated correction.
+
+The four owed rows, two expression edits and 62/62 gate pin are present. R9’s corrected original brief is not exhibited in the supplied diff or reviewed artifacts; its completion is unverified, rather than proved absent.
+
+4. VERDICT
+
+REPAIR. Keep the two product expressions. Add coverage for B1-B9, correct F1-F7, supply the four missing R5 predictions, and update the gate total after the added rows are finalized.
+
+Premises checked directly in GXEMUL-SEC: handler expressions and read/clear order; dispatch assignments; probe seeds, instruction triples and scoring; disassembler operand output; gate placement and assertions; PRETABLE, its generator, SCORES, VERDICT and the two relevant timestamps. The CR type is uint32_t and CPU initialization selects MODE_PPC.
+
+I did not edit, build or execute repository code, or inspect another src tree. Build propagation and full-battery clearance remain reported evidence, not independently reproduced measurements.
+
+CODEXP2R575: 76 CELLS SWEPT 9 BREACHES 7 FALSE RECORDS VERDICT:REPAIR

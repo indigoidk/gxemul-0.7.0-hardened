@@ -371,7 +371,9 @@ elif out=$(python "$SCORECHK" 2>&1); then
 	#  (#579, pinned UNQUOTED in gate_ppc.sh at 83 rows under the stem ppc_llsc; its docstring is checked).
 	#  RAISED 44 -> 45 ON 2026-11-04, DELIBERATELY.  One newly gated probe: mips_primundec_probe.py
 	#  (#580, pinned in gate_mips_folds.sh at 122 rows under the stem mips_primundec; its docstring is checked).
-	SCORE_CLAIMS_MANIFEST=45
+	#  RAISED 45 -> 46 ON 2026-11-05, DELIBERATELY.  One newly gated probe: ppc_crlogic_probe.py
+	#  (#575, pinned UNQUOTED in gate_ppc.sh at 70 rows under the stem ppc_crlogic; its docstring is checked).
+	SCORE_CLAIMS_MANIFEST=46
 	_spinned=$(printf '%s\n' "$out" | sed -n 's/^SCORE_CLAIMS_PINNED=//p')
 	if [ -z "$_spinned" ]; then
 		bad "check_score_claims printed no SCORE_CLAIMS_PINNED line -- the count cannot be pinned"
