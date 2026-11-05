@@ -1,3 +1,11 @@
+# `#575` Records (follow-up, 2026-11-05): `ppccrandcorc` names its landing commit `c599cd66`; the committed-tree proofs; the trees restored; the pass-2 receipt
+
+`git ls-tree c599cd66`, md5s hashed in Python from the committed bytes: `src/cpus/cpu_ppc_instr.c` blob `bda65397b378`, md5 `6efa6781b203`; `regress/ppc_crlogic_probe.py` blob `404c2cb2346f`, md5 `75b5510dc724`; `regress/gate_ppc.sh` blob `4162a88d8bfe`, md5 `50265c7e9e8a`; `tools/precommit_check.sh` blob `8c9a8b0975d6`, md5 `81d10dfc8e95`.  The working copy against each: cpu_ppc_instr.c plus qhslowifetch's uncommitted read-failure block (one hunk), nothing else; ppc_crlogic_probe.py same; gate_ppc.sh plus qhslowifetch's uncommitted gate_begin title and ppc_ifetch block, nothing else of #575's (2 hunks); precommit_check.sh plus three other rounds' uncommitted manifest raises (1 hunk(s)).
+
+After the commit `restore_trees_575.sh` put the working copy back (`regress/artifacts/ppccrandcorc/landing_20261105/RESTORE575.out`): the four trees hold the SEC working copy again (both rounds), the three build trees rebuilt (part 1 cmp-clean, part 2 binary newer; warnings 0 0 0); every .LANDING575 note removed.
+
+The row's `commits` field names `c599cd66` and its state note names the landing commit.  The `regress/pass2_ledger.tsv` receipt line for `c599cd66`, a landing line in OUTSTANDING_BUGS.md's `#575` section and `matrix.html` re-rendered complete this records commit.
+
 # `#575` (2026-11-05) -- `ppccrandcorc`: the PowerPC crandc and crorc handlers compute CR[BA] AND NOT CR[BB] and CR[BA] OR NOT CR[BB] instead of NAND and NOR
 
 **The defect.**  `src/cpus/cpu_ppc_instr.c`, `X(crandc)` and `X(crorc)`: each reads CR[BA] and CR[BB] as 0/1, clears CR[BT] and sets it
