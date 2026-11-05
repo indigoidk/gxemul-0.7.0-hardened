@@ -1,3 +1,9 @@
+# `#582` Records (follow-up, 2026-11-05): `qhslowifetch` names its landing commit `2f83ff0a`; the committed-tree proofs; the pass-2 receipt
+
+`git ls-tree 2f83ff0a`, md5s hashed in Python from the committed bytes: `src/cpus/cpu_ppc_instr.c` blob `508e9181982f`, md5 `dbd192fbc950`; `src/include/cpu_ppc.h` blob `beada84cba9d`, md5 `30544e73fced`; `regress/ppc_ifetch_probe.py` blob `86c750aa1246`, md5 `6a098d38c17e`; `regress/gate_ppc.sh` blob `f6bc4609ca51`, md5 `b4d4e002bb01`; `tools/precommit_check.sh` blob `2d7650296cfe`, md5 `0150bf2341a4`; `tools/pipeline/check_probe_wiring.py` blob `13a6e68bf756`, md5 `334ab5cbb1dd`.  The working copy against each: cpu_ppc_instr.c the same; cpu_ppc.h the same; ppc_ifetch_probe.py the same; gate_ppc.sh the same; precommit_check.sh plus other rounds' uncommitted manifest raises (1 hunk(s)); check_probe_wiring.py plus other rounds' uncommitted MANIFEST entries (2 hunk(s)).
+
+The four trees took the committed `cpu_ppc_instr.c` in the landing window and keep it (no restore owed: `regress/artifacts/qhslowifetch/landing_20261105/UPDATE_QHS.out`).  The row's `commits` field names `2f83ff0a` and its state note names the landing commit.  The `regress/pass2_ledger.tsv` receipt line for `2f83ff0a`, a landing line in OUTSTANDING_BUGS.md's `#582` section and `matrix.html` re-rendered complete this records commit.
+
 # `#582` (2026-11-05) -- `qhslowifetch`: a failed slow-path instruction fetch on the PowerPC no longer ends the emulator process; the read-failure arm returns on read-ahead, refreshes after an exception already delivered, parks on a -T halt, and raises a machine check or checkstops when a device declines the fetch while running
 
 **The defect.**  `src/cpus/cpu_ppc_instr.c`, `X(to_be_translated)`: when the instruction word is not in a host page the translator reads it
