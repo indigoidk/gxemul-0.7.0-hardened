@@ -1,3 +1,9 @@
+# `#583` Records (follow-up, 2026-11-05): `pvrrenderexit` names its landing commit `e1a091e4`; the committed-tree proofs; the pass-2 receipt
+
+`git ls-tree e1a091e4`, md5s hashed in Python from the committed bytes: `src/devices/dev_pvr.c` blob `0b92af702196`, md5 `f2fc508e34c5`; `regress/pvr_zwrite_probe.py` blob `c3b6a971b29b`, md5 `c70b1d2fd8f7`; `regress/gate_arm.sh` blob `3c18ef5026ba`, md5 `36f7b1bed04c`; `tools/precommit_check.sh` blob `b73e831d38d2`, md5 `ce25fc040cc2`; `tools/pipeline/check_probe_wiring.py` blob `807f15c11c1c`, md5 `88b4d0728cf5`.  The working copy against each: dev_pvr.c the same; pvr_zwrite_probe.py the same; gate_arm.sh plus other rounds' uncommitted edits (4 hunk(s)), none touching the pvr block; precommit_check.sh the same; check_probe_wiring.py plus other rounds' uncommitted MANIFEST entries (2 hunk(s)).
+
+The four trees took the committed `dev_pvr.c` in the landing window and keep it (no restore owed: `regress/artifacts/pvrrenderexit/landing_20261105/UPDATE_PVR.out`).  The row's `commits` field names `e1a091e4` and its state note names the landing commit.  The `regress/pass2_ledger.tsv` receipt line for `e1a091e4`, a landing line in OUTSTANDING_BUGS.md's `#583` section and `matrix.html` re-rendered complete this records commit.
+
 # `#583` (2026-11-05) -- `pvrrenderexit`: a Dreamcast PowerVR render with the Z-write-disable bit set no longer ends the emulator; the bit is honoured -- the depth test kept, only the depth store skipped
 
 **The defect.**  `src/devices/dev_pvr.c`, `pvr_render()`: a polygon header whose ISP/TSP word 1 sets bit 26 (Z-write disable) hit
