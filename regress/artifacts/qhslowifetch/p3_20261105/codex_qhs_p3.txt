@@ -1,0 +1,142 @@
+CODEXP3QHS
+model: GPT-6 (Codex)
+VERDICT: REPAIR — two additional floor breaches under the stated bound, plus three false records.
+
+1. FLOOR
+
+I found two uncovered behavior families. The following witnesses are independent single edits, absent from table 3. Their all-green results are derived from source and the recorded sessions, not newly measured.
+
+B1 — MSR[ME] preservation is unobserved.
+
+Exact edit: immediately before arm (c)’s existing next_ic assignment at cpu_ppc_instr.c:4170, insert:
+
+cpu->cd.ppc.msr &= ~PPC_MSR_ME;
+
+Derivation:
+- T me enters with MSR=0x1000; the edit changes it to zero, then the existing park and return execute.
+- T ra me takes the unchanged read-ahead return first. Its real fetch prints the second halt report, then the edited arm (c) clears ME and parks.
+- T step, T cont, again and T ra already have ME clear.
+- The remaining sessions do not enter arm (c).
+- No exception is delivered and no additional text appears. Every asserted exit status, pc, SRR0, halt count, address and stopped indication remains unchanged.
+- session() parses msr, but none of the 62 rows checks it.
+
+A “T me msr” row expecting 0x1000 catches this exact edit. “T ra me msr” expecting 0x1000 also catches it.
+
+The same observation gap admits clearing ME inside arm (a) before its return, or setting ME before arm (c)’s park. To cover these polarities and placements, assert final MSR in T step, T me, T ra and T ra me, expecting respectively 0, 0x1000, 0 and 0x1000. I count this as one preservation breach family.
+
+B2 — the ME-clear read-ahead session does not observe checkstop text.
+
+Exact edit: insert the following immediately before arm (a), retaining its existing return and all subsequent code:
+
+if (cpu->translation_readahead && !(cpu->cd.ppc.msr & PPC_MSR_ME))
+    fatal("[ ppc: instruction fetch from 0x%" PRIx64 " declined with MSR[ME]=0: checkstop ]\n", (uint64_t) addr);
+
+Derivation:
+- Only T ra’s speculative failing fetch satisfies this condition.
+- fatal() prints this diagnostic without exiting. Arm (a) still returns; the real fetch still produces the second halt report and parks.
+- T ra retains exit0, pc=0xfec00008, two reports naming 0xfec00008, and its stopped indication.
+- T ra has no chkstop row.
+- T ra me’s chkstop row cannot catch it: its ME bit is set, so the added condition is false.
+- The global symptom check searches for “read failed: TODO”, not “checkstop”.
+- Every other session is unchanged.
+
+Add “T ra chkstop”, expecting absent. This is a diagnostic correctness distinction already recognized by V11: an otherwise identical halt with invented checkstop text must fail.
+
+Both findings stay inside X(to_be_translated), use fields already read by the guarded failure body, and introduce no new input partition. The written bound does not exclude state-write or diagnostic insertions. Restricting the review to pure guard and complete-exit substitutions would be an additional restriction; under that narrower sweep I found no additional breach.
+
+DENOMINATOR
+
+I swept the four measured live failure cells, with running=0 and pc=addr:
+
+Cell   Read-ahead   ME      Sessions
+C1     zero         clear   T step, T cont, again; T ra’s real fetch
+C2     zero         set     T me; T ra me’s real fetch
+C3     nonzero      clear   T ra’s speculative fetch
+C4     nonzero      set     T ra me’s speculative fetch
+
+Predicates inspected:
+- page != NULL, including its slow-path else;
+- !memory_rw(...);
+- translation_readahead;
+- pc != addr;
+- !running;
+- msr & PPC_MSR_ME.
+
+Edit shapes swept:
+- Predicate inversion, constants, deletion, and conditioning with either polarity of the existing read-ahead, ME, running and equality tests.
+- Arm ordering and substitution among return, refresh-and-return, park, bad, exception, checkstop, decoder fallthrough and the restored fatal exit.
+- Removal of park, refresh or running-clear operations.
+- Existing body-field substitutions, with pc and addr equal on the measured entries.
+- ME-bit preservation and diagnostic side effects conditioned on the existing cells, producing B1 and B2.
+
+Read-ahead depth distinctions and the disclosed unmeasured arm-(b), arm-(d) and fallback classes are not counted as newly covered. This is a finite source-review denominator, not an assertion that every possible C insertion has been enumerated.
+
+2. ENUMERATION
+
+All four measured input cells are populated. The stronger claim that every relevant output is observed is false.
+
+T ra asserts session, pc, nonex, addr and stopped. It asserts neither final MSR nor SRR0, UNIMPLEMENTED, exception or checkstop text. T ra me asserts session, pc, nonex and checkstop; it does not assert final MSR. B1 and B2 demonstrate consequential omissions without requiring another input cell.
+
+The row denominator independently enumerates as:
+
+ctl 3; neg 1; isi 5; isi1 4; noT 5; T cont 9; T step 9; T me 8; again 9; T ra 5; T ra me 4.
+
+These are eleven sessions and 62 rows.
+
+“Every reachable entry” also needs qualification to the measured aligned sessions. The translator sets cpu->pc before aligning local addr. Raw debugger PCs 0x02040001, 0x02040002 and 0x02040003 can therefore distinguish pc from aligned addr=0x02040000. This limits the universal premise; I file it under the already-disclosed arm-(b) coverage limitation rather than count another breach.
+
+3. RECORDS
+
+Three definite false records:
+
+R1 — regress/ppc_ifetch_probe.py:28–29:
+“its prompt and checkstop channels are left to the other three sessions.”
+
+Correction: Only the prompt lacks a dedicated row. T me chkstop exists, and V11 makes it red.
+
+R2 — regress/ppc_ifetch_probe.py:46–47:
+“Arm (a)'s guard conditioned on ME differs only on a read-ahead with ME set”
+
+Correction: Conjoining with ME clear differs on ME-set read-ahead: V8 → T_ra_me_nonex. Conjoining with ME set differs on ME-clear read-ahead: V9 → T_ra_nonex. The sentence must specify the polarity.
+
+R3 — table3/VERDICT.md:17:
+“No variant went undetected.”
+
+Correction: “All 23 variants predicted detectable were detected; nine variants remained green with the disclosed dispositions.”
+
+The nine green variants enumerate as D6, D9, D10, D11, V2, V3, V4, V5 and V6. The other 23 enumerate as B1, W2, W3, W4, W5, D1, D2, D3, D4, D5, D7, D8, D12, D13, D14, D15, W7, V7, V8, V9, V10, V11 and V12.
+
+One numerical clarification should accompany those corrections, but I do not count its ambiguous wording as a fourth false record. “A different three from PRETABLE_3’s prediction” should explicitly say:
+
+- D12 predicted five rows: T_ra_pc, T_ra_nonex, T_ra_addr, T_ra_me_pc, T_ra_me_nonex. It measured three: T_ra_nonex, T_ra_me_pc, T_ra_me_nonex.
+- V12 predicted two rows: T_ra_nonex, T_ra_me_nonex. It measured three: T_ra_pc, T_ra_nonex, T_ra_addr.
+
+The updated gate’s eleven-session and 62-row counts are consistent.
+
+4. ACCEPTED DISPOSITIONS
+
+None of the five is overturned within its stated measured scope.
+
+(1) V3 is equivalent on the measured failure entries because running is already zero.
+
+(2) D11 and V2 affect an arm reached on no measured session. That disclosure remains accurate; it is not proof of universal unreachability.
+
+(3) The recorded device-window sweep supports the disclosed absence of a running-1 declining-fetch producer in those sessions. It does not exhaust every possible device state.
+
+(4) D12 and V12 are detected despite their different red sets. Their exact sets depend on the stale or uninitialized instruction word.
+
+(5) For the permitted existing exception/exit substitutions, ppc_exception changes SRR0 together with pc and next_ic. B1 concerns MSR preservation and does not contradict that disposition.
+
+5. VERDICT
+
+REPAIR.
+
+B1 is a medium-severity detector gap: incorrect guest MSR state can remain entirely green.
+
+B2 is a diagnostic detector gap: an invented checkstop on ME-clear read-ahead can remain entirely green.
+
+R1–R3 require records corrections. These alone prevent the requested zero-false-record closure.
+
+I checked the actual translator, dyntrans machinery, exception implementation, memory-failure handling, probe assertions, gate, variant definitions, frozen scores/predictions and sweep records in GXEMUL-SEC. I treated recorded execution outcomes as supplied evidence, not independently reproduced measurements. I did not edit, build or run repository code.
+
+CODEXP3QHS: 4 CELLS SWEPT 2 BREACHES 3 FALSE RECORDS VERDICT:REPAIR

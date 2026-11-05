@@ -1,0 +1,485 @@
+#!/bin/bash
+# GATE 13 -- PowerPC single-precision conversion fidelity, on real guest instructions.
+#
+# What this protects
+# -----------------
+# #304 gave `frsp` the rounding mode it never read (the narrowing was a host C cast,
+# nearest-always, so the three directed modes were unreachable) and taught `stfs` the
+# ISA's denormalization band, which it had been flushing to signed zero. #305 stopped
+# `lfs`/`stfs` from destroying a NaN's sign and payload: the value-domain transport
+# (interpret -> host double -> store) structurally cannot carry them, so the NaN classes
+# are handled by bit surgery on the pattern instead.
+#
+# Why this gate had to exist BEFORE the fixes
+# ------------------------------------------
+# There is no PowerPC OS rig -- no guest boots on this path -- so the defects were found
+# by a cold-debugger spike and every one of them could only be believed once an
+# instrument measured it. The rows below were run against the COMMITTED build first and
+# their committed bytes recorded; the fix then had to flip exactly the DISC rows and
+# leave every PIN untouched. That baseline sweep is what makes "the fix worked" a
+# measurement rather than a claim, and it caught three of the author's own wrong
+# predictions before any code changed (frsp's RN overflow to Infinity is ISA-correct,
+# and the negative band row keeps its sign through the flush).
+#
+# Three row classes, and why PINs are not decoration
+# -------------------------------------------------
+#   PIN  -- correct today, must stay. Includes two POLICY pins: for finite values at
+#           and above ~2^129 the letter of Book I would splice-WRAP the exponent, and
+#           this fork deliberately keeps #287's +/-Inf instead (the letter turns a
+#           finite overflow into a NaN pattern: 1.5*2^128 -> 0x7FC00000). A policy pin
+#           failing means someone changed a known divergence without updating the
+#           record -- worth knowing either way.
+#   DISC -- discriminator: committed byte is the defect, want flips with the fix.
+#   DIV  -- known divergence left to a later round, pinned so it cannot drift.
+#   [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] The DISC classification
+#   includes 7 negative controls in CAUSE_ROWS that verify non-raising of exception flags (yielding identical values
+#   before and after #330), contrary to :32 defining DISC as values that flip with the fix.  (hbundle_regress27:F11:
+#   regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+#
+# #310's eighteen rows cover the eight float UPDATE forms, every one of which
+# stopped the emulator before this round -- neither the primary opcodes
+# 0x31/0x33/0x35/0x37 nor the indexed 567/631/695/759 were defined or decoded.
+# Each form gets BOTH halves of its contract: a value row and a base-register
+# row. A diff-review seat caught the first version giving five forms a base row
+# only, which would have passed an implementation with the wrong transfer size
+# that still advanced the base.
+#
+# The two non-update rows assert the mirror image, that the base is UNCHANGED --
+# and their displacement and index are NONZERO on purpose. With a zero offset
+# the effective address equals the base, so a wrongly-updating implementation
+# would write back exactly the value the row expects: the same seat found both
+# controls vacuous that way.
+#
+# The control row is load-bearing: `msr=0x2000` must take or every FP instruction
+# raises FPU-unavailable and the probe measures nothing. A dead probe SKIPs; it never
+# passes quietly. The mode rows additionally read FPSCR back, because a mode that
+# silently failed to take would turn every directed-mode row into a second copy of
+# the RN row.
+# [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Absence of PPC_CONV_RESULT=
+# invokes gate_skip, preserving earlier failures. With a result present, missing control or mode-readback tokens
+# fail; PPC_CONV_CONTROL=DEAD also fails. FPSCR writes are verified in four separate sessions, once per rounding
+# mode.  (hbundle_regress27:F12: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+#
+# Those rows set FPSCR by DEBUGGER WRITE rather than through the guest's own `mtfsf`,
+# which used to be necessary: #324 found that instruction building its write mask with
+# an eight-bit stride across four-bit fields, so half the FM bits wrote nothing and the
+# rest wrote the wrong fields. It is fixed and has six rows of its own now. The
+# debugger write stays because it keeps the mode rows independent of a second
+# instruction's correctness -- which is the property that let #324 be found at all.
+#
+# The `mtfsf` rows used to record a DIVERGENCE here: FM=0x80 selects field 0, whose bits
+# 1 and 2 are FEX and VX, and mtfsf copied them straight out of frB although Book I
+# lists it among the five instructions that "cannot alter FPSCR FEX / VX explicitly".
+# #327 closed that, and the row now expects hardware's 90000000 instead of the
+# emulator's old f0000000. THREE MORE ROWS MOVED WITH IT, because VX and FEX are
+# DERIVED and the recompute re-establishes them from whatever mtfsf did write: FM=0x40
+# gains VX from VXSNAN, FM=0x0f gains both from VXSOFT/VXSQRT/VXCVI plus VE, and
+# `mtfsf clears` keeps both because its preloaded causes and enables survive the
+# field-0 write. FM=0xff is unchanged only by coincidence -- with every cause and
+# enable set, derivation reproduces the copy -- and FM=0x01 selects a field with no
+# causes in it at all.
+#
+# All four bytes were PRE-REGISTERED from Book I before the code was written, which is
+# what makes this gate the fix's acceptance test rather than a transcript of it.
+# FM=0x40 stays the clean companion row for field PLACEMENT: it holds VXSNAN, which
+# the guest could not clear at all until #324 (its nibble landed above bit 31).
+#
+# #325's `fctiwz` rows carry a warning of their own. That row was pinned as a known
+# DIVERGENCE from #304 onward with its answer recorded as 00000000 -- and it was never
+# measuring the instruction it named: its word had frB = 0, so it converted f0 while
+# the probe seeded f1, and the zero came from an empty register. The `fctiwz 1.0
+# control` row exists because of it: a wrong register field yields zero for ANY
+# operand, so rows expecting 0x80000000 or 0 can be satisfied by accident and a row
+# expecting 1 cannot.
+set -u
+cd "$(dirname "$0")"
+. ./lib.sh
+
+gate_begin "gate 13: PowerPC FP conversion + FPSCR (#304/#305/#324-#330) + rlwimi/rldimi/rldicl + #571 DS-form + #579 llsc + #NNN ifetch"
+
+PMAX=${PMAX:-$ROOT/build/gxemul}
+LOG=$LOGDIR/gate_ppc.log
+
+need_exec "$PMAX"
+command -v python3 >/dev/null || gate_skip "python3 not available"
+
+# ---- ppcrlwimiwidth: X(rlwimi) at 32-bit width + the wrapping mask's high half --------
+# BEFORE the NetBSD prerequisite ON PURPOSE.  These rows are register-to-register on
+# `-E bareppc -M 64` and need no image; behind need_file a missing image would turn a
+# red detector into a silent SKIP.  Placed here, a red row is recorded first, and #371's
+# gate_skip then reports FAIL rather than absorbing it.  PARSE BEFORE SCORE: gates grep
+# the result line, never the exit status, and a missing or DUPLICATED protocol line is a
+# FAIL.  Both halves of the score are pinned to a literal so a shrunk table cannot pass.
+RLWLOG=$LOGDIR/ppc_rlwimi.log
+python3 ppc_rlwimi_probe.py "$PMAX" gate > "$RLWLOG" 2>&1 || true
+#  Each KEY must occur exactly once in ANY form, and that one line must be well formed --
+#  counting only well-formed lines let a malformed EXTRA `RESULT=' through (codex review).
+rlwres=$(grep -c '^PPC_RLWIMI_RESULT=' "$RLWLOG")
+rlwresok=$(grep -cE '^PPC_RLWIMI_RESULT=[0-9]+/[0-9]+$' "$RLWLOG")
+rlwctl=$(grep -c '^PPC_RLWIMI_CONTROL=' "$RLWLOG")
+rlwctlok=$(grep -cE '^PPC_RLWIMI_CONTROL=(OK|FAIL)$' "$RLWLOG")
+rlwdone=$(grep -c '^PPC_RLWIMI_PROBE_DONE' "$RLWLOG")
+if [ "$rlwres" = 1 ] && [ "$rlwresok" = 1 ] && [ "$rlwctl" = 1 ] && [ "$rlwctlok" = 1 ] &&
+   [ "$rlwdone" = 1 ] && grep -qx 'PPC_RLWIMI_PROBE_DONE' "$RLWLOG"; then
+    check "rlwimi protocol parsed" "yes" "yes"
+    grep -E " ok$| FAIL$" "$RLWLOG" | sed 's/^/       /'
+    rlw=$(grep '^PPC_RLWIMI_RESULT=' "$RLWLOG" | cut -d= -f2)
+    check "rlwimi controls prove the probe measures" \
+          "$(grep '^PPC_RLWIMI_CONTROL=' "$RLWLOG" | cut -d= -f2)" "OK"
+    check "rlwimi rows run"     "${rlw#*/}" 28
+    check "rlwimi rows correct" "${rlw%/*}" 28
+else
+    note "rlwimi: protocol lines missing or duplicated (result=$rlwres control=$rlwctl done=$rlwdone)"
+    tail -5 "$RLWLOG" | sed 's/^/       /'
+    check "rlwimi protocol parsed" "no" "yes"
+fi
+
+# ---- ppcrldimimask: X(rldimi) mask bounds + wrap (same shape, same reasons) ------------
+RLDLOG=$LOGDIR/ppc_rldimi.log
+python3 ppc_rldimi_probe.py "$PMAX" gate > "$RLDLOG" 2>&1 || true
+#  Each KEY must occur exactly once in ANY form, and that one line must be well formed --
+#  counting only well-formed lines let a malformed EXTRA `RESULT=' through (codex review).
+rldres=$(grep -c '^PPC_RLDIMI_RESULT=' "$RLDLOG")
+rldresok=$(grep -cE '^PPC_RLDIMI_RESULT=[0-9]+/[0-9]+$' "$RLDLOG")
+rldctl=$(grep -c '^PPC_RLDIMI_CONTROL=' "$RLDLOG")
+rldctlok=$(grep -cE '^PPC_RLDIMI_CONTROL=(OK|FAIL)$' "$RLDLOG")
+rlddone=$(grep -c '^PPC_RLDIMI_PROBE_DONE' "$RLDLOG")
+if [ "$rldres" = 1 ] && [ "$rldresok" = 1 ] && [ "$rldctl" = 1 ] && [ "$rldctlok" = 1 ] &&
+   [ "$rlddone" = 1 ] && grep -qx 'PPC_RLDIMI_PROBE_DONE' "$RLDLOG"; then
+    check "rldimi protocol parsed" "yes" "yes"
+    grep -E " ok$| FAIL$" "$RLDLOG" | sed 's/^/       /'
+    rld=$(grep '^PPC_RLDIMI_RESULT=' "$RLDLOG" | cut -d= -f2)
+    check "rldimi controls prove the probe measures" \
+          "$(grep '^PPC_RLDIMI_CONTROL=' "$RLDLOG" | cut -d= -f2)" "OK"
+    check "rldimi rows run"     "${rld#*/}" 29
+    check "rldimi rows correct" "${rld%/*}" 29
+else
+    note "rldimi: protocol lines missing or duplicated (result=$rldres control=$rldctl done=$rlddone)"
+    tail -5 "$RLDLOG" | sed 's/^/       /'
+    check "rldimi protocol parsed" "no" "yes"
+fi
+
+# ---- ppcrldiclzero (#522) + #565: X(rldicl) wrote ZERO on every execution -- its 24-row detector --------
+# Shipped EXEMPT with e777ff06 (2026-09-10) and re-dated three times by owner ruling (2026-09-18 with
+# ten others, eec0f4a3; 2026-09-24 with nine others; 04f3e7c0 on 2026-10-09) because no block here
+# scored it; #565 discharges that exemption.  BEFORE the NetBSD prerequisite for the reason the rlwimi block gives: `-E bareppc -M 64`
+# needs no image, so a red row is recorded first.  A stalled guest cannot hang the gate: the probe's
+# own subprocess backstops (90 s; 60 s for the bogus-machine and 32-bit sessions) turn it into
+# failing rows.  The probe prints no RESULT/CONTROL protocol, so it is scored as gate_arm.sh scores
+# mk48's: its completion sentinel, then EVERY row by name, then the run/green/red counts and its own
+# SCORE line, each pinned to a literal so a shrunk or renamed table cannot pass -- 30 checks when
+# green.  Names sit in a %-18s column and none is longer than 15, so `^name  ' cannot match a
+# neighbour (the padded-column trap).  The rows-run line is in the form check_score_claims.py pins.
+# CONTRACT: the block TRANSMITS the probe's verdicts and re-derives none -- each row's ok/FAIL and its
+# SCORE come from one comparison in the probe's row(), so an edit there (Grok 4.7's `ok = True', GPT-6
+# Astra's `>=', #565 pass 2) lets a mutant through, as it would through any block that scores only a
+# probe's ok/FAIL tokens (some gate_arm.sh blocks also pin a got= value; this one, like mk48's, does not).
+# The exit status is ignored on purpose: this probe exits 0 with failed rows (probeexitzero).
+# Floor (c), measured (regress/artifacts/ppcrldiclzero/gatewire_20261018/nullmedium/): an IDENTITY
+# BODY for X(rldicl) -- decode and retire, write nothing -- reds 11 of the 30 (identity/), and
+# /bin/true 22 of the 30.  An absent binary reds the sentinel check in this block's scoring text, but
+# in gate 13 need_exec turns it into a SKIP before any check.
+RLCLOG=$LOGDIR/ppc_rldicl.log
+python3 -u ppc_rldicl_probe.py "$PMAX" gate > "$RLCLOG" 2>&1 || true
+if [ "$(grep -cx 'PPC_RLDICL_PROBE_DONE' "$RLCLOG")" != 1 ]; then
+    note "ppc_rldicl: completion sentinel missing or duplicated; last lines follow"
+    tail -5 "$RLCLOG" | sed 's/^/       /'
+    check "ppc_rldicl probe completed" "no" "yes"
+else
+    check "ppc_rldicl probe completed" "yes" "yes"
+    for v in "session" "live" "seed holds" "src intact" "disasm xcheck" "zx32 rldicl" "zx32 rldicr" "rot8 rldicl" "rot8 rldicr" "naive fix wrong" "neg apparatus" "bits32 live" "bits32 rld bad" "vacuous cell" "vac neighbour" "census run" "census wrong" "census zero" "disasm total" "cand session" "cr parsed" "sh63 rldicl" "sh32 rldicl" "rc cr0"; do
+        check "ppc_rldicl row: $v" "$(count "$RLCLOG" "^$v  .*ok$")" "1"
+    done
+    rlcok=$(count "$RLCLOG" " ok$"); rlcbad=$(count "$RLCLOG" " FAIL$"); rlcrun=$((rlcok + rlcbad))
+    check "ppc_rldicl rows run"   "$rlcrun" 24
+    check "ppc_rldicl rows green" "$rlcok" 24
+    check "ppc_rldicl rows red"   "$rlcbad" 0
+    #  EVERY SCORE line is counted, then the one is read: counting only `SCORE 24/24' lines let an
+    #  appended contradictory `SCORE 0/24' pass (GPT-6 Astra, pass 1).
+    check "ppc_rldicl score lines"  "$(grep -c '^SCORE ' "$RLCLOG")" "1"
+    check "ppc_rldicl score 24/24"  "$(grep -c '^SCORE 24/24 ' "$RLCLOG")" "1"
+fi
+
+# ---- ppcdsformxo (#571): the 64-bit DS-form loads and stores, opcodes 58 and 62 -- its 39-row detector ------
+# The decoder took the whole low halfword of an opcode-58 or opcode-62 word as the displacement and never read
+# the two-bit XO field: ldu, lwa and stdu executed as an 8-byte ld or std at EA + XO with no update, and the
+# reserved encodings (58 with XO 3, 62 with XO 2 or 3) executed as well.  BEFORE the NetBSD prerequisite for
+# the reason the rlwimi block gives: `-E bareppc -M 64' needs no image, so a red row is recorded first.  Seven
+# debugger-stepped guest sessions (loads, stores and five stop sessions, each stop word last) plus one
+# bogus-machine session that exits before any step -- eight in all; the rung-3 witness of the loads
+# (regress/artifacts/ppcdsformxo/witness_20261024/) is NOT run here.
+# Scored in the #565 shape: the completion sentinel exactly once and as the last line; each protocol key
+# exactly once in ANY form, then exactly once in its accepted form (the rldimi block's idiom); every row by
+# name; the census row at its frozen count of placed words; the emitted, green and red row counts -- each
+# pinned to a literal.  Names are at most 14 characters in a %-16s column, so `^name  ' cannot match a
+# neighbour (the padded-column trap).  Session transcripts go to $LOGDIR/ppc_dsform/.  Kill table:
+# regress/artifacts/ppcdsformxo/table1_20261024/.
+DSFLOG=$LOGDIR/ppc_dsform.log
+python3 -u ppc_dsform_probe.py "$PMAX" gate "$LOGDIR/ppc_dsform" > "$DSFLOG" 2>&1 || true
+if [ "$(grep -cx 'PPC_DSFORM_PROBE_DONE' "$DSFLOG")" != 1 ]; then
+    note "ppc_dsform: completion sentinel missing or duplicated; last lines follow"
+    tail -5 "$DSFLOG" | sed 's/^/       /'
+    check "ppc_dsform probe completed" "no" "yes"
+else
+    check "ppc_dsform probe completed" "yes" "yes"
+    check "ppc_dsform sentinel is the last line" "$(tail -n 1 "$DSFLOG")" "PPC_DSFORM_PROBE_DONE"
+    for k in RESULT CONTROL SYMPTOM RED; do
+        check "ppc_dsform $k= lines" "$(grep -c "^PPC_DSFORM_$k=" "$DSFLOG")" "1"
+    done
+    check "ppc_dsform RESULT=39/39"   "$(grep -cx 'PPC_DSFORM_RESULT=39/39' "$DSFLOG")" "1"
+    check "ppc_dsform CONTROL=OK"     "$(grep -cx 'PPC_DSFORM_CONTROL=OK' "$DSFLOG")" "1"
+    check "ppc_dsform SYMPTOM=ABSENT" "$(grep -cx 'PPC_DSFORM_SYMPTOM=ABSENT' "$DSFLOG")" "1"
+    check "ppc_dsform RED=none"       "$(grep -cx 'PPC_DSFORM_RED=none' "$DSFLOG")" "1"
+    for v in "ld value" "ld RA after" "ld ds0 value" "ld ra0 value" "ldu value" "ldu RA after" "ldu ds0 value" "lwa value" "lwa RA after" "lwa ds0 value" "lwa ra0 value" "lwz value" "lwz odd" "live" "std value" "std RA after" "std ds0 value" "std ra0 value" "stdu value" "stdu neigh" "stdu RA after" "stdu ds0 value" "stdu alias val" "stdu alias RA" "stw odd" "st live" "xo58_3 live" "xo58_3 bad" "xo62_2 live" "xo62_2 bad" "xo62_3 live" "xo62_3 bad" "ldu ra0 live" "ldu ra0 bad" "stdu ra0 live" "stdu ra0 bad" "unasm census" "word pins" "neg apparatus"; do
+        check "ppc_dsform row: $v" "$(count "$DSFLOG" "^$v  .*ok$")" "1"
+    done
+    check "ppc_dsform census, 108 placed words" "$(count "$DSFLOG" "^unasm census  *108/108  *108/108  .*ok$")" "1"
+    dsfok=$(count "$DSFLOG" " ok$"); dsfbad=$(count "$DSFLOG" " FAIL$"); dsfrun=$((dsfok + dsfbad))
+    check "ppc_dsform rows run"   "$dsfrun" 39
+    check "ppc_dsform rows green" "$dsfok" 39
+    check "ppc_dsform rows red"   "$dsfbad" 0
+fi
+
+# ---- ppcllscrcexit (#579): X(llsc)'s bit-31 forms no longer end the emulator process -- its 83-row witness/detector ---------------
+# The opcode-31 decoder keys on the extended opcode alone, so lwarx/ldarx with bit 31 set and stwcx./stdcx. with it clear reached
+# X(llsc), whose two guards ended the process on them.  The guards are gone: the load pair's bit is a reserved field the processor
+# ignores (Book I 1.5.2), the store pair's bit-clear word is an invalid form whose permitted outcomes include boundedly undefined
+# results (Book I 1.9.2), and the handler performs the defined operation.  `-E bareppc -M 64' needs no image (PPC970; a -C PPC603 leg
+# runs the word forms), so this block runs BEFORE the NetBSD prerequisite, like the #571 block above.  Twenty-three cold
+# debugger sessions: a control and a bogus-machine negative control; the four valid forms; six reservation and XER[SO] controls
+# (no reservation, a mismatched address, a chained failure, SO on a success, SO on a failure, a second store-conditional after a
+# success) and a field-decode control (a base register); the four bit-31 forms and two reservation sessions on them (a
+# bit-31-set lwarx whose reservation a stwcx. consumes; a bit-clear stwcx. with no reservation); and on the 32-bit CPU the
+# two valid and the two bit-31 word forms.
+# The rung-3 witness is the same probe on the committed build
+# (regress/artifacts/ppcllscrcexit/witness_20261103/prefix_final2.out: 50/83, SYMPTOM=PRESENT) and on the fix (postfix_final2.out: 83/83).
+# Scored in the #565/#571 shape: the completion sentinel exactly once and as the last line; each protocol key exactly once in ANY
+# form, then exactly once in its accepted form; every row by name; the census row at its frozen count of placed words; the emitted,
+# green and red row counts -- each pinned to a literal.  Names are at most 16 characters in an 18-wide column, so `^name  ' cannot
+# match a neighbour (the padded-column trap).  Session transcripts go to $LOGDIR/ppc_llsc/.  Kill table:
+# regress/artifacts/ppcllscrcexit/killtable_20261103/.
+LLSCLOG=$LOGDIR/ppc_llsc.log
+python3 -u ppc_llsc_probe.py "$PMAX" gate "$LOGDIR/ppc_llsc" > "$LLSCLOG" 2>&1 || true
+if [ "$(grep -cx 'PPC_LLSC_PROBE_DONE' "$LLSCLOG")" != 1 ]; then
+    note "ppc_llsc: completion sentinel missing or duplicated; last lines follow"
+    tail -5 "$LLSCLOG" | sed 's/^/       /'
+    check "ppc_llsc probe completed" "no" "yes"
+else
+    check "ppc_llsc probe completed" "yes" "yes"
+    check "ppc_llsc sentinel is the last line" "$(tail -n 1 "$LLSCLOG")" "PPC_LLSC_PROBE_DONE"
+    for k in RESULT CONTROL SYMPTOM RED; do
+        check "ppc_llsc $k= lines" "$(grep -c "^PPC_LLSC_$k=" "$LLSCLOG")" "1"
+    done
+    check "ppc_llsc RESULT=83/83"    "$(grep -cx 'PPC_LLSC_RESULT=83/83' "$LLSCLOG")" "1"
+    check "ppc_llsc CONTROL=OK"      "$(grep -cx 'PPC_LLSC_CONTROL=OK' "$LLSCLOG")" "1"
+    check "ppc_llsc SYMPTOM=ABSENT"  "$(grep -cx 'PPC_LLSC_SYMPTOM=ABSENT' "$LLSCLOG")" "1"
+    check "ppc_llsc RED=none"        "$(grep -cx 'PPC_LLSC_RED=none' "$LLSCLOG")" "1"
+    for v in "ctl session" "ctl live" "ctl seed holds" "ctl data" "neg apparatus" "lw ok session" "lw ok value" "lw ok cr" "lw ok pc" "lw ok seed" "ld ok session" "ld ok value" "ld ok cr" "ld ok pc" "ld ok seed" "stw ok session" "stw ok bytes" "stw ok tail" "stw ok cr" "stw ok pc" "std ok session" "std ok bytes" "std ok cr" "std ok pc" "noresv session" "noresv bytes" "noresv cr" "mismatch bytes" "mismatch cr" "chain bytes" "chain cr" "so bytes" "so cr" "twice bytes" "twice cr" "ra value" "ra r3 kept" "nso bytes" "nso cr" "lw rc1 session" "lw rc1 value" "lw rc1 cr" "lw rc1 pc" "lw rc1 seed" "ld rc1 session" "ld rc1 value" "ld rc1 cr" "ld rc1 pc" "ld rc1 seed" "stw rc0 session" "stw rc0 bytes" "stw rc0 tail" "stw rc0 cr" "stw rc0 pc" "std rc0 session" "std rc0 bytes" "std rc0 cr" "std rc0 pc" "rc1 resv bytes" "rc1 resv cr" "rc0 nr bytes" "rc0 nr cr" "lw32 ok session" "lw32 ok value" "lw32 ok cr" "lw32 ok pc" "lw32 ok seed" "sw32 ok session" "sw32 ok bytes" "sw32 ok tail" "sw32 ok cr" "sw32 ok pc" "lw32 rc1 session" "lw32 rc1 value" "lw32 rc1 cr" "lw32 rc1 pc" "lw32 rc1 seed" "sw32 rc0 session" "sw32 rc0 bytes" "sw32 rc0 tail" "sw32 rc0 cr" "sw32 rc0 pc" "unasm census"; do
+        check "ppc_llsc row: $v" "$(count "$LLSCLOG" "^$v  .*ok$")" "1"
+    done
+    check "ppc_llsc census, 35 placed words" "$(count "$LLSCLOG" "^unasm census  *35/35  *35/35  .*ok$")" "1"
+    llscok=$(count "$LLSCLOG" " ok$"); llscbad=$(count "$LLSCLOG" " FAIL$"); llscrun=$((llscok + llscbad))
+    check "ppc_llsc rows run"   "$llscrun" 83
+    check "ppc_llsc rows green" "$llscok" 83
+    check "ppc_llsc rows red"   "$llscbad" 0
+fi
+
+# ---- qhslowifetch (#NNN): a failed slow-path instruction fetch no longer ends the emulator process -- its 249-row detector ------
+# X(to_be_translated) read the word with memory_rw and, on failure, printed `read failed: TODO' and called exit(1).  The arm now
+# returns on read-ahead, refreshes next_ic when the translation already delivered an exception, PARKS the CPU on a -T halt, and
+# delivers a machine check (MSR[ME] set) or a checkstop (clear) when a device declines the fetch while running.  `-E pmppc' with a
+# raw four-byte word needs no image, so this block runs BEFORE the NetBSD prerequisite, like the #579 block above.  Thirty-one cold
+# sessions: controls (a live word, a bogus machine, the ISI route by continue and by step, the no -T route), four -T sessions at
+# 0x02040000 -- step, continue, step-step-continue-continue, and a step with MSR[ME] set -- each pinning the park (pc, SRR0), the
+# exact halt-report count, the final MSR and the absence of the fatal, UNIMPLEMENTED, exception and checkstop text (the ME-set
+# step pins the same), eight -T continues from cpc700_pci's last word whose read-ahead reaches arm (a) -- pc's low two bits {00,
+# 01, 10, 11} x MSR[ME] {clear, set}, entered at 0xfec00004 | low bits, each pinning the same nine channels: survival, the park pc,
+# the two halt reports, the halted address, the stop, the final MSR, no checkstop line, SRR0 untouched and no UNIMPLEMENTED text
+# (repair 7 completed the grid, repairs 7b and 8 the channels; repair 6 added the first unaligned cell), eight one-entry PARTNERS
+# at the same full pc and MSR as those eight (pc set to 0xfec00008 | low bits directly, so the first fetch fails once; repair 11):
+# each pair presents the failure block with the same pc, addr, MSR, running and slot and differs only in translation_readahead, so a
+# toggle that cancels over the two-entry session's two visits, under a condition on state the block reads that the toggle itself
+# leaves unchanged, shows once on its partner (scope: the probe's docstring; codex pass 11, R1) -- and six -T continues
+# into a guest-made unaligned pc (mtlr; blr), low bits 11, 01 and 10 with MSR[ME] clear and set, that arm (c) must park: one-entry
+# failures, which see a change the block makes under pc's low bits and ME that the two-entry read-ahead sessions undo (repairs 5,
+# 6, 9 and 10; with `T cont`, `T step`, `again` and `T me` they give every (low bits, ME) cell a one-entry session).
+# The rung-3 witness is the 17-row probe frozen at regress/artifacts/qhslowifetch/witness_20261104/; the detector scores 108/249 (141
+# rows red) on the pre-fix build and 249/249 on the fix (regress/artifacts/qhslowifetch/r7_20261105/table12/SCORES.txt).  Scored in the
+# #579 shape: the completion sentinel once and last; each protocol key once in any form and once accepted; every row by name; the
+# emitted, green and red row counts pinned to literals.  Names are at most 16 characters in an 18-wide column.  Test-variant tables:
+# regress/artifacts/qhslowifetch/det_20261104/table1/ (the 50-row probe), table2/ (the 56-row probe), r3_20261105/table3/
+# (the 62-row probe), r4_20261105/table4/ (the 69-row probe), r5_20261105/table5/ (the 79-row probe), r6_20261105/table6/ (the
+# 82-row probe), r7_20261105/table7/ (the 103-row probe), r7_20261105/table8/ (the 129-row probe), r7_20261105/table9/ (the 137-row
+# probe), r7_20261105/table10/ (the 153-row probe), r7_20261105/table11/ (the 177-row probe) and r7_20261105/table12/ (this probe,
+# the record; its pairing check, table12/PAIRS_base.out).
+IFLOG=$LOGDIR/ppc_ifetch.log
+python3 -u ppc_ifetch_probe.py "$PMAX" gate "$LOGDIR/ppc_ifetch" > "$IFLOG" 2>&1 || true
+if [ "$(grep -cx 'PPC_IFETCH_PROBE_DONE' "$IFLOG")" != 1 ]; then
+    note "ppc_ifetch: completion sentinel missing or duplicated; last lines follow"
+    tail -5 "$IFLOG" | sed 's/^/       /'
+    check "ppc_ifetch probe completed" "no" "yes"
+else
+    check "ppc_ifetch probe completed" "yes" "yes"
+    check "ppc_ifetch sentinel is the last line" "$(tail -n 1 "$IFLOG")" "PPC_IFETCH_PROBE_DONE"
+    for k in RESULT CONTROL SYMPTOM RED; do
+        check "ppc_ifetch $k= lines" "$(grep -c "^PPC_IFETCH_$k=" "$IFLOG")" "1"
+    done
+    check "ppc_ifetch RESULT=249/249"  "$(grep -cx 'PPC_IFETCH_RESULT=249/249' "$IFLOG")" "1"
+    check "ppc_ifetch CONTROL=OK"      "$(grep -cx 'PPC_IFETCH_CONTROL=OK' "$IFLOG")" "1"
+    check "ppc_ifetch SYMPTOM=ABSENT"  "$(grep -cx 'PPC_IFETCH_SYMPTOM=ABSENT' "$IFLOG")" "1"
+    check "ppc_ifetch RED=none"        "$(grep -cx 'PPC_IFETCH_RED=none' "$IFLOG")" "1"
+    for v in "ctl session" "ctl live" "ctl srr0 kept" "neg apparatus" "isi session" "isi srr0" "isi pc" "isi text" "isi nonex" "isi1 session" "isi1 srr0" "isi1 pc" "isi1 nonex" "noT session" "noT pc" "noT srr0 kept" "noT unimpl" "noT chkstop" "T cont session" "T cont text" "T cont prompt" "T cont pc" "T cont srr0" "T cont nonex" "T cont unimpl" "T cont exc" "T cont chkstop" "T cont msr" "T step session" "T step text" "T step prompt" "T step pc" "T step srr0" "T step nonex" "T step unimpl" "T step exc" "T step chkstop" "T step msr" "T me session" "T me pc" "T me srr0" "T me nonex" "T me text" "T me exc" "T me unimpl" "T me chkstop" "T me msr" "again session" "again pc" "again srr0" "again nonex" "again text" "again unimpl" "again exc" "again chkstop" "again prompt" "again msr" "T ra session" "T ra pc" "T ra nonex" "T ra addr" "T ra stopped" "T ra msr" "T ra chkstop" "T ra srr0" "T ra unimpl" "T ra me session" "T ra me pc" "T ra me nonex" "T ra me addr" "T ra me stopped" "T ra me chkstop" "T ra me msr" "T ra me srr0" "T ra me unimpl" "T ra odd session" "T ra odd pc" "T ra odd nonex" "T ra odd addr" "T ra odd stopped" "T ra odd msr" "T ra odd chkstop" "T ra odd srr0" "T ra odd unimpl" "T ra o1m session" "T ra o1m pc" "T ra o1m nonex" "T ra o1m addr" "T ra o1m stopped" "T ra o1m msr" "T ra o1m chkstop" "T ra o1m srr0" "T ra o1m unimpl" "T ra o2 session" "T ra o2 pc" "T ra o2 nonex" "T ra o2 addr" "T ra o2 stopped" "T ra o2 msr" "T ra o2 chkstop" "T ra o2 srr0" "T ra o2 unimpl" "T ra o2m session" "T ra o2m pc" "T ra o2m nonex" "T ra o2m addr" "T ra o2m stopped" "T ra o2m msr" "T ra o2m chkstop" "T ra o2m srr0" "T ra o2m unimpl" "T ra o3 session" "T ra o3 pc" "T ra o3 nonex" "T ra o3 addr" "T ra o3 stopped" "T ra o3 msr" "T ra o3 chkstop" "T ra o3 srr0" "T ra o3 unimpl" "T ra o3m session" "T ra o3m pc" "T ra o3m nonex" "T ra o3m addr" "T ra o3m stopped" "T ra o3m msr" "T ra o3m chkstop" "T ra o3m srr0" "T ra o3m unimpl" "T rp session" "T rp pc" "T rp nonex" "T rp addr" "T rp stopped" "T rp msr" "T rp chkstop" "T rp srr0" "T rp unimpl" "T rp me session" "T rp me pc" "T rp me nonex" "T rp me addr" "T rp me stopped" "T rp me msr" "T rp me chkstop" "T rp me srr0" "T rp me unimpl" "T rp odd session" "T rp odd pc" "T rp odd nonex" "T rp odd addr" "T rp odd stopped" "T rp odd msr" "T rp odd chkstop" "T rp odd srr0" "T rp odd unimpl" "T rp o1m session" "T rp o1m pc" "T rp o1m nonex" "T rp o1m addr" "T rp o1m stopped" "T rp o1m msr" "T rp o1m chkstop" "T rp o1m srr0" "T rp o1m unimpl" "T rp o2 session" "T rp o2 pc" "T rp o2 nonex" "T rp o2 addr" "T rp o2 stopped" "T rp o2 msr" "T rp o2 chkstop" "T rp o2 srr0" "T rp o2 unimpl" "T rp o2m session" "T rp o2m pc" "T rp o2m nonex" "T rp o2m addr" "T rp o2m stopped" "T rp o2m msr" "T rp o2m chkstop" "T rp o2m srr0" "T rp o2m unimpl" "T rp o3 session" "T rp o3 pc" "T rp o3 nonex" "T rp o3 addr" "T rp o3 stopped" "T rp o3 msr" "T rp o3 chkstop" "T rp o3 srr0" "T rp o3 unimpl" "T rp o3m session" "T rp o3m pc" "T rp o3m nonex" "T rp o3m addr" "T rp o3m stopped" "T rp o3m msr" "T rp o3m chkstop" "T rp o3m srr0" "T rp o3m unimpl" "T blr session" "T blr pc" "T blr nonex" "T blr srr0" "T blr msr" "T blr chkstop" "T blr unimpl" "T blr lr" "T blr o1 session" "T blr o1 pc" "T blr o1 nonex" "T blr o1 srr0" "T blr o1 msr" "T blr o1 chkstop" "T blr o1 unimpl" "T blr o1 lr" "T blr o2 session" "T blr o2 pc" "T blr o2 nonex" "T blr o2 srr0" "T blr o2 msr" "T blr o2 chkstop" "T blr o2 unimpl" "T blr o2 lr" "T blr m1 session" "T blr m1 pc" "T blr m1 nonex" "T blr m1 srr0" "T blr m1 msr" "T blr m1 chkstop" "T blr m1 unimpl" "T blr m1 lr" "T blr m2 session" "T blr m2 pc" "T blr m2 nonex" "T blr m2 srr0" "T blr m2 msr" "T blr m2 chkstop" "T blr m2 unimpl" "T blr m2 lr" "T blr m3 session" "T blr m3 pc" "T blr m3 nonex" "T blr m3 srr0" "T blr m3 msr" "T blr m3 chkstop" "T blr m3 unimpl" "T blr m3 lr"; do
+        check "ppc_ifetch row: $v" "$(count "$IFLOG" "^$v  .*ok$")" "1"
+    done
+    ifok=$(count "$IFLOG" " ok$"); ifbad=$(count "$IFLOG" " FAIL$"); ifrun=$((ifok + ifbad))
+    check "ppc_ifetch rows run"   "$ifrun" 249
+    check "ppc_ifetch rows green" "$ifok" 249
+    check "ppc_ifetch rows red"   "$ifbad" 0
+fi
+
+# ---- ppccrandcorc (#575): crandc and crorc computed NAND and NOR -- its 70-row rung-3 detector ---------------------------------------
+# X(crandc) and X(crorc) set CR[BT] on !(CR[BA] & CR[BB]) and !(CR[BA] | CR[BB]); PowerPC Book I v2.01 defines CR[BA] & ~CR[BB] and
+# CR[BA] | ~CR[BB].  `-E bareppc -M 64` (PPC970) and `-C PPC603` run each CR logical instruction on a real guest through the real
+# decoder, CR seeded from the debugger; the truth-table, edge and `hi' rows pre-set the destination to the INVERSE of the
+# architectural result, two round-2 rows pre-set it EQUAL (the only way a BB read of CR[BT] shows), and the four round-3 rows
+# compare the whole CR (round 3 corrected "every destination pre-set to the INVERSE": pass 3, R7); the five correct siblings run
+# the same table as controls; edge rows pin BT 0 and 31; two rows pin the BA/BB field masks with every submask alias seeded
+# opposite; four round-2 rows close every field mask 0..30, the BB read of CR[BT] and the read-before-clear order (the closure by
+# simulation: regress/artifacts/ppccrandcorc/r2_20261105/CLOSURE.md, 239 cells); four round-3 whole-CR rows close the read-mask
+# constants and the set literals (r3_20261105/CLOSURE3.md, 453 cells: 56 escaped the 66 rows, 0 escape the 70).  BEFORE the NetBSD
+# prerequisite, like the blocks above.  Test-variant tables: regress/artifacts/ppccrandcorc/table1_20261105/, r2_20261105/ and
+# r3_20261105/ (the pass-1 ruling: regress/artifacts/ppccrandcorc/adj_p1_20261105/).
+CLLOG=$LOGDIR/ppc_crlogic.log
+python3 -u ppc_crlogic_probe.py "$PMAX" gate > "$CLLOG" 2>&1 || true
+if [ "$(grep -cx 'PPC_CRLOGIC_PROBE_DONE' "$CLLOG")" != 1 ]; then
+    note "ppc_crlogic: completion sentinel missing or duplicated; last lines follow"
+    tail -5 "$CLLOG" | sed 's/^/       /'
+    check "ppc_crlogic probe completed" "no" "yes"
+else
+    check "ppc_crlogic probe completed" "yes" "yes"
+    check "ppc_crlogic sentinel is the last line" "$(tail -n 1 "$CLLOG")" "PPC_CRLOGIC_PROBE_DONE"
+    for k in RESULT CONTROL; do
+        check "ppc_crlogic $k= lines" "$(grep -c "^PPC_CRLOGIC_$k=" "$CLLOG")" "1"
+    done
+    check "ppc_crlogic RESULT=70/70" "$(grep -cx 'PPC_CRLOGIC_RESULT=70/70' "$CLLOG")" "1"
+    check "ppc_crlogic CONTROL=OK"   "$(grep -cx 'PPC_CRLOGIC_CONTROL=OK' "$CLLOG")" "1"
+    for v in "ctl session" "ctl live" "ctl seed holds" "ctl cr seed" "ctl mfcr" "neg apparatus" "64 session" "64 crandc 00" "64 crandc 01" "64 crandc 10" "64 crandc 11" "64 crorc 00" "64 crorc 01" "64 crorc 10" "64 crorc 11" "64 others" "64 mfcr" "64 disasm" "s64 session" "s64 crand 00" "s64 crand 01" "s64 crand 10" "s64 crand 11" "s64 cror 00" "s64 cror 01" "s64 cror 10" "s64 cror 11" "s64 crnor 00" "s64 crnor 01" "s64 crnor 10" "s64 crnor 11" "s64 creqv 00" "s64 creqv 01" "s64 creqv 10" "s64 creqv 11" "s64 crxor 00" "s64 crxor 01" "s64 crxor 10" "s64 crxor 11" "s64 others" "s64 mfcr" "s64 disasm" "edge session" "edge crandc bt0" "edge crorc bt31" "edge others" "edge mfcr" "edge disasm" "64 crandc hi" "64 crorc hi" "64 crandc bbmask" "64 crandc order" "64 crorc bamask" "64 crorc bbmask" "64 crorc baread" "64 crorc bbread" "64 crandc setbits" "64 crorc setbits" "32 session" "32 crandc 00" "32 crandc 01" "32 crandc 10" "32 crandc 11" "32 crorc 00" "32 crorc 01" "32 crorc 10" "32 crorc 11" "32 others" "32 mfcr" "32 disasm"; do
+        check "ppc_crlogic row: $v" "$(count "$CLLOG" "^$v  .*ok$")" "1"
+    done
+    clok=$(count "$CLLOG" " ok$"); clbad=$(count "$CLLOG" " FAIL$"); clrun=$((clok + clbad))
+    check "ppc_crlogic rows run"   "$clrun" 70
+    check "ppc_crlogic rows green" "$clok" 70
+    check "ppc_crlogic rows red"   "$clbad" 0
+fi
+
+need_file "$IMAGES/netbsd401-macppc-GENERIC"
+
+note "binary : $PMAX"
+note "machine: macppc/G4, NetBSD kernel loaded so the machine constructs; never executed"
+note "cold debugger; big-endian (dump renders value order); msr=0x2000 required for FP"
+
+python3 ppc_rounding_probe.py "$PMAX" "$IMAGES" > "$LOG" 2>&1 || true
+
+if ! grep -q "PPC_CONV_RESULT=" "$LOG"; then
+    note "probe produced no result line; last lines follow"
+    tail -5 "$LOG" | sed 's/^/       /'
+    gate_skip "probe did not complete"
+fi
+
+grep -E " ok$| FAIL$" "$LOG" | sed 's/^/       /'
+
+# A probe whose control row failed has measured NOTHING, and no other row may be
+# believed -- this harness has been bitten by a probe that reported a defect off
+# sentinel reads while its guest code had never run.
+ctrl=$(grep -o "PPC_CONV_CONTROL=[A-Z]*" "$LOG" | tail -1 | cut -d= -f2)
+check "control rows prove the probe measures" "${ctrl:-missing}" "OK"
+
+# The rounding-mode WRITE channel is proven once per mode, in its own sessions, by
+# reading FPSCR back through the guest's own mffs. Both numbers are asserted, because
+# "0 bad" is also what a probe reports when it never read FPSCR at all: the first
+# version parsed the debugger's plain `reg`, which does not print FPSCR on this CPU,
+# so the check passed vacuously on every run until a diff-review seat predicted the
+# hole and the rewrite measured it (43 rows of "unparsed").
+modebad=$(grep -o "PPC_CONV_MODEWRITES_BAD=[0-9]*" "$LOG" | tail -1 | cut -d= -f2)
+modereads=$(grep -o "PPC_CONV_MODEREADS=[0-9]*" "$LOG" | tail -1 | cut -d= -f2)
+check "every rounding-mode write took"    "${modebad:-missing}"   "0"
+check "all four modes read back by guest" "${modereads:-0}"       "4"
+
+res=$(grep -o "PPC_CONV_RESULT=[0-9]*/[0-9]*" "$LOG" | tail -1 | cut -d= -f2)
+got=${res%/*}; want=${res#*/}
+check "rows run"     "$want" 138
+check "rows correct" "$got"  "$want"
+
+# The table must keep enough of each class to be worth running: a gate whose rows are
+# all pins cannot detect a reverted fix, and one with no pins cannot detect collateral
+# damage. Both counts are asserted rather than trusted.
+disc=$(grep -c " DISC " "$LOG")
+pins=$(grep -c " PIN " "$LOG")
+# Both floors are set to the ACTUAL counts, not below them. They had drifted to 47/26
+# against real counts of 50/36, which means a whole class could have lost rows without
+# the floor noticing -- the same "a check that cannot fail" species this gate's header
+# warns about twice. The two numbers must also sum to the asserted `rows run` above
+# (94 + 44 = 138); if they stop summing, a row lost its class rather than the table
+# losing a row.
+# #335 added two DISC (fmadd/fmsub fusion) and one PIN (the 2by3+1 control that
+# proves the hand-assembled A-form register fields land where intended).
+check_min "discriminating rows present" "$disc" 94
+check_min "pinned rows present"         "$pins" 44
+
+# The one row that records a divergence this round deliberately does NOT fix.
+div=$(grep -c " DIV " "$LOG")
+# #325 retired the one DIV row this gate carried: fctiwz of a NaN answered zero,
+# and now answers the most negative value the ISA owes. The count is asserted at
+# zero rather than the check being deleted -- a gate that stops counting a class
+# stops noticing when a member of it reappears.
+check "divergence rows recorded" "$div" 0
+
+# Named rows, one per contract, so a single site reverting cannot hide behind a total.
+#
+# The pattern demands TWO spaces after the name, not one: the probe pads names to a
+# fixed column, so a name that is a PREFIX of another ("frsp qNaN" of "frsp qNaN
+# payload") matched both rows and the check counted 2 where it wanted 1. A check that
+# counts the wrong rows is the same species as a check that cannot fail -- it was
+# passing for the wrong reason the moment the table grew a longer name.
+for v in "frsp qNaN" "frsp sNaN" "frsp 1+3ulp/2 RZ" "frsp band RP" "frsp band- RM" \
+         "frsp tiny RP" "frsp 2^128 RZ" "frsp carry-up RZ" \
+         "stfs 2^-127" "stfs band tail" "stfs band-" "stfsx 2^-127" \
+         "stfs qNaN payload" "stfs sNaN passthrough" "stfsx qNaN payload" \
+         "lfs qNaN-" "composed frsp->stfs NaN" "lfsx qNaN-" "VXSNAN sticky" \
+         "fctiwz qNaN" "fctiwz -qNaN" "fctiwz 1.0 control" \
+         "fctiwz +Inf" "fctiwz -Inf" "fctiwz 2^31" "fctiwz -(2^31+1)" \
+         "fctiwz 1.9 RTZ" "fctiwz -1.9 RTZ" \
+         "VXISI fadd Inf-Inf" "VXIDI fdiv Inf/Inf" "VXZDZ fdiv 0/0" \
+         "VXIMZ fmul Inf-by-0" "ZX fdiv 1/0" "VXSNAN fadd sNaN" \
+         "VXSNAN fcmpu sNaN" "VXCVI fctiwz sNaN" "VXCVI fctiwz qNaN" \
+         "clean fadd qNaN" "clean fadd Inf+Inf" "clean fdiv Inf/0" \
+         "mtfsf FM=0xff" "mtfsf FM=0x80" "mtfsf FM=0x01" "mtfsf FM=0x0f" \
+         "mtfsf FM=0x40" "mtfsf clears" \
+         "VX falls on last clear" "VX rises on cause" \
+         "FEX rises on enable" "FEX falls with its cause" \
+         "FEX order: enable first" "FEX order: cause first" \
+         "FX latches once only" \
+         "lfsu value" "lfsu updates r3" "lfdu value" "lfdu updates r3" \
+         "stfsu value" "stfsu updates r3" "stfdu value" "stfdu updates r3" \
+         "fmadd fused 1+-2^-52" "fmsub fused 1+-2^-52" "fmadd 2by3+1 control" \
+         "VXIMZ+VXSNAN fmadd" "VXIMZ fmadd Inf-by-0" "VXSNAN fmadd sNaN" \
+         "VXISI fmadd Inf+-Inf" "clean fmadd Inf+Inf" \
+         "VXISI fmsub Inf-Inf" "clean fmsub Inf--Inf" "clean fmadd 2by3+1" \
+         "VXIMZ fmadd 0-by-Inf" "VXSNAN fmadd frC" "VXIMZ fmadd qNaN addend" \
+         "VXIMZ not VXISI" "VXISI fmadd neg product" \
+         "fnmadd 2by3+1 = -7" "fnmsub 2by3-1 = -5" \
+         "fadd RZ mode ignored" "fadd RN control" \
+         "lfsux value" "lfsux updates r3" "lfdux value" "lfdux updates r3" \
+         "stfsux value" "stfsux updates r3" "stfdux value" \
+         "stfdux updates r3" "lfs leaves r3" "lfsx leaves r3"; do
+    n=$(count "$LOG" "^$v  .*ok$")
+    check "  row: $v" "$n" 1
+done
+
+# The pins that record a DELIBERATE divergence from the letter of the ISA.
+for v in "stfs 2^129 policy" "stfs 3\*2^128 policy" "frsp 2^128 RN"; do
+    n=$(count "$LOG" "^$v .*ok$")
+    check "  policy pin: $v" "$n" 1
+done
+
+gate_end

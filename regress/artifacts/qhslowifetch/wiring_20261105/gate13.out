@@ -1,0 +1,562 @@
+############################################################
+## GATE: gate 13: PowerPC FP conversion + FPSCR (#304/#305/#324-#330) + rlwimi/rldimi/rldicl + #571 DS-form + #579 llsc + #NNN ifetch
+############################################################
+  ok   rlwimi protocol parsed                               yes
+       session             exit0                exit0                the control session ran to `quit'              ok
+       live                0x1234               0x1234               li r9,0x1234 -- guest executes and readback works ok
+       seed holds          0x5a5a5a5a5a5a5a5a   0x5a5a5a5a5a5a5a5a   r30 seeded, never destination: proves write is real ok
+       src intact          0xdeadbeefcafef00d   0xdeadbeefcafef00d   rS is unchanged by instructions                ok
+       disasm xcheck       3/3                  3/3                  tree's disassembler agrees with encoder        ok
+       ctl rlwinm          0xcafef00d           0xcafef00d           sibling control: rlwinm low word extract       ok
+       neg apparatus       exit1/-0x1           exit1/-0x1           bogus machine -> no guest -> live fails        ok
+       bits32 live         0x1234               0x1234               PPC603 (32-bit): guest still runs li           ok
+       bits32 rlwimi       0xfef00dca           0xfef00dca           PPC603 (32-bit): rlwimi executes cleanly       ok
+       nowrap sh0          0xcafef00d           0xcafef00d           SH=0, MB<=ME: full 32-bit word, unaffected by shift ok
+       nowrap sh8 mb0      0xfef00000           0xfef00000           SH=8, MB<=ME: width contamination corrupts low word ok
+       nowrap sh16 mb8     0xdca00              0xdca00              SH=16, MB<=ME: width contamination into middle bits ok
+       nowrap sh4 mb16     0xdc                 0xdc                 SH=4, MB<=ME: width contamination into low bits ok
+       wrap mutant         0xf5a5a5a5b          0xf5a5a5a5b          brief mutant: rlwimi r4,r3,0,31,0 -> high word 0x0000000f ok
+       wrap sh0 mb24       0xf005a5a0f          0xf005a5a0f          SH=0, MB>ME: high half must be replaced with rotated low word ok
+       wrap sh8 mb20       0xf00001a5f00        0xf00001a5f00        SH=8, MB>ME: both defects active (width contam + high half) ok
+       wrap sh16 mb28      0xf0000025a5a50      0xf0000025a5a50      SH=16, MB>ME: both defects active (width contam + high half) ok
+       pres nowrap         0x5a5a5a5afef05a5a   0x5a5a5a5afef05a5a   preserve unmasked destination bits in low and high words ok
+       pres wrap           0xcafef00dcada5a0d   0xcafef00dcada5a0d   preserve unmasked bits in low word, replace high half ok
+       wrap fullword       0xcafef00dcafef00d   0xcafef00dcafef00d   wrap fullword boundary: replace entire high half + all 32 low bits ok
+       alias nowrap        0xdeadbeeffef0f00d   0xdeadbeeffef0f00d   RA==RS nowrap: self-insertion with SH=8        ok
+       alias wrap          0xcafef00dcafef00d   0xcafef00dcafef00d   RA==RS wrap: self-insertion replacing high half ok
+       alias both          0xafef00dcaffef0dc   0xafef00dcaffef0dc   RA==RS both: self-insertion with SH=4, MB>ME   ok
+       cr0 record form     exit0                exit0                rlwimi. executes with Rc=1 and dumps CR        ok
+       disasm total        146/146              146/146              every placed word re-read by disassembler      ok
+       census run          129                  129                  (SH,MB,ME) cells driven across sweeps and diagonals ok
+       census wrong        0                    0                    cells differing from architectural result (0 after fix) ok
+       census zero         0                    0                    cells returning zero (0 after fix)             ok
+  ok   rlwimi controls prove the probe measures             OK
+  ok   rlwimi rows run                                      28
+  ok   rlwimi rows correct                                  28
+  ok   rldimi protocol parsed                               yes
+       session             exit0                exit0                the control session ran to `quit'              ok
+       live                0x1234               0x1234               li r9,0x1234 -- guest executes and readback works ok
+       seed holds          0x5a5a5a5a5a5a5a5a   0x5a5a5a5a5a5a5a5a   r30 seeded, never destination: proves write is real ok
+       src intact          0xdeadbeefcafef00d   0xdeadbeefcafef00d   rS is unchanged by instructions                ok
+       disasm xcheck       4/4                  4/4                  tree's disassembler agrees with encoder        ok
+       ctl rldicl          0xcafef00d           0xcafef00d           sibling control: rldicl zero-extend            ok
+       ctl rldicr          0xdeadbeef00000000   0xdeadbeef00000000   sibling control: rldicr extract                ok
+       neg apparatus       exit1/-0x1           exit1/-0x1           bogus machine -> no guest -> live fails        ok
+       bits32 live         0x1234               0x1234               PPC603 (32-bit): guest still runs li           ok
+       bits32 rld bad      TODO                 TODO                 decoder sends rld* to bad on 32-bit CPU        ok
+       nowrap sh8 mb0      0xffffffffffffff00   0xffffffffffffff00   MB<=63-SH: mask must stop at bit 55            ok
+       nowrap sh32 mb0     0xffffffff00000000   0xffffffff00000000   MB<=63-SH: mask must stop at bit 31            ok
+       nowrap sh0 mb0      0xffffffffffffffff   0xffffffffffffffff   SH=0: coincidental agree on committed build    ok
+       nowrap sh16 mb16    0xffffffff0000       0xffffffff0000       MB<=63-SH: mask 16..47; defect gives 16..63    ok
+       nowrap single       0x1                  0x1                  singleton mask at bit 63                       ok
+       wrap sh40 mb40      0xffffff0000ffffff   0xffffff0000ffffff   worked case: mask 40..63 + 0..23               ok
+       wrap sh63 mb63      0x8000000000000001   0x8000000000000001   wrapping boundary: 2-bit mask (bits 63 and 0)  ok
+       wrap full           0xffffffffffffffff   0xffffffffffffffff   wrapping full 64-bit mask (bits 1..63 and 0)   ok
+       wrap sh48 mb32      0xffff0000ffffffff   0xffff0000ffffffff   wrapping mask 32..63 + 0..15                   ok
+       pres nowrap         0xadbeefcafef00d5a   0xadbeefcafef00d5a   preserve unmasked destination bits 56..63      ok
+       pres wrap           0xfef00d5a5abeefca   0xfef00d5a5abeefca   preserve unmasked destination bits 24..39      ok
+       pres sh0            0x5a5a5a5acafef00d   0x5a5a5a5acafef00d   preserve unmasked high 32 bits 0..31           ok
+       full rot            0xefcafef00ddeadbe   0xefcafef00ddeadbe   full mask, patterned source: result is ROTL64(rS,24) ok
+       alias rs=ra         0xdeadefcafef00d0d   0xdeadefcafef00d0d   rA == rS: merge uses rS as read, not the cleared rA ok
+       cr0 record form     exit0                exit0                rldimi. executes with Rc=1 and dumps CR        ok
+       disasm total        513/513              513/513              every placed word re-read by disassembler      ok
+       census run          495                  495                  (SH,MB) cells driven across sweeps and diagonals ok
+       census wrong        0                    0                    cells differing from architectural result (0 after fix) ok
+       census zero         0                    0                    cells returning zero (0 after fix)             ok
+  ok   rldimi controls prove the probe measures             OK
+  ok   rldimi rows run                                      29
+  ok   rldimi rows correct                                  29
+  ok   ppc_rldicl probe completed                           yes
+  ok   ppc_rldicl row: session                              1
+  ok   ppc_rldicl row: live                                 1
+  ok   ppc_rldicl row: seed holds                           1
+  ok   ppc_rldicl row: src intact                           1
+  ok   ppc_rldicl row: disasm xcheck                        1
+  ok   ppc_rldicl row: zx32 rldicl                          1
+  ok   ppc_rldicl row: zx32 rldicr                          1
+  ok   ppc_rldicl row: rot8 rldicl                          1
+  ok   ppc_rldicl row: rot8 rldicr                          1
+  ok   ppc_rldicl row: naive fix wrong                      1
+  ok   ppc_rldicl row: neg apparatus                        1
+  ok   ppc_rldicl row: bits32 live                          1
+  ok   ppc_rldicl row: bits32 rld bad                       1
+  ok   ppc_rldicl row: vacuous cell                         1
+  ok   ppc_rldicl row: vac neighbour                        1
+  ok   ppc_rldicl row: census run                           1
+  ok   ppc_rldicl row: census wrong                         1
+  ok   ppc_rldicl row: census zero                          1
+  ok   ppc_rldicl row: disasm total                         1
+  ok   ppc_rldicl row: cand session                         1
+  ok   ppc_rldicl row: cr parsed                            1
+  ok   ppc_rldicl row: sh63 rldicl                          1
+  ok   ppc_rldicl row: sh32 rldicl                          1
+  ok   ppc_rldicl row: rc cr0                               1
+  ok   ppc_rldicl rows run                                  24
+  ok   ppc_rldicl rows green                                24
+  ok   ppc_rldicl rows red                                  0
+  ok   ppc_rldicl score lines                               1
+  ok   ppc_rldicl score 24/24                               1
+  ok   ppc_dsform probe completed                           yes
+  ok   ppc_dsform sentinel is the last line                 PPC_DSFORM_PROBE_DONE
+  ok   ppc_dsform RESULT= lines                             1
+  ok   ppc_dsform CONTROL= lines                            1
+  ok   ppc_dsform SYMPTOM= lines                            1
+  ok   ppc_dsform RED= lines                                1
+  ok   ppc_dsform RESULT=39/39                              1
+  ok   ppc_dsform CONTROL=OK                                1
+  ok   ppc_dsform SYMPTOM=ABSENT                            1
+  ok   ppc_dsform RED=none                                  1
+  ok   ppc_dsform row: ld value                             1
+  ok   ppc_dsform row: ld RA after                          1
+  ok   ppc_dsform row: ld ds0 value                         1
+  ok   ppc_dsform row: ld ra0 value                         1
+  ok   ppc_dsform row: ldu value                            1
+  ok   ppc_dsform row: ldu RA after                         1
+  ok   ppc_dsform row: ldu ds0 value                        1
+  ok   ppc_dsform row: lwa value                            1
+  ok   ppc_dsform row: lwa RA after                         1
+  ok   ppc_dsform row: lwa ds0 value                        1
+  ok   ppc_dsform row: lwa ra0 value                        1
+  ok   ppc_dsform row: lwz value                            1
+  ok   ppc_dsform row: lwz odd                              1
+  ok   ppc_dsform row: live                                 1
+  ok   ppc_dsform row: std value                            1
+  ok   ppc_dsform row: std RA after                         1
+  ok   ppc_dsform row: std ds0 value                        1
+  ok   ppc_dsform row: std ra0 value                        1
+  ok   ppc_dsform row: stdu value                           1
+  ok   ppc_dsform row: stdu neigh                           1
+  ok   ppc_dsform row: stdu RA after                        1
+  ok   ppc_dsform row: stdu ds0 value                       1
+  ok   ppc_dsform row: stdu alias val                       1
+  ok   ppc_dsform row: stdu alias RA                        1
+  ok   ppc_dsform row: stw odd                              1
+  ok   ppc_dsform row: st live                              1
+  ok   ppc_dsform row: xo58_3 live                          1
+  ok   ppc_dsform row: xo58_3 bad                           1
+  ok   ppc_dsform row: xo62_2 live                          1
+  ok   ppc_dsform row: xo62_2 bad                           1
+  ok   ppc_dsform row: xo62_3 live                          1
+  ok   ppc_dsform row: xo62_3 bad                           1
+  ok   ppc_dsform row: ldu ra0 live                         1
+  ok   ppc_dsform row: ldu ra0 bad                          1
+  ok   ppc_dsform row: stdu ra0 live                        1
+  ok   ppc_dsform row: stdu ra0 bad                         1
+  ok   ppc_dsform row: unasm census                         1
+  ok   ppc_dsform row: word pins                            1
+  ok   ppc_dsform row: neg apparatus                        1
+  ok   ppc_dsform census, 108 placed words                  1
+  ok   ppc_dsform rows run                                  39
+  ok   ppc_dsform rows green                                39
+  ok   ppc_dsform rows red                                  0
+  ok   ppc_llsc probe completed                             yes
+  ok   ppc_llsc sentinel is the last line                   PPC_LLSC_PROBE_DONE
+  ok   ppc_llsc RESULT= lines                               1
+  ok   ppc_llsc CONTROL= lines                              1
+  ok   ppc_llsc SYMPTOM= lines                              1
+  ok   ppc_llsc RED= lines                                  1
+  ok   ppc_llsc RESULT=83/83                                1
+  ok   ppc_llsc CONTROL=OK                                  1
+  ok   ppc_llsc SYMPTOM=ABSENT                              1
+  ok   ppc_llsc RED=none                                    1
+  ok   ppc_llsc row: ctl session                            1
+  ok   ppc_llsc row: ctl live                               1
+  ok   ppc_llsc row: ctl seed holds                         1
+  ok   ppc_llsc row: ctl data                               1
+  ok   ppc_llsc row: neg apparatus                          1
+  ok   ppc_llsc row: lw ok session                          1
+  ok   ppc_llsc row: lw ok value                            1
+  ok   ppc_llsc row: lw ok cr                               1
+  ok   ppc_llsc row: lw ok pc                               1
+  ok   ppc_llsc row: lw ok seed                             1
+  ok   ppc_llsc row: ld ok session                          1
+  ok   ppc_llsc row: ld ok value                            1
+  ok   ppc_llsc row: ld ok cr                               1
+  ok   ppc_llsc row: ld ok pc                               1
+  ok   ppc_llsc row: ld ok seed                             1
+  ok   ppc_llsc row: stw ok session                         1
+  ok   ppc_llsc row: stw ok bytes                           1
+  ok   ppc_llsc row: stw ok tail                            1
+  ok   ppc_llsc row: stw ok cr                              1
+  ok   ppc_llsc row: stw ok pc                              1
+  ok   ppc_llsc row: std ok session                         1
+  ok   ppc_llsc row: std ok bytes                           1
+  ok   ppc_llsc row: std ok cr                              1
+  ok   ppc_llsc row: std ok pc                              1
+  ok   ppc_llsc row: noresv session                         1
+  ok   ppc_llsc row: noresv bytes                           1
+  ok   ppc_llsc row: noresv cr                              1
+  ok   ppc_llsc row: mismatch bytes                         1
+  ok   ppc_llsc row: mismatch cr                            1
+  ok   ppc_llsc row: chain bytes                            1
+  ok   ppc_llsc row: chain cr                               1
+  ok   ppc_llsc row: so bytes                               1
+  ok   ppc_llsc row: so cr                                  1
+  ok   ppc_llsc row: twice bytes                            1
+  ok   ppc_llsc row: twice cr                               1
+  ok   ppc_llsc row: ra value                               1
+  ok   ppc_llsc row: ra r3 kept                             1
+  ok   ppc_llsc row: nso bytes                              1
+  ok   ppc_llsc row: nso cr                                 1
+  ok   ppc_llsc row: lw rc1 session                         1
+  ok   ppc_llsc row: lw rc1 value                           1
+  ok   ppc_llsc row: lw rc1 cr                              1
+  ok   ppc_llsc row: lw rc1 pc                              1
+  ok   ppc_llsc row: lw rc1 seed                            1
+  ok   ppc_llsc row: ld rc1 session                         1
+  ok   ppc_llsc row: ld rc1 value                           1
+  ok   ppc_llsc row: ld rc1 cr                              1
+  ok   ppc_llsc row: ld rc1 pc                              1
+  ok   ppc_llsc row: ld rc1 seed                            1
+  ok   ppc_llsc row: stw rc0 session                        1
+  ok   ppc_llsc row: stw rc0 bytes                          1
+  ok   ppc_llsc row: stw rc0 tail                           1
+  ok   ppc_llsc row: stw rc0 cr                             1
+  ok   ppc_llsc row: stw rc0 pc                             1
+  ok   ppc_llsc row: std rc0 session                        1
+  ok   ppc_llsc row: std rc0 bytes                          1
+  ok   ppc_llsc row: std rc0 cr                             1
+  ok   ppc_llsc row: std rc0 pc                             1
+  ok   ppc_llsc row: rc1 resv bytes                         1
+  ok   ppc_llsc row: rc1 resv cr                            1
+  ok   ppc_llsc row: rc0 nr bytes                           1
+  ok   ppc_llsc row: rc0 nr cr                              1
+  ok   ppc_llsc row: lw32 ok session                        1
+  ok   ppc_llsc row: lw32 ok value                          1
+  ok   ppc_llsc row: lw32 ok cr                             1
+  ok   ppc_llsc row: lw32 ok pc                             1
+  ok   ppc_llsc row: lw32 ok seed                           1
+  ok   ppc_llsc row: sw32 ok session                        1
+  ok   ppc_llsc row: sw32 ok bytes                          1
+  ok   ppc_llsc row: sw32 ok tail                           1
+  ok   ppc_llsc row: sw32 ok cr                             1
+  ok   ppc_llsc row: sw32 ok pc                             1
+  ok   ppc_llsc row: lw32 rc1 session                       1
+  ok   ppc_llsc row: lw32 rc1 value                         1
+  ok   ppc_llsc row: lw32 rc1 cr                            1
+  ok   ppc_llsc row: lw32 rc1 pc                            1
+  ok   ppc_llsc row: lw32 rc1 seed                          1
+  ok   ppc_llsc row: sw32 rc0 session                       1
+  ok   ppc_llsc row: sw32 rc0 bytes                         1
+  ok   ppc_llsc row: sw32 rc0 tail                          1
+  ok   ppc_llsc row: sw32 rc0 cr                            1
+  ok   ppc_llsc row: sw32 rc0 pc                            1
+  ok   ppc_llsc row: unasm census                           1
+  ok   ppc_llsc census, 35 placed words                     1
+  ok   ppc_llsc rows run                                    83
+  ok   ppc_llsc rows green                                  83
+  ok   ppc_llsc rows red                                    0
+  ok   ppc_ifetch probe completed                           yes
+  ok   ppc_ifetch sentinel is the last line                 PPC_IFETCH_PROBE_DONE
+  ok   ppc_ifetch RESULT= lines                             1
+  ok   ppc_ifetch CONTROL= lines                            1
+  ok   ppc_ifetch SYMPTOM= lines                            1
+  ok   ppc_ifetch RED= lines                                1
+  ok   ppc_ifetch RESULT=56/56                              1
+  ok   ppc_ifetch CONTROL=OK                                1
+  ok   ppc_ifetch SYMPTOM=ABSENT                            1
+  ok   ppc_ifetch RED=none                                  1
+  ok   ppc_ifetch row: ctl session                          1
+  ok   ppc_ifetch row: ctl live                             1
+  ok   ppc_ifetch row: ctl srr0 kept                        1
+  ok   ppc_ifetch row: neg apparatus                        1
+  ok   ppc_ifetch row: isi session                          1
+  ok   ppc_ifetch row: isi srr0                             1
+  ok   ppc_ifetch row: isi pc                               1
+  ok   ppc_ifetch row: isi text                             1
+  ok   ppc_ifetch row: isi nonex                            1
+  ok   ppc_ifetch row: isi1 session                         1
+  ok   ppc_ifetch row: isi1 srr0                            1
+  ok   ppc_ifetch row: isi1 pc                              1
+  ok   ppc_ifetch row: isi1 nonex                           1
+  ok   ppc_ifetch row: noT session                          1
+  ok   ppc_ifetch row: noT pc                               1
+  ok   ppc_ifetch row: noT srr0 kept                        1
+  ok   ppc_ifetch row: noT unimpl                           1
+  ok   ppc_ifetch row: noT chkstop                          1
+  ok   ppc_ifetch row: T cont session                       1
+  ok   ppc_ifetch row: T cont text                          1
+  ok   ppc_ifetch row: T cont prompt                        1
+  ok   ppc_ifetch row: T cont pc                            1
+  ok   ppc_ifetch row: T cont srr0                          1
+  ok   ppc_ifetch row: T cont nonex                         1
+  ok   ppc_ifetch row: T cont unimpl                        1
+  ok   ppc_ifetch row: T cont exc                           1
+  ok   ppc_ifetch row: T cont chkstop                       1
+  ok   ppc_ifetch row: T step session                       1
+  ok   ppc_ifetch row: T step text                          1
+  ok   ppc_ifetch row: T step prompt                        1
+  ok   ppc_ifetch row: T step pc                            1
+  ok   ppc_ifetch row: T step srr0                          1
+  ok   ppc_ifetch row: T step nonex                         1
+  ok   ppc_ifetch row: T step unimpl                        1
+  ok   ppc_ifetch row: T step exc                           1
+  ok   ppc_ifetch row: T step chkstop                       1
+  ok   ppc_ifetch row: T me session                         1
+  ok   ppc_ifetch row: T me pc                              1
+  ok   ppc_ifetch row: T me srr0                            1
+  ok   ppc_ifetch row: T me nonex                           1
+  ok   ppc_ifetch row: T me text                            1
+  ok   ppc_ifetch row: T me exc                             1
+  ok   ppc_ifetch row: again session                        1
+  ok   ppc_ifetch row: again pc                             1
+  ok   ppc_ifetch row: again srr0                           1
+  ok   ppc_ifetch row: again nonex                          1
+  ok   ppc_ifetch row: again text                           1
+  ok   ppc_ifetch row: again unimpl                         1
+  ok   ppc_ifetch row: again exc                            1
+  ok   ppc_ifetch row: again chkstop                        1
+  ok   ppc_ifetch row: again prompt                         1
+  ok   ppc_ifetch row: T ra session                         1
+  ok   ppc_ifetch row: T ra pc                              1
+  ok   ppc_ifetch row: T ra nonex                           1
+  ok   ppc_ifetch row: T ra addr                            1
+  ok   ppc_ifetch row: T ra stopped                         1
+  ok   ppc_ifetch rows run                                  56
+  ok   ppc_ifetch rows green                                56
+  ok   ppc_ifetch rows red                                  0
+  --   binary : /mnt/c/DocumentNoSnc/CC/GXEMUL/build/gxemul
+  --   machine: macppc/G4, NetBSD kernel loaded so the machine constructs; never executed
+  --   cold debugger; big-endian (dump renders value order); msr=0x2000 required for FP
+       control frsp 2.0           4000000000000000   4000000000000000   PIN  ok
+       frsp qNaN                  7ff8000000000000   7ff8000000000000   DISC ok
+       frsp qNaN-                 fff8000000000000   fff8000000000000   DISC ok
+       frsp qNaN payload          7ffdeadbe0000000   7ffdeadbe0000000   DISC ok
+       frsp sNaN                  7ff8000000000000   7ff8000000000000   DISC ok
+       frsp +Inf                  7ff0000000000000   7ff0000000000000   PIN  ok
+       frsp -0.0                  8000000000000000   8000000000000000   PIN  ok
+       frsp 1+3ulp/2 RN           3ff0000020000000   3ff0000020000000   PIN  ok
+       frsp 1+3ulp/2 RZ           3ff0000000000000   3ff0000000000000   DISC ok
+       frsp 1+3ulp/2 RP           3ff0000020000000   3ff0000020000000   PIN  ok
+       frsp 1+3ulp/2 RM           3ff0000000000000   3ff0000000000000   DISC ok
+       frsp tie even RN           3ff0000000000000   3ff0000000000000   PIN  ok
+       frsp tie odd RN            3ff0000040000000   3ff0000040000000   PIN  ok
+       frsp band RN               3730000000000000   3730000000000000   PIN  ok
+       frsp band RP               3730080000000000   3730080000000000   DISC ok
+       frsp band- RM              b730080000000000   b730080000000000   DISC ok
+       frsp band RZ               3730000000000000   3730000000000000   DISC ok
+       frsp carry-up RN           3810000000000000   3810000000000000   PIN  ok
+       frsp carry-up RZ           380fffffc0000000   380fffffc0000000   DISC ok
+       frsp tiny RP               36a0000000000000   36a0000000000000   DISC ok
+       frsp tiny RN               0000000000000000   0000000000000000   PIN  ok
+       frsp tiny- RM              b6a0000000000000   b6a0000000000000   DISC ok
+       frsp 2^128 RN              7ff0000000000000   7ff0000000000000   PIN  ok
+       frsp 2^128 RZ              47efffffe0000000   47efffffe0000000   DISC ok
+       control stfs 1.0           3f800000           3f800000           PIN  ok
+       stfs 1+3ulp/2 RN           3f800000           3f800000           PIN  ok
+       stfs 1+3ulp/2 RZ           3f800000           3f800000           PIN  ok
+       stfs 2^-127                00400000           00400000           DISC ok
+       stfs band tail             00600000           00600000           DISC ok
+       stfs band deep             00000201           00000201           DISC ok
+       stfs band-                 80400000           80400000           DISC ok
+       stfs FLT_MIN               00800000           00800000           PIN  ok
+       stfs 2^128                 7f800000           7f800000           PIN  ok
+       stfs max-single            7f7fffff           7f7fffff           PIN  ok
+       stfs 2^129 policy          7f800000           7f800000           PIN  ok
+       stfs 3*2^128 policy        7f800000           7f800000           PIN  ok
+       stfs qNaN payload          ffc00001           ffc00001           DISC ok
+       stfs sNaN passthrough      7f800001           7f800001           DISC ok
+       stfs NaN collapse          7f800000           7f800000           DISC ok
+       stfs +Inf                  7f800000           7f800000           PIN  ok
+       stfs -0.0                  80000000           80000000           PIN  ok
+       stfsx 2^-127               00400000           00400000           DISC ok
+       stfsx qNaN payload         ffc00001           ffc00001           DISC ok
+       control lfs 1.0f           3ff0000000000000   3ff0000000000000   PIN  ok
+       lfs S-min                  36a0000000000000   36a0000000000000   PIN  ok
+       lfs -S-min                 b6a0000000000000   b6a0000000000000   PIN  ok
+       lfs denorm-max             380fffffc0000000   380fffffc0000000   PIN  ok
+       lfs qNaN-                  fff8000020000000   fff8000020000000   DISC ok
+       lfs qNaN+                  7ff8000020000000   7ff8000020000000   DISC ok
+       lfsx control 1.0f          3ff0000000000000   3ff0000000000000   PIN  ok
+       lfsx qNaN-                 fff8000020000000   fff8000020000000   DISC ok
+       fctiwz 1.0 control         00000001           00000001           PIN  ok
+       fctiwz 1.9 RTZ             00000001           00000001           PIN  ok
+       fctiwz -1.9 RTZ            ffffffff           ffffffff           PIN  ok
+       fctiwz qNaN                80000000           80000000           DISC ok
+       fctiwz -qNaN               80000000           80000000           DISC ok
+       fctiwz +Inf                7fffffff           7fffffff           PIN  ok
+       fctiwz -Inf                80000000           80000000           PIN  ok
+       fctiwz 2^31                7fffffff           7fffffff           PIN  ok
+       fctiwz -(2^31+1)           80000000           80000000           PIN  ok
+       mtfsf FM=0xff              ffffffff           ffffffff           DISC ok
+       mtfsf FM=0x80              90000000           90000000           DISC ok
+       mtfsf FM=0x40              2f000000           2f000000           DISC ok
+       mtfsf FM=0x01              0000000f           0000000f           PIN  ok
+       mtfsf FM=0x0f              6000ffff           6000ffff           DISC ok
+       mtfsf clears               6fffffff           6fffffff           DISC ok
+       lfsu value                 3ff0000000000000   3ff0000000000000   DISC ok
+       lfsu updates r3            00009800           00009800           DISC ok
+       lfdu value                 3ff0000000000000   3ff0000000000000   DISC ok
+       lfdu updates r3            00009808           00009808           DISC ok
+       stfsu value                3f800000           3f800000           DISC ok
+       stfsu updates r3           00009900           00009900           DISC ok
+       stfdu value                3ff0000000000000   3ff0000000000000   DISC ok
+       stfdu updates r3           00009900           00009900           DISC ok
+       lfsux value                3ff0000000000000   3ff0000000000000   DISC ok
+       lfsux updates r3           00009800           00009800           DISC ok
+       lfdux value                3ff0000000000000   3ff0000000000000   DISC ok
+       lfdux updates r3           00009808           00009808           DISC ok
+       stfsux value               3f800000           3f800000           DISC ok
+       stfsux updates r3          00009900           00009900           DISC ok
+       stfdux value               3ff0000000000000   3ff0000000000000   DISC ok
+       stfdux updates r3          00009900           00009900           DISC ok
+       lfs leaves r3              000097fc           000097fc           PIN  ok
+       lfsx leaves r3             000097fc           000097fc           PIN  ok
+       composed frsp->stfs NaN    7fc00000           7fc00000           DISC ok
+       VX falls on last clear     80001000           80001000           DISC ok
+       VX rises on cause          a0200000           a0200000           DISC ok
+       FEX rises on enable        e1000080           e1000080           DISC ok
+       FEX falls with its cause   00000040           00000040           DISC ok
+       FEX order: enable first    e1001080           e1001080           DISC ok
+       FEX order: cause first     e1001080           e1001080           DISC ok
+       FX latches once only       21001000           21001000           DISC ok
+       VXISI fadd Inf-Inf         a0801000           a0801000           DISC ok
+       VXISI fsub Inf-Inf         a0801000           a0801000           DISC ok
+       VXIDI fdiv Inf/Inf         a0401000           a0401000           DISC ok
+       VXZDZ fdiv 0/0             a0201000           a0201000           DISC ok
+       VXIMZ fmul Inf-by-0        a0101000           a0101000           DISC ok
+       ZX fdiv 1/0                84004000           84004000           DISC ok
+       VXSNAN fadd sNaN           a1001000           a1001000           DISC ok
+       VXSNAN fcmpu sNaN          a1001000           a1001000           DISC ok
+       VXCVI fctiwz sNaN          a1000100           a1000100           DISC ok
+       VXCVI fctiwz qNaN          a0000100           a0000100           DISC ok
+       clean fadd qNaN            00001000           00001000           DISC ok
+       clean fcmpu qNaN           00001000           00001000           DISC ok
+       clean fadd Inf+Inf         00004000           00004000           DISC ok
+       clean fsub Inf--Inf        00004000           00004000           DISC ok
+       clean fmul Inf-by-1        00004000           00004000           DISC ok
+       clean fdiv Inf/0           00004000           00004000           DISC ok
+       clean fdiv 1/1             00004000           00004000           DISC ok
+       fadd RZ mode ignored       3ff0000000000000   3ff0000000000000   DISC ok
+       fadd RN control            3ff0000000000001   3ff0000000000001   PIN  ok
+       VXIMZ+VXSNAN fmadd         a1101000           a1101000           DISC ok
+       VXIMZ fmadd Inf-by-0       a0101000           a0101000           DISC ok
+       VXSNAN fmadd sNaN          a1001000           a1001000           DISC ok
+       VXISI fmadd Inf+-Inf       a0801000           a0801000           DISC ok
+       clean fmadd Inf+Inf        00004000           00004000           PIN  ok
+       VXISI fmsub Inf-Inf        a0801000           a0801000           DISC ok
+       clean fmsub Inf--Inf       00004000           00004000           PIN  ok
+       clean fmadd 2by3+1         00004000           00004000           PIN  ok
+       VXIMZ fmadd 0-by-Inf       a0101000           a0101000           DISC ok
+       VXSNAN fmadd frC           a1001000           a1001000           DISC ok
+       VXIMZ fmadd qNaN addend    a0101000           a0101000           DISC ok
+       VXIMZ not VXISI            a0101000           a0101000           DISC ok
+       VXISI fmadd neg product    a0801000           a0801000           DISC ok
+       fmadd fused 1+-2^-52       b970000000000000   b970000000000000   DISC ok
+       fmsub fused 1+-2^-52       b970000000000000   b970000000000000   DISC ok
+       fmadd 2by3+1 control       401c000000000000   401c000000000000   PIN  ok
+       fnmadd 2by3+1 = -7         c01c000000000000   c01c000000000000   DISC ok
+       fnmsub 2by3-1 = -5         c014000000000000   c014000000000000   DISC ok
+       VXSNAN sticky              set                set                DISC ok
+       VXSNAN sticky vs fadd      set                set                DISC ok
+       VXSNAN sticky vs fmul      set                set                DISC ok
+       VXSNAN sticky vs fcmpu     set                set                DISC ok
+       fcmpu LT                   80000000           80000000           PIN  ok
+       fcmpu GT                   40000000           40000000           PIN  ok
+       fcmpu EQ                   20000000           20000000           PIN  ok
+       fcmpu FU qNaN-a            10000000           10000000           DISC ok
+       fcmpu FU qNaN-b            10000000           10000000           DISC ok
+  ok   control rows prove the probe measures                OK
+  ok   every rounding-mode write took                       0
+  ok   all four modes read back by guest                    4
+  ok   rows run                                             138
+  ok   rows correct                                         138
+  ok   discriminating rows present                          94 (>= 94)
+  ok   pinned rows present                                  44 (>= 44)
+  ok   divergence rows recorded                             0
+  ok     row: frsp qNaN                                     1
+  ok     row: frsp sNaN                                     1
+  ok     row: frsp 1+3ulp/2 RZ                              1
+  ok     row: frsp band RP                                  1
+  ok     row: frsp band- RM                                 1
+  ok     row: frsp tiny RP                                  1
+  ok     row: frsp 2^128 RZ                                 1
+  ok     row: frsp carry-up RZ                              1
+  ok     row: stfs 2^-127                                   1
+  ok     row: stfs band tail                                1
+  ok     row: stfs band-                                    1
+  ok     row: stfsx 2^-127                                  1
+  ok     row: stfs qNaN payload                             1
+  ok     row: stfs sNaN passthrough                         1
+  ok     row: stfsx qNaN payload                            1
+  ok     row: lfs qNaN-                                     1
+  ok     row: composed frsp->stfs NaN                       1
+  ok     row: lfsx qNaN-                                    1
+  ok     row: VXSNAN sticky                                 1
+  ok     row: fctiwz qNaN                                   1
+  ok     row: fctiwz -qNaN                                  1
+  ok     row: fctiwz 1.0 control                            1
+  ok     row: fctiwz +Inf                                   1
+  ok     row: fctiwz -Inf                                   1
+  ok     row: fctiwz 2^31                                   1
+  ok     row: fctiwz -(2^31+1)                              1
+  ok     row: fctiwz 1.9 RTZ                                1
+  ok     row: fctiwz -1.9 RTZ                               1
+  ok     row: VXISI fadd Inf-Inf                            1
+  ok     row: VXIDI fdiv Inf/Inf                            1
+  ok     row: VXZDZ fdiv 0/0                                1
+  ok     row: VXIMZ fmul Inf-by-0                           1
+  ok     row: ZX fdiv 1/0                                   1
+  ok     row: VXSNAN fadd sNaN                              1
+  ok     row: VXSNAN fcmpu sNaN                             1
+  ok     row: VXCVI fctiwz sNaN                             1
+  ok     row: VXCVI fctiwz qNaN                             1
+  ok     row: clean fadd qNaN                               1
+  ok     row: clean fadd Inf+Inf                            1
+  ok     row: clean fdiv Inf/0                              1
+  ok     row: mtfsf FM=0xff                                 1
+  ok     row: mtfsf FM=0x80                                 1
+  ok     row: mtfsf FM=0x01                                 1
+  ok     row: mtfsf FM=0x0f                                 1
+  ok     row: mtfsf FM=0x40                                 1
+  ok     row: mtfsf clears                                  1
+  ok     row: VX falls on last clear                        1
+  ok     row: VX rises on cause                             1
+  ok     row: FEX rises on enable                           1
+  ok     row: FEX falls with its cause                      1
+  ok     row: FEX order: enable first                       1
+  ok     row: FEX order: cause first                        1
+  ok     row: FX latches once only                          1
+  ok     row: lfsu value                                    1
+  ok     row: lfsu updates r3                               1
+  ok     row: lfdu value                                    1
+  ok     row: lfdu updates r3                               1
+  ok     row: stfsu value                                   1
+  ok     row: stfsu updates r3                              1
+  ok     row: stfdu value                                   1
+  ok     row: stfdu updates r3                              1
+  ok     row: fmadd fused 1+-2^-52                          1
+  ok     row: fmsub fused 1+-2^-52                          1
+  ok     row: fmadd 2by3+1 control                          1
+  ok     row: VXIMZ+VXSNAN fmadd                            1
+  ok     row: VXIMZ fmadd Inf-by-0                          1
+  ok     row: VXSNAN fmadd sNaN                             1
+  ok     row: VXISI fmadd Inf+-Inf                          1
+  ok     row: clean fmadd Inf+Inf                           1
+  ok     row: VXISI fmsub Inf-Inf                           1
+  ok     row: clean fmsub Inf--Inf                          1
+  ok     row: clean fmadd 2by3+1                            1
+  ok     row: VXIMZ fmadd 0-by-Inf                          1
+  ok     row: VXSNAN fmadd frC                              1
+  ok     row: VXIMZ fmadd qNaN addend                       1
+  ok     row: VXIMZ not VXISI                               1
+  ok     row: VXISI fmadd neg product                       1
+  ok     row: fnmadd 2by3+1 = -7                            1
+  ok     row: fnmsub 2by3-1 = -5                            1
+  ok     row: fadd RZ mode ignored                          1
+  ok     row: fadd RN control                               1
+  ok     row: lfsux value                                   1
+  ok     row: lfsux updates r3                              1
+  ok     row: lfdux value                                   1
+  ok     row: lfdux updates r3                              1
+  ok     row: stfsux value                                  1
+  ok     row: stfsux updates r3                             1
+  ok     row: stfdux value                                  1
+  ok     row: stfdux updates r3                             1
+  ok     row: lfs leaves r3                                 1
+  ok     row: lfsx leaves r3                                1
+  ok     policy pin: stfs 2^129 policy                      1
+  ok     policy pin: stfs 3\*2^128 policy                   1
+  ok     policy pin: frsp 2^128 RN                          1
+
+gate 13: PowerPC FP conversion + FPSCR (#304/#305/#324-#330) + rlwimi/rldimi/rldicl + #571 DS-form + #579 llsc + #NNN ifetch: PASS (359 checks)

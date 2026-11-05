@@ -249,6 +249,7 @@ struct ppc_cpu {
 #define	PPC_FPSCR_RN_MASK	0x3
 
 /*  Exceptions:  */
+#define	PPC_EXCEPTION_MC	0x2	/*  Machine check, vector 0x200  */
 #define	PPC_EXCEPTION_DSI	0x3	/*  Data Storage Interrupt  */
 #define	PPC_EXCEPTION_ISI	0x4	/*  Instruction Storage Interrupt  */
 #define	PPC_EXCEPTION_EI	0x5	/*  External interrupt  */

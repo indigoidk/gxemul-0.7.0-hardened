@@ -1,0 +1,87 @@
+CODEXP8QHS
+model: GPT-6 (Codex)
+VERDICT: REPAIR — 1 statically derived floor breach; 1 false record.
+
+1. VERIFY THE CLOSURE
+
+The eight sessions each have the nine stated assertions, but that does not close the single-edit floor.
+
+B1: Two MSR changes can cancel before the final observation.
+
+Insert this single conditional statement immediately inside the failed-read block, before arm (a):
+
+if ((cpu->pc & 3) == 1) cpu->cd.ppc.msr ^= PPC_MSR_ME;
+
+This uses only PC low bits and MSR[ME], already within the stated bound. It introduces neither an unrelated field nor an address-specific condition.
+
+Enumerating the eight cells:
+
+00, clear: T ra;     0xfec00004 -> 0xfec00008; edit skipped.
+00, set:   T ra me;  0xfec00004 -> 0xfec00008; edit skipped.
+01, clear: T ra odd; 0xfec00005 -> 0xfec00009; MSR 0 -> 0x1000 -> 0.
+01, set:   T ra o1m; 0xfec00005 -> 0xfec00009; MSR 0x1000 -> 0 -> 0x1000.
+10, clear: T ra o2;  0xfec00006 -> 0xfec0000a; edit skipped.
+10, set:   T ra o2m; 0xfec00006 -> 0xfec0000a; edit skipped.
+11, clear: T ra o3;  0xfec00007 -> 0xfec0000b; edit skipped.
+11, set:   T ra o3m; 0xfec00007 -> 0xfec0000b; edit skipped.
+
+The affected sessions enter the failure block twice: the read-ahead failure toggles ME and returns through (a); the real failure toggles it back and parks through (c). Neither exit consults ME. The intervening subfic does not read MSR. Real-mode translation and the intervening dispatch do not make the changed ME observable.
+
+Consequently, final MSR, pc, SRR0, session status, both halt reports, their address, stopped, checkstop and UNIMPLEMENTED observations remain unchanged. T blr has low bits 11; the other direct failing sessions are aligned. Successful controls never execute the insertion.
+
+Predicted result: 137/137, CONTROL=OK, SYMPTOM=ABSENT. This is a source-derived result, not an executed measurement.
+
+This is a real regression: an isolated -T fetch starting at 0xfec00009 executes the insertion once and leaves MSR wrong. The existing machinery can expose it without another machine or an unrelated field. The disclosed running-restoration exception does not cover an MSR mutation. Selecting low bits 10 yields the same cancellation mechanism; I count this as one breach family.
+
+The other disclosure arguments hold within their stated measured scope:
+
+G1: The host-page/physical-page cache relationship and generic dispatch translation support the claimed absence of the translator-owned exception producer. Where aligned pc equals addr, pc < addr is also false.
+
+G2: The reported sessions do not reach arm (d); changing its predicate remains unobserved.
+
+G3: Every recorded read-ahead failure clears running through -T before returning. The device-window measurements support that measured scope, not a theorem about every possible programmed device state.
+
+SRR1: Its missing assertion is explicitly disclosed. Calling ppc_exception also changes rowed pc/SRR0, whereas a standalone SRR1 mutation remains outside the claimed coverage.
+
+DENOMINATOR: Eight enumerated state cells, each with nine final observations: 72 cell/channel assertions. I reviewed guard deletion, inversion, forcing and conjunction/disjunction; arm ordering; return, refresh, park, bad and exception transfers; alignment masks; state writes and existing diagnostics; and the newly identified cancellation across two visits. I also checked the 69 recorded variants and their disclosed exclusions. I did not execute them.
+
+2. THE CHANNEL RE-CHECK
+
+Exception text: The stated producer argument holds. ppc_exception saves SRR0 and sets the vector; a transfer through it cannot preserve both expected observations on these sessions.
+
+Read-failed text: Covered by the composite SYMPTOM scan across every session. The reinstated exit also fails session/register assertions.
+
+Prompt: Covered indirectly. Register parsing starts only after “GXemul> reg”; without it, register observations become “none.”
+
+SRR1: Unasserted and explicitly disclosed, as above.
+
+LR: No failure arm writes it.
+
+Thus I found no additional undisclosed channel omission among these five. B1 instead defeats observation timing: an asserted channel changes and changes back.
+
+3. THE DIFF
+
+Each new unimpl row catches its named real-fetch transfers. The recorded sets agree:
+
+W3: all eight new rows.
+V10: the four ME-set rows.
+R8_c_meun_bad: o1m, o2m, o3m.
+R8_c_clun_bad: odd, o2, o3, plus the existing T blr row.
+
+The row count enumerates as 3 + 1 + 5 + 4 + 5 + 10 + 10 + 9 + 10 + 72 + 8 = 137. Table 9 contains 55 measured-red variants and 14 green variants. Its separate accounting of 54 claimed-red variants plus the unpredicted, measured-red V12 is consistent.
+
+R1: Section 3’s “bad: (any transfer to it)” producing UNIMPLEMENTED is false as written. cpu_dyntrans.c:1990-1991 returns silently when translation_readahead is nonzero, before the print. Replacing arm (a)’s return with goto bad therefore does not print UNIMPLEMENTED.
+
+Qualify that record, and the corresponding generic probe comment, as a non-read-ahead transfer. The individual new row notes already correctly say “the real fetch.” This is one record error, not another floor breach.
+
+I checked premises directly in GXEMUL-SEC: the translator prologue and failure block; subfic’s lack of MSR dependence; dispatch/cache behavior; real-mode translation; exception state updates; -T’s clearing of running; probe parsing and assertions; gate row names; and the recorded score sets. Nothing was edited, built or executed.
+
+4. VERDICT
+
+REPAIR B1: Detect the cancellation family with independently observed real-fetch cases, including low-bit patterns 01 and 10, then review the resulting repair.
+
+REPAIR R1: Restrict the bad-label emission claim to non-read-ahead transfers.
+
+The disclosed uninitialised-buffer limitation remains filed. I established no additional product defect beyond the proposed mutation’s incorrect behavior.
+
+CODEXP8QHS: 8 CELLS SWEPT 1 BREACHES 1 FALSE RECORDS VERDICT:REPAIR

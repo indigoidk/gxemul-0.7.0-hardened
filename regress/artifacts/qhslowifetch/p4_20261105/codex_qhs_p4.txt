@@ -1,0 +1,105 @@
+CODEXP4QHS
+model: GPT-6 (Codex)
+VERDICT: REPAIR — 0 new floor breaches; 1 false record; 468 cells swept.
+
+1. FLOOR
+
+I found no new single-edit floor breach outside the table-4 variants and disclosed classes. No additional row is proposed.
+
+My denominator is 468 source-reviewed cells, not 468 newly executed variants.
+
+The six predicates are:
+
+P0: page == NULL, selecting the slow path.
+P1: the memory_rw failure test.
+P2: translation_readahead.
+P3: pc != addr.
+P4: !running.
+P5: MSR[ME].
+
+For each predicate I swept:
+- Four basic changes: body deletion, predicate inversion, forced true, forced false.
+- Eight conjunctions and eight disjunctions, using ra, !ra, running, !running, ME, !ME, pc==addr, pc!=addr.
+- Each of those eight conditioning literals paired with seven exits: bare return; park-and-return; refresh-and-return; goto bad; machine check; ISI; checkstop fallback.
+
+That enumerates P0=76, P1=76, P2=76, P3=76, P4=76, P5=76: 456 cells. For P1, these conditionings preserve the memory_rw call and evaluate the added operand afterward; suppressing the read is a separate observable change.
+
+The remaining twelve cells are clear-ME, set-ME and checkstop-text-only insertion in each of these four measured failure states:
+- ra=0, ME=0.
+- ra=0, ME=1.
+- ra!=0, ME=0.
+- ra!=0, ME=1.
+
+Thus 456+12=468. This does not claim exhaustive coverage of arbitrary CPU-field assignments.
+
+The relevant reductions are:
+
+P0 changes that suppress a required read or exit beforehand alter halt counts or session survival; D12 retains its stated build dependence. P1 changes reduce to the recorded failure-test variants, equivalent behavior, or disclosed cases. In particular, V12 remains NOT PREDICTED, and the successful-fetch/running-clear case remains F5’s disclosure.
+
+For P2–P4, a bare return on a real fetch changes pc or continue counts; parking during read-ahead reduces two reports to one; goto bad on a real fetch changes UNIMPLEMENTED; exception exits change pc/SRR0 or read-ahead outcomes; checkstop exits change the checkstop channel. Refresh-and-return is observed on real-fetch continues, while its deeper-read-ahead difference is disclosed. P5 and its fallback remain behind the unreached running-1 route.
+
+For the twelve repair-specific cells, effective ME changes hit the new MSR rows; idempotent writes change nothing. All four text-only checkstop cells now have a corresponding checkstop channel.
+
+2. THE DIFF
+
+Each new row catches its stated variant:
+
+- T cont msr: B1c changes final MSR from 0 to 0x1000.
+- T step msr: B1c makes the same change.
+- T me msr: B1a changes 0x1000 to 0.
+- again msr: B1c changes the first park; subsequent commands execute no instructions and preserve that changed MSR.
+- T ra msr: B1c changes MSR at the subsequent real-fetch park.
+- T ra chkstop: B2 prints the checkstop text during ME-clear read-ahead while retaining arm (a)’s return.
+- T ra me msr: B1b clears ME during read-ahead; B1a clears it at the real-fetch park. Either leaves final MSR at 0.
+
+The saved results match exactly: B1a’s two named rows, B1b’s one, B1c’s four, B2’s one.
+
+The executable probe diff is exactly seven row additions; the remaining probe changes are docstring changes. The gate names and count literals include those additions.
+
+The row-group enumeration is ctl 3, neg 1, isi 5, isi1 4, noT 5, T cont 10, T step 10, T me 9, again 10, T ra 7, T ra me 5: 69.
+
+The counted red variants are B1; W2,W3,W4,W5,W7; D1,D2,D3,D4,D5,D7,D8,D12,D13,D14,D15; V7,V8,V9,V10,V11; B1a,B1b,B1c,B2: 26. The predicted greens are D6,D9,D10,V4,V5,V6,D11,V2,V3: nine. V12 is the separate thirty-sixth variant, counted in neither tally.
+
+HEAD’s previous 26 red rows plus the six new MSR failures give 32 red and 37 green. The new T ra chkstop row passes. The null-leg scores also match the saved record.
+
+F3, F4, F5 and F1’s narrowed disclosure faithfully carry the ruling. F2’s missing addr/stopped disclosure is present. D12’s missed row-set prediction is acknowledged in the verdict and errata; it is not an uncorrected false record.
+
+R1 — false record: regress/ppc_ifetch_probe.py:85 says the unaligned-PC route “is not a guest state (PowerPC branch targets are word-aligned).” That does not hold for this fork’s implementation.
+
+The source-derived counterexample is:
+
+- src/cpus/cpu_ppc_instr.c:2833: mtlr copies a guest register into LR without masking.
+- :4579–4582: with tracing disabled, ordinary blr selects bclr_20.
+- :382–385: bclr_20 copies LR into cpu->pc without masking.
+- src/include/quick_pc_to_pointers.h and the generic pointer lookup select an instruction slot without realigning cpu->pc.
+- src/cpus/memory_ppc.c:258–260 preserves the address during IR-off translation.
+
+Consequently, guest code can load 0x02040001 into LR and execute blr, reaching the translator with an unaligned PC. Architectural branch alignment does not establish that this emulator enforces it.
+
+I found no other false added docstring or gate-comment statement.
+
+3. F6
+
+Filing rather than adding a row is correct under the ruling’s conditional disposition. The prologue does not realign cpu->pc.
+
+The actual constants give 1024 slots, alignment shift 2, and slot-index mask 0xffc. For slot zero, the four cases are:
+
+Input PC       Assigned cpu->pc   Aligned addr   pc != addr
+0x02040000     0x02040000          0x02040000     false
+0x02040001     0x02040001          0x02040000     true
+0x02040002     0x02040002          0x02040000     true
+0x02040003     0x02040003          0x02040000     true
+
+The assignment precedes alignment of addr alone. Thus the earlier realignment premise was wrong. The filing stands, but its “not a guest state” justification requires R1’s correction.
+
+4. VERDICT
+
+REPAIR R1: replace the debugger-only implication with wording such as:
+
+“A debugger-set unaligned pc retains its low two bits through the translator’s prologue. This fork’s unmasked bclr_20 path can also produce that state from guest code. Either can make pc differ from aligned addr and reach arm (b); neither route is measured by this probe.”
+
+The separate branch-alignment product defect should be filed. It does not create a new floor finding outside the already disclosed arm-(b) class or require an F6 row.
+
+Premises checked directly in GXEMUL-SEC: the translator and its controlling predicates; alignment constants; read-ahead and bad-path behavior; probe parsing, row additions and gate enumeration; saved variant definitions, scores, predictions and errata; the actual pass-3 ruling; and the guest branch/pointer-lookup path supporting R1. These were source and artifact checks. I did not edit, build or execute repository code.
+
+CODEXP4QHS: 468 CELLS SWEPT 0 BREACHES 1 FALSE RECORDS VERDICT:REPAIR

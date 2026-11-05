@@ -1,0 +1,100 @@
+CODEXP9QHS
+model: GPT-6 (Codex)
+VERDICT: REPAIR — one surviving breach family affecting three cells; two false records.
+
+1. VERIFY THE CLOSURE
+
+All eight read-ahead cells have the nine stated channels. That establishes final-state coverage, but does not close the class against cancellation across visits.
+
+B1: insert this single conditional statement immediately inside the failed-read block, before arm (a):
+
+    if ((cpu->cd.ppc.msr & PPC_MSR_ME) && cpu->pc != addr)
+        cpu->cd.ppc.spr[SPR_SRR0] ^= 0x100;
+
+This combines the already-reviewed SRR0-toggle shape with the block’s own ME/alignment predicates. It remains within the stated bound.
+
+The three unaligned, ME-set read-ahead sessions execute it twice. Every unaligned one-entry session has ME clear. The only ME-set one-entry session, T me, is aligned. Consequently, this edit is predicted to leave all 153 rows green, CONTROL=OK and SYMPTOM=ABSENT.
+
+This is a source-derived result, not a new measurement: I did not build or execute anything. It is neither a listed variant nor covered by the disclosures. It uses SRR0, ordinary depth-one read-ahead, and existing pmppc failure paths.
+
+The requested disclosure checks hold for the stated machinery:
+
+- G1: the actual dispatch code caches physical-page pointers only with host memory; other pages undergo generic translation first. On the skipped side of arm (b), the possible pc values are addr, addr+1, addr+2 and addr+3. None satisfies pc < addr. The disclosed missing producer concerns the taken side.
+- G2/G3: the default pmppc device callbacks support the reported absence of a declined mapped instruction read while running. The serial callback’s failure condition lies outside its registered window. memory.c clears running before returning from a -T halt. These disclosures do not cover B1.
+- SRR1: its omission is expressly disclosed. ppc_exception writes SRR0/SRR1 and changes pc, supporting the stated exception-channel reasoning. That does not exempt a separate SRR0 toggle.
+
+DENOMINATOR: 16 cell/history combinations, enumerated below: eight low-bits × ME cells, each checked for a two-entry read-ahead session and a one-entry failure session.
+
+    Bits  ME     Two-entry session   One-entry session
+    00    clear  T ra                T cont / T step / again
+    00    set    T ra me             T me
+    01    clear  T ra odd            T blr o1
+    01    set    T ra o1m            MISSING
+    10    clear  T ra o2             T blr o2
+    10    set    T ra o2m            MISSING
+    11    clear  T ra o3             T blr
+    11    set    T ra o3m            MISSING
+
+Thirteen combinations have sessions; three do not. These are static review cells, not sixteen newly executed tests.
+
+The edit shapes reviewed were guard deletion, inversion and constant replacement; conjunction/disjunction with the admitted predicates; alignment-mask and comparison substitutions; return, park, bad-label and exception transfers; and state assignment, set, clear and toggle shapes. I checked them against the composite detector and its explicit exclusions.
+
+2. THE VISIT COUNT
+
+Yes: SRR0 can still change and change back unseen.
+
+For B1, the session enumeration is:
+
+- T ra o1m, T ra o2m, T ra o3m: SRR0 is 0x11111111 before the first failure, 0x11111011 after the first toggle, and 0x11111111 after the second toggle. The intervening subfic does not consume SRR0.
+- T ra and T ra me: aligned, so the condition is false.
+- T ra odd, T ra o2 and T ra o3: ME clear, so the condition is false.
+- T cont, T step, T me and again: aligned, so the condition is false.
+- T blr, T blr o1 and T blr o2: ME clear, so the condition is false.
+- ctl, neg, isi, isi1 and noT: no relevant failure-block entry.
+
+No other asserted channel changes. Replacing pc != addr with (pc & 3) == 1, == 2 or == 3 isolates each missing cell. I count these as one breach family affecting three cells.
+
+Repair 9 closes the low-bit-only toggles it measured. It does not close toggles conditioned jointly on alignment and ME.
+
+3. THE DIFF
+
+The new sessions and assertions are otherwise correctly constructed. BLR_PUTS contains exactly the eight byte writes at 0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006 and 0x2007. The breakpoint suppresses read-ahead.
+
+The targets enumerate as follows:
+
+    o1: pc 0x02040005, low bits 01, aligned addr 0x02040004
+    o2: pc 0x02040006, low bits 10, aligned addr 0x02040004
+
+R5_mask2 is correctly associated with o1; R5_mask1 with o2. The gate includes all sixteen new rows and requires 153/153.
+
+R1 — packet summary, section 0:
+“each passed all 153 rows” is false. R9_tog_me1, R9_tog_me2 and R9_tog_srr0_1 passed 137/137 before repair. Sections 3 and 4 show each scoring 152/153 afterward. Change 153 to 137. This error is in the packet summary.
+
+R2 — shipped row note, regress/ppc_ifetch_probe.py:535:
+Both new SRR0 rows name R9_tog_srr0_1. T blr o2 srr0 does not catch that mutant: its pc has low bits 10, while the mutant tests for 01. Table 10 correctly identifies only T_blr_o1_srr0 as red. The o2 assertion is valid; its named-mutant attribution is wrong. Describe the analogous low-bits-10 toggle or supply its own named variant.
+
+The corrected distinction between read-ahead and real-fetch transfers to bad: agrees with the source.
+
+The counts reconcile:
+
+    Session groups: 5 controls + 4 aligned failures + 8 read-ahead + 3 blr = 20.
+    Row groups: 18 + 39 + 72 + 24 = 153.
+    Prediction groups: 46 + 14 + 4 + 4 + 1 + 5 = 74 variants.
+    Observed outcomes: 59 counted red + 1 unpredicted red + 14 green = 74.
+
+Thus “59 red” in the counted tally and “60 red” in the measured tally are compatible.
+
+4. VERDICT
+
+REPAIR:
+
+- Add one-entry ME-set failures at low bits 01, 10 and 11, retaining the existing eight channels. Measure the joint-gated SRR0-toggle family and its isolated members against the repaired composite detector.
+- Correct the packet’s 153-versus-137 statement.
+- Correct T blr o2 srr0’s mutant attribution.
+- Submit that repair for its required pass.
+
+I read the packet in full and checked GXEMUL-SEC’s actual probe, gate, fetch prologue, failure arms, read-ahead loop, dispatch lookup, exception implementation, subfic, memory halt handling and relevant device callbacks. No files were changed and no project code was built or run.
+
+One additional observation is filed, not counted: some temporary changes to pc’s slot-offset bits can be overwritten by subsequent slot reconstruction. I did not establish a behaviorally incorrect route for that candidate, so it is not a second breach.
+
+CODEXP9QHS: 16 CELLS SWEPT 1 BREACHES 2 FALSE RECORDS VERDICT:REPAIR

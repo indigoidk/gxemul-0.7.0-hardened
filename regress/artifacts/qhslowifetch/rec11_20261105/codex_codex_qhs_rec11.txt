@@ -1,0 +1,38 @@
+CODEXRECP11QHS
+model: GPT-6 (Codex)
+VERDICT: FIX — six correction items accepted; R1 and the partner-loop comment still need qualification.
+
+1. R1: NO — FIX. regress/ppc_ifetch_probe.py:75-76 still infers two firings and cancellation from an unchanged condition. That condition alone does not preserve the two failed-fetch visits.
+
+Source-derived counterexample, inserted before arm (a):
+
+    if (cpu->cd.ppc.msr & PPC_MSR_ME)
+        cpu->pc ^= 0xfec02000ULL;
+
+On T ra me’s read-ahead failure, this changes pc from 0xfec00008 to 0x2008 while leaving ME unchanged. Arm (a) returns. The read-ahead loop does not restore pc, and subfic changes neither pc nor MSR (src/cpus/cpu_dyntrans.c:1957-1978; src/cpus/cpu_ppc_instr.c:311-318). The next untranslated slot reconstructs its address using the changed page bits (cpu_ppc_instr.c:4099-4103), so its fetch reads RAM at 0x2008 rather than making the claimed second failed-block visit. The toggle therefore does not fire twice or cancel.
+
+This is a records defect, not a detector escape. Qualify the cancellation argument with preservation of the failed-fetch visits and the toggled state between them. DERIVED, not measured.
+
+2. R2: YES — ACCEPT. regress/ppc_ifetch_probe.py:94-96 correctly distinguishes reads from writes. next_ic is written at cpu_ppc_instr.c:4177 and :4207, and through the refresh at :4169. The refresh writes it through quick_pc_to_pointers.h:12-14 or cpu_dyntrans.c:832-833/:894-895. The block does not read next_ic or the referenced GPRs.
+
+3. Partner-loop comment: NO — FIX. regress/ppc_ifetch_probe.py:551-553 repeats R1’s insufficient inference. The counterexample above satisfies its unchanged-condition qualifier but eliminates the second failure visit. Apply the same additional qualification.
+
+4. Gate comment: YES — ACCEPT. regress/gate_ppc.sh:301-302 explicitly starts with a toggle that actually cancels over the two visits. The counterexample does not satisfy that antecedent.
+
+5. Deviation 1: RIGHT — ACCEPT. cpu_ppc_instr.c:4168 masks off pc’s low two bits; their values cannot affect that comparison.
+
+Their self-referential toggles are caught by initialized marker-set cells and exact final-PC checks. For bit 0, T ra odd starts its failure at 0xfec00009, clears the bit to reach 0xfec00008, then skips the second toggle because both read-ahead and the marker are clear. Its pc row expects 0xfec00009 (probe:513). T rp odd clears it once and likewise fails its pc row (:561). The prologue preserves those low bits, and read-ahead does not restore them.
+
+B1’s DEBT grading remains consistent. Catching these existing alignment cells does not make every untested-bit joint mandatory. RI remains untested and initially clear in the relevant sessions; the applicable bounds are tools/CLAUDE.md:1531-1549 and :1614-1624. The operational distinction is existing marker-set coverage, not whether every caught marker is tested by a block predicate.
+
+6. Deviation 2: RIGHT — ACCEPT. probe:81-82 correctly says “unaligned cells carrying it.” A bit-0 marker affects patterns 01 and 11; a bit-1 marker affects 10 and 11. Unaligned cells lacking the marker do not produce that final-PC mismatch.
+
+7. Deviation 3: RIGHT — ACCEPT. probe:82 correctly labels the ME/pc catches DERIVED, not measured. For ME-set cells, the first visit clears ME; the second skips the toggle and parks before arm (d), leaving MSR 0 against the expected 0x1000. The source supports the derivation without establishing a measurement.
+
+8. Deviation 4: RIGHT — ACCEPT. The disclosure at probe:219-221 concerns writes to unrelated fields. It does not justify excluding conditions on unread state, and next_ic is written. Dropping that attribution is correct.
+
+No separate NEW false claim was introduced by the four deviations. The remaining problem is an existing universal assertion left incompletely corrected in R1 and its partner comment.
+
+The saved diffs and p11rec_proof.out:1-7 support the text-only record. I read the packet in full and inspected only the specified repository; I edited nothing and ran no build, emulator, probe or proof script.
+
+CODEXRECP11QHS: 6 ACCEPTED 2 TO FIX VERDICT:FIX

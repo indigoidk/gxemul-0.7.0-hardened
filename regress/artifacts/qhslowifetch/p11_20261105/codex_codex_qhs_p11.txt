@@ -1,0 +1,83 @@
+CODEXP11QHS
+model: GPT-6 (Codex)
+VERDICT: REPAIR — 1 breach, 2 false records.
+
+1. VERIFY THE CLOSURE
+
+The eight read-ahead cells and their partners carry all nine listed channels, but the cancellation family is not closed.
+
+B1: Insert this single conditional statement immediately inside the failed-read block, before arm (a):
+
+    if (cpu->translation_readahead ||
+        (cpu->cd.ppc.msr & PPC_MSR_RI))
+        cpu->cd.ppc.msr ^= PPC_MSR_RI;
+
+PPC_MSR_RI is 0x2 (src/include/cpu_ppc.h:175). The existing cells behave as follows:
+
+    Read-ahead / partner    Failure PC    Read-ahead session's MSR
+    T ra      / T rp        0xfec00008    0 -> 2 -> 0
+    T ra me   / T rp me     0xfec00008    0x1000 -> 0x1002 -> 0x1000
+    T ra odd  / T rp odd    0xfec00009    0 -> 2 -> 0
+    T ra o1m  / T rp o1m    0xfec00009    0x1000 -> 0x1002 -> 0x1000
+    T ra o2   / T rp o2     0xfec0000a    0 -> 2 -> 0
+    T ra o2m  / T rp o2m    0xfec0000a    0x1000 -> 0x1002 -> 0x1000
+    T ra o3   / T rp o3     0xfec0000b    0 -> 2 -> 0
+    T ra o3m  / T rp o3m    0xfec0000b    0x1000 -> 0x1002 -> 0x1000
+
+On the first visit, read-ahead makes the condition true and sets RI. The intervening subfic changes XER and a GPR, not MSR (cpu_ppc_instr.c:311–318). RI does not change this real-mode fetch’s translation. On the second visit, RI itself makes the condition true and the write clears it before arm (c).
+
+Every partner starts with read-ahead zero and RI clear, so it executes no write. The older one-entry failures likewise do nothing; the successful-read controls do not execute the insertion. All nine channels remain unchanged.
+
+Predicted result: 249/249, CONTROL=OK, SYMPTOM=ABSENT. This is a source-derived prediction, not an executed measurement.
+
+This edit is in-bound: it reads only translation_readahead and MSR, fields already read by the failure block. It requires no additional input cell. The mutation creates the intermediate RI-set state inside the existing eight cells. It is absent from table 12 and is not covered by the running-write, SRR1, deeper-read-ahead or unrelated-field disclosures.
+
+The G1, G2, G3 and SRR1 disclosures remain supported for the measured setups:
+
+- G1: dispatch translates pages without host memory and handles the translation exception before the slow instruction fetch. A higher exception vector does not establish entry into arm (b).
+- G2: the measured failures reach arm (c) before arm (d).
+- G3: memory.c:645–651 clears running before each rowed -T failure returns.
+- SRR1: its unobserved writes are explicitly disclosed. The existing machine-check producer also changes rowed PC and SRR0 (cpu_ppc.c:318–344).
+
+Denominator: 16 session-cells, explicitly enumerated above as eight read-ahead cases plus eight one-entry partners. Each carries nine channels, giving 144 paired-session rows; the floor assessment uses the complete 249-row detector.
+
+The static edit sweep covered predicate deletion, inversion and constants; conjunctions/disjunctions using read-ahead, running, PC/alignment and MSR; compare-mask changes; arm ordering; return/park/exception/bad transfers; state assignments, bit operations and toggles, including conditions that inspect the state being toggled. Disclosed cases were checked separately.
+
+2. THE PAIRING INVARIANT
+
+The baseline pairing premises hold, but they do not establish the claimed universal closure.
+
+I checked the fork’s prologue, failure block, read-ahead loop, pair_check.py and table12/PAIRS_base.out. The eight pairs have matching reported PC/address, matching MSR setup and final registers, running zero, and the same logical untranslated slot 2. “Same slot” means the corresponding slot, not an identical pointer across separate processes.
+
+The direct scalar conditions read translation_readahead, PC, addr, running and MSR. No additional state source is needed for B1.
+
+R1: The proof applies baseline MSR equality to the modified execution. Under B1, the real-fetch visit enters with MSR 0x2 or 0x1002, while its independent partner enters with 0 or 0x1000. A condition involving both read-ahead and the state being toggled therefore fires twice on one side and zero times on the other.
+
+pair_check.py checks halt lines, setup commands and final registers; it does not observe intermediate MSR. Its checks would not expose this cancellation. The new universal guarantee in sections 0, 2a–2c and 3 is false, although the nine measured R11 variants are correctly caught.
+
+3. THE DIFF
+
+All 72 new rows agree with their specific cited catches:
+
+- nonex: R6_mask15.
+- addr: W2 and D3.
+- stopped: B1_exit_head.
+- msr: the corresponding R9_tog_me member.
+- chkstop: D1/D2 for ME clear; V11 for ME set.
+- srr0: R11_tog_full and the matching isolated member.
+- unimpl: W3, plus V10 for ME set.
+- session and pc: the stated exit and parked-PC expectations.
+
+The counts reconcile: 18 control-group rows, 39 older -T rows, 72 read-ahead rows, 72 partner rows and 48 blr rows total 249. Their session counts are 5, 4, 8, 8 and 6, totaling 31. Table 12 has 74 observed red variants and 14 green; the contractual tally of 73 red separately excludes the red but unpredicted V12.
+
+R2: The new docstring says next_ic belongs to state the block “neither reads nor writes” (regress/ppc_ifetch_probe.py:82–83). The block writes next_ic at cpu_ppc_instr.c:4177 and :4207. Conditions reading next_ic can remain excluded under the read-field operand bound, but the explanation must say that its value is not read.
+
+Else found: an arm-(a) PC-bit-2 toggle is overwritten by the next translator prologue and also escapes final-state observation. I have not established semantic harm because those PC offset bits are reconstructed during normal dispatch, so I do not count it as another breach.
+
+4. VERDICT
+
+REPAIR B1 and correct R1 and R2. The full-PC partners catch the documented variants, but matching baseline inputs does not prevent a mutation from creating and then consuming its own intermediate condition.
+
+I read the packet in full and checked only the specified GXEMUL-SEC fork. No files were edited, and no build, emulator or regression code was run.
+
+CODEXP11QHS: 16 CELLS SWEPT 1 BREACHES 2 FALSE RECORDS VERDICT:REPAIR

@@ -1,0 +1,118 @@
+CODEXP6QHS
+model: GPT-6 (Codex)
+VERDICT: REPAIR — 3 breach families and 3 distinct false records.
+
+1. FLOOR
+
+These are static derivations, not new measured scores. Each edit predicts all 82 existing rows remain green.
+
+B1. Arm (a) can reject the second alignment bit undetected.
+
+Replace its guard with:
+
+if (cpu->translation_readahead && !(cpu->pc & 2))
+
+The measured read-ahead failure PCs enumerate as:
+T ra:     0xfec00008 & 2 = 0
+T ra me:  0xfec00008 & 2 = 0
+T ra odd: 0xfec00009 & 2 = 0
+
+T blr reaches 0x02040007 with read-ahead disabled by its breakpoint. Consequently, every existing session takes the same exits.
+
+Witness: enter T ra at 0xfec00007. The read-ahead failure has pc=0xfec0000b and addr=0xfec00008. The correct guard returns; the edit skips (a), the aligned comparison in (b) remains equal, and (c) parks after one report instead of two.
+
+Row: that session’s nonex must equal 2; pin pc=0xfec0000b and exit0. Re-seeding the existing odd session this way also retains its catches for both full-alignment conjunctions. This is the existing depth-one alignment-conjunction shape, not a disclosed deeper-read-ahead case.
+
+B2. The unaligned, ME-set read-ahead joint cell is absent.
+
+Replace arm (a)’s guard with:
+
+if (cpu->translation_readahead &&
+    (!(cpu->cd.ppc.msr & PPC_MSR_ME) || cpu->pc == addr))
+
+The measured cells enumerate as:
+ME clear, aligned:   T ra
+ME set, aligned:     T ra me
+ME clear, unaligned: T ra odd
+ME set, unaligned:   absent
+
+The added conjunct is true on every measured read-ahead failure. It is false in the missing cell, sending that failure to (c)’s early park.
+
+Row: run T ra odd with msr=0x1000. At entry pc=0xfec00005, expect exit0, final pc=0xfec00009 and nonex=2; this edit produces nonex=1. PC alignment and ME are already distinctions examined by this block and its accepted mutation shapes. This introduces neither a different machine nor a deeper read-ahead.
+
+B3. An alignment-conditioned MSR write escapes the new session’s assertions.
+
+Replace arm (a)’s bare return with:
+
+{
+    cpu->cd.ppc.msr |= (cpu->pc != addr ? PPC_MSR_ME : 0);
+    return;
+}
+
+T ra and T ra me have pc==addr and remain unchanged. T ra odd acquires MSR=0x1000, but still exits zero, parks at 0xfec00009 and prints two reports. Those are its entire asserted output set. Other sessions do not take this read-ahead exit.
+
+Row: add T ra odd msr, expected 0. This uses fields already read by the block and the established MSR-write mutation shape; it is not an unrelated-field disclosure.
+
+DENOMINATOR: 41 explicitly enumerated predicate/shape cells, counted as follows. Unchanged reference expressions are excluded.
+
+• Arm (a), 12 single-conjunct edits: running; !running; ME; !ME; pc==addr; pc!=addr; pc&1; pc&2; pc&3; !(pc&1); !(pc&2); !(pc&3).
+
+• Arm (b), 17 mask replacements: m=0,1,2,4,5,6,7,8,9,10,11,12,13,14,15,0x13,0x40003 in pc&~m. The original m=3 is excluded. Among m=0 through 15, every replacement except 11 is exposed by T blr; 11 is exposed by T ra. The 0x13 case is disclosed; 0x40003 is exposed by T blr.
+
+• Arm (a), four guard conjunctions excluding respectively the ME-clear/aligned, ME-set/aligned, ME-clear/unaligned and ME-set/unaligned cells.
+
+• Arm (a), four conditional ME writes: set or clear ME, conditioned on pc==addr or pc!=addr. Equality-conditioned writes are observed by the aligned sessions. Inequality-conditioned writes expose B3 or the missing producer in B2.
+
+• Failure predicate, three disjunctions: translation_readahead; pc!=addr; !running.
+
+• Enclosing slow-path selection, one edit: suppress it during read-ahead, as D12 does.
+
+Thus 12+17+4+4+3+1=41. I count the three independent coverage gaps above, rather than counting multiple edits exposing the same gap. Table 6’s other named variants were checked as supplied evidence, not added to this denominator.
+
+2. THE DIFF
+
+The new and re-seeded assertions catch their specifically named variants.
+
+For T blr, pc=0x02040007 and addr=0x02040004:
+unmasked gives 0x02040007;
+~1 gives 0x02040006;
+~2 gives 0x02040005;
+~3 gives 0x02040004;
+~7 gives 0x02040000;
+~15 gives 0x02040000.
+
+Only ~3 equals addr. The re-seed therefore preserves the narrowed-mask catches and adds the claimed ~7 catch.
+
+T ra odd correctly catches both R6_a_pceq and R6_a_align through nonex: one report versus the required two. Its session and pc rows correctly assert survival and the retained low bit. Neither assertion alone distinguishes those two variants.
+
+Three distinct false records remain:
+
+R1. “Every -T session also pins the final MSR” and “MSR is rowed on every -T session” are false. T ra odd has only session, pc and nonex rows. These are two occurrences of one false coverage claim.
+
+R2. The higher-mask disclosure’s explanation, “no rowed failing fetch carries such a bit,” is false for the stated class of bits above bit 3.
+
+Enumerating set bits, with bit 0 least significant:
+0x02040004: {2,18,25}
+0xfec00008: {3,22,23,25,26,27,28,29,30,31}
+
+For example, ~0x40003 preserves bits 2 and 3 but clears bit 18. T blr then compares 0x02000004 against 0x02040004 and exposes the edit. The particular ~0x13 example is valid; restrict the explanation to higher bits absent from the measured addresses. The disclosed class itself is not counted as a new breach.
+
+R3. The failure-test disclosure for “|| cpu->pc != addr” is obsolete. It says only an unaligned no-T fetch would newly enter the block. T ra odd now supplies a successful unaligned fetch under -T:
+
+pc=0xfec00005, addr=0xfec00004, read-ahead=0, running=1, ME=0.
+
+The widened failure test enters the block immediately. Arms (a), (b) and (c) do not take it, so it checkstops before read-ahead. Its pc and nonex rows would observe 0xfec00005 and 0 instead of 0xfec00009 and 2. This is a newly detectable edit, not a surviving floor breach.
+
+The gate’s count is consistent. Enumerating sessions and row counts:
+ctl 3; neg 1; isi 5; isi1 4; noT 5; T cont 10; T step 10; T me 9; again 10; T ra 8; T ra me 6; T ra odd 3; T blr 8.
+These are 13 sessions and 82 rows.
+
+The PRETABLE “at least” errors are recorded honestly. W5 lost T_ra_srr0; D7 lost T_ra_me_srr0. Section 4c explicitly calls those predictions wrong. Continued detection does not satisfy the original subset predictions, and the record acknowledges that distinction. I do not count those acknowledged historical errors again.
+
+Premises independently checked in GXEMUL-SEC: the prologue assigns pc before aligning addr; alignment shift is 2 and the instruction-page entry shift is 10; mtlr and X(bclr_20) copy unmasked values while generic bclr masks them; the breakpoint suppresses read-ahead; cpc700’s data access returns success and its registered window is eight bytes; and the actual probe contains precisely the three odd-session assertions described above. I read the complete packet and inspected source only; I did not edit, build or execute repository code.
+
+3. VERDICT
+
+REPAIR B1’s missing alignment-bit coverage, B2’s missing unaligned/ME-set producer, and B3’s missing odd-session MSR assertion. Correct R1–R3. The repair’s specifically claimed catches work, but the composite does not meet the closing condition.
+
+CODEXP6QHS: 41 CELLS SWEPT 3 BREACHES 3 FALSE RECORDS VERDICT:REPAIR

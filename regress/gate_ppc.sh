@@ -95,7 +95,7 @@ set -u
 cd "$(dirname "$0")"
 . ./lib.sh
 
-gate_begin "gate 13: PowerPC FP conversion + FPSCR (#304/#305/#324-#330) + rlwimi/rldimi/rldicl + #571 DS-form + #579 llsc"
+gate_begin "gate 13: PowerPC FP conversion + FPSCR (#304/#305/#324-#330) + rlwimi/rldimi/rldicl + #571 DS-form + #579 llsc + #582 ifetch"
 
 PMAX=${PMAX:-$ROOT/build/gxemul}
 LOG=$LOGDIR/gate_ppc.log
@@ -282,6 +282,59 @@ else
     check "ppc_llsc rows run"   "$llscrun" 83
     check "ppc_llsc rows green" "$llscok" 83
     check "ppc_llsc rows red"   "$llscbad" 0
+fi
+
+# ---- qhslowifetch (#582): a failed slow-path instruction fetch no longer ends the emulator process -- its 249-row detector ------
+# X(to_be_translated) read the word with memory_rw and, on failure, printed `read failed: TODO' and called exit(1).  The arm now
+# returns on read-ahead, refreshes next_ic when the translation already delivered an exception, PARKS the CPU on a -T halt, and
+# delivers a machine check (MSR[ME] set) or a checkstop (clear) when a device declines the fetch while running.  `-E pmppc' with a
+# raw four-byte word needs no image, so this block runs BEFORE the NetBSD prerequisite, like the #579 block above.  Thirty-one cold
+# sessions: controls (a live word, a bogus machine, the ISI route by continue and by step, the no -T route), four -T sessions at
+# 0x02040000 -- step, continue, step-step-continue-continue, and a step with MSR[ME] set -- each pinning the park (pc, SRR0), the
+# exact halt-report count, the final MSR and the absence of the fatal, UNIMPLEMENTED, exception and checkstop text (the ME-set
+# step pins the same), eight -T continues from cpc700_pci's last word whose read-ahead reaches arm (a) -- pc's low two bits {00,
+# 01, 10, 11} x MSR[ME] {clear, set}, entered at 0xfec00004 | low bits, each pinning the same nine channels: survival, the park pc,
+# the two halt reports, the halted address, the stop, the final MSR, no checkstop line, SRR0 untouched and no UNIMPLEMENTED text
+# (repair 7 completed the grid, repairs 7b and 8 the channels; repair 6 added the first unaligned cell), eight one-entry PARTNERS
+# at the same full pc and MSR as those eight (pc set to 0xfec00008 | low bits directly, so the first fetch fails once; repair 11):
+# each pair presents the failure block with the same pc, addr, MSR, running and slot and differs only in translation_readahead, so a
+# toggle inserted before arm (a) whose condition reads only that shared entry state fires on the partner's one visit exactly when it
+# fires on the two-entry session's first visit (the probe's docstring; codex rec13; regress review R-A) -- and six -T continues
+# into a guest-made unaligned pc (mtlr; blr), low bits 11, 01 and 10 with MSR[ME] clear and set, that arm (c) must park: one-entry
+# failures, which see a change the block makes under pc's low bits and ME that the two-entry read-ahead sessions undo (repairs 5,
+# 6, 9 and 10; with `T cont`, `T step`, `again` and `T me` they give every (low bits, ME) cell a one-entry session).
+# The rung-3 witness is the 17-row probe frozen at regress/artifacts/qhslowifetch/witness_20261104/; the detector scores 108/249 (141
+# rows red) on the pre-fix build and 249/249 on the fix (regress/artifacts/qhslowifetch/r7_20261105/table12/SCORES.txt).  Scored in the
+# #579 shape: the completion sentinel once and last; each protocol key once in any form and once accepted; every row by name; the
+# emitted, green and red row counts pinned to literals.  Names are at most 16 characters in an 18-wide column.  Test-variant tables:
+# regress/artifacts/qhslowifetch/det_20261104/table1/ (the 50-row probe), table2/ (the 56-row probe), r3_20261105/table3/
+# (the 62-row probe), r4_20261105/table4/ (the 69-row probe), r5_20261105/table5/ (the 79-row probe), r6_20261105/table6/ (the
+# 82-row probe), r7_20261105/table7/ (the 103-row probe), r7_20261105/table8/ (the 129-row probe), r7_20261105/table9/ (the 137-row
+# probe), r7_20261105/table10/ (the 153-row probe), r7_20261105/table11/ (the 177-row probe) and r7_20261105/table12/ (this probe,
+# the record; its pairing check, table12/PAIRS_base.out).
+IFLOG=$LOGDIR/ppc_ifetch.log
+python3 -u ppc_ifetch_probe.py "$PMAX" gate "$LOGDIR/ppc_ifetch" > "$IFLOG" 2>&1 || true
+if [ "$(grep -cx 'PPC_IFETCH_PROBE_DONE' "$IFLOG")" != 1 ]; then
+    note "ppc_ifetch: completion sentinel missing or duplicated; last lines follow"
+    tail -5 "$IFLOG" | sed 's/^/       /'
+    check "ppc_ifetch probe completed" "no" "yes"
+else
+    check "ppc_ifetch probe completed" "yes" "yes"
+    check "ppc_ifetch sentinel is the last line" "$(tail -n 1 "$IFLOG")" "PPC_IFETCH_PROBE_DONE"
+    for k in RESULT CONTROL SYMPTOM RED; do
+        check "ppc_ifetch $k= lines" "$(grep -c "^PPC_IFETCH_$k=" "$IFLOG")" "1"
+    done
+    check "ppc_ifetch RESULT=249/249"  "$(grep -cx 'PPC_IFETCH_RESULT=249/249' "$IFLOG")" "1"
+    check "ppc_ifetch CONTROL=OK"      "$(grep -cx 'PPC_IFETCH_CONTROL=OK' "$IFLOG")" "1"
+    check "ppc_ifetch SYMPTOM=ABSENT"  "$(grep -cx 'PPC_IFETCH_SYMPTOM=ABSENT' "$IFLOG")" "1"
+    check "ppc_ifetch RED=none"        "$(grep -cx 'PPC_IFETCH_RED=none' "$IFLOG")" "1"
+    for v in "ctl session" "ctl live" "ctl srr0 kept" "neg apparatus" "isi session" "isi srr0" "isi pc" "isi text" "isi nonex" "isi1 session" "isi1 srr0" "isi1 pc" "isi1 nonex" "noT session" "noT pc" "noT srr0 kept" "noT unimpl" "noT chkstop" "T cont session" "T cont text" "T cont prompt" "T cont pc" "T cont srr0" "T cont nonex" "T cont unimpl" "T cont exc" "T cont chkstop" "T cont msr" "T step session" "T step text" "T step prompt" "T step pc" "T step srr0" "T step nonex" "T step unimpl" "T step exc" "T step chkstop" "T step msr" "T me session" "T me pc" "T me srr0" "T me nonex" "T me text" "T me exc" "T me unimpl" "T me chkstop" "T me msr" "again session" "again pc" "again srr0" "again nonex" "again text" "again unimpl" "again exc" "again chkstop" "again prompt" "again msr" "T ra session" "T ra pc" "T ra nonex" "T ra addr" "T ra stopped" "T ra msr" "T ra chkstop" "T ra srr0" "T ra unimpl" "T ra me session" "T ra me pc" "T ra me nonex" "T ra me addr" "T ra me stopped" "T ra me chkstop" "T ra me msr" "T ra me srr0" "T ra me unimpl" "T ra odd session" "T ra odd pc" "T ra odd nonex" "T ra odd addr" "T ra odd stopped" "T ra odd msr" "T ra odd chkstop" "T ra odd srr0" "T ra odd unimpl" "T ra o1m session" "T ra o1m pc" "T ra o1m nonex" "T ra o1m addr" "T ra o1m stopped" "T ra o1m msr" "T ra o1m chkstop" "T ra o1m srr0" "T ra o1m unimpl" "T ra o2 session" "T ra o2 pc" "T ra o2 nonex" "T ra o2 addr" "T ra o2 stopped" "T ra o2 msr" "T ra o2 chkstop" "T ra o2 srr0" "T ra o2 unimpl" "T ra o2m session" "T ra o2m pc" "T ra o2m nonex" "T ra o2m addr" "T ra o2m stopped" "T ra o2m msr" "T ra o2m chkstop" "T ra o2m srr0" "T ra o2m unimpl" "T ra o3 session" "T ra o3 pc" "T ra o3 nonex" "T ra o3 addr" "T ra o3 stopped" "T ra o3 msr" "T ra o3 chkstop" "T ra o3 srr0" "T ra o3 unimpl" "T ra o3m session" "T ra o3m pc" "T ra o3m nonex" "T ra o3m addr" "T ra o3m stopped" "T ra o3m msr" "T ra o3m chkstop" "T ra o3m srr0" "T ra o3m unimpl" "T rp session" "T rp pc" "T rp nonex" "T rp addr" "T rp stopped" "T rp msr" "T rp chkstop" "T rp srr0" "T rp unimpl" "T rp me session" "T rp me pc" "T rp me nonex" "T rp me addr" "T rp me stopped" "T rp me msr" "T rp me chkstop" "T rp me srr0" "T rp me unimpl" "T rp odd session" "T rp odd pc" "T rp odd nonex" "T rp odd addr" "T rp odd stopped" "T rp odd msr" "T rp odd chkstop" "T rp odd srr0" "T rp odd unimpl" "T rp o1m session" "T rp o1m pc" "T rp o1m nonex" "T rp o1m addr" "T rp o1m stopped" "T rp o1m msr" "T rp o1m chkstop" "T rp o1m srr0" "T rp o1m unimpl" "T rp o2 session" "T rp o2 pc" "T rp o2 nonex" "T rp o2 addr" "T rp o2 stopped" "T rp o2 msr" "T rp o2 chkstop" "T rp o2 srr0" "T rp o2 unimpl" "T rp o2m session" "T rp o2m pc" "T rp o2m nonex" "T rp o2m addr" "T rp o2m stopped" "T rp o2m msr" "T rp o2m chkstop" "T rp o2m srr0" "T rp o2m unimpl" "T rp o3 session" "T rp o3 pc" "T rp o3 nonex" "T rp o3 addr" "T rp o3 stopped" "T rp o3 msr" "T rp o3 chkstop" "T rp o3 srr0" "T rp o3 unimpl" "T rp o3m session" "T rp o3m pc" "T rp o3m nonex" "T rp o3m addr" "T rp o3m stopped" "T rp o3m msr" "T rp o3m chkstop" "T rp o3m srr0" "T rp o3m unimpl" "T blr session" "T blr pc" "T blr nonex" "T blr srr0" "T blr msr" "T blr chkstop" "T blr unimpl" "T blr lr" "T blr o1 session" "T blr o1 pc" "T blr o1 nonex" "T blr o1 srr0" "T blr o1 msr" "T blr o1 chkstop" "T blr o1 unimpl" "T blr o1 lr" "T blr o2 session" "T blr o2 pc" "T blr o2 nonex" "T blr o2 srr0" "T blr o2 msr" "T blr o2 chkstop" "T blr o2 unimpl" "T blr o2 lr" "T blr m1 session" "T blr m1 pc" "T blr m1 nonex" "T blr m1 srr0" "T blr m1 msr" "T blr m1 chkstop" "T blr m1 unimpl" "T blr m1 lr" "T blr m2 session" "T blr m2 pc" "T blr m2 nonex" "T blr m2 srr0" "T blr m2 msr" "T blr m2 chkstop" "T blr m2 unimpl" "T blr m2 lr" "T blr m3 session" "T blr m3 pc" "T blr m3 nonex" "T blr m3 srr0" "T blr m3 msr" "T blr m3 chkstop" "T blr m3 unimpl" "T blr m3 lr"; do
+        check "ppc_ifetch row: $v" "$(count "$IFLOG" "^$v  .*ok$")" "1"
+    done
+    ifok=$(count "$IFLOG" " ok$"); ifbad=$(count "$IFLOG" " FAIL$"); ifrun=$((ifok + ifbad))
+    check "ppc_ifetch rows run"   "$ifrun" 249
+    check "ppc_ifetch rows green" "$ifok" 249
+    check "ppc_ifetch rows red"   "$ifbad" 0
 fi
 
 # ---- ppccrandcorc (#575): crandc and crorc computed NAND and NOR -- its 70-row rung-3 detector ---------------------------------------

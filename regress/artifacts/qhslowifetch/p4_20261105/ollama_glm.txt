@@ -1,0 +1,47 @@
+GLMP4QHS
+model: GLM-4.5
+VERDICT LINE: GLMP4QHS: 36 CELLS SWEPT 1 BREACHES 0 FALSE RECORDS VERDICT:REPAIR
+
+## 1. FLOOR — one breach
+
+**EDIT:** in arm (a), before its `return;` (line 4145), insert `cpu->cd.ppc.srr0 = 0;` (any value ≠ the session sentinel).
+
+**DERIVATION:**
+- READ: `T ra nonex` = "2" ("every halt names the word past the window") and `T ra me pc`'s note says "the real fetch parks" — so each read-ahead session makes **two** failure-block entries: the prefetch (arm (a)) and the real fetch (arm (c) park). For nonex to be 2, the prefetch entry must leave running set (otherwise the real fetch could never run).
+- READ: arm (a) is entered only on those two prefetch entries. The four park sessions (T cont, T step, T me, again) reach the block with translation_readahead clear; the ctl/isi/no -T sessions never enter it.
+- READ: the read-ahead legs' rows are exactly T ra {session, pc, nonex, addr, stopped, msr, chkstop} and T ra me {session, pc, nonex, chkstop, msr}. **No srr0 row on either leg.** The park legs do pin srr0 ("T cont/T step/T me/again srr0").
+- REASONED: an srr0 write prints nothing, moves no pc, and leaves nonex/addr/stopped/msr/chkstop/session untouched — every pinned cell on both read-ahead legs is unchanged, and the park legs never enter (a). Green on all 69.
+- READ: no table-4 variant writes SRR0 (B1a/B1b/B1c write MSR; the rest are conditionings, exits, prints) — yet the shape "add a field-write in arm (a)" is squarely in the swept grid (B1b is that exact shape with F=MSR).
+- READ: the diff's **new** disclosure sentence claims SRR0: "a write … that changes none of pc, **SRR0**, MSR or the reports — is not claimed" ⇒ SRR0-changing writes are claimed territory.
+
+⇒ A claimed channel, corrupted by a single in-bound edit on a route the block demonstrably executes, invisible to every row. **BREACH.**
+
+**ROW that closes it:** `T ra srr0`, `T ra me msr`'s sibling `T ra me srr0` — "srr0 kept" against the sentinel, the same parity argument the diff itself uses for `T ra chkstop` (F2) and for addr/stopped. (The other unrowed absence pins on the read-ahead legs — fatal/UNIMPLEMENTED/exc — I treat as settled design: the ruling's F2 chose checkstop parity. SRR0 is different because the sentence claiming it is new in this diff.)
+
+**DENOMINATOR (READ):** 36 named cells = B1,B1a,B1b,B1c,B2 (5) + W2,W3,W4,W5,W7 (5) + D1–D15 (15) + V2–V12 (11); each scored against 69 cells (ctl 3, neg 1, isi 5, isi1 4, noT 5, T cont 10, T step 10, T me 9, again 10, T ra 7, T ra me 5 = 69), plus HEAD and three null legs; nine green inside disclosed classes; V12 in neither tally per F4. My audit adds one unswept cell to that grid: field-write in arm (a)/(c) with F=SRR0 (the grid swept F=MSR only).
+
+**FILED, not breaches (per the standing rule):** (1) arm (c) operand swap `!running`→`!translation_readahead`: green on all 69 (at the real fetch readahead must be clear — otherwise (a) would fire and the fixed build could not park, contradicting `T ra me pc`; the prefetch exits at (a) first); differs only at a running fetch failure — the ROW-5 state already disclosed as unmeasured, but the disclosure's wording covers only edits to arm (d)/checkstop, so it deserves a sentence. (2) arm (a)'s return → park+return: green on all 69 (the two-continue structure absorbs the moved batch boundary; final pc/nonex/stopped/msr identical); differs only at a running read-ahead failure — same ROW-5 class; the depth-1 clause ("differs only at a deeper read-ahead") does not literally cover it.
+
+## 2. THE DIFF
+
+**Each new row catches what its note claims — all seven verified against the two-entry route model (READ facts above; REASONED routing):** T cont/T step/again msr "(B1c)" ✓ (park route is (c), MSR 0; B1a correctly leaves them green — already 0); T me msr "(B1a)" ✓; T ra msr "(B1c)" ✓ via the real fetch's (c) entry (B1b correctly green — MSR already 0); T ra me msr "(B1a, B1b)" ✓ via both entries (B1c correctly green — already set); T ra chkstop "(B2)" ✓ via the ME-clear prefetch. Section 3's "EXACTLY their named rows" for B1a/B1b/B1c/B2 is confirmed — the *exclusions* are the strongest internal check that the route model is right. The further catches listed for D1/D2/D14/D15/V7 on T_ra_chkstop also re-derive correctly (each sends T ra's real fetch, or the session's first fetch, into the checkstop fallback).
+
+**Arithmetic, enumerated (READ):** 69 = 62 + 7, and the rest of 2a is docstring ✓. Gate list = 69 names, the seven new names each once ✓. Variants 36 = 26 + 9 + 1 (V12) ✓ = table 3's 32 + the four p3 variants ✓; table 3's 23 red − V12 + 4 = 26 ✓. HEAD: 37/69 green = table 3's 36 + `T ra chkstop` (the pre-fix exit prints no checkstop line); 32 red = 26 + the six msr rows (every -T leg exits before `reg`) — "EXACTLY the predicted set" reconciles ✓. D12 65/69 = 4 red ✓. PRETABLE 23:32:20.75 → first output 23:32:37.80 = 17 s ✓.
+
+**Added sentences vs sections 1/3:** none proven false among the checkable ones (the null scores, the green nine, the V12 "OPPOSITE leg" account matching both tables' measured legs, the `|| !running` disclosure consistent with the block comment and DHALT_NOTE, the D12 erratum honestly filed). Three things are **not settleable from the packet**:
+
+1. **W7/V9 vs the further-catches list (the one that matters).** REASONED from READ facts: nonex=2 forces running=1 at the prefetch entry; T ra runs with MSR 0; arm order is (a),(b),(c),(d),checkstop. Therefore W7 (arm (a)'s guard deleted) and V9 (guard && ME set) must send T ra's prefetch failure past (b) (pc==addr), past (c) (running=1), past (d) (msr 0) **into the checkstop print** — both redden `T ra chkstop` by exactly the mechanism the record names for D1/D2/D14/D15/V7. The record lists only those five and claims "ONE row-set prediction missed" (D12). This is consistent **only if** PRETABLE_4 predicted W7's and V9's `T ra chkstop` reds (putting them in the predicted row-sets). Settling fact: PRETABLE_4's predicted rows for W7 and V9, or the per-variant rows in table4/SCORES.txt. If unpredicted, two records are false. I file this as a required reconciliation, not a counted false record.
+2. "with `T ra nonex` in all three" — the table-2 leg is not inlined. Settling fact: table 2's D12 row-set.
+3. F3/F5's ruled wordings — the ruling is inlined only for F1, F2, F4 (V12) and F6; the sentences plausibly carrying F3/F5 are internally consistent, but faithfulness is not checkable here.
+
+**Ruled wordings carried:** F1 ✓ (six msr rows, 0/0x1000 matching the sessions' msr=0x1000 and the row constants); F2 ✓; F4 ✓ (V12 NOT PREDICTED, neither tally — 26+9=35≠36 confirms it is counted nowhere; the stack-decides account matches both tables; zero-init filed, not fixed). Minor nit: section 0 points at "(section 4)" for the table-4 legs; the record is section 3.
+
+## 3. F6 — right
+
+Re-derived from the quoted prologue, ENUMERATED: the page mask is (N−1)<<2 — with N=1024, 0xFFC, clearing bits 2..11 (slot-index bits) and **leaving bits 0-1**. pc=0x103: line 1 → addr=0x003; line 2 restores the slot bits → addr=0x103; line 3: cpu->pc = 0x103 (bits 0-1 survive); line 4: addr = 0x100. So cpu->pc is assigned the pre-alignment value and only addr is aligned: a debugger-set unaligned pc reaches the failure block with cpu->pc ≠ addr, arm (b) fires. READ+REASONED: the ruling's realignment premise fails, exactly as stated. Filing rather than rowing is right: an unaligned pc is not a guest state (REASONED: PowerPC branch targets are word-aligned — immediates are scaled by 4, indirect targets' low bits ignored), so a row would demand a cell outside the guest-reachable bound; D11/V2 green is consistent; the block comment's "reached on no measured session" stays true.
+
+## 4. VERDICT — REPAIR
+
+One floor breach: the read-ahead route's unpinned SRR0 channel — owed by this diff itself, since the sentence claiming SRR0 is new in 2a. Fix: add `T ra srr0` / `T ra me srr0` (or rewrite the disclosure to unclaim SRR0 there). Plus: settle the W7/V9 PRETABLE reconciliation named above (it decides whether "ONE row-set prediction missed" and the further-catches enumeration are false records); the two ROW-5-confined green edits filed for disclosure-wording parity; the "(section 4)" pointer. Everything else the ruling owed — F1, F2, the seven rows, the B1a/B1b/B1c/B2 parity, the F4/V12 record, the F6 filing, the PRETABLE-before-driver order, the 36-cell denominator with its nine disclosed green — is delivered and internally consistent as far as this packet shows.
+
+GLMP4QHS: 36 CELLS SWEPT 1 BREACHES 0 FALSE RECORDS VERDICT:REPAIR

@@ -4127,10 +4127,86 @@ X(to_be_translated)
 		/*  fatal("TRANSLATION MISS!\n");  */
 		if (!cpu->memory_rw(cpu, cpu->mem, addr, ib,
 		    sizeof(ib), MEM_READ, CACHE_INSTRUCTION)) {
-			fatal("PPC to_be_translated(): "
-			    "read failed: TODO\n");
-			exit(1);
-			/*  goto bad;  */
+			/*  #582: the instruction fetch failed.  This
+			    used to be fatal() + exit(1).  Four states
+			    reach here; none may run this slot, and
+			    the slot stays TO_BE_TRANSLATED, so a fetch
+			    that later reaches it re-enters this arm.
+			    (A -T halt is terminal whichever exit is
+			    taken: memory.c cleared running, so the run
+			    loop no longer enters this CPU and a further
+			    step or continue runs nothing.  (c)'s park
+			    only ends the current batch and keeps pc
+			    here.)  */
+			/*  (a) Read-ahead: the guest has not reached
+			    this address.  Touch nothing, as bad:
+			    does.  */
+			if (cpu->translation_readahead)
+				return;
+			/*  (b) The translation in memory_rw raised an
+			    ISI or 603 IMISS: ppc_exception() saved
+			    SRR0/SRR1 and moved pc to the vector.
+			    That route is reached on no measured
+			    session (the dispatch pc lookup translates
+			    this address first); kept so a delivered
+			    exception is not doubled by (d).  Not
+			    watertight: when the vector equals the
+			    failing address, pc equals addr again, (b)
+			    is skipped and (d) delivers a second
+			    exception over SRR0/SRR1, or checkstops if
+			    MSR[ME] is clear (`ppcvecaddr`; no producer on any
+			    machine measured).  pc is compared ALIGNED:
+			    the prologue aligns addr but not pc, and a
+			    guest can make pc unaligned (mtlr and bclr
+			    copy LR unmasked), so a bare pc != addr
+			    took this arm for such a pc, re-ran the
+			    slot and, under -T, printed thousands of
+			    halt reports instead of parking in (c).
+			    next_ic must follow pc; ppc_exception()
+			    re-resolves it, and (d) relies on that.
+			    The refresh here is redundant and harmless.  */
+			if ((cpu->pc & ~(uint64_t)3) != addr) {
+				quick_pc_to_pointers(cpu);
+				return;
+			}
+			/*  (c) -T: memory.c cleared running and printed
+			    the non-existant line.  No PowerPC exception
+			    is involved.  Park at this pc (set above) so
+			    the debugger shows the failing fetch.  */
+			if (!cpu->running) {
+				cpu->cd.ppc.next_ic = &nothing_call;
+				return;
+			}
+			/*  (d) A device declined an instruction-width
+			    read while running.  A fetch the bus
+			    terminates with an error is a machine check
+			    (vector 0x200) when MSR[ME] is set and a
+			    checkstop when it is clear.  SRR1 status
+			    bits are not modelled.  */
+			if (cpu->cd.ppc.msr & PPC_MSR_ME) {
+				/*  ppc_exception() leaves MSR[ME] set,
+				    where the architecture clears it on a
+				    machine check, so a further failing
+				    fetch here takes a second machine check
+				    instead of checkstopping
+				    (`ppcintentrymsr`).  */
+				ppc_exception(cpu, PPC_EXCEPTION_MC);
+				return;
+			}
+			/*  Clears only this CPU's running and parks
+			    next_ic on nothing_call, which ends the
+			    current batch.  memory.c's -T halt clears
+			    every CPU's running; a checkstop is a
+			    per-processor state.  pmppc has one CPU,
+			    so what the other CPUs of a multiprocessor
+			    do after this checkstop is not measured
+			    (`ppcmpcheckstop`).  */
+			fatal("[ ppc: instruction fetch from 0x%" PRIx64
+			    " declined with MSR[ME]=0: checkstop ]\n",
+			    (uint64_t) addr);
+			cpu->running = 0;
+			cpu->cd.ppc.next_ic = &nothing_call;
+			return;
 		}
 	}
 

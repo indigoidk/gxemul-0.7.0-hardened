@@ -1,0 +1,71 @@
+CODEXP7QHS
+model: GPT-6 (Codex)
+VERDICT: REPAIR — one floor breach and one false record.
+
+1. The eight-cell grid has all eight advertised channels, but the shipped composite detector is not closed.
+
+The cells enumerate as follows; clear means MSR=0, set means MSR=0x1000:
+
+00 clear: T ra      entry 0xfec00004, final pc 0xfec00008
+00 set:   T ra me   entry 0xfec00004, final pc 0xfec00008
+01 clear: T ra odd  entry 0xfec00005, final pc 0xfec00009
+01 set:   T ra o1m  entry 0xfec00005, final pc 0xfec00009
+10 clear: T ra o2   entry 0xfec00006, final pc 0xfec0000a
+10 set:   T ra o2m  entry 0xfec00006, final pc 0xfec0000a
+11 clear: T ra o3   entry 0xfec00007, final pc 0xfec0000b
+11 set:   T ra o3m  entry 0xfec00007, final pc 0xfec0000b
+
+Each checks exit0, the listed pc, two halt reports, MSR as entered, halted address 0xfec00008, stopped=yes, chkstop=absent and SRR0=0x11111111.
+
+Breach F1: insert this single conditional transfer inside arm (c), before its park:
+
+    if ((cpu->cd.ppc.msr & PPC_MSR_ME) && cpu->pc != addr)
+        goto bad;
+
+This specializes V10_c_me_bad using the already admitted ME/alignment joint condition. Both operands are tested by the failure block; the edit stays inside the enclosing function and affects existing sessions.
+
+It sends the real fetches of T ra o1m, T ra o2m and T ra o3m to bad:. They print UNIMPLEMENTED, but retain all eight checked channels. T me, the only red row’s session under V10, is aligned and therefore excluded. T blr is unaligned but ME-clear and therefore excluded.
+
+The source supports this directly: cpu_dyntrans.c:1988 resets the untranslated slot; :2004 prints UNIMPLEMENTED without changing pc; :2014 clears already-cleared running; :2023 and tmp_ppc_head.c:60 together leave next_ic parked on nothing_call. Neither MSR nor SRR0 changes.
+
+There is also existing measurement supporting this derivation: table8/sessions_V10_c_me_bad/T_ra_o1m.txt prints UNIMPLEMENTED while retaining the expected registers, two halt reports and stop line. Table 8 records V10’s sole red row as T_me_unimpl. The proposed specialization removes that catcher. Its predicted result is therefore 129/129, CONTROL=OK, SYMPTOM=ABSENT. This is a static finding, not a newly executed measurement.
+
+The composite symptom check does not rescue this case: it scans every session for “read failed: TODO”, not UNIMPLEMENTED.
+
+The disclosures survive my checks:
+
+G1: the generic dispatch lookup performs translation and follows an exception’s new pc before dispatch. The quick physical-page cache is populated only with host memory, whose translator fetch uses memcpy. Same-page read-ahead supports the stated absence of a fresh translation fault on these sessions.
+
+G2/G3: the existing pmppc device callbacks support the disclosed absence of a running-1 declined fetch. The -T failure path clears running before returning failure; the ordinary unmapped read zero-fills. I found no contrary producer in the reviewed machinery.
+
+SRR1: explicitly unrowed and disclosed. ppc_exception writes it, including during dispatch ISI handling. “Only arm (d) writes it here” is supportable as a statement about the failure block’s exception call, not about every session.
+
+Denominator: eight class cells, each with eight advertised assertions, including their subsequent real-fetch paths. I swept guard deletion/inversion/forcing; ME, running, read-ahead and alignment conjunctions/disjunctions; compare-mask changes; return/park/bad:/exception substitutions; arm ordering; and pc/MSR/SRR0/running/diagnostic changes against the named variants and disclosures. The dominating slow-path predicate and failure test were included. This found one missing-channel family; the three affected sessions are not three separate breaches.
+
+2. The four failure-test narrowings are acceptably discharged today under the stated empirical floor rule.
+
+Their recorded red counts are respectively 19, 16, 36 and 17. None currently survives the detector. I confirmed that ib is uninitialized at cpu_ppc_instr.c:4089 and decoded at :4214 when a narrowing bypasses the block.
+
+Those measurements establish detection on the recorded builds, not deterministic detection across arbitrary stack contents or future builds. Keep that limitation explicit. Zero-initialization remains a filed improvement; these results alone do not require it, or another deterministic row, in this round. F1 is a separate concrete missing-channel finding.
+
+3. The new rows catch what their notes claim. I found one false record.
+
+R1: regress/ppc_ifetch_probe.py:62–67, reproduced in section 2b, says the non-read-ahead sessions already cover the relevant states, so a predicate-gated UNIMPLEMENTED emission must appear on one of those checked sessions. They cover aligned ME-clear, aligned ME-set and unaligned ME-clear. They lack the unaligned ME-set joint state with an UNIMPLEMENTED assertion. F1 directly contradicts that justification.
+
+The counts otherwise reconcile:
+
+Repair 7 adds T ra odd msr and five four-row sessions: 21 rows.
+Repair 7b adds four channels to six sessions and two to T ra me: 26 rows.
+Thus 82 + 21 + 26 = 129.
+
+The session row counts are ctl 3, neg 1, isi 5, isi1 4, noT 5, T cont 10, T step 10, T me 9, again 10, eight read-ahead sessions with 8 each, and T blr 8. The gate names all 129 rows uniquely.
+
+Table 8’s 53 observed-red variants comprise 52 claimed catches plus the separately unpredicted V12; the other 14 are green. The “52” versus “53” distinction is intentional, not another false record.
+
+4. REPAIR.
+
+Close F1 by asserting absent UNIMPLEMENTED text across the existing eight read-ahead sessions, updating the gate, and measuring the conditional V10 specialization. Correct R1’s joint-state coverage argument. That detector repair then owes its own pass.
+
+I read the complete packet and checked the hardened fork’s probe, gate, translator, dispatch/read-ahead/bad: paths, exception handling, relevant memory/device paths and stored mutation evidence. Nothing was edited, built or executed. I found no additional independent breach or false record; historical build provenance was not independently reproduced.
+
+CODEXP7QHS: 8 CELLS SWEPT 1 BREACHES 1 FALSE RECORDS VERDICT:REPAIR

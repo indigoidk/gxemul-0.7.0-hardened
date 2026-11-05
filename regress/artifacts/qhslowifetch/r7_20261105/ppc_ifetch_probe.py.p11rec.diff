@@ -1,0 +1,102 @@
+--- artifacts/qhslowifetch/r7_20261105/ppc_ifetch_probe.py.pre_p11rec	2026-11-05 05:30:25.384103900 -0600
++++ ppc_ifetch_probe.py	2026-11-05 06:01:21.398261900 -0600
+@@ -72,39 +72,52 @@
+ 0xfec00008 | low bits directly, so its first fetch fails once (a failed fetch is never translated, so no read-ahead follows) and
+ arm (c) parks it; each partner pins its pair's nine channels.  A pair presents the failure block with the same pc, addr, MSR,
+ running (0) and instruction slot, and differs only in translation_readahead, nonzero on the two-entry session's first visit.  So a
+-toggle of pinned state under a condition on anything else the block reads fires on both of the two-entry session's visits exactly
+-when it fires on the partner's one -- it cancels on one side and shows on the other -- and a condition on translation_readahead
+-fires on one visit of the two-entry session and shows there.  SHOWN TO SHARE, and how: pc and addr by the halt report memory_rw
+-prints at each failing fetch (`paddr=0xfec00008 len=4 pc=0xfec0000X`), textually identical on the partner's one report and both of
+-its pair's (r7_20261105/pair_check.py over the base run's transcripts, base249/PAIRS.out, PAIRS_OK=8/8; a mismatched pair fails
+-it); MSR by the same msr command before `continue` (none: the reset 0) and the same final MSR; running by memory.c, which clears it
+-before every -T read failure returns; the slot by the prologue, which derives pc and addr from the same pc's page bits and slot
+-index (both by code reading).  The bound: a condition on state the block neither reads nor writes -- the GPRs the subfic changes,
+-next_ic -- is outside it, as the field-write disclosure says.  The 0x0204000x and `T blr` one-entry sessions stay; they carry other
+-rows.  `T ra odd` (repair 6) is `T ra` entered at the UNALIGNED pc 0xfec00005: the read-ahead fetch reaches the failure block with
+-pc != addr, arm (a) returns and the real fetch halts again; it pins exit 0, pc 0xfec00009, two reports and MSR 0 (`T ra odd msr`,
+-repair 7), so arm (a)'s guard is seen with an unaligned pc (p5_20261105/TRAODD_NOTE.md).  `T ra o1m`, `T ra o2`, `T ra o2m`, `T ra
+-o3` and `T ra o3m` (repair 7, the CLASS CLOSURE: passes 5 and 6 both found unrowed arm (a) x alignment cells,
+-r7_20261105/B123_NOTE.md) complete the grid of pc's low two bits {00, 01, 10, 11} x MSR[ME] {clear, set} on that route: each is `T
+-ra` entered at 0xfec00004 | low bits (the digit; `m` = MSR[ME] set, written msr=0x1000 before pc) and pins exit 0, pc 0xfec00008 |
+-low bits, two reports and MSR as entered.  REPAIR 7B gave the six unaligned sessions the four channels their aligned siblings
+-pinned and they did not -- the halted address, the stop, the checkstop text and SRR0 (`addr`, `stopped`, `chkstop`, `srr0`) -- and
+-`T ra me` the first two, so all eight cells (with `T ra`, `T ra me` and `T ra odd`) pin the same eight channels: session, pc,
+-nonex, addr, stopped, msr, chkstop and srr0.  Before it an SRR0 write and a checkstop print in arm (a), each gated on pc != addr,
+-passed all 103 rows (r7_20261105/B123_NOTE.md, repair 7b).  Repair 8 added a ninth channel to all eight read-ahead sessions: no
+-UNIMPLEMENTED text (`unimpl`).  This text argued that none was needed: "the real fetch of each reaches the block in a state the
+-0x02040000 sessions and `T blr` already pin -- not read-ahead, running 0, ME clear or set, pc aligned or not -- so an edit gated on
+-anything the block tests that prints `read failed: TODO`, `[ PPC Exception` or UNIMPLEMENTED there prints it on one of those
+-sessions too".  That was FALSE: those sessions hold ME and alignment one at a time and never the unaligned ME-set joint state, and
+-a `goto bad` gated on `(msr & ME) && pc != addr` in arm (c) printed UNIMPLEMENTED on `T ra o1m`, `T ra o2m` and `T ra o3m` with all
+-129 rows green (codex pass 7, F1 and R1; MEASURED, r7_20261105/B123_NOTE.md, repair 8).  No read-ahead session carries a `text`,
+-`exc` or `prompt` row, and the reason is now given per channel, from the block's own arms: `[ PPC Exception` is printed only by
+-ppc_exception, which always moves pc to the vector and writes SRR0, both rowed on every read-ahead session; `read failed: TODO` is
+-the removed exit's text, which the composite SYMPTOM key scans every session for and whose exit ends the session; the prompt is
+-implied by the register rows, which read `none` without it.  Their wants are derived from the code -- the read-ahead fetch reaches
+-the failure block at pc 0xfec00008 | low bits, arm (a) returns, the subfic runs, the real fetch halts again and arm (c) parks at
+-that pc -- and the eight-cell table measured them before the rows existed; a guard refusing a cell parks it at read-ahead time
+-instead (one report).
++toggle of pinned state under a condition that the toggle itself leaves unchanged, on anything else the block reads, fires on both
++of the two-entry session's visits exactly when it fires on the partner's one; it cancels on one side and shows on the other.  A
++condition on translation_readahead fires on one visit of the two-entry session and shows there.  THE SCOPE: the pairing guarantees
++equal INPUTS at entry; it says nothing about state the toggle writes on the first visit and tests on the second.  A
++SELF-REFERENTIAL toggle, `if (translation_readahead || (msr & BIT)) msr ^= BIT`, sets its marker on the read-ahead visit and clears
++it on the real fetch, cancels on the two-entry side and never fires on the partner, which enters with the marker clear.  When the
++marker is MSR[ME] or one of pc's low two bits, the generating-set rows catch it: the ME-set cells' msr rows and the pc rows of the
++unaligned cells carrying it red because those bits are held both ways (DERIVED, not measured).  When the marker is MSR[RI] (codex
++pass 11, B1; cpu_ppc.h:175; DERIVED, not measured), MSR[PMM], MSR[LE], or an SRR0 bit clear in the sentinel, no row distinguishes
++it: this is a joint of translation_readahead x an untested bit x visit order, clause (e), NOT CLAIMED, and no row is owed for it
++(tools/CLAUDE.md, the generating-set and 'tests means masks or compares' clauses).  An entry with that bit set would see any one
++member and the next member moves the bit.  This text said "a toggle of pinned state under a condition on anything else the block
++reads fires on both of the two-entry session's visits exactly when it fires on the partner's one"; that was FALSE for conditions on
++state the toggle itself writes (codex pass 11, R1): the block reads MSR, B1's condition reads MSR, and the second visit's MSR is
++not the entry MSR.  SHOWN TO SHARE, and how: pc and addr by the halt report memory_rw prints at each failing fetch
++(`paddr=0xfec00008 len=4 pc=0xfec0000X`), textually identical on the partner's one report and both of its pair's
++(r7_20261105/pair_check.py over the base run's transcripts, base249/PAIRS.out, PAIRS_OK=8/8; a mismatched pair fails it); MSR by
++the same msr command before `continue` (none: the reset 0) and the same final MSR; running by memory.c, which clears it before
++every -T read failure returns; the slot by the prologue, which derives pc and addr from the same pc's page bits and slot index
++(both by code reading).  The bound: a condition on state the block does not READ: the GPRs the subfic changes (neither read nor
++written here) and next_ic (written by arm (b)'s refresh, arm (c)'s park and the checkstop fallback, never read) is outside it.
++This sentence called next_ic state the block "neither reads nor writes": FALSE (codex pass 11, R2).  The 0x0204000x and `T blr`
++one-entry sessions stay; they carry other rows.  `T ra odd` (repair 6) is `T ra` entered at the UNALIGNED pc 0xfec00005: the
++read-ahead fetch reaches the failure block with pc != addr, arm (a) returns and the real fetch halts again; it pins exit 0, pc
++0xfec00009, two reports and MSR 0 (`T ra odd msr`, repair 7), so arm (a)'s guard is seen with an unaligned pc
++(p5_20261105/TRAODD_NOTE.md).  `T ra o1m`, `T ra o2`, `T ra o2m`, `T ra o3` and `T ra o3m` (repair 7, the CLASS CLOSURE: passes 5
++and 6 both found unrowed arm (a) x alignment cells, r7_20261105/B123_NOTE.md) complete the grid of pc's low two bits {00, 01, 10,
++11} x MSR[ME] {clear, set} on that route: each is `T ra` entered at 0xfec00004 | low bits (the digit; `m` = MSR[ME] set, written
++msr=0x1000 before pc) and pins exit 0, pc 0xfec00008 | low bits, two reports and MSR as entered.  REPAIR 7B gave the six unaligned
++sessions the four channels their aligned siblings pinned and they did not -- the halted address, the stop, the checkstop text and
++SRR0 (`addr`, `stopped`, `chkstop`, `srr0`) -- and `T ra me` the first two, so all eight cells (with `T ra`, `T ra me` and `T ra
++odd`) pin the same eight channels: session, pc, nonex, addr, stopped, msr, chkstop and srr0.  Before it an SRR0 write and a
++checkstop print in arm (a), each gated on pc != addr, passed all 103 rows (r7_20261105/B123_NOTE.md, repair 7b).  Repair 8 added a
++ninth channel to all eight read-ahead sessions: no UNIMPLEMENTED text (`unimpl`).  This text argued that none was needed: "the real
++fetch of each reaches the block in a state the 0x02040000 sessions and `T blr` already pin -- not read-ahead, running 0, ME clear
++or set, pc aligned or not -- so an edit gated on anything the block tests that prints `read failed: TODO`, `[ PPC Exception` or
++UNIMPLEMENTED there prints it on one of those sessions too".  That was FALSE: those sessions hold ME and alignment one at a time
++and never the unaligned ME-set joint state, and a `goto bad` gated on `(msr & ME) && pc != addr` in arm (c) printed UNIMPLEMENTED
++on `T ra o1m`, `T ra o2m` and `T ra o3m` with all 129 rows green (codex pass 7, F1 and R1; MEASURED, r7_20261105/B123_NOTE.md,
++repair 8).  No read-ahead session carries a `text`, `exc` or `prompt` row, and the reason is now given per channel, from the
++block's own arms: `[ PPC Exception` is printed only by ppc_exception, which always moves pc to the vector and writes SRR0, both
++rowed on every read-ahead session; `read failed: TODO` is the removed exit's text, which the composite SYMPTOM key scans every
++session for and whose exit ends the session; the prompt is implied by the register rows, which read `none` without it.  Their wants
++are derived from the code -- the read-ahead fetch reaches the failure block at pc 0xfec00008 | low bits, arm (a) returns, the
++subfic runs, the real fetch halts again and arm (c) parks at that pc -- and the eight-cell table measured them before the rows
++existed; a guard refusing a cell parks it at read-ahead time instead (one report).
+ 
+ WHY THE CHECKSTOP AND ME-SET ROWS EXIST.  MSR is 0 on `T step`, `T cont` and `again`; `T me` sets MSR[ME] (0x1000).  On the
+ first three, arm (c) deleted or inverted falls to the checkstop fallback, which parks identically -- same pc, SRR0 and
+@@ -535,9 +548,10 @@
+ # TWICE at one full pc -- the read-ahead visit, then the real fetch; its partner enters it ONCE at the SAME full pc and MSR: pc set to
+ # 0xfec00008 | low bits directly and continued under -T, so the first fetch fails (a failed fetch is never translated, so no
+ # read-ahead follows) and arm (c) parks it.  The pair then presents the block with the same pc, addr, MSR, running (0) and slot; only
+-# translation_readahead differs, nonzero on the two-entry session's first visit.  So a toggle conditioned on any of those fires on
+-# both visits exactly when it fires on the partner's one -- it cancels on the pair's two-entry side and shows on the partner -- and a
+-# condition on translation_readahead fires on one visit only and shows on the two-entry side.
++# translation_readahead differs, nonzero on the two-entry session's first visit.  So a toggle conditioned on any of those that the
++# toggle itself leaves unchanged fires on both visits exactly when it fires on the partner's one -- it cancels on the pair's two-entry
++# side and shows on the partner -- and a condition on translation_readahead fires on one visit only and shows on the two-entry side.
++# A self-referential toggle is outside this: the docstring's SCOPE (codex pass 11, R1).
+ for tag, low, msr in (("", 0, 0), ("me", 0, MSR_ME), ("odd", 1, 0), ("o1m", 1, MSR_ME), ("o2", 2, 0), ("o2m", 2, MSR_ME),
+                       ("o3", 3, 0), ("o3m", 3, MSR_ME)):
+     nm, pair = ("T rp " + tag).rstrip(), ("T ra " + tag).rstrip()

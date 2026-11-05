@@ -30,8 +30,9 @@
 > 2. `ppcllscrcexit` (HIGH, FIXED by `#579` on 2026-11-04, closed) -- lwarx/ldarx with Rc=1 and stwcx./stdcx. with Rc=0 exit the host.  T3;
 >    ~~design owed~~ -- shipped: X(llsc)'s two guards deleted (the load pair's bit 31 is a reserved field the processor ignores; the store
 >    pair's bit-clear word is an invalid form whose defined operation is a permitted outcome), with an 83-row rung-3 detector in gate 13.
-> 3. `qhslowifetch` (HIGH) -- a failed slow-path instruction fetch exits the host; user-reachable on 32-bit PowerPC.
->    T6; PPC970 stops first at `ppc64xlateexit`.
+> 3. `qhslowifetch` (HIGH, FIXED by `#582` on 2026-11-05, closed) -- a failed slow-path instruction fetch exits the host;
+>    user-reachable on 32-bit PowerPC.  T6; PPC970 stops first at `ppc64xlateexit`.  Shipped: the failed read returns, parks
+>    or raises a machine check by state, with a 249-row rung-3 detector in gate 13.
 > 4. `ppcdsformxo` (HIGH, FIXED by `#571` on 2026-10-24, held for Fable) -- DS-form XO bits: ldu/lwa/stdu run as ld/std at EA+1/+2.  T2;
 >    ~~design owed~~ -- shipped: opcodes 58 and 62 decode their five forms by XO with the displacement DS||00, the reserved encodings and the RA = 0 update forms stop the cpu, with a 39-row rung-3 detector in gate 13; see the second 2026-10-24 section at the end.
 > 5. `m88kbuserrregs` (MED, FIXED by `#570` on 2026-10-24, held for Fable) -- 88K bus errors carry no PFSR/PFAR; the carrier of the reopened PFAR item.  T36;
@@ -24039,6 +24040,7 @@ written out below by `records555.py.txt` (both kept under `regress/artifacts/idl
 
 #### `qhslowifetch` (HIGH, an id for an entry this file already carries in prose) -- PPC slow ifetch still calls exit on a failed instruction read, separate from the Thumb stops already filed as armthumbabortkill
 the prose: 2614-2615 scoped to PPC (line numbers of this file as of commit `db8b1a33`) -- `regress/artifacts/idless_20261002/IDLESS_DISPOSITIONS.md`  [grok/grok_irule_a.txt C11 (conceding in part Astra's ifile_01 finding)]
+**[`#582`, 2026-11-05: FIXED -- see the `#582` section at the end of this file.]**
 
 #### `qhppciphack` (HIGH, an id for an entry this file already carries in prose) -- MSR.IP stops the CPU instead of selecting the exception vector base
 the prose: 2616 (line numbers of this file as of commit `db8b1a33`) -- `regress/artifacts/idless_20261002/IDLESS_DISPOSITIONS.md`  [the governing line's quoted title (grok)]
@@ -24286,7 +24288,7 @@ the prose: 4139-4145 (line numbers of this file as of commit `db8b1a33`) -- `reg
 * 2453-2455 -> `arcpartlba` (named in this file only: no ledger row of its own)
 * 2456-2459 -> `OB-22` (named in this file only: no ledger row of its own)
 * 2597-2599 -> `qhfcsrflags` (a `#555` row above), `qhmipstlbwarn` (a `#555` row above)
-* 2614-2615 -> `armthumbabortkill` (the Thumb half), `qhslowifetch` (the PPC half) [widened 2026-11-02, records: said "`armthumbabortkill` (in part: the Thumb half only)"]
+* 2614-2615 -> `armthumbabortkill` (the Thumb half), `qhslowifetch` (the PPC half) [widened 2026-11-02, records: said "`armthumbabortkill` (in part: the Thumb half only)"]  [`#582`, 2026-11-05: the PPC half FIXED]
 * 2616 -> `m88kexit` (ledger: held), `qhppciphack`, `qhm88kstops`, `qhmbphasestops`, `qhmbunimplstops`, `qhmbbufendstops` [widened 2026-11-02, records: named `m88kexit` only]
 * 2636-2638 -> `mipsreadpriv`
 * 2685-2689 -> `exitunowned76`
@@ -26647,3 +26649,10 @@ src/devices/dev_dec5800.c:359-367 at 987cb596: The DEC 5800 CPU-mask registers a
   replaced; only the re-walk can say the widened probe closes a family.
 
   **Amended by repair 6 (`regress/artifacts/mvme187memcoob/r7_20261105/ERRATA_r7_20261105.md` item 4), 2026-11-05:** the detector is now 213 rows and table 6 re-ran table 5's 665 green variants: 24 red, 641 green (`r7_20261105/table6/TALLY.txt`).  (a) The filing's preamble (`r6_20261105/FILING_memccoverdebt.md` lines 6-7, not quoted here) said none of these rows is owed in-round; item 6's `L_ME_M_xori_any` is one of eight own-latch variants repair 6 rowed in-round with session R18.  (b) Item 6's "one inside the 665" is four ungated `^= idata` toggles, all red on `R18 lines` in table 6.  (c) No item files a remedy for the "lands on a set latch" toggles; R19 reddens only two of the eight on the model and stays the sketch for item 6's VACUOUS example.  (d) The sketched sessions named R18 and R19 collide with the probe's new R18: rename them when built and check names against the 213 rows.  (e) Item 4 (NB4): R18 makes a controller-0 first memconf store of 0x01, so NB4's memconf representative `K_MB_memconf_and_D` is red (`R18 08 r4`) and its chiprev representative stays green.  Landing note: the filing's closing "Closing all six items would be repair 6" was written before the round's own repair 6 (session R18, `r7_20261105/`); read it as a future coverage repair.
+
+## 2026-11-05 -- `#582` qhslowifetch: a failed slow-path instruction fetch on the PowerPC no longer ends the emulator process
+
+* **FIXED** -- `qhslowifetch` (HIGH): `src/cpus/cpu_ppc_instr.c`, `X(to_be_translated)` printed `read failed: TODO` and called `exit(1)` when the slow-path fetch failed.  The failed read now returns on read-ahead, refreshes next_ic after an exception already delivered, parks the CPU on a -T halt, and takes a machine check (MSR[ME] set) or checkstops (clear) when a device declines the fetch while running; `src/include/cpu_ppc.h` gains `PPC_EXCEPTION_MC`.  Witness (rung 3, unmodified `-E pmppc`): 11/17 on the committed build (`regress/artifacts/qhslowifetch/witness_20261104/WITNESS.md`).  Detector: `regress/ppc_ifetch_probe.py`, 249 rows, gate 13 (HEAD 108/249, fix 249/249); twelve test-variant tables (table 12: 88 variants, 73 red, 14 green, V12 not predicted).  See the `#582` round block in CHANGELOG.md.
+* **Filed, new (all LOW):** `ppcvecaddr` (arm (b) skipped when the exception vector equals the failing fetch: the fix's #MMM); `ppcmpcheckstop` (the checkstop on a multiprocessor: #PPP); `ppcifetchibinit` (zero-initialise ib, so the build-dependent variants decide deterministically); `ppcbranchlowbits` (X(bclr_20) keeps pc's low two bits; Book I clears them); `ppcifetchdeclineprod` (ROW 5: no measured machine produces arm (d), pending an X11 build or a window sweep on bebox, prep, macppc and mvmeppc); `memrwtreadahead` (memory_rw's -T halt fires on a read-ahead fetch the guest has not reached: the final ruling's F4); `vgagfxwindowend` (dev_vga's `>=` declines the vga_gfx window's last word: ROW 5's producer).
+* **Note, no new row:** `ppcintentrymsr` is the fix's #QQQ -- the machine check arm (d) raises leaves MSR[ME] set, where the architecture clears it; the row's MSR-modelling filing now names ME.
+* **Uncommitted beside it:** nothing of this round; the working copy and the four trees took the committed `cpu_ppc_instr.c` (its placeholders filled) in the landing window.

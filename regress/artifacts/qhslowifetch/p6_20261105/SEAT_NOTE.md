@@ -1,0 +1,3 @@
+2026-11-05 glm-5.3:cloud SEAT DOWN -- WALL: HTTP 429 'you have reached your monthly usage limit, add usage credits' (ollama_glm.txt, 225 bytes).  A seat failure, NOT agreement; a monthly limit, so no re-fire this round.  Pass 6 seats: codex (Astra) + Gemini x2.
+
+*Corrected 2026-11-05 (main loop): this file's time-of-day stamps (removed: ~09:0xZ) were GUESSES, taken from the main loop's own wrong clock, that ran up to 3.5 hours AHEAD of the real time; one section header was even out of order. The qhs landing-kit agent found them.  The file's own timestamps are the record: created 08:11Z, last written 08:11Z before this note (UTC).*

@@ -1,0 +1,103 @@
+CODEXP10QHS
+model: GPT-6 (Codex)
+VERDICT: REPAIR (1 breach family; 2 false records).
+
+1. The eight read-ahead cells have all nine advertised channels. That channel coverage is complete as stated; the shipped detector’s visit-count coverage is not. B1 below is an in-bound single edit predicted to leave all 177 rows green.
+
+I read the entire packet and checked these premises in GXEMUL-SEC only:
+
+- src/cpus/cpu_ppc_instr.c:4097–4209: the prologue, host-page predicate, failed-read test, and arms (a)–(d).
+- src/cpus/cpu_dyntrans.c: the dispatch translation/cache logic, read-ahead loop, and bad: behavior.
+- src/cpus/cpu_ppc.c:318–348: exception entry writes SRR0/SRR1, changes MSR, moves PC, and resolves instruction pointers.
+- src/core/memory.c and src/cpus/memory_rw.c: a -T halt clears running before the failed read returns.
+- regress/ppc_ifetch_probe.py, regress/gate_ppc.sh, and the recorded table-11 results: session construction, asserted channels, row names, and reported catches.
+
+Nothing was edited, built, or executed.
+
+The disclosures withstand this review within their measured scope:
+
+G1: where the fixed comparison skips arm (b), PC is addr, addr+1, addr+2, or addr+3. None satisfies PC < addr. The dispatch/cache source supports the explanation that the measured ISI sessions deliver their exception before this translator read. I found no new producer of arm (b)’s taken side.
+
+G2: every measured failed fetch passes through read-ahead’s return or the running-clear park before reaching arm (d). Changing its MSR predicate remains unobservable there.
+
+G3: running is already zero on both recorded failed-read visits, so adding !running to arm (a)’s guard changes neither. The window sweep supports the stated measured absence of its alternative producer; it does not prove absence across every possible guest-programmed device state.
+
+SRR1: its missing assertion is explicitly disclosed. An exception transfer also changes the asserted PC/SRR0 channels. I do not count the disclosed isolated SRR1-write gap as a new breach.
+
+DENOMINATOR: 16 stated cells swept, enumerated as eight pairs:
+
+00, ME clear: two-entry T ra; one-entry T cont, T step, again.
+00, ME set: two-entry T ra me; one-entry T me.
+01, ME clear: two-entry T ra odd; one-entry T blr o1.
+01, ME set: two-entry T ra o1m; one-entry T blr m1.
+10, ME clear: two-entry T ra o2; one-entry T blr o2.
+10, ME set: two-entry T ra o2m; one-entry T blr m2.
+11, ME clear: two-entry T ra o3; one-entry T blr.
+11, ME set: two-entry T ra o3m; one-entry T blr m3.
+
+Each read-ahead cell asserts session, pc, nonex, msr, addr, stopped, chkstop, srr0, and unimpl.
+
+The edit shapes reviewed were predicate deletion/inversion/constant substitution; failure-test conjunction/disjunction; ME/alignment/read-ahead/running conditions; comparison masks; return/park/refresh substitutions and arm ordering; exception/bad:/checkstop/exit transfers; and MSR/SRR0 writes and toggles. I checked these against the supplied variant results and disclosures, then analyzed B1 across the same 16 cells. This is a static review, not a new mutation run.
+
+2. The 16-cell grid is populated, but it is not the whole claimed visit-count class.
+
+B1: insert this single conditional statement immediately inside the failed-read block, before arm (a):
+
+    if ((cpu->pc & ~(uint64_t)0xb) != addr)
+        cpu->cd.ppc.spr[SPR_SRR0] ^= 0x100;
+
+This uses arm (b)’s own comparison operands and clears mask bits 0, 1, and 3. Bit 3 is already within the admitted comparison-mask class represented by R6_mask15. The edit uses no new CPU field, caller, or callee. It combines an already admitted mask shape with the already admitted failure-head SRR0-toggle shape.
+
+Enumerating its behavior:
+
+PC 0xfec00008 becomes 0xfec00000; addr is 0xfec00008.
+PC 0xfec00009 becomes 0xfec00000; addr is 0xfec00008.
+PC 0xfec0000a becomes 0xfec00000; addr is 0xfec00008.
+PC 0xfec0000b becomes 0xfec00000; addr is 0xfec00008.
+
+Thus every read-ahead cell, with either ME value, satisfies the predicate on both visits. SRR0 changes:
+
+0x11111111 -> 0x11111011 -> 0x11111111.
+
+The intervening subfic does not consume SRR0.
+
+For the one-entry cells:
+
+PC 0x02040000 becomes 0x02040000, equal to addr.
+PC 0x02040005 becomes 0x02040004, equal to addr.
+PC 0x02040006 becomes 0x02040004, equal to addr.
+PC 0x02040007 becomes 0x02040004, equal to addr.
+
+Every one-entry session skips the toggle. The control sessions do not execute it. Consequently all 177 rows, CONTROL, and SYMPTOM are predicted unchanged.
+
+This is an active cancellation on the measured route, not an undisclosed deeper-read-ahead case or a test of an address bit absent from all sessions. The paired sessions match low bits and ME but differ in another value the block reads: their full PC/address.
+
+3. The new rows catch the specific variants their notes name.
+
+For m1, m2, and m3 respectively:
+
+- The nonex notes correctly name R5_mask2; R5_mask1; and both.
+- The srr0 notes correctly name R10_tog_srr0_me1, _me2, and _me3.
+- The msr notes correctly name R9_tog_me1, _me2, and _me3.
+- Their unimpl rows catch V10_c_me_bad and R8_c_meun_bad.
+- The corrected o2 srr0 note correctly names R10_tog_srr0_2.
+
+Each new session supplies session, pc, nonex, srr0, msr, chkstop, unimpl, and lr: eight rows for m1, eight for m2, eight for m3. Those 24 additions produce 177 rows from 153.
+
+Two definite false records remain:
+
+R1. The new docstring says “a toggle under any condition both visits share shows on the one-entry session of its cell.” B1 disproves that universal claim. It holds only when the paired one-entry session also satisfies the toggle’s condition.
+
+R2. Section 0 says the joint toggle and its isolated members initially “passed all 177 rows.” Section 3’s instrument was the 153-row probe: each passed 153/153. Section 4 records the repaired outcomes as 174/177 for the joint toggle and 176/177 for each isolated member.
+
+The tally is not another false record: 64 claimed red variants, 14 green variants, and the separately excluded V12 account for all 79; including V12 gives 65 observed red variants.
+
+ELSE: the repair-10 heading’s ~12:0xZ timestamp needs clarification against table 11’s ~10:48–11:00Z and the 10:47:08Z baseline clearance. I cannot settle whether the heading denotes measurement time or later note-writing time, so I have not counted it as another established false record.
+
+4. REPAIR.
+
+B1 needs a detector witness that observes the address-conditioned toggle once. One first-fetch failure at 0xfec00008 catches the generic statement above. To cover its low-bit/ME members, pair the eight read-ahead cells with one-entry failures at the same full PCs—0xfec00008, 0xfec00009, 0xfec0000a, and 0xfec0000b, each with ME clear and set—and assert SRR0/MSR alongside the usual channels. Retain the existing blr sessions for their other coverage.
+
+Correct R1’s universal coverage claim and R2’s pre-repair denominator. The resulting repair owes its own pass.
+
+CODEXP10QHS: 16 CELLS SWEPT 1 BREACHES 2 FALSE RECORDS VERDICT:REPAIR

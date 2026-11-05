@@ -3557,6 +3557,212 @@ MANIFEST = {
     "artifacts/mvme187memcoob/r7_20261105/apply_r7_records_b.py":
         (CLASS_TOOL, "#581: repair 6's second text-only pass on the probe's docstring (r7_20261105/IMPL_NOTE.md, step 5), "
                      "preserved as run"),
+    #  #582 qhslowifetch: the PowerPC translator's failed slow-path instruction fetch printed `read failed: TODO' and called exit(1).  The
+    #  SHIPPING detector is CLASS_DETECTOR and gated in gate_ppc.sh (gate 13) in the same commit; its wiring is DERIVED, not asserted
+    #  here.  Every artifact script below is CLASS_RESEARCH: evidence beside the round's twelve test-variant tables, run by no gate.
+    "ppc_ifetch_probe.py":
+        (CLASS_DETECTOR, "#582 qhslowifetch: a failed slow-path instruction fetch in X(to_be_translated) no longer ends the "
+                         "emulator process -- 249 rows over 31 cold -E pmppc debugger sessions: controls, four -T sessions at "
+                         "0x02040000, eight read-ahead cells (pc's low two bits x MSR[ME]) and their eight one-entry partners, six "
+                         "guest-made unaligned-pc sessions; gate_ppc.sh pins RESULT 249/249 by EQUALITY and every row by name.  "
+                         "Witness artifacts/qhslowifetch/witness_20261104/ (11/17 on the committed build); test-variant table 12 "
+                         "(artifacts/qhslowifetch/r7_20261105/table12/: base 249/249, HEAD 108/249, 88 variants)."),
+    "artifacts/qhslowifetch/det_20261104/legs50/probe50_frozen.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: the 50-row detector frozen for test-variant table 1 (det_20261104/table1/) "
+                         "(det_20261104/table1/SCORES.txt: base 50/50), preserved as evidence"),
+    "artifacts/qhslowifetch/det_20261104/probe43_draft_frozen.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: the 43-row draft detector, frozen, preserved as evidence"),
+    "artifacts/qhslowifetch/det_20261104/probe43_frozen.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: the 43-row detector, frozen, preserved as evidence"),
+    "artifacts/qhslowifetch/det_20261104/qhs_variants.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: the test-variant set for the qhslowifetch fix's detector (legs50/probe50_frozen.py, "
+                         "50 rows), 2026-11-04. -- preserved as evidence"),
+    "artifacts/qhslowifetch/det_20261104/qhs_variants_1b.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: test-variant table 1b for the qhslowifetch detector: the two variants pass 2 raised, "
+                         "measured against the shipped 50-row probe (legs50/probe50_frozen.py) and against a candidate with two "
+                         "noT rows added ... -- preserved as evidence"),
+    "artifacts/qhslowifetch/det_20261104/qhs_variants_2.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: test-variant TABLE 2 for the qhslowifetch detector, 2026-11-05, as ruled by the "
+                         "adjudication (adj_20261104/ ADJ_FABLE.md P9/P15, FINAL_FABLE.md F6/F8, TIE_FABLE.md T1): table 1's "
+                         "eighteen (D8 re-anchored: the ruled ... -- preserved as evidence"),
+    "artifacts/qhslowifetch/det_20261104/table1b/probe52c.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: the 52-row candidate measured for test-variant table 1b (det_20261104/table1b/), "
+                         "preserved as evidence"),
+    "artifacts/qhslowifetch/det_20261104/table2/probe56_frozen.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: the 56-row detector frozen for test-variant table 2 (det_20261104/table2/SCORES.txt: "
+                         "base 56/56, HEAD 33/56), preserved as evidence"),
+    "artifacts/qhslowifetch/p3_20261105/dhalt_witness.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: pass 3: does a SUCCESSFUL slow-path instruction fetch happen with running == 0? -- "
+                         "preserved as evidence"),
+    "artifacts/qhslowifetch/p3_20261105/p3_variants.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: REPAIR PASS 3: the four test variants of GPT-6 Astra's two floor findings "
+                         "(codex_qhs_p3.txt B1, B2), MEASURED before the adjudication rules on them. -- preserved as evidence"),
+    "artifacts/qhslowifetch/p3_20261105/table_p3/probe62_p3.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: the 62-row detector as run for repair pass 3's table (p3_20261105/table_p3/), "
+                         "preserved as evidence"),
+    "artifacts/qhslowifetch/p4_20261105/blr_witness.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: pass 3: does a SUCCESSFUL slow-path instruction fetch happen with running == 0? -- "
+                         "preserved as evidence"),
+    "artifacts/qhslowifetch/p5_20261105/blr_witness.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: pass 3: does a SUCCESSFUL slow-path instruction fetch happen with running == 0? -- "
+                         "preserved as evidence"),
+    "artifacts/qhslowifetch/p5_20261105/traodd_witness.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: pass 5, Mythos breach 2 (MYTHOS.md / MYTHOS_r2.md): arm (a)'s read-ahead guard "
+                         "conjoined with an alignment test (`&& cpu->pc == addr`, or `&& !(cpu->pc & 3)`) is green on all 79 rows "
+                         "because every measured read-ahead ... -- preserved as evidence"),
+    "artifacts/qhslowifetch/r3_20261105/qhs_variants_3.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: test-variant TABLE 3 for the qhslowifetch detector, 2026-11-05, as ruled by the "
+                         "adjudication of repair pass 2 (p2r_20261105/ADJ_FABLE.md): table 2's 27 variants plus V8 (arm (a)'s "
+                         "guard conjoined with ME clear, GLM's ... -- preserved as evidence"),
+    "artifacts/qhslowifetch/r3_20261105/table3/probe62_frozen.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: the 62-row detector frozen for test-variant table 3 (r3_20261105/table3/SCORES.txt: "
+                         "base 62/62, HEAD 36/62), preserved as evidence"),
+    "artifacts/qhslowifetch/r4_20261105/qhs_variants_4.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: test-variant TABLE 4 for the qhslowifetch detector (repair 4: 69 rows), 2026-11-05, "
+                         "as ruled by the repair-pass-3 adjudication (p3_20261105/ADJ_MYTHOS.md): table 3's 32 variants "
+                         "(r3_20261105/qhs_variants_3.py) and ... -- preserved as evidence"),
+    "artifacts/qhslowifetch/r4_20261105/table4/probe69_frozen.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: the 69-row detector frozen for test-variant table 4 (r4_20261105/table4/SCORES.txt: "
+                         "base 69/69, HEAD 37/69), preserved as evidence"),
+    "artifacts/qhslowifetch/r5_20261105/qhs_variants_5.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: test-variant TABLE 5 for qhslowifetch (repair 5: the aligned compare in arm (b); 79 "
+                         "rows), 2026-11-05. -- preserved as evidence"),
+    "artifacts/qhslowifetch/r5_20261105/table5/probe79_frozen.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: the 79-row detector frozen for test-variant table 5 (r5_20261105/table5/SCORES.txt: "
+                         "base 79/79, HEAD 40/79), preserved as evidence"),
+    "artifacts/qhslowifetch/r6_20261105/base82/probe82_run.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: the 82-row detector as run for repair 6's base leg "
+                         "(r6_20261105/base82/probe_base82.out: 82/82 on build/), preserved as evidence"),
+    "artifacts/qhslowifetch/r6_20261105/qhs_variants_6.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: test-variant TABLE 6 for qhslowifetch (repair 6: 82 rows; no product change since "
+                         "repair 5), 2026-11-05. -- preserved as evidence"),
+    "artifacts/qhslowifetch/r6_20261105/table6/probe82_frozen.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: the 82-row detector frozen for test-variant table 6 (r6_20261105/table6/SCORES.txt: "
+                         "base 82/82, HEAD 40/82), preserved as evidence"),
+    "artifacts/qhslowifetch/r7_20261105/b10_variant.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: repair 10's variants (codex GPT-6 Astra, pass 9: p9_20261105/codex_codex_qhs_p9.txt, "
+                         "B1 and R2), each ONE conditional statement inserted immediately inside the failed-read block, before arm "
+                         "(a), against the fix ... -- preserved as evidence"),
+    "artifacts/qhslowifetch/r7_20261105/b11_variant.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: repair 11's variants (codex GPT-6 Astra, pass 10: "
+                         "p10_20261105/codex_codex_qhs_p10.txt, B1), each ONE conditional statement inserted immediately inside "
+                         "the failed-read block, before arm (a), against the fix ... -- preserved as evidence"),
+    "artifacts/qhslowifetch/r7_20261105/b123_variant.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: the three pass-6 breaches of arm (a) (codex GPT-6 Astra, "
+                         "p6_20261105/codex_codex_qhs_p6.txt), each ONE exact edit against the fix (GXEMUL-SEC's "
+                         "src/cpus/cpu_ppc_instr.c): B1 the guard conjoined with `!(cpu->pc & 2)` ... -- preserved as evidence"),
+    "artifacts/qhslowifetch/r7_20261105/b7b_variant.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: repair 7b's variants, each ONE exact edit against the fix (GXEMUL-SEC's "
+                         "src/cpus/cpu_ppc_instr.c == r7_20261105/cpu_ppc_instr.c.fix7). -- preserved as evidence"),
+    "artifacts/qhslowifetch/r7_20261105/b8_variant.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: repair 8's variants (codex GPT-6 Astra, pass 7: p7_20261105/codex_codex_qhs_p7.txt, "
+                         "F1), each ONE exact edit against the fix (GXEMUL-SEC's src/cpus/cpu_ppc_instr.c == "
+                         "r7_20261105/cpu_ppc_instr.c.fix7). -- preserved as evidence"),
+    "artifacts/qhslowifetch/r7_20261105/b9_variant.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: repair 9's variants (codex GPT-6 Astra, pass 8: p8_20261105/codex_codex_qhs_p8.txt, "
+                         "B1), each ONE exact edit against the fix (GXEMUL-SEC's src/cpus/cpu_ppc_instr.c == "
+                         "r7_20261105/cpu_ppc_instr.c.fix7): a single ... -- preserved as evidence"),
+    "artifacts/qhslowifetch/r7_20261105/base103/probe103_run.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: the 103-row detector as run for the base leg before table 7 "
+                         "(r7_20261105/base103/probe_base103.out: 103/103 on build/), preserved as evidence"),
+    "artifacts/qhslowifetch/r7_20261105/base129/probe129_run.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: the 129-row detector as run for the base leg before table 8 "
+                         "(r7_20261105/base129/probe_base129.out: 129/129 on build/), preserved as evidence"),
+    "artifacts/qhslowifetch/r7_20261105/base137/probe137_run.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: the 137-row detector as run for the base leg before table 9 "
+                         "(r7_20261105/base137/probe_base137.out: 137/137 on build/), preserved as evidence"),
+    "artifacts/qhslowifetch/r7_20261105/base153/probe153_run.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: the 153-row detector as run for the base leg before table 10 "
+                         "(r7_20261105/base153/probe_base153.out: 153/153 on build/), preserved as evidence"),
+    "artifacts/qhslowifetch/r7_20261105/base177/probe177_run.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: the 177-row detector as run for the base leg before table 11 "
+                         "(r7_20261105/base177/probe_base177.out: 177/177 on build/), preserved as evidence"),
+    "artifacts/qhslowifetch/r7_20261105/base249/probe249_run.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: the 249-row detector as run for the base leg before table 12 "
+                         "(r7_20261105/base249/probe_base249.out: 249/249 on build/), preserved as evidence"),
+    "artifacts/qhslowifetch/r7_20261105/cell_witness.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: pass 6 (codex GPT-6 Astra, p6_20261105/codex_codex_qhs_p6.txt): "
+                         "p5_20261105/traodd_witness.py with an MSR argument and an output directory. -- preserved as evidence"),
+    "artifacts/qhslowifetch/r7_20261105/compare10.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: table 10 against PRETABLE_10.out, mechanically (run with python -B). -- preserved as "
+                         "evidence"),
+    "artifacts/qhslowifetch/r7_20261105/compare11.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: table 11 against PRETABLE_11.out, mechanically (run with python -B). -- preserved as "
+                         "evidence"),
+    "artifacts/qhslowifetch/r7_20261105/compare12.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: table 12 against PRETABLE_12.out, mechanically (run with python -B). -- preserved as "
+                         "evidence"),
+    "artifacts/qhslowifetch/r7_20261105/compare7.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: table 7 against PRETABLE_7.out, mechanically. -- preserved as evidence"),
+    "artifacts/qhslowifetch/r7_20261105/compare8.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: table 8 against PRETABLE_8.out, mechanically (run with python -B). -- preserved as "
+                         "evidence"),
+    "artifacts/qhslowifetch/r7_20261105/compare9.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: table 9 against PRETABLE_9.out, mechanically (run with python -B). -- preserved as "
+                         "evidence"),
+    "artifacts/qhslowifetch/r7_20261105/g12_explore.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: the coordinator's G1 question, \"check what the isi session's setup allows\": can the "
+                         "probe's ISI route put pc ABOVE the failing addr after an exception, so that arm (b)'s `pc < addr` (G1) "
+                         "and the fix's aligned compare ... -- preserved as evidence"),
+    "artifacts/qhslowifetch/r7_20261105/g12_variant.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: the two pass-6 findings of the Gemini 4 Argon seat, each ONE exact edit against the "
+                         "fix (GXEMUL-SEC's src/cpus/cpu_ppc_instr.c): G1 arm (b)'s aligned compare `(cpu->pc & ~(uint64_t)3) != "
+                         "addr` made `cpu->pc < addr`; ... -- preserved as evidence"),
+    "artifacts/qhslowifetch/r7_20261105/p11rec_proof.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: Text-only proof for the pass-11 records: the edited probe against table 12's frozen "
+                         "instrument and the pre-edit backup. -- preserved as evidence"),
+    "artifacts/qhslowifetch/r7_20261105/p11rec_step_cmt.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: Pass-11 R1's sibling in the partner loop's header comment (comment-only: no AST "
+                         "change). -- preserved as evidence"),
+    "artifacts/qhslowifetch/r7_20261105/p11rec_step_doc.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: Pass-11 records corrections R1 and R2 (adj_p11_20261105/ADJ_MYTHOS_local.md sections "
+                         "2 and 3), docstring only. -- preserved as evidence"),
+    "artifacts/qhslowifetch/r7_20261105/p11rec_step_gate.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: Pass-11 R1 repeated in gate_ppc.sh's qhslowifetch block comment: add the ruler's "
+                         "scope qualifier. -- preserved as evidence"),
+    "artifacts/qhslowifetch/r7_20261105/pair_check.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: repair 11's PAIRING INVARIANT, checked from a run's session transcripts. -- preserved "
+                         "as evidence"),
+    "artifacts/qhslowifetch/r7_20261105/qhs_variants_10.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: test-variant TABLE 10 for qhslowifetch (repair 9: 153 rows; no product change since "
+                         "repair 5), 2026-11-05. -- preserved as evidence"),
+    "artifacts/qhslowifetch/r7_20261105/qhs_variants_11.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: test-variant TABLE 11 for qhslowifetch (repair 10: 177 rows; no product change since "
+                         "repair 5), 2026-11-05. -- preserved as evidence"),
+    "artifacts/qhslowifetch/r7_20261105/qhs_variants_12.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: test-variant TABLE 12 for qhslowifetch (repair 11: 249 rows; no product change since "
+                         "repair 5), 2026-11-05. -- preserved as evidence"),
+    "artifacts/qhslowifetch/r7_20261105/qhs_variants_7.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: test-variant TABLE 7 for qhslowifetch (repair 7: 103 rows; no product change since "
+                         "repair 5), 2026-11-05. -- preserved as evidence"),
+    "artifacts/qhslowifetch/r7_20261105/qhs_variants_8.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: test-variant TABLE 8 for qhslowifetch (repair 7b: 129 rows; no product change since "
+                         "repair 5), 2026-11-05. -- preserved as evidence"),
+    "artifacts/qhslowifetch/r7_20261105/qhs_variants_9.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: test-variant TABLE 9 for qhslowifetch (repair 8: 137 rows; no product change since "
+                         "repair 5), 2026-11-05. -- preserved as evidence"),
+    "artifacts/qhslowifetch/r7_20261105/table10/probe153_frozen.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: the 153-row detector frozen for test-variant table 10 "
+                         "(r7_20261105/table10/SCORES.txt: base 153/153, HEAD 67/153), preserved as evidence"),
+    "artifacts/qhslowifetch/r7_20261105/table11/probe177_frozen.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: the 177-row detector frozen for test-variant table 11 "
+                         "(r7_20261105/table11/SCORES.txt: base 177/177, HEAD 76/177), preserved as evidence"),
+    "artifacts/qhslowifetch/r7_20261105/table12/probe249_frozen.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: the 249-row detector frozen for test-variant table 12; the shipped probe equals it "
+                         "but for its docstring (landing_20261105/PROBE_IDENTITY_qhs.md) (r7_20261105/table12/SCORES.txt: base "
+                         "249/249, HEAD 108/249), preserved as evidence"),
+    "artifacts/qhslowifetch/r7_20261105/table7/probe103_frozen.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: the 103-row detector frozen for test-variant table 7 (r7_20261105/table7/SCORES.txt: "
+                         "base 103/103, HEAD 40/103), preserved as evidence"),
+    "artifacts/qhslowifetch/r7_20261105/table8/probe129_frozen.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: the 129-row detector frozen for test-variant table 8 (r7_20261105/table8/SCORES.txt: "
+                         "base 129/129, HEAD 53/129), preserved as evidence"),
+    "artifacts/qhslowifetch/r7_20261105/table9/probe137_frozen.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: the 137-row detector frozen for test-variant table 9 (r7_20261105/table9/SCORES.txt: "
+                         "base 137/137, HEAD 61/137), preserved as evidence"),
+    "artifacts/qhslowifetch/witness_20261104/probe_frozen.py":
+        (CLASS_RESEARCH, "#582 qhslowifetch: the rung-3 witness as run on 2026-11-04 before any edit, the 17-row first form "
+                         "(witness_20261104/WITNESS.md: 11/17 on the committed build, the six -T rows red), preserved as evidence"),
 }
 
 #  DATED, NAMED DEBT -- not a count and not a silent allowlist.  gate_offline.sh MEASURED that

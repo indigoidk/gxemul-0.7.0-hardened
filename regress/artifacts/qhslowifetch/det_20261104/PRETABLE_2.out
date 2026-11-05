@@ -1,0 +1,53 @@
+PRETABLE_2 -- qhslowifetch detector, test-variant table 2.  Written BEFORE table 2 runs (this file's mtime precedes table2/'s).
+Instrument: table2/probe56_frozen.py (56 rows; -E pmppc unmodified), frozen from regress/ppc_ifetch_probe.py.  Baseline: the
+final candidate, cpu_ppc_instr.c.fix3 + cpu_ppc.h.fix (TIE_FABLE.md T1: no MSR edit in arm (d); the ruled comments in).  The legs
+-- base, the HEAD leg (cpu_ppc_instr.c.HEAD + cpu_ppc.h.HEAD) and three null media -- run first, in the same clone.
+
+THE FOUR CHECKS: PRETABLE.out (table 1) with PRETABLE.errata.md, which corrects three of its sentences, still holds for the arm.
+What changed since, row by row: noT unimpl (want present) and noT chkstop (want absent) were ADDED (P9: D15 was a floor gap,
+undetected on the 50-row probe); T me chkstop was REMOVED (vacuous: ME set never reaches the checkstop text); five ISI rows, the
+two step-count rows and again nonex became CONTROLS (premise pins, not repair rows; P11).  The five `T ra` rows were ADDED
+after the window sweep (window_sweep.out) reached arm (a) on cpc700_pci: FINAL_FABLE.md F4 owed a read-ahead row with four
+pins -- the halt line's address, running 0 (the stop), pc after the batch, the halt count -- plus the session's survival.
+CHANNEL for the added rows: noT unimpl -- D15 and V7 (the zero word is never decoded: the block's checkstop fallback parks first);
+noT chkstop -- the same two (the fallback's text).  No other variant touches the no-T route: it never enters the failure arm.
+CHANNEL for T ra: session -- B1 (the exit fires inside the read-ahead); pc -- B1 (none), W2/D3 (walks on), W4 (0x400),
+D15/V7 (0xfec00004: the successful fetch checkstops); nonex -- W7/D5 (one: parked during read-ahead), W5/D7/D12 (garbage-
+translated slot), D4 (re-fetch loop), W2/D3 (walk); addr -- W2/D3 (later words), D12/D15/V7 (no halt); stopped -- B1, D12.
+
+SCOPE (FINAL_FABLE.md F8): table 1's eighteen, table 1b's two, and P15/F6's seven, all on ONE instrument; every SCORES line names
+its row count.  Predicted scores are 56 minus the red count listed.  W5, D7 and V7 ride on the uninitialised instruction word (P25):
+their exact red rows are BUILD-DEPENDENT, and the claim is that SOME row reds, not which.
+
+VARIANTS (name, what, predicted red rows -> predicted score):
+   B1_exit_head   (b) HEAD's fatal()+exit(1) reinstated at the arm head        red: T step: session text prompt pc srr0; T cont: session text prompt pc srr0; again: session text prompt pc srr0; T me: session text pc srr0; again session; T ra session pc nonex stopped (the exit fires inside the read-ahead) (= the HEAD leg) -> 33/56
+   W2_bare_ret    W2: a bare return at the arm head, no park                   red: T step pc, T cont pc nonex, T me pc, again pc; T ra pc nonex addr (the real fetch returns unparked, the run walks on) -> 48/56
+   W3_goto_bad    W3: goto bad                                                 red: T step unimpl, T cont unimpl, again unimpl -> 53/56
+   W4_isi_inv     W4: arm (c) invents an ISI instead of parking                red: pc srr0 exc in T step, T cont, T me, again; T cont unimpl; T ra pc (0x400) -> 42/56
+   W5_dec_tail    W5: the arm emptied, the uninitialised ib decoded            red: T cont unimpl; T step pc srr0 exc; T me pc srr0 exc; again pc srr0 exc (W5's set, BUILD-DEPENDENT: the uninitialised word, P25); T ra nonex (the read-ahead slot is translated from garbage, so no real fetch) and maybe pc -> 45/56
+   D1_c_inv       (d) arm (c)'s test inverted                                  red: T step/T cont/again chkstop; T me pc srr0 exc -> 50/56
+   D2_c_del       (d) arm (c) deleted                                          red: as D1 -> 50/56
+   D3_c_nopark    (d) arm (c) keeps its test, drops the park                   red: T step pc, T cont pc nonex, T me pc, again pc; T ra pc nonex addr (no park: the run walks past the window) -> 48/56
+   D4_b_inv       (d) arm (b)'s test inverted                                  red: T cont nonex (measured in table 1; again nonex stays 2 -- PRETABLE.errata.md item 2); T ra nonex (the refreshed slot re-fetches) -> 54/56
+   D5_a_inv       (d) arm (a)'s test inverted: a bare return on every non-read red: as W2 on the four -T sessions; T ra nonex (the read-ahead failure falls to (c)'s park: one report) and maybe pc -> 50/56
+   D6_d_inv       (d) arm (d)'s test inverted                                  red: NONE (arm (c) returns first on every -T session; arm (d) is ROW 5's, FILED pending X11) -> 56/56
+   D7_dom_run     (d) the read's failure test conditioned on running           red: as W5, T ra included (memory_rw cleared running before returning, so the arm is skipped; BUILD-DEPENDENT) -> 45/56
+   D8_c_below_d   (d) arm (c) moved below arm (d) (re-anchored on the commente red: T me pc srr0 exc -> 53/56
+   D9_mc_vec      (d) arm (d) delivers the wrong exception                     red: NONE (disclosed: arm (d) unreachable here) -> 56/56
+   D10_chk_run    (d) the checkstop fallback leaves running set                red: NONE (disclosed: the checkstop fallback is unreachable here) -> 56/56
+   D11_b_noref    (d) arm (b) drops its next_ic refresh                        red: NONE (disclosed: arm (b) is reached on no measured session) -> 56/56
+   D12_else_ra    (d) the slow path's else conditioned on not read-ahead       red: T ra nonex addr stopped (read-ahead skips the read: the slot is translated from garbage, no halt at all; BUILD-DEPENDENT, the session may run on to its timeout) -> 53/56
+   D13_c_me       (d) arm (c) conditioned on ME clear                          red: T me pc srr0 exc -> 53/56
+   D14_c_meset    arm (c) conditioned on ME set (the mirror of D13)            red: T step/T cont/again chkstop (table 1b) -> 53/56
+   D15_dom_ok     the block entered whatever the slow-path read returns        red: noT unimpl, noT chkstop (table 1b; table1b/D15_EDIT.md); T ra pc nonex addr (the successful fetch of 0xfec00004 itself enters the block and checkstops there: no subfic, no read-ahead) -> 51/56
+   W7_a_del       the reconciliation's W7: arm (a)'s read-ahead guard deleted  red: T ra nonex (the read-ahead failure falls to (c)'s park, whose batch end survives the read-ahead return: one report; F4) and maybe pc -> 55/56
+   V2_b_del       arm (b) deleted                                              red: NONE (arm (b) is reached on no measured session) -> 56/56
+   V3_c_true      arm (c)'s guard forced true                                  red: NONE (on pmppc every failing fetch that reaches (c) has running 0 already) -> 56/56
+   V4_d_false     arm (d)'s guard forced false                                 red: NONE (arm (d) unreachable here) -> 56/56
+   V5_d_true      arm (d)'s guard forced true                                  red: NONE (arm (d) unreachable here) -> 56/56
+   V6_chk_nopark  the checkstop fallback's park dropped (Mythos (iv))          red: NONE (the checkstop fallback is unreachable here) -> 56/56
+   V7_fail_inv    the read's failure test inverted (F6)                        red: noT unimpl, noT chkstop (the zero-fill succeeds: the block's checkstop fallback runs, MSR 0) + T cont unimpl; T step pc srr0 exc; T me pc srr0 exc; again pc srr0 exc (the failing -T reads skip the block, F6; BUILD-DEPENDENT) + T ra pc nonex addr (as D15) -> 41/56
+   HEAD leg       the pre-fix build                                            red: as B1 -> 33/56, SYMPTOM=PRESENT
+   null media     /bin/true, an absent binary, /bin/false                      CONTROL=FAIL each
+
+PROVENANCE: probe56_frozen.py md5 0cae1c8e2884 (56/56 on the fixed build: fixed_first56.out, binary ee2532155321, per first56_run.md5); the window sweep that owed the T ra rows: window_sweep.out (run 2; run 1's word column had an r3/r03 parse bug, kept in window_sweep_run1/).

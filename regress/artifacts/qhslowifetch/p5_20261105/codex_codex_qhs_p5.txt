@@ -1,0 +1,116 @@
+CODEXP5QHS
+model: GPT-6 (Codex)
+VERDICT: REPAIR — one new floor breach; zero false records in the changed product comment, probe docstring, or gate comment.
+
+1. THE NO -T SESSION
+
+No additional no-T row is owed under the stated joint-cell bound.
+
+I independently checked the premise: src/core/memory.c:645–655 distinguishes the -T halt, and src/cpus/memory_rw.c:695–702,731,804 zero-fills and returns success without -T. Thus the proposed no-T checkstop-present expectation would be wrong. Changes confined to the failure block cannot affect this successful fetch. The existing noT unimpl and noT chkstop rows already detect the measured failure-guard inversion and forced-true variants.
+
+This conclusion is scoped. Adding “|| cpu->pc != addr” to the failure guard would remain green currently and would be caught by an unaligned no-T session. I FILE that candidate under the joint-cell restriction: it introduces a raw-low-bit predicate that the repaired body does not test; its comparison explicitly ignores those bits. Section 3’s “no variant” conclusion should be understood within that bound, not as a statement about arbitrary mutations.
+
+2. FLOOR ON THE COMPOSITE
+
+Breach B1: widen the new alignment mask by changing one literal:
+
+    if ((cpu->pc & ~(uint64_t)7) != addr) {
+
+The complete inventory of measured pairs reaching this comparison is:
+
+    Sessions                         cpu->pc       addr          pc & ~7
+    T cont, T step, T me, again       0x02040000    0x02040000    0x02040000
+    T ra, T ra me: actual fetch       0xfec00008    0xfec00008    0xfec00008
+    T blr                            0x02040003    0x02040000    0x02040000
+
+Each result also equals pc & ~3. Speculative failures return through (a) before this comparison; successful reads bypass the failure block. Therefore this edit preserves every existing row by path identity.
+
+It is outside the disclosed classes: it can wrongly enter (b) on an ordinary -T halt. It is not merely a change to the unmeasured delivered-exception refresh.
+
+Concrete distinguishing witness: retain the T blr program, byte stores, far breakpoint and -T, but use r3=0x02040007.
+
+    cpu->pc                = 0x02040007
+    addr                   = 0x02040004
+    correct pc & ~3        = 0x02040004
+    mutant pc & ~7         = 0x02040000
+
+The fix reaches (c) and parks. The mutant takes (b), refreshes next_ic and repeats the failed fetch. A “nonex = 1” row catches it. This is a static derivation; I have not measured an exact mutant report count.
+
+The other immediate mask cases enumerate as follows:
+
+    Mask literal 0: T blr retains ...03 — caught.
+    Mask literal 1: T blr retains ...02 — caught.
+    Mask literal 2: T blr retains ...01 — caught.
+    Mask literal 7: every existing pair unchanged — breach.
+    Mask literal 15: 0xfec00008 becomes 0xfec00000 — read-ahead-session catch.
+
+Denominator: 69 explicitly reviewed edit cells, comprising:
+
+    36: six predicate sites × six shapes.
+        Sites: page != NULL; failed memory_rw; (a) read-ahead;
+        (b) aligned inequality; (c) !running; (d) MSR[ME].
+        Shapes: inversion; forced true; forced false;
+        conjunction with running; with translation_readahead; with MSR[ME].
+
+    14: additional edits to (b).
+        Five mask literals: 0, 1, 2, 7, 15.
+        Five comparison replacements: ==, <, <=, >, >=.
+        Three left-operand replacements: running, translation_readahead, msr.
+        One right-operand replacement: addr -> cpu->pc.
+
+    12: arms (a) and (c) × six exit choices.
+        Bare return; refresh-and-return; park-and-return;
+        goto bad; machine-check-and-return; checkstop fallback.
+
+     7: explicit state-write cells.
+        In (a): SRR0=addr; running=1; clear MSR[ME].
+        In (c): SRR0=addr; clear MSR[ME]; set MSR[ME]; pc=addr.
+
+These are static review cells, not newly executed variants. Existing table results support the corresponding measured cases. I do not claim exhaustive enumeration of arbitrary literals or additional joint predicates.
+
+The masked inverse is caught by T cont nonex even though D4 measured the unmasked inverse. The < and > replacements suppress (b) on the measured equal-aligned pairs and fall within its disclosed unmeasured-route limitation. The operand substitutions produce catches in T cont or T blr. Arm (a)’s early return, arm (c)’s park, and the ME-dependent downstream exits introduce no additional surviving breach in this denominator.
+
+3. THE DIFF
+
+The product change is correct for the measured routes. For aligned PCs, the old and new comparisons agree. Exception vectors are aligned. The changed outcome is the intended unaligned fetch, which now reaches (c).
+
+One source precision matters: the unmasked implementation is X(bclr_20), selected for this untraced unconditional blr. Generic X(bclr) masks its target. I checked the implementations and decoder in src/cpus/cpu_ppc_instr.c:349–385,2833–2834,4583–4589. The packet’s witness is sound; its “bclr” wording is shorthand for that path, not evidence that every bclr implementation is unmasked.
+
+The new rows match their stated channels:
+
+    T blr: session, pc, nonex, srr0, msr, chkstop, unimpl, lr.
+    T ra: srr0.
+    T ra me: srr0.
+
+R5_revert, R5_mask1 and R5_mask2 demonstrate the nonex channel. R5_srr0_a demonstrates both added read-ahead SRR0 channels. Individual absence checks do not independently prove the entire route, but the composite observations support their notes.
+
+The row totals enumerate:
+
+    ctl 3; neg 1; isi 5; isi1 4; noT 5;
+    T cont 10; T step 10; T me 9; again 10;
+    T ra 8; T ra me 6; T blr 8.
+
+That is 79 rows across the twelve named sessions. The executable probe text matches the frozen instrument after newline normalization. The recorded red-set cardinalities match their scores. V12’s measured red is explicitly excluded from the predicted-red tally; that accounting is consistent.
+
+R5_arun’s disclosure is appropriate. The measured window-end words enumerate:
+
+    mc146818    0x7ff000fc: 0
+    pmppc_board 0x7ff4000c: 0
+    dec_mirror  0x800000fc: 0
+    dec21143    0xf80000fc: 0
+    cpc700_pci  0xfec00004: 0x23120e00
+    cpc700_int  0xff5008a0: 0
+    ns16550_0   0xff600304: 0
+    ns16550_1   0xff600404: 0
+
+None of those measured words branches. The subfic proceeds to the actual failed fetch, whose second halt masks restoring running. This supports “none is measured,” not impossibility under every programmable device state.
+
+I also checked the translator prologue, read-ahead continuation, exception-vector setup, probe address inventory, and existing window records. I did not edit, build, execute the emulator, or independently reproduce the runtime measurements or build-clearance claims.
+
+4. VERDICT
+
+REPAIR B1: add a distinguishing -T fetch with address bit 2 set and confirm the 3->7 variant turns red. Using r3=0x02040007 preserves the existing one-bit-mask catches while exposing this widening. Carry the updated rows and variant result into the records and submit the repair’s own pass.
+
+No product reversal is indicated. No changed-record correction is required by this review. Closure fails because B1 survives the composite detector.
+
+CODEXP5QHS: 69 CELLS SWEPT 1 BREACHES 0 FALSE RECORDS VERDICT:REPAIR
