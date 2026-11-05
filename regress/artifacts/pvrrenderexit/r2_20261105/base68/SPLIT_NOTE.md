@@ -1,0 +1,1 @@
+base68's first run (65/68): the mask session TIMED OUT (90 s) sending 16 TA commands (sessions/mask.txt: '--- transcript (TIMEOUT) ---'); every other new row as predicted.  Split into two 8-command sessions, mask (MASK27, T1/T2) and mask25 (MASK25, T1/T2); T3/T4 and overlap25 dropped.  Re-run: probe_base68b.out.

@@ -1,0 +1,122 @@
+CODEXP3PVR
+model: GPT-6 (Codex)
+VERDICT: REPAIR — 15 single-site floor breaches and 5 false assertions in the supplied repair records.
+
+1. The composite does not close the class.
+
+The following edits are absent from table 2 and its disclosed non-coverage. “All 68 remain green” below is a source-derived prediction, not a claim that I executed these variants.
+
+A. Span start widened left, separately in simpleline and texturedline: change int x = x1 to int x = x1 - 1.
+
+The existing samples remain interior, at the unchanged right endpoint, or protected by the inner x bounds. Every probe triangle has constant depth, colour and texture coordinates, so the extra interpolation step does not change sampled values.
+
+Add “s before” at (364,180) to each yedges session. SWAP arrives at 435 and 365; after swapping, its first column is 365. Fixed: BLACK at 364. Edited: RED. Two breaches.
+
+B. Swap threshold tightened, separately in both rasterizers: change x1 > x2 to x1 > x2 + 1.
+
+At the sampled SWAP row 180, the endpoint difference is 435 - 365 = 70, so the edited predicate still swaps.
+
+Add (400,249). After 99 increments, the incoming endpoints are 450 - 49.5 = 400.5 and 350 + 49.5 = 399.5. texturedline receives 400 and 399. The fixed code swaps and draws column 400; the edit skips the swap and draws nothing. Two breaches.
+
+C. Swap equality admitted, separately in both rasterizers: change x1 > x2 to x1 >= x2.
+
+Equal endpoints are harmless in the current flat-attribute triangles, but the swap also exchanges depths.
+
+Use a vertical triangle with x = 300, y = 100/150/200, vertex depths 2/1/2, and red colour or texture. At row 150, both endpoints have x = 300, but their depths are 2 and 1. The fixed code starts with depth 2; the edit swaps in depth 1. Draw a subsequent green polygon at depth 1.5 covering (300,150). Fixed: RED. Edited: GREEN. Two breaches.
+
+D. Left-clause operand copied, separately in both rasterizers: replace the first x1 with x2, producing (x2 < 0 && x2 < 0).
+
+The existing LEFT spans arrive with x1 negative and x2 positive, so this edit leaves them unchanged. SWAP supplies reversed spans only inside the frame.
+
+Reverse LEFT’s first two vertices. At row 230, the incoming endpoints are 30 and -30. The fixed code swaps and draws column 1; the edit returns early. Add reversed-left (1,230), expecting RED. Two breaches.
+
+E. Right-clause operand copied, separately in both rasterizers: replace the second x2 with x1, producing (x1 >= d->xsize && x1 >= d->xsize).
+
+Existing RIGHT and RSPAN have their first endpoint inside the frame. The edit therefore preserves their samples.
+
+Reverse RSPAN’s first two vertices. At row 430, the incoming endpoints are approximately 669.5 and exactly 639; texturedline receives 669 and 639. Fixed: RED at (639,430). Edited: early return and BLACK. Two breaches.
+
+These operand substitutions use endpoints read by the swap body. The orientation distinction is also tested by that body; this is inside the stated bound.
+
+F. Equal-depth Z-off rejection, separately in both rasterizers: replace the depth predicate with:
+
+d->vram_z[ofs] < z || (!d->zwrite_disabled && d->vram_z[ofs] == z)
+
+This preserves strict depth outcomes and Z-on equality. Existing equal/texequal test only Z-on equality.
+
+Add red Z-on T1 at depth 2, followed by green Z-off T2 at depth 2. At overlap (220,180), the fixed result is GREEN; the edit leaves RED. The joint cell is explicitly justified by the body’s depth test and zwrite_disabled test. Two breaches.
+
+G. Decode operator substitution: change (list[1] >> 26) & 1 to (list[1] >> 26) == 1.
+
+The current word-1 values are 0x00000000, 0x02000000, 0x04000000 and 0x08000000. Their shifted values are respectively 0, 0, 1 and 2; both expressions produce identical Boolean results.
+
+Use T1 word 1 = 0x14000000: shifted value 5, bit 26 set, culling mode 2. T1’s cross product is 200 × 200 - 0 × 100 = 40000, so mode 2 does not cull it. Follow with ordinary green T2 behind it. Fixed: GREEN overlap because T1 stored no depth. Edited: RED. One breach.
+
+H. Another decode-mask widening: change & 1 to & 5.
+
+This incorrectly includes word-1 bit 28, which no existing probe header sets. Add a bit-28-only T1 header, 0x10000000. The same positive-cross-product T1 survives culling mode 2. Follow it with ordinary green T2 behind it. Fixed: RED overlap. Edited: GREEN because T1 incorrectly skipped its depth store. One breach.
+
+I. Fractional span-end widening in simpleline: change x <= x2 to x < x2 + 1.
+
+The exact-integer SWAP samples cannot distinguish these expressions. Existing fractional right endpoints either have no adjacent readback or lie beyond the screen boundary.
+
+Use triangle [(100,100),(201,100),(100,102)]. At row 101, its endpoints are 100 and 150.5. Fixed: BLACK at (151,101). Edited: RED. texturedline has integer endpoints, so this particular rewrite is equivalent there. One breach.
+
+Denominator: 84 explicitly considered input cells, with the following enumeration.
+
+For each rasterizer, 33 cells:
+- Four y-boundary cells: -1, 0, 479, 480.
+- Four left-clause truth pairs: false/false, false/true, true/false, true/true.
+- Four right-clause truth pairs: false/false, false/true, true/false, true/true.
+- Five swap cells: forward; equal endpoints with equal attributes; equal endpoints with unequal depths; reversed endpoint difference 1; reversed difference greater than 1.
+- Three integer span-start positions: immediately before, at, immediately after.
+- Three integer span-end positions: immediately before, at, immediately after.
+- Four inner x-boundary cells: 0, 1, 639, 640.
+- Six depth/write cells: stored depth less than, equal to, or greater than incoming depth, each with Z-write on and off.
+
+Additionally: two simpleline fractional-end cells, floor(x2) and ceil(x2); and sixteen decode patterns for bits 25–28:
+0x00000000, 0x02000000, 0x04000000, 0x06000000,
+0x08000000, 0x0a000000, 0x0c000000, 0x0e000000,
+0x10000000, 0x12000000, 0x14000000, 0x16000000,
+0x18000000, 0x1a000000, 0x1c000000, 0x1e000000.
+
+Thus 33 + 33 + 2 + 16 = 84 cells. Edit shapes considered include boundary shifts, strict/inclusive comparisons, endpoint operand copies, conjunction changes, swap deletion, depth/write predicate combinations, and decode operator/mask changes. This is a finite static-review denominator, not a claim of exhaustive coverage of arbitrary edits.
+
+2. The added rows correctly target their stated cases.
+
+The 17 additions enumerate as seven geometry observations per rasterizer, plus three mask observations:
+
+- rspan: left endpoint exactly 639; mathematical right endpoint 700 - 30 × 61/60 = 669.5. texturedline truncates the latter to 669.
+- t in: TOP at y = 0 mathematically spans 275 to 325; column 300 is inside.
+- b in: BOTTOM at y = 479 spans 275⅚ to 324⅙; column 300 is inside.
+- b out: y = 480 is rejected. Its sampled depth index would be 480 × 640 + 300 = 307500, beyond valid indices 0 through 307199.
+- swap: SWAP at y = 180 arrives at exactly 435 and 365; column 400 draws after swapping.
+- s end: column 435 draws.
+- s past: column 436 does not draw.
+- mask overlap, mask t2 only, mask25 overlap: T1 at row 180 spans 140 to 260; T2 spans 165 to 335. Column 220 overlaps, while 320 belongs only to T2.
+
+The b-out row checks the baseline correctly. Y4 remains an undefined-behaviour observation, not a deterministic prediction.
+
+mask25 was rightly added. I checked header() and the renderer: ordinary textured headers select texturing through word 0 bit 3; texture1 from word 1 bit 25 is ignored. K2 therefore needed its own bit-25 witness.
+
+Five false assertions in the supplied repair records, counting repeated assertions once:
+
+a. “59 red, every one on its predicted rows” is false. The partition is 35 old predicted-red variants, 20 new predicted-red variants, four unpredicted-red variants (Y2s, Y2t, Y4s, Y4t), and three predicted-green variants (M17, L1s, L1t). That is 55 predicted red + 4 unpredicted red + 3 predicted green = 62. The prediction denominator is 58.
+
+b. The gate’s “fifteen render sessions” should be sixteen: ovoff, ovon, behind, texoff, texbeh, texon, two, sticky, edges, texedges, equal, texequal, yedges, texyedges, mask, mask25. Its actual row-name list contains all 68 rows.
+
+c. PRETABLE’s mtime does not precede every file in table2/. The frozen probe is older, as VERDICT itself states and filesystem metadata confirms. Restrict the claim to the driver/results, with the frozen-probe exception.
+
+d. The three sibling exits are not in the same function. The texture-format exit is in texturedline(); the render-mode and list-command exits are in pvr_render(). Their dispositions need not change.
+
+e. Y2’s “negative VRAM offset when FB_RENDER_ADDR1 < 1280” is overbroad. At y = -1, TOP draws columns 274 through 325. Their depth indices run from -366 through -315; their colour bytes run from fb_base - 732 through fb_base - 629. For fb_base = 1000, those colour offsets are positive, 268 through 371, despite 1000 < 1280. The actual zero-base probe still accesses before both buffers.
+
+M17’s equivalence survives inspection. There is a frame-bounds return after the original reset, but it precedes the sole nonzero writer. Initialization and completed-render resets maintain zero across that return. This does not create another breach.
+
+3. REPAIR.
+
+Add distinguishing rows for A–I, retaining separate rasterizer coverage where specified; correct the five record assertions; then review the delivered repair and its updated mutation results.
+
+Premises checked directly in GXEMUL-SEC: both complete rasterizers, both triangle sweeps, header decoding, culling, texture selection, depth allocation, initialization/reset paths, probe geometry and session construction, gate row enumeration, and the prediction/frozen-probe ordering. No files were edited and no project, probe, build or mutant was executed.
+
+CODEXP3PVR: 84 CELLS SWEPT 15 BREACHES 5 FALSE RECORDS VERDICT:REPAIR

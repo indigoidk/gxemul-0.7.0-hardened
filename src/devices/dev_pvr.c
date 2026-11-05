@@ -144,6 +144,10 @@ struct pvr_data {
 	/*  Video RAM and Z information:  */
 	uint8_t			*vram;
 	double			*vram_z;
+	int			zwrite_disabled;	/*  #583: ISP/TSP word 1 bit 26 of the
+							    polygon being rendered.  When set, the
+							    rasterizers skip their vram_z stores.
+							    Cleared at every pvr_render entry.  */
 
 	/*  DMA registers:  */
 	uint32_t		dma_reg[N_PVR_DMA_REGS];
@@ -680,7 +684,8 @@ static void simpleline(struct pvr_data *d, int y, double x1, double x2,
 		if (x > 0 && x < d->xsize) {
 			int ofs = x + y * d->xsize;
 			if (d->vram_z[ofs] <= z) {
-				d->vram_z[ofs] = z;
+				if (!d->zwrite_disabled)	/*  #583: depth test kept, store skipped  */
+					d->vram_z[ofs] = z;
 
 				// z = 1/w
 				// int v = z * scale_factor;
@@ -764,7 +769,8 @@ static void texturedline(struct pvr_data *d,
 		if (x > 0 && x < d->xsize) {
 			int ofs = x + y * d->xsize;
 			if (d->vram_z[ofs] <= z) {
-				d->vram_z[ofs] = z;
+				if (!d->zwrite_disabled)	/*  #583: depth test kept, store skipped  */
+					d->vram_z[ofs] = z;
 
 				int fbofs = fb_base + ofs * d->bytes_per_pixel;
 
@@ -1128,6 +1134,10 @@ void pvr_render(struct cpu *cpu, struct pvr_data *d)
 
 	double baseRed = 0.0, baseGreen = 0.0, baseBlue = 0.0;
 
+	d->zwrite_disabled = 0;	/*  #583: per render.  A type-4 header in this
+				    call assigns it; a list with no header must
+				    not inherit the previous render's value.  */
+
 	debug("[ pvr_render: rendering to FB offset 0x%x, "
 	    "%i Tile Accelerator commands ]\n", fb_base, d->n_ta_commands);
 
@@ -1240,10 +1250,13 @@ void pvr_render(struct cpu *cpu, struct pvr_data *d)
 				fatal("dcalcexact %s\n", dcalcexact ? "TRUE" : "false");
 			}
 
-			if (!zwrite) {
-				fatal("pvr: no zwrite? not implemented yet.\n");
-				exit(1);
-			}
+			/*  #583: ISP/TSP instruction word 1 bit 26 is "Z-write disable".
+			    A polygon with the bit set goes through the same depth test
+			    and rasterization as any other polygon, but its depth values
+			    are not stored.  Both rasterizers check d->zwrite_disabled
+			    at their vram_z stores.  Before #583 this bit ended the
+			    emulator with fatal() + exit(1).  */
+			d->zwrite_disabled = !zwrite;
 
 			// For now, trust texture and ignore texture1.
 			// if (texture != texture1) {

@@ -1,0 +1,163 @@
+PRETABLE.out -- pvrrenderexit detector (draft probe39_draft_frozen.py, 39 rows), written BEFORE table 1 runs; its mtime is the order proof.
+Fix under test: dev_pvr.c.fix (the round's working set, md5 481755b4f10f).  Design: cloud Fable 5.1's final ruling (adj_20261104/
+FABLE_FINAL_r2.md, VERDICT GO-WITH-CHANGES, rows R1-R5).  R6-R8 are added here by the checks below; each is one cold session.
+
+1. SIBLING PARITY.  The fix guards the depth store in TWO rasterizers, simpleline() and texturedline(); each is its own enclosing
+   function with the same dominating predicates (x in range; vram_z[ofs] <= z) and the same new guard (!d->zwrite_disabled).  Parity
+   means each rasterizer gets the same cells (section 3).  simpleline: ovoff, ovon, behind (R2, R3, R6).  texturedline: texoff,
+   texbeh, texon (R4, and R7 = the two textured sessions this check adds).  Asymmetry before this check: Fable's rows gave simpleline
+   three sessions and texturedline one (R4); the textured Z-on path and the textured Z-off-behind cell had no row.
+   Sibling EXITS in the same function (texture pixel format :873, render mode :1090, list command :1431) are out of scope by the
+   row's own state_note ("keep their own disposition"); the list-command exit was witnessed today (../sibling_listcmd_20261104/).
+
+2. CLAIM -> ROW.  Every added comment sentence that asserts an observable consequence:
+   a. field comment "When set, the rasterizers skip their vram_z stores" -> ovoff overlap, texoff overlap.
+   b. field comment "Cleared at every pvr_render entry" and the reset's "a list with no header must not inherit the previous
+      render's value" -> two overlap (R5).
+   c. rasterizer comments "depth test kept, store skipped" -> kept: behind overlap, texbeh overlap (a Z-off polygon still FAILS the
+      test behind a nearer one); skipped: ovoff and texoff overlap.
+   d. case 4 comment "goes through the same depth test and rasterization as any other polygon" -> same depth test: behind and texbeh
+      overlap (the fail side; R2 and R4 show only the pass side); rasterization: ovoff t1 only, texoff t1 only (drawn, not declined).
+   e. "its depth values are not stored" -> ovoff and texoff overlap.  "Both rasterizers check d->zwrite_disabled" -> texoff, texbeh.
+   f. "Before #NNN this bit ended the emulator with fatal() + exit(1)" -> the HEAD leg (zoff session and prompt red).
+   No added sentence is left without a row.
+
+3. GUARD FIELD vs BODY FIELD.  The guard reads d->zwrite_disabled; the guarded body writes d->vram_z[ofs].  Writers of
+   zwrite_disabled: DEVINIT's memset (0), the pvr_render entry (0), case 4 (= !zwrite).  Writers of vram_z: the render-entry clear
+   (background z) and the two guarded stores.  States where the two disagree, each rowed: the field left at 1 by a previous render, at
+   a render with no header (two, R5); the field set by one header and a later Z-on header in the same render (sticky, R8).
+   PARTITION the body induces, per lvalue: zwrite_disabled tested zero / non-zero -> EXHAUSTED (both values rowed in each rasterizer);
+   vram_z[ofs] <= z -> {pass, fail} -> EXHAUSTED per rasterizer; the EQUAL edge (vram_z == z) is NOT rowed: the comparator predates
+   the fix and compares two variables, so rule D2 (a constant bound) does not bind -- disclosed under clause (e).
+   JOINT CELLS {zwrite 0, 1} x {depth pass, fail}, per rasterizer:
+     simpleline   (0,pass) ovon and behind t1   (0,fail) ovon overlap    (1,pass) ovoff t1, behind t2    (1,fail) behind overlap
+     texturedline (0,pass) texbeh and texon t1  (0,fail) texon overlap   (1,pass) texoff t1, texbeh t2   (1,fail) texbeh overlap
+
+4. CHANNEL -- per row, the variant it is written for and the observable that differs.  Rows no enumerated variant can move are
+   CONTROLS by construction (they pin the channel: the frame clear, a Z-on triangle drawing, headerless vertices drawing).
+   zoff session/prompt, and the session row of every Z-off session   B1_exit                exit 1, no prompt
+   ovoff overlap                                                     M1, M3, M5, M7         0xf800 instead of 0x07e0
+   ovoff t1 only, texoff t1 only                                     M11 (M12 simple only)  0x0000 instead of 0xf800
+   ovon overlap                                                      M3, M6, M7, M15        0x07e0 instead of 0xf800
+   behind overlap                                                    M13 (M3/M6/M7/M15 via T1)   0x07e0 instead of 0xf800
+   behind t2 only, texbeh t2 only                                    M11 (M12 simple only)  0x0000 instead of 0x07e0
+   texoff overlap                                                    M2, M4, M5, M7         0xf800 instead of 0x07e0
+   texbeh overlap                                                    M14, M16, M4, M6, M7   0x07e0 instead of 0xf800
+   texon overlap                                                     M4, M6, M7, M16        0x07e0 instead of 0xf800
+   two overlap                                                       M9, M10                0x07e0 instead of 0xf800
+   sticky overlap                                                    M8 (M3, M6, M7, M15)   0x001f instead of 0x07e0
+   CONTROLS by this check (the draft's row() calls do not flag them yet; the probe is changed before landing, never during the table):
+   zoff rendered, ovoff t2 only, ovoff bg, ovon t2 only, ovon t1 only, ovon bg, behind t1 only, texoff t2 only, texbeh t1 only,
+   texon t2 only, two t1 only (R5's void condition: headerless vertices must draw), two t2 only, sticky t2 only -- beside the
+   witness's six (neg apparatus, id session, id r8, zon session, zon rendered, zon prompt).
+   CHANNEL, first mandated use, checked rather than obeyed: every detector row above names a variant under which its pixel MUST
+   change, and the table measures whether it does; no detector row is survive-only at a refusal-effect site (the session rows are the
+   clause-(b) channel, which an exit does move).
+
+5. TABLE 1 -- the variants (variants/<name>.c, one exact edit each, written by pvr_variants.py) and the predicted red rows.
+   B1_exit                  the removed `if (!zwrite) { fatal(...); exit(1); }`, verbatim, above the assignment
+                            -> every Z-off session dies: 13/39 (= the HEAD leg's prediction)
+   M1_simple_unguarded      simpleline store unconditional              -> ovoff overlap                               38/39
+   M2_tex_unguarded         texturedline store unconditional            -> texoff overlap                              38/39
+   M3_simple_inv            simpleline guard inverted                   -> ovoff, ovon, behind, two, sticky overlap    34/39
+   M4_tex_inv               texturedline guard inverted                 -> texoff, texbeh, texon overlap               36/39
+   M5_assign0               case 4: zwrite_disabled = 0                 -> ovoff, texoff overlap                       37/39
+   M6_assign1               case 4: zwrite_disabled = 1                 -> ovon, behind, texbeh, texon, sticky overlap 34/39
+   M7_assign_inv            case 4: zwrite_disabled = zwrite            -> ovoff, ovon, behind, texoff, texbeh, texon, sticky overlap 32/39
+   M8_sticky                case 4: if (!zwrite) zwrite_disabled = 1    -> sticky overlap                              38/39
+   M9_noreset               the entry reset deleted                     -> two overlap                                 38/39
+   M10_reset_in_resetta     the reset moved into pvr_reset_ta()         -> two overlap (no session writes the TA reset) 38/39
+   M11_decline              the draw dispatch skips Z-off polygons      -> ovoff t1, behind t2, texoff t1, texbeh t2   35/39
+   M12_hoist_simple         simpleline: guard folded into the depth test, so Z-off polygons are not drawn -> ovoff t1, behind t2 37/39
+   M13_ztest_bypass_simple  simpleline: <= z || zwrite_disabled         -> behind overlap                              38/39
+   M14_ztest_bypass_tex     texturedline: the same                      -> texbeh overlap                              38/39
+   M15_simple_never_store   simpleline guard && 0                       -> ovon, behind, two, sticky overlap           35/39
+   M16_tex_never_store      texturedline guard && 0                     -> texbeh, texon overlap                       37/39
+   M17_reset_at_end         the reset moved to the end of pvr_render    -> PREDICTED UNDETECTED (39/39), EQUIVALENT: the render
+                            loop has no return or goto (grep, 2026-11-04), the field's only non-zero writer is inside that loop,
+                            DEVINIT zeroes it, and the one early return (fb_base outside VRAM) precedes the loop -- so every render
+                            begins with 0 either way.
+   The scores above are PREDICTIONS; table 1's SCORES.txt is the record.  The HEAD leg is predicted 13/39 with SYMPTOM=PRESENT, and
+   the three null media (/bin/true, an absent binary, /bin/false) CONTROL=FAIL.
+
+6. ADDENDUM, 2026-11-04 17:1x, STILL BEFORE TABLE 1 RAN -- after Argon's design review (gweb jobs_20261103_adj/pvrrenderexit_det39,
+   GWEBPVRDET: re-derived five predictions and found them right; named one gap).  THE GAP IS REAL AND IN-BOUND: both guarded stores sit
+   under `if (x > 0 && x < d->xsize)`, a predicate DOMINATING the edited lines inside the enclosing function -- so DEPENDS-ON clause (1)
+   enumerates it, and section 1 above named it ("x in range") without giving it a row.  Its two compares are relational against bounds
+   (0, and xsize, 640 on this machine), so rule D2 pins each at its edges: one row per side, at most two per compare.  No earlier session
+   drew within 10 pixels of either screen edge, so a one-token widening (x >= 0, x <= d->xsize: a store one column past a row's end,
+   landing on the neighbouring row) went unobserved.
+   ADDED (L1, pre-ship construction): two sessions, eight rows -- R9 `edges` (untextured) and `texedges` (textured, red texel), each a
+   triangle across the LEFT edge (row 230 spans x = -30..30) and one across the RIGHT edge (row 330 spans x = 610..670):
+     l in   (1, 230)   RED    column 1 drawn                 catches x > 1          (the tightening move of x > 0)
+     l out  (0, 230)   BLACK  column 0 not drawn             catches x >= 0, and the bound deleted (x = 0 drawn)
+     r in   (639, 330) RED    column 639 drawn               catches x < xsize - 1  (the tightening move of x < xsize)
+     r out  (0, 331)   BLACK  x = 640 not wrapped onto 331   catches x <= xsize, and the bound deleted
+   Odd pixel 1 and pixel 639 are read as the HIGH half of a 32-bit load at the even pixel below (little-endian).  The instrument is now
+   probe47_draft_frozen.py (47 rows; 47/47 on build/gxemul, fixed_first47.out); probe39_draft_frozen.py stays as the record of the draft
+   this file first described.  None of the eight new rows is a control.
+   ADDED VARIANTS, each one token, each predicted to red exactly one row:
+     M18_simple_lo_ge   x > 0 -> x >= 0             -> edges l out       46/47      M22_tex_lo_ge    the same in texturedline -> texedges l out
+     M19_simple_lo_gt1  x > 0 -> x > 1              -> edges l in        46/47      M23_tex_lo_gt1   -> texedges l in
+     M20_simple_hi_le   x < d->xsize -> <=          -> edges r out       46/47      M24_tex_hi_le    -> texedges r out
+     M21_simple_hi_lt1  x < d->xsize -> < xsize - 1 -> edges r in        46/47      M25_tex_hi_lt1   -> texedges r in
+   RESTATED DENOMINATORS: every section-5 prediction keeps its red set and gains the eight edge rows (green under all of M1-M17), so a
+   prediction of k/39 becomes (k+8)/47; B1_exit and the HEAD leg become 21/47 (the edge sessions carry no Z-off header and survive).
+   M17 stays PREDICTED UNDETECTED (47/47).  The three null media stay CONTROL=FAIL.
+
+7. ADDENDUM, 2026-11-05 00:3xZ, STILL BEFORE ANY LEG OR TABLE RAN -- after the design ruling on the 47-row draft.  Cloud Mythos 5.1
+   adjudicating (the retry of cloud Fable 5.1, whose run a safety classifier stopped partway: adj_20261104/DESIGN47_MYTHOS.md, CHANGE-FIRST,
+   0 wrong predictions, 1 gap) and cloud Opus 5.5 confirming (DESIGN47_OPUS.md, CHANGE-FIRST, 1 at-risk prediction [M10, settled since],
+   2 gaps).  Fable's stopped partial (DESIGN47_FABLE.md) is a seat failure, never a vote.
+   a. AGREED by both and adopted: R6 behind, R7 texbeh, R8 sticky and R9 edges/texedges are OWED; the 26 predictions above stand (M10:
+      pvr_reset_ta() runs only from DEVINIT and a PVRREG_RESET write, and the `two` session's render 2 reports 6 commands).
+   b. THE GAP, named by both (Opus M26/M27, Mythos M29/M30): the depth compare's EQUAL edge.  `vram_z[ofs] <= z` -> `< z` changes no pixel
+      of the 47 rows, because no session draws two polygons at one z.  Section 3 excluded it as "two variables, so D2 does not bind"; both
+      seats rejected that reading (the ruling's D2 carries no constant-bound limit, and M19/M21 already treat a tightening of
+      `x < d->xsize`, also two variables, as in bound).  ADDED (L1, pre-ship construction): R10, sessions `equal` (untextured) and
+      `texequal` (red and green texels), each a Z-on T1 at z = 2.0 then a Z-on T2 at z = 2.0 over it:
+        equal overlap      (220,180) GREEN  ties go to the later polygon under <=    catches M29
+        equal t2 only      (320,180) GREEN  T2 drawn                                 CONTROL
+        texequal overlap   (220,180) GREEN  the same in texturedline                 catches M30
+        texequal t2 only   (320,180) GREEN  T2 drawn from its texel                  CONTROL
+      REACHABILITY, read before any run: three vertices at z = 2.0 give dz12 = dz13 = dz23 = 0.0 in pvr_render_triangle and dz12 = 0 in
+      simpleline, so z is exactly 2.0 at every pixel (texturedline likewise).  The legs' base run settles it: if `equal overlap` reads
+      0xf800 on the fix, the edge is unreachable on this tree and R10 is recorded VOID beside this addendum, never rewritten.
+   c. THE DISAGREEMENT, texon.  Opus: EXCESS, "its red set {M4, M6, M7, M16} is entirely inside texbeh overlap's red set".  Mythos: OWED, by
+      the joint cell {zwrite 0, depth fail} in texturedline, and it names the in-bound variant only texon sees, M27: texturedline
+      `<= z || !d->zwrite_disabled` (a Z-on polygon skips the depth test); texbeh's T2 is Z-off, so the test still applies there.
+      Re-derived here: M27 leaves texoff, texbeh, texedges and texequal green and reds texon overlap alone.  DECIDED NOW, SETTLED BY
+      TABLE 1: if M27's red set is exactly {texon overlap}, texon is OWED and stays; if any other row reds under M27, texon is excess and
+      is dropped before landing.
+   d. THE CONTROLS, section 4 CORRECTED.  Opus is right and section 4 was wrong: eight of its thirteen "controls" sit in Z-off sessions,
+      and B1, an enumerated variant, ends every Z-off session (both seats derive B1's 26 red rows identically), so they move and are NOT
+      controls: ovoff t2 only, ovoff bg, behind t1 only, texoff t2 only, texbeh t1 only, two t1 only, two t2 only, sticky t2 only.
+      FLAGGED control=True now, before any leg, so the legs and the table test the claim: zoff rendered, ovon t2 only, ovon t1 only, ovon
+      bg, texon t2 only, equal t2 only, texequal t2 only -- beside the witness's six (neg apparatus, id session, id r8, zon session, zon
+      rendered, zon prompt).  Thirteen controls.  CONTROL=FAIL under the HEAD leg or any enumerated variant would refute this section;
+      only the three null media are predicted CONTROL=FAIL.
+      Mythos's "flag `texon session` a control" is REFUTED by reading: the texon psession emits two rows (texon overlap, texon t2 only);
+      no `texon session` row exists in probe47 or probe51.
+   e. RENDERED ANCHORED (Opus, low): "1 Tile Accelerator commands" also matches ", 11 Tile ..."; it is now ", 1 Tile Accelerator commands"
+      (the debug line reads "[ pvr_render: rendering to FB offset 0x%x, %i Tile Accelerator commands ]"; zon and zoff submit one command).
+   f. M17's PRECONDITION (Mythos): simpleline is called only from pvr_render_triangle and texturedline only from
+      pvr_render_triangle_textured, and those two only from pvr_render (dev_pvr.c lines 1398 and 1405; grep, 2026-11-05).  M17 stays
+      PREDICTED UNDETECTED, 51/51.  BACKGROUND Z for the `<` variants: vram_z is cleared to REG(PVRREG_BGPLANE_Z), which only a guest
+      register write sets (no session writes it), so it is 0.0 here and a T2 at z = 1.0 still passes `0.0 < 1.0`.
+   ADDED VARIANTS (pvr_variants.py, one token or one moved line each; Mythos's numbering, Opus's in brackets):
+     M26_simple_ztest_del      simpleline `if (d->vram_z[ofs] <= z)` -> `if (1)`  -> ovon, behind, two, sticky overlap         47/51
+     M26b_tex_ztest_del        the same in texturedline                           -> texbeh, texon overlap                      49/51
+     M27_tex_zon_bypass        texturedline `<= z || !d->zwrite_disabled`         -> texon overlap                              50/51
+     M27b_simple_zon_bypass    the same in simpleline                             -> ovon, two, sticky overlap                  48/51
+     M28_hoist_tex [Opus M28]  texturedline: guard folded into the depth test     -> texoff t1 only, texbeh t2 only             49/51
+     M29_simple_lt [Opus M26]  simpleline `<= z` -> `< z`                         -> equal overlap                              50/51
+     M30_tex_lt    [Opus M27]  texturedline `<= z` -> `< z`                       -> texequal overlap                           50/51
+     M31_bit25                 case 4 reads list[1] bit 25, not 26               -> ovoff, texoff overlap (M5's red set)       49/51
+     M32_reset1                the entry reset writes 1                           -> two overlap                                50/51
+     M33_reset_in_loop         the reset moved to the top of the command loop     -> ovoff, texoff overlap                      49/51
+   RESTATED DENOMINATORS: every earlier prediction keeps its red set and gains the four R10 rows, green under B1, the HEAD leg and M1-M25
+   (R10 is Z-on, so the exit never runs there, and none of M1-M25 changes a Z-on polygon's result at equal z), so k/47 becomes (k+4)/51;
+   B1_exit and the HEAD leg become 25/51 with SYMPTOM=PRESENT and CONTROL=OK; M17 51/51.  The three null media stay CONTROL=FAIL.
+   THE INSTRUMENT is probe51_draft_frozen.py (md5 5da28a4dfcf7, frozen from _scratchpad/w_pvr/det/pvr_zwrite_probe.py before any leg);
+   probe47_draft_frozen.py stays as the record of what addendum 6 described.  Order: legs_pvr.sh (base, HEAD, null media) first; the
+   table runs only if the base leg is 51/51.

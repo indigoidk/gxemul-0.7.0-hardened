@@ -1,0 +1,137 @@
+CODEXP6PVR
+model: GPT-6 (Codex)
+VERDICT: REPAIR — 20 established operand-substitution breaches and one false universal statement; two additional floating-point-dependent candidates are reported separately.
+
+I read the packet in full. I checked the fork’s dev_pvr.c, the shipped probe, the closure enumeration, the pass-5 ruling, and the relevant records. I did not edit, build, or execute project code. The new findings below are derivations, not measurements.
+
+1. THE FLOOR
+
+The deletion closure is sound, but permitted body-field substitutions still escape.
+
+These substitutions fit the stated bound: they occur inside the admitted exchange bodies and replace an operand with a field the guarded body reads. The ruling itself distinguishes compound-assignment debt on the ground that it “swaps no operand for a body-read field.”
+
+For the following enumeration, X means d->xsize = 640, Y means d->ysize = 480, W means d->zwrite_disabled = 0 or 1, and B means d->bytes_per_pixel = 2. Each listed replacement is a separate single edit.
+
+Twelve depth breaches:
+
+Simpleline:
+  1. tmpf = z1       -> tmpf = B
+  2. z1 = z2         -> z1 = B
+  3. z2 = tmpf       -> z2 = B
+
+Texturedline:
+  4–6. double tmpf = z1 -> double tmpf = X, Y, or B
+  7–9. z1 = z2          -> z1 = X, Y, or B
+  10–12. z2 = tmpf      -> z2 = X, Y, or B
+
+The textured declaration remains present; its initializer changes.
+
+Why every shipped row stays green:
+
+- Other sampled reversed geometry draws positive depth over cleared depth.
+- RAMP reads its left endpoint at depth 2. Substitution B preserves that value; textured X/Y remain above the cover’s 1.5.
+- RAMP8 reads its right endpoint at depth 2. The same reasoning applies.
+- RAMP8HI’s simpleline endpoints are 2 and 3 beneath a cover at 4. Substitution B either preserves 2 or changes 3 to 2; neither crosses the tested threshold.
+- The negative-start witnesses and VERT do not enter the exchange body.
+- The new high-cover sessions never call texturedline.
+
+A detecting set for all twelve: use RAMP8 with depths (1,1,1), COVERHI geometry at depth 1.5, and read both endpoints. For simpleline, use the existing green/magenta endpoints and blue cover: both pixels should be blue; substitutions expose green or magenta. For texturedline, use the existing RAMP8 UVs and a red cover: both should be red; substitutions expose blue or green. Draw the cover first for the Z-off twins.
+
+Eight RGB breaches in simpleline:
+
+  13–14. tmpf = r1  -> tmpf = X or Y
+  15–16. r2 = tmpf  -> r2 = X or Y
+  17. tmpf = g1    -> tmpf = W
+  18. g2 = tmpf    -> g2 = W
+  19. b1 = b2      -> b1 = W
+  20. b1 = b2      -> b1 = B
+
+The red substitutions replace sampled 255 with 480 or 640, which still clamps to 255. The green substitutions replace sampled zero with zero or one, below RGB565’s green quantum of four. The blue substitutions replace sampled zero with zero, one, or two, below its quantum of eight.
+
+I checked HALF’s extrapolation explicitly. Its swapped span is 100.75..101.25, but the loop starts at 100. At column 101, green W reaches at most two and remains invisible; the blue-start substitutions extrapolate negatively and clamp to zero. In contrast, replacing the green endpoint with B produces green four there and is detected. Those two B substitutions are not included among the survivors.
+
+The disclosed unsaturated RGB proposal detects all eight: RAMP8’s right RGB (63,96,128), left RGB (32,48,80), read at 448 and 440, with Z-on and Z-off versions. Expected right/left values are 0x3b10/0x218a. The three survivor groups produce 0xfb10 at the right, 0x3810 at the right, or 0x2180 at the left. These rows are now justified by operand substitutions independently of the compound-assignment debt.
+
+The advertised D2-F geometry is correct:
+
+  swap s start, y249: incoming 400.5/399.5; swapped start 399.5.
+  half swap, y103: incoming 101.25/100.75; difference 0.5.
+  swap frac past, y101: span 100/150.5; observed column 151.
+  half r x1, y401: incoming 639.5/670.
+  half r x2, y411: incoming 670/639.5.
+
+All five calculations are binary-exact. Their Z-off twins reuse the same geometry.
+
+Additional findings, kept outside the final breach count because the packet does not establish the host’s floating-point evaluation precision and rounding mode:
+
+A. Under binary64 round-to-nearest/ties-to-even, texturedline’s u1 = u2 -> u1 = d->ysize also survives. At texramp’s left endpoint, 480 wraps to texture column zero. At texramp8’s right endpoint, eight exact steps still reach u = 0.5. LREV’s sampled value is exactly 480 − 31×8 = 232, again wrapping to zero.
+
+The potentially troublesome SWAP recurrence also remains green under that arithmetic: descending from 480 by fl(480/70), the values after 35 and 70 steps are respectively 240 + 27×2^-45 and 383×2^-49. Both select texture column zero.
+
+The proposed UV set detects it: right (.5,.25), left (.25,.375), with only texels (4,2) green and (2,3) blue stored. At (440,60), the substitution selects unstored texel (0,3), black instead of blue. Repeat Z-off.
+
+B. Under the same arithmetic, simpleline’s int x = x1 + 0x1p-54 is another survivor. A detecting triangle is [(0,50),(3,50),(3,80)], colored green/red/green at depth 2. At row 60, ten additions of 0.1 give x1 = 1 − 2^-53, while x2 = 3. The baseline starts at zero and draws midpoint 0x7be0 at column one. Adding 2^-54 rounds the start to one, drawing green 0x07e0 instead. The twin behaves identically.
+
+Neither floating-point-sensitive candidate was measured here.
+
+2. THE NEW ROWS
+
+All eight new rows catch their stated variants.
+
+COVERHI’s endpoints at y50 through y60 are:
+
+  left:  430,431,432,433,434,435,436,437,438,439,440
+  right: 470,469,468,467,466,465,464,463,462,461,460
+
+Thus row 60 covers both 440 and 448.
+
+RAMP8HI’s depths at columns 440 through 448 are:
+
+  2, 2.125, 2.25, 2.375, 2.5, 2.625, 2.75, 2.875, 3.
+
+Deleting tmpf = z1 changes the right endpoint to depth 448, making both right-end rows magenta instead of blue. The two left-end compounds produce depths five and six, making both optional rows green instead of blue.
+
+For NEGX, iterations at −1, 0, 1 carry:
+
+  RGB: (0,255,0), (127.5,127.5,0), (255,0,0)
+  u:   0, .25, .5
+
+N1s starts at zero and therefore supplies 0x7be0 at column one. B2t supplies u=.25: texel (2,0), address 0x200004, linear 0x500000, black. The baseline supplies texel (4,0), address 0x200008, linear 0x100004, green. The twins preserve these distinctions.
+
+The 24 deletion cells are held by their named rows and twins:
+
+- Six temporary assignments: simpleline z by ramp8hi right; simpleline r/g/b by ramp8 right; textured u/v by texramp8 right.
+- Seven first-endpoint assignments: simpleline z/r/g/b by ramp left; textured z/u/v by texramp left.
+- Seven second-endpoint assignments: simpleline z/r/g/b by ramp8 right; textured z/u/v by texramp8 right.
+- Four coordinate assignments: x1 assignment deletion loses the named swap pixel; x2 assignment deletion loses both swap and s end, in each rasterizer.
+
+Enumeration: 6 + 7 + 7 + 4 = 24; equivalently 14 simpleline + 10 texturedline. The three excluded declaration deletions leave undeclared temporaries. I checked that structurally, without invoking a compiler.
+
+3. THE RECORDS
+
+R1 and R2 are corrected accurately. R3 fixes the substantive truncation error for N1s and B2t, but introduces an unqualified universal that is false for floating-point C arithmetic:
+
+“for a negative integer start every … 0 < c <= 1, begins at x1 + 1”
+
+Under binary64 nearest-even arithmetic, −1 + 2^-54 rounds back to −1. The initializer consequently remains −1. The statement needs a rounding qualification; the floating-point-sensitive candidate above shows why “EXHAUSTED” also needs care. I count this as one false-record item, not separate findings for each repetition.
+
+The four corrections to the ruling otherwise hold:
+
+- Seven simpleline depth compounds become red; the four textured compounds remain green.
+- Depth compounds: 9 caught + 11 survivors = 20.
+- RGB compounds: 20 caught + 9 survivors + 7 undefined = 36.
+- UV compounds: 12 caught + 6 survivors + 6 undefined = 24.
+- Total: 41 caught + 26 survivors + 13 undefined = 80.
+- Adding six temporary deletions contributes five catches and one survivor, explaining the earlier 86-form totals.
+- Threshold placement, rather than zero operands or color saturation, explains the depth survivors.
+- There are 24 assignment statements and three declarations.
+
+Table 5’s accounting is consistent: 156 predicted-red + 30 predicted-green + 4 unpredicted = 190 variants; 186 predicted variants + six apparatus legs = 192 hits; 196 total legs. The new operand-substitution findings do not invalidate those historical measurements.
+
+4. VERDICT
+
+REPAIR the twenty enumerated field-operand escapes and qualify R3’s universal floating-point claim. Preserve the correct eight new rows and the valid deletion closure. Measure and adjudicate the two additional floating-point-sensitive candidates.
+
+The final denominator is 108 concrete edit cells: 24 statement deletions, plus 84 field substitutions comprising 24 coordinate, 24 depth, and 36 RGB cells. Within that completed sweep, 88 are detected and 20 survive by derivation. Separately, I checked the ten D2-F feature/Z-state observations and examined the UV substitutions and tiny-offset candidate described above; those conditional findings are excluded from the final tally. This denominator is not the historical 185 input-region count or the 148 regression-row count.
+
+CODEXP6PVR: 108 CELLS SWEPT 20 BREACHES 1 FALSE RECORDS VERDICT:REPAIR

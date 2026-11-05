@@ -46,7 +46,8 @@
 >    dev_mvme187.c exits that `exitunowned76` carries.  T7; shipped: per-arm field reads, both exits declined with once-per-device
 >    announces, a 213-row rung-3 detector in gate 14.
 > 9. `vr41xx1kpage` (HIGH, new) -- VR41xx 1 KB-page TLB writes exit the host at two sites.  T11; design owed.
-> 10. `pvrrenderexit` (HIGH) -- the zwrite exit only.  T5.
+> 10. `pvrrenderexit` (HIGH, FIXED by `#583` on 2026-11-05, closed) -- the zwrite exit only.  T5; shipped: the Z-write-disable
+>     bit honoured in both rasterizers (depth test kept, depth store skipped), a 164-row rung-3 detector in gate 14.
 >
 > Tail, in order: (1) `fbsdrampair`, T12, DECLINE, narrow; (2) `wdclbaaddr`, T4 -- FIXED by `#572` on 2026-10-24 (held for
 > the Fable review; word 49 kept at 0, the advertisement filed as `wdclbaadvertise`; the dated section below);
@@ -2784,6 +2785,8 @@
 > - **`devices/dev_pvr.c` render/texture-loop `exit(1)`s (med DoS): lines 868 (texture pixelformat), 1084 (non-RGB565
 >   render cfg), 1245, 1419 (unimplemented TA list-cmd).** Reachable via STARTRENDER; converting these safely needs
 >   flood-free per-iteration recovery, unlike the simple MMIO-write fall-through used for #187.
+>   **[`#583`, 2026-11-05: line 1245, the zwrite exit, FIXED (`pvrrenderexit`) -- see the `#583` section at the end of this
+>   file; 868, 1084 and 1419 keep their own disposition.]**
 > - **CUE symlink/junction bypass of #158 (`disk/diskimage.c`, med, host-side threat):** the #158 guard rejects only
 >   *lexical* `..`/absolute paths; `fopen()` still follows a symlink/junction inside a caller-supplied CUE bundle.
 >   Needs a caller-supplied disk image (host-side), not an untrusted guest — lower priority under the guest→host charter.
@@ -23122,6 +23125,7 @@ batch 3e -- `regress/artifacts/astraretro_20260926/DISPOSITIONS.md`  [Astra afil
 
 #### `pvrrenderexit` (HIGH, an id for an entry this file already carries in prose) -- OUTSTANDING_BUGS.md:2721-2723 at db8b1a33 -- dev_pvr.c's render and texture loops still call exit(1) (the entry graded it `med DoS`; the ruling grades it HIGH)
 batch 3d, `devpvr:F4` -- `regress/artifacts/astraretro_20260926/DISPOSITIONS.md`  [Astra afile_01, D:726]
+**[`#583`, 2026-11-05: FIXED -- see the `#583` section at the end of this file.]**
 
 #### `ofpeerexit` (HIGH) -- OpenFirmware peer(): of.c:394 calls exit(1) when the handle is not the root and the lookup misses
 batch 3h -- `regress/artifacts/astraretro_20260926/DISPOSITIONS.md`  [Astra afile_01, D:956 (the ruler's own addition)]
@@ -24292,7 +24296,7 @@ the prose: 4139-4145 (line numbers of this file as of commit `db8b1a33`) -- `reg
 * 2616 -> `m88kexit` (ledger: held), `qhppciphack`, `qhm88kstops`, `qhmbphasestops`, `qhmbunimplstops`, `qhmbbufendstops` [widened 2026-11-02, records: named `m88kexit` only]
 * 2636-2638 -> `mipsreadpriv`
 * 2685-2689 -> `exitunowned76`
-* 2721-2723 -> `pvrrenderexit`
+* 2721-2723 -> `pvrrenderexit`  [`#583`, 2026-11-05: the zwrite exit FIXED; the file's other exits keep their own disposition]
 * 2727-2728 -> `ramspaninval`
 * 2730 -> `jazzlbmask`, `OB-22` (named in this file only: no ledger row of its own)
 * 2730-2731 -> `arcpartlba` (named in this file only: no ledger row of its own)
@@ -26657,3 +26661,10 @@ src/devices/dev_dec5800.c:359-367 at 987cb596: The DEC 5800 CPU-mask registers a
 * **Filed, new (all LOW):** `ppcvecaddr` (arm (b) skipped when the exception vector equals the failing fetch: the fix's #MMM); `ppcmpcheckstop` (the checkstop on a multiprocessor: #PPP); `ppcifetchibinit` (zero-initialise ib, so the build-dependent variants decide deterministically); `ppcbranchlowbits` (X(bclr_20) keeps pc's low two bits; Book I clears them); `ppcifetchdeclineprod` (ROW 5: no measured machine produces arm (d), pending an X11 build or a window sweep on bebox, prep, macppc and mvmeppc); `memrwtreadahead` (memory_rw's -T halt fires on a read-ahead fetch the guest has not reached: the final ruling's F4); `vgagfxwindowend` (dev_vga's `>=` declines the vga_gfx window's last word: ROW 5's producer).
 * **Note, no new row:** `ppcintentrymsr` is the fix's #QQQ -- the machine check arm (d) raises leaves MSR[ME] set, where the architecture clears it; the row's MSR-modelling filing now names ME.
 * **Uncommitted beside it:** nothing of this round; the working copy and the four trees took the committed `cpu_ppc_instr.c` (its placeholders filled) in the landing window.
+
+## 2026-11-05 -- `#583` pvrrenderexit: a Dreamcast PowerVR render with the Z-write-disable bit set no longer ends the emulator
+
+* **FIXED** -- `pvrrenderexit` (HIGH): `src/devices/dev_pvr.c`, `pvr_render()` called `fatal("pvr: no zwrite? not implemented yet.\n")` and `exit(1)` on a polygon header with ISP/TSP word 1 bit 26 (Z-write disable) set.  The bit is now held in `d->zwrite_disabled`, cleared at every render; both rasterizers keep the depth test and skip only the `vram_z` store.  Witness (rung 3, unmodified `-E dreamcast`): 7/9 on the committed build (`regress/artifacts/pvrrenderexit/witness_20261104/WITNESS.md`).  Detector: `regress/pvr_zwrite_probe.py`, 164 rows, gate 14 (HEAD 78/164, fix 164/164); six test-variant tables (table 7: 206 variants, 172 red on their predicted rows, 30 green, 4 not predicted).  The file's other exits (868 texture pixel format, 1084 non-RGB565 render mode, 1419 unimplemented list command) keep their own disposition.  See the `#583` round block in CHANGELOG.md.
+* **Filed, new (all LOW):** `pvrswapdebt` (the swap's exchange bodies: clause-(e) debt the 164 rows do not catch, with remedy sets); `pvruvfpundet` (8 floating-point-sensitive UV substitution cells: measure); `pvrdepth2bpp` (the probe's depth 2.0 equals bytes_per_pixel, and a register left at its reset 0 equals a guard's constant: a probe-design rule); `dcstdincap` (the -E dreamcast debugger drops stdin past about 4100 bytes; eleven other dreamcast scripts do not check); `pvrmodvolbit26` (what bit 26 means in a modifier-volume header; no local TA manual).
+* **Owner flags, open:** D2-F into the carrier beside rule D2; reading (i) of the register ruling (`regress/artifacts/pvrrenderexit/adj_reg_20261105/ADJ_MYTHOS_local.md`).
+* **Uncommitted beside it:** nothing of this round; the working copy and the four trees take the committed `dev_pvr.c` (its `#NNN` tags filled) in the landing window.

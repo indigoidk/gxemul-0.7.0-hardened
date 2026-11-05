@@ -3763,6 +3763,185 @@ MANIFEST = {
     "artifacts/qhslowifetch/witness_20261104/probe_frozen.py":
         (CLASS_RESEARCH, "#582 qhslowifetch: the rung-3 witness as run on 2026-11-04 before any edit, the 17-row first form "
                          "(witness_20261104/WITNESS.md: 11/17 on the committed build, the six -T rows red), preserved as evidence"),
+    #  #583 pvrrenderexit: the Dreamcast PowerVR renderer ended the emulator (fatal() + exit(1)) on a polygon header with ISP/TSP word 1 bit 26
+    #  (Z-write disable).  The SHIPPING detector is CLASS_DETECTOR and gated in gate_arm.sh (gate 14) in the same commit; its
+    #  wiring is DERIVED, not asserted here.  Every artifact script below is CLASS_RESEARCH: evidence beside the round's six
+    #  test-variant tables, run by no gate.
+    "pvr_zwrite_probe.py":
+        (CLASS_DETECTOR, "#583 pvrrenderexit: a polygon with the Z-write-disable bit set no longer ends the emulator; the depth "
+                         "test is kept and only the depth store skipped -- 164 rows over 62 cold -E dreamcast debugger sessions "
+                         "whose pixels are read back through the linear VRAM window (both rasterizers' depth-test cells with "
+                         "Z-write on and off, the x and y ranges, span ends, the swap and its exchange bodies, the bit-26 decode, "
+                         "Z-off twins, and repair 7's non-zero frame base and PALETTE_CFG); gate_arm.sh pins RESULT 164/164 by "
+                         "EQUALITY and every row by name.  Witness artifacts/pvrrenderexit/witness_20261104/ (7/9 on the committed "
+                         "build); test-variant table 7 (artifacts/pvrrenderexit/r7_20261105/table7/: base 164/164, HEAD 78/164, "
+                         "206 variants)."),
+    "artifacts/pvrrenderexit/det_20261104/probe39_draft_frozen.py":
+        (CLASS_RESEARCH, "#583 pvrrenderexit: the 39-row detector, draft, frozen, preserved as evidence"),
+    "artifacts/pvrrenderexit/det_20261104/probe47_draft_frozen.py":
+        (CLASS_RESEARCH, "#583 pvrrenderexit: the 47-row detector, draft, frozen, preserved as evidence"),
+    "artifacts/pvrrenderexit/det_20261104/probe51_draft_frozen.py":
+        (CLASS_RESEARCH, "#583 pvrrenderexit: the 51-row detector, draft, frozen, preserved as evidence"),
+    "artifacts/pvrrenderexit/det_20261104/pvr_variants.py":
+        (CLASS_RESEARCH, "#583 pvrrenderexit: writes the table-1 test variants of the pvrrenderexit fix (dev_pvr.c.fix) into "
+                         "variants/<name>.c. -- preserved as evidence"),
+    "artifacts/pvrrenderexit/draft_20261104/apply_draft.py":
+        (CLASS_RESEARCH, "#583 pvrrenderexit: write the pvrrenderexit FIX DRAFT into a SCRATCH CLONE's dev_pvr.c, for measurement "
+                         "only. -- preserved as evidence"),
+    "artifacts/pvrrenderexit/draft_20261104/main_pixels.py":
+        (CLASS_RESEARCH, "#583 pvrrenderexit: the PIXEL CHANNEL for pvrrenderexit, measured by the main loop (2026-11-04) after "
+                         "the m_pvr seat stopped on a classifier refusal. -- preserved as evidence"),
+    "artifacts/pvrrenderexit/impl_20261104/probe_frozen.py":
+        (CLASS_RESEARCH, "#583 pvrrenderexit: the detector, frozen (impl_20261104/probe_final.out: 9/9), preserved as evidence"),
+    "artifacts/pvrrenderexit/r2_20261105/base68/probe68b_run.py":
+        (CLASS_RESEARCH, "#583 pvrrenderexit: the 68-row detector, as run (r2_20261105/base68/probe_base68.out: 65/68), preserved "
+                         "as evidence"),
+    "artifacts/pvrrenderexit/r2_20261105/pvr_variants_2.py":
+        (CLASS_RESEARCH, "#583 pvrrenderexit: test-variant TABLE 2 for pvrrenderexit (repair 2: the class closure, 68 rows), "
+                         "2026-11-05. -- preserved as evidence"),
+    "artifacts/pvrrenderexit/r2_20261105/table2/probe68_frozen.py":
+        (CLASS_RESEARCH, "#583 pvrrenderexit: the 68-row detector, frozen (r2_20261105/table2/SCORES.txt: base 68/68, HEAD 42/68), "
+                         "preserved as evidence"),
+    "artifacts/pvrrenderexit/r3_20261105/base91_v1/probe91_run.py":
+        (CLASS_RESEARCH, "#583 pvrrenderexit: the 91-row detector, as run (r3_20261105/base91_v1/probe_base91.out: 91/91), "
+                         "preserved as evidence"),
+    "artifacts/pvrrenderexit/r3_20261105/closure_cells.py":
+        (CLASS_RESEARCH, "#583 pvrrenderexit: the DERIVER of CLOSURE3.md's input-cell denominator and its disposition tally "
+                         "(pvrrenderexit repair 3, 2026-11-05). -- preserved as evidence"),
+    "artifacts/pvrrenderexit/r3_20261105/head128/probe128_run.py":
+        (CLASS_RESEARCH, "#583 pvrrenderexit: the 128-row detector, as run (r3_20261105/head128/probe_HEAD.out: 60/128), preserved "
+                         "as evidence"),
+    "artifacts/pvrrenderexit/r3_20261105/head85/probe85_run.py":
+        (CLASS_RESEARCH, "#583 pvrrenderexit: the 85-row detector, as run (r3_20261105/head85/probe_HEAD.out: 56/85), preserved as "
+                         "evidence"),
+    "artifacts/pvrrenderexit/r3_20261105/head91/probe91_run.py":
+        (CLASS_RESEARCH, "#583 pvrrenderexit: the 91-row detector, as run (r3_20261105/head91/probe_HEAD.out: 58/91), preserved as "
+                         "evidence"),
+    "artifacts/pvrrenderexit/r3_20261105/meas_AI/probe68_frozen.py":
+        (CLASS_RESEARCH, "#583 pvrrenderexit: the 68-row detector, frozen (r3_20261105/meas_AI/SCORES.txt: base 68/68), preserved "
+                         "as evidence"),
+    "artifacts/pvrrenderexit/r3_20261105/meas_SW/probe68_frozen.py":
+        (CLASS_RESEARCH, "#583 pvrrenderexit: the 68-row detector, frozen (r3_20261105/meas_SW/SCORES.txt: base 68/68), preserved "
+                         "as evidence"),
+    "artifacts/pvrrenderexit/r3_20261105/meas_W/probe68_frozen.py":
+        (CLASS_RESEARCH, "#583 pvrrenderexit: the 68-row detector, frozen (r3_20261105/meas_W/SCORES.txt: base 68/68), preserved "
+                         "as evidence"),
+    "artifacts/pvrrenderexit/r3_20261105/pvr_variants_3.py":
+        (CLASS_RESEARCH, "#583 pvrrenderexit: test-variant TABLE 3 for pvrrenderexit (repair 3: the class closure completed; the "
+                         "128-row probe), 2026-11-05. -- preserved as evidence"),
+    "artifacts/pvrrenderexit/r3_20261105/pvr_variants_AI.py":
+        (CLASS_RESEARCH, "#583 pvrrenderexit: repair 3, step 2 (2026-11-05): codex pass 3's A-I as test variants, ONE exact-text "
+                         "edit of the fix each (GXEMUL-SEC dev_pvr.c == ../det_20261104/dev_pvr.c.fix, checked here), per "
+                         "rasterizer where codex named two (s = ... -- preserved as evidence"),
+    "artifacts/pvrrenderexit/r3_20261105/pvr_variants_SW.py":
+        (CLASS_RESEARCH, "#583 pvrrenderexit: repair 3, step 2b (2026-11-05): the SWAP-BODY cells both Gemini pass-3 readings "
+                         "raised (p3_20261105/gemini_p3_pvr{,_r2}.md, handed on by the coordinator): inside `if (x1 > x2) { ... -- "
+                         "preserved as evidence"),
+    "artifacts/pvrrenderexit/r3_20261105/pvr_variants_W.py":
+        (CLASS_RESEARCH, "#583 pvrrenderexit: repair 3, step 2c (2026-11-05): the cells the CLASS CLOSURE found beyond codex and "
+                         "Gemini, built so they are MEASURED on the 68-row probe before rows are added for them (CLOSURE3.md, "
+                         "family A4 / A3): W1 `x > 0` -> `x ... -- preserved as evidence"),
+    "artifacts/pvrrenderexit/r3_20261105/superseded_91/probe91_frozen.py":
+        (CLASS_RESEARCH, "#583 pvrrenderexit: the 91-row detector, frozen, preserved as evidence"),
+    "artifacts/pvrrenderexit/r3_20261105/table3/probe128_frozen.py":
+        (CLASS_RESEARCH, "#583 pvrrenderexit: the 128-row detector, frozen (r3_20261105/table3/SCORES.txt: base 128/128, HEAD "
+                         "60/128), preserved as evidence"),
+    "artifacts/pvrrenderexit/r4_20261105/head140/probe140_run.py":
+        (CLASS_RESEARCH, "#583 pvrrenderexit: the 140-row detector, as run (r4_20261105/head140/probe_HEAD.out: 66/140), preserved "
+                         "as evidence"),
+    "artifacts/pvrrenderexit/r4_20261105/meas_B/probe128_frozen.py":
+        (CLASS_RESEARCH, "#583 pvrrenderexit: the 128-row detector, frozen (r4_20261105/meas_B/SCORES.txt: base 128/128), "
+                         "preserved as evidence"),
+    "artifacts/pvrrenderexit/r4_20261105/meas_B140/probe140_frozen.py":
+        (CLASS_RESEARCH, "#583 pvrrenderexit: the 140-row detector, frozen (r4_20261105/meas_B140/SCORES.txt: base 140/140), "
+                         "preserved as evidence"),
+    "artifacts/pvrrenderexit/r4_20261105/meas_L/probe140_frozen.py":
+        (CLASS_RESEARCH, "#583 pvrrenderexit: the 140-row detector, frozen (r4_20261105/meas_L/SCORES.txt: base 140/140), "
+                         "preserved as evidence"),
+    "artifacts/pvrrenderexit/r4_20261105/pvr_variants_4.py":
+        (CLASS_RESEARCH, "#583 pvrrenderexit: test-variant TABLE 4 for pvrrenderexit (repair 4: rule D2-F's half-pixel rows and "
+                         "the swap body's far end; the 140-row probe), 2026-11-05. -- preserved as evidence"),
+    "artifacts/pvrrenderexit/r4_20261105/pvr_variants_B.py":
+        (CLASS_RESEARCH, "#583 pvrrenderexit: repair 4 (2026-11-05): codex pass 4's B1-B14 as test variants, as the ruling "
+                         "(../adj_p4_20261105/ADJ_MYTHOS_local.md section 4) lists them -- ONE exact edit of dev_pvr.c.fix4 (== "
+                         "GXEMUL-SEC dev_pvr.c), its text ... -- preserved as evidence"),
+    "artifacts/pvrrenderexit/r4_20261105/pvr_variants_L.py":
+        (CLASS_RESEARCH, "#583 pvrrenderexit: repair 4 (2026-11-05): the LEFT clause's compares at the HALF pixel, which the "
+                         "pass-4 ruling derived need no row (`x1 < 0.5` EQUIVALENT, `x1 < 1.5` caught by `edges2 l tip`). -- "
+                         "preserved as evidence"),
+    "artifacts/pvrrenderexit/r4_20261105/table4/probe140_frozen.py":
+        (CLASS_RESEARCH, "#583 pvrrenderexit: the 140-row detector, frozen (r4_20261105/table4/SCORES.txt: base 140/140, HEAD "
+                         "66/140), preserved as evidence"),
+    "artifacts/pvrrenderexit/r5_20261105/head148/probe148_run.py":
+        (CLASS_RESEARCH, "#583 pvrrenderexit: the 148-row detector, as run (r5_20261105/head148/probe_HEAD.out: 70/148), preserved "
+                         "as evidence"),
+    "artifacts/pvrrenderexit/r5_20261105/meas140/probe140_frozen.py":
+        (CLASS_RESEARCH, "#583 pvrrenderexit: the 140-row detector, frozen (r5_20261105/meas140/SCORES.txt: base 140/140), "
+                         "preserved as evidence"),
+    "artifacts/pvrrenderexit/r5_20261105/meas_cand/probe148_frozen.py":
+        (CLASS_RESEARCH, "#583 pvrrenderexit: the 148-row detector, frozen (r5_20261105/meas_cand/SCORES.txt: base 148/148), "
+                         "preserved as evidence"),
+    "artifacts/pvrrenderexit/r5_20261105/pvr_table5.py":
+        (CLASS_RESEARCH, "#583 pvrrenderexit: test-variant TABLE 5 for pvrrenderexit (repair 5: the swap body's statement-deletion "
+                         "closure, the right end from above, a negative span start; the 146-row probe plus any optional rows), "
+                         "2026-11-05. -- preserved as evidence"),
+    "artifacts/pvrrenderexit/r5_20261105/pvr_variants_5.py":
+        (CLASS_RESEARCH, "#583 pvrrenderexit: repair 5 (2026-11-05): the variants the pass-5 ruling "
+                         "(../adj_p5_20261105/ADJ_MYTHOS_local.md) owes, each ONE exact edit of dev_pvr.c.fix5 (== GXEMUL-SEC "
+                         "src/devices/dev_pvr.c), its anchor line occurring exactly once ... -- preserved as evidence"),
+    "artifacts/pvrrenderexit/r5_20261105/table5/probe148_frozen.py":
+        (CLASS_RESEARCH, "#583 pvrrenderexit: the 148-row detector, frozen (r5_20261105/table5/SCORES.txt: base 148/148, HEAD "
+                         "70/148), preserved as evidence"),
+    "artifacts/pvrrenderexit/r6_20261105/ast_same.py":
+        (CLASS_RESEARCH, "#583 pvrrenderexit: do two versions of a Python script have the same AST once the module docstring is "
+                         "removed? -- preserved as evidence"),
+    "artifacts/pvrrenderexit/r6_20261105/r3_arith.py":
+        (CLASS_RESEARCH, "#583 pvrrenderexit: the pass-6 R3 arithmetic, re-done in IEEE binary64 (Python floats: "
+                         "round-to-nearest-even, as the build's SSE2 doubles; gate_offline.sh refuses fast-math). -- preserved as "
+                         "evidence"),
+    "artifacts/pvrrenderexit/r7_20261105/cand152_probe.py":
+        (CLASS_RESEARCH, "#583 pvrrenderexit: the 152-row candidate detector, preserved as evidence"),
+    "artifacts/pvrrenderexit/r7_20261105/cand164_probe.py":
+        (CLASS_RESEARCH, "#583 pvrrenderexit: the 164-row candidate detector, preserved as evidence"),
+    "artifacts/pvrrenderexit/r7_20261105/head164/probe164_run.py":
+        (CLASS_RESEARCH, "#583 pvrrenderexit: the 164-row detector, as run (r7_20261105/head164/probe_HEAD.out: 78/164), preserved "
+                         "as evidence"),
+    "artifacts/pvrrenderexit/r7_20261105/mk_cand164.py":
+        (CLASS_RESEARCH, "#583 pvrrenderexit: writes cand164_probe.py: the shipped 148-row probe (argv[1]) plus repair 7's sixteen "
+                         "rows in eight sessions (ruling ../adj_reg_20261105/ADJ_MYTHOS_local.md section 2), inserted before the "
+                         "probe's summary lines. -- preserved as evidence"),
+    "artifacts/pvrrenderexit/r7_20261105/mk_gate_r7.py":
+        (CLASS_RESEARCH, "#583 pvrrenderexit: gate_pvr_block.new for the 164-row probe: ../r5_20261105/gate_pvr_block.new with its "
+                         "counts at 164, the sixteen repair-7 row names added to the named-row list (on its one line), and the "
+                         "header's session count, scope, ... -- preserved as evidence"),
+    "artifacts/pvrrenderexit/r7_20261105/mk_probe_r7.py":
+        (CLASS_RESEARCH, "#583 pvrrenderexit: the shipped probe for repair 7: table7/probe164_frozen.py (the instrument table 7 "
+                         "measured) with its docstring brought to the 164 rows -- the records the repair-7 ruling names (the "
+                         "contract's operand-swap sentence, ... -- preserved as evidence"),
+    "artifacts/pvrrenderexit/r7_20261105/probe148_frozen.py":
+        (CLASS_RESEARCH, "#583 pvrrenderexit: the 148-row detector, frozen, preserved as evidence"),
+    "artifacts/pvrrenderexit/r7_20261105/pvr_cells_7.py":
+        (CLASS_RESEARCH, "#583 pvrrenderexit: repair 7's 16 register-swap variants: 12 FLOOR cells plus 4 measured checks outside "
+                         "the class (PL1t-PL4t: the PALETTE register at :842 is an ADDRESS, not a read -- codex pass 8, "
+                         "p8_20261105/; corrected 2026-11-05, ... -- preserved as evidence"),
+    "artifacts/pvrrenderexit/r7_20261105/pvr_table7.py":
+        (CLASS_RESEARCH, "#583 pvrrenderexit: test-variant TABLE 7 for pvrrenderexit (repair 7: the guards' constant 0 against the "
+                         "d->reg values the body reads; the 164-row probe), 2026-11-05. -- preserved as evidence"),
+    "artifacts/pvrrenderexit/r7_20261105/pvr_variants_7.py":
+        (CLASS_RESEARCH, "#583 pvrrenderexit: the REGRESS stage's candidate floor cell (regress_20261105/REG_MYTHOS_local.md "
+                         "section 2(d)): a guard's constant 0 swapped for `fb_base` (REG(PVRREG_FB_RENDER_ADDR1), loaded at "
+                         "dev_pvr.c:662 / :735) or `palette_cfg` ... -- preserved as evidence"),
+    "artifacts/pvrrenderexit/r7_20261105/table7/probe164_frozen.py":
+        (CLASS_RESEARCH, "#583 pvrrenderexit: the 164-row detector, frozen (r7_20261105/table7/SCORES.txt: base 164/164, HEAD "
+                         "78/164); the shipped probe equals it but for its docstring (landing_20261105/PROBE_IDENTITY_pvr164.md), "
+                         "preserved as evidence"),
+    "artifacts/pvrrenderexit/sibling_listcmd_20261104/listcmd_witness.py":
+        (CLASS_RESEARCH, "#583 pvrrenderexit: a sibling of pvrrenderexit found while reading pvr_render() for the detector: the "
+                         "command loop's `default: fatal(\"pvr_render: unimplemented list cmd %i \", cmd); exit(1);`. -- preserved "
+                         "as evidence"),
+    "artifacts/pvrrenderexit/witness_20261104/probe_frozen.py":
+        (CLASS_RESEARCH, "#583 pvrrenderexit: the rung-3 witness as run on 2026-11-04 before any edit, the 9-row first form "
+                         "(witness_20261104/WITNESS.md: 7/9 on the committed build), preserved as evidence"),
 }
 
 #  DATED, NAMED DEBT -- not a count and not a silent allowlist.  gate_offline.sh MEASURED that
