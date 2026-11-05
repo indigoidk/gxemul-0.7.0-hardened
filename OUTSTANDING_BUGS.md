@@ -26539,6 +26539,7 @@ src/devices/dev_dec5800.c:359-367 at 987cb596: The DEC 5800 CPU-mask registers a
 
 ## 2026-11-05 -- `#581` mvme187memcoob: the MVME187 memory controller no longer ends the emulator, and no longer reads past its register image
 
+* **Landed** as `03d97106` (2026-11-05); the records commit after it names it; no tree swap was needed.
 * **FIXED** -- `mvme187memcoob` (MED): `src/devices/dev_mvme187.c`, `DEVICE_ACCESS(mvme187_memc)`, indexed the 124-byte `struct memcreg` with the folded offset (0..0xff) before its switch, and ended the emulator on a memconf store and on every offset the switch did not name.  Now each served arm reads its own field, a memconf store and any other offset's access are not kept, and each category is announced once per device.  Witness (rung 3, unmodified `-E mvme88k -e mvme187 -M 64`): 13/21 on the committed build.  Detector: `regress/mvme187_memc_probe.py`, 213 rows, gate 14; six test-variant tables; pass 5's ruling CLOSE-AFTER-RECORDS; the regress review's floor breach closed by repair 6 (session R18).  See the `#581` round block in CHANGELOG.md.
 * **`exitunowned76`** loses census line 97: both dev_mvme187.c exits are gone.
 * **Filed, new (LOW):** `memccoverdebt`, below -- `regress/artifacts/mvme187memcoob/r6_20261105/FILING_memccoverdebt.md` as amended through the fourth records reading, quoted whole, then repair 6's amendments.

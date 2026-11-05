@@ -1,3 +1,11 @@
+# `#581` Records (follow-up, 2026-11-05): `mvme187memcoob` names its landing commit `03d97106`; the committed-tree proofs; the pass-2 receipt
+
+`git ls-tree 03d97106`, md5s hashed in Python from the committed bytes: `src/devices/dev_mvme187.c` blob `de48f59b48ec`, md5 `97e983872a72`; `regress/mvme187_memc_probe.py` blob `1557a378ed93`, md5 `cd3e95ca72a7`; `regress/gate_arm.sh` blob `1f52059a98aa`, md5 `cbb9d843cffd`; `tools/precommit_check.sh` blob `6c252e5b5baa`, md5 `538bb143d2b1`.  The working copy against each: dev_mvme187.c same; mvme187_memc_probe.py same; gate_arm.sh plus other rounds' uncommitted blocks (fbsdrampair's footbridge rows, pvrrenderexit's old pvr block), nothing of #581's (4 hunks); precommit_check.sh plus two other rounds' uncommitted manifest raises (1 hunk(s)).
+
+No tree swap was needed for this round (`dev_mvme187.c` carried only #581's change), so there is no restore record.
+
+The row's `commits` field names `03d97106` and its state note names the landing commit.  The `regress/pass2_ledger.tsv` receipt line for `03d97106`, a landing line in OUTSTANDING_BUGS.md's `#581` section and `matrix.html` re-rendered complete this records commit.
+
 # `#581` (2026-11-05) -- `mvme187memcoob`: the MVME187 memory controller no longer ends the emulator on a memconf store or an unnamed offset, and no longer reads past its 124-byte register image
 
 **The defect.**  `src/devices/dev_mvme187.c`, `DEVICE_ACCESS(mvme187_memc)`, the memory controller's register window (0x200 bytes
