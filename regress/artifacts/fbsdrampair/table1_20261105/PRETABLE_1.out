@@ -1,0 +1,181 @@
+PRETABLE_1 -- fbsdrampair, test-variant TABLE 1.  Written BEFORE table 1 runs: this file's mtime precedes
+table1_20261105/runs/, TABLE.log and SCORES.txt, which is the order discriminator.
+
+INSTRUMENT  table1_20261105/probe56_frozen.py, md5 a52267ff1856bc4127c2052a4b30f8e0, cmp-identical at freeze time
+            to regress/footbridge_sites_probe.py (56 rows; measured on the fix 56/56 and pre-fix 46/56 in
+            impl_20261105/probe_legs.out, and through gate_arm.sh's own footbridge block, 29/29 on build/, in
+            impl_20261105/fbblock_check.out).  The table runs ONLY this frozen copy.
+BASELINE    named: the GXEMUL-SEC working copy of src/devices/dev_footbridge.c at HEAD edb3213f plus the uncommitted
+            fbsdrampair fix, md5 ccaf09d4d30c5a29e6fe0422c0681314 = table1_20261105/dev_footbridge.c.fix1.  The table
+            refuses to start unless fix1 cmp's against the working copy AND the clone's dev_footbridge.c cmp's
+            against fix1 before mutant 1; it rebuilds the baseline in the clone and requires
+            [ gxemul -nt dev_footbridge.c ] for that build and for every variant's.
+CLONE       /tmp/gxfbs2, a cp -a of build/ (which holds the fix since propagation); a clone-local .MUTANT is written
+            before anything is built; cleared ONLY after the restore (cp from GXEMUL-SEC) cmp's clean and the
+            rebuilt binary is newer than its source; then the clone is removed.
+VARIANTS    fbs_variants_1.py -- 40, each ONE exact-text replacement against fix1, refused unless the find-text
+            occurs exactly once.  d_exchanged and d_backing_* replace one contiguous span.
+SCORING     a row is RED when its line ends in FAIL.  SCORES.txt: <name> <green>/<total> CONTROL=<OK|FAIL>
+            DONE=<1 if PROBE_WALL printed> NRED=<n> RED=<rows|none>; CONTROL=OK means FOOTBRIDGE_SITES_CONTROL=OK.
+
+LEGS (exact):
+  base          56/56  CONTROL=OK    RED=none
+  HEAD          46/56  CONTROL=OK    RED=B1,B2,B3,M1,M2,M3,O1,O2,O3,X1   (impl_20261105/dev_footbridge.c.pre_fbs,
+                       md5 0b3370b8, the pre-fix source, built IN THE CLONE: build/ holds the fix now)
+  null_absent    1/56  CONTROL=FAIL  RED=every row but D1   (/nonexistent/gxemul: execvp fails, no prompt)
+  null_true      1/56  CONTROL=FAIL  RED=every row but D1   (/bin/true: exits 0, no prompt)
+  null_false     1/56  CONTROL=FAIL  RED=every row but D1   (/bin/false: exits 1, no prompt; H1's text clause fails)
+                 D1 stays green on a dead run: it compares only words that were stepped, and none were.
+  restored      56/56  CONTROL=OK    RED=none   (the clone rebuilt from GXEMUL-SEC before the sentinel goes)
+
+FLOOR CLAUSES -> LEGS/VARIANTS: (a) HEAD; (b) b_exit_mask, b_exit_offset -- HEAD's two lines verbatim at each fixed
+site; (c) the three null media (a runtime probe's null medium: an absent or non-emulator binary); (d) the null-repair
+forms over the fix's DEPENDS-ON predicates -- the latch test (latchnever, latchpass, latchinv), the read guard
+(predinv, predalways, prednever, predlatch, predorlatch, predlen, the opswap operand swaps drawn from the body-read
+latch), and the repair's effect (announcedel, oldtext, misname, value_*, earlyret, wsetlatch, backing); the rulings'
+latch-collision and announce variants are d_shared_*, d_setswap_*, d_exchanged, d_announcedel_*, d_oldtext_mask,
+d_misname_mask; (e) the probe docstring's SDRAM CONTRACT and NOT COVERED.
+
+SIBLING PARITY -- the two arms the fix edits, against each other and against #545's declined READ at 18Ch:
+  channel                        SDRAM_BA_MASK (+0x100)     SDRAM_BA_OFFSET (+0x104)    18Ch (#545, arm S)
+  survival                       M1 (X1, B1-B3)             O1 (X1, B1-B3)              N0-N5 require arm S alive
+  declined value                 M2 (3 reads), B1           O2 (3 reads), B2            N3: r9 = r8 = 0
+  announced once, its own text   M3, X1, B1                 O3, X1, B2                  N3 count 1
+  one latch per register         X1, B2                     X1, B2                      N0: five distinct
+  writes untouched               W1, W2, B3                 W1, W2, B3                  E5 (Clear still works)
+  write with the read latch SET  B3                         B3                          n/a: 18Ch's write arm is
+                                                                                        outside its read guard
+  ASYMMETRY, and it is in the WRITE arms, not the fix: the mask write arm whitelists eleven Table 7-7 values (0
+  among them) and announces the rest; the offset write arm announces any nonzero value.  So a READ diverted into
+  the write path (idata 0) is silent at BOTH arms, and the predicate-inversion variants are caught by announce
+  rows at both, never by a value or survival row.  Parity holds; no row owed.
+
+CLAIM -> ROW -- each added comment sentence of the fix that asserts an observable:
+  struct  "one warn-once latch per SDRAM register READ"          -> M3, O3 (once over 3 reads); X1 (per register)
+          "that used to end the process"                         -> HEAD leg: M1, O1 red
+          "(7.3.9, 7.3.10: both registers are R/W)"              -> provenance; no row
+          "Zeroed by the same memset and calloc as the five above"-> M3/O3: the FIRST read announces (1, not 0)
+  mask    "an R/W register ..., so this read is legal"            -> M1 (survival); provenance
+          "-- it used to end the emulator with exit(1)"          -> HEAD leg; b_exit_mask
+          "The write arms keep nothing"                          -> B1, B2 (0 read back after a write)
+          "(hardware would read back W & 0x8ffc0000 here, W & 0x0ffc0000 at 104h; keeping writes is filed)"
+                                                                 -> NO ROW: hardware behaviour the model does not
+                                                                    implement; B1/B2 pin that it does not
+          "so the read is declined: odata stays 0"               -> M2, O2, B1, B2; d_value_*
+          "and the common tail below returns it -- keep the break"
+                                                                 -> NO ROW POSSIBLE: an early return is EQUIVALENT
+                                                                    (memory_rw.c #95 zeroes the read buffer, the
+                                                                    decline is 0) -- d_earlyret_* predicted GREEN
+          "0 is also both registers' normal reset value; 00FC0000h is only the mask's blank-ROM-programming default"
+                                                                 -> provenance (dc21285.txt 7.3.9, 7.3.10,
+                                                                    :3206-3228); the 0 itself is M2/O2
+          "Announced once per register."                         -> M3, O3, X1, B1, B2
+  offset  "declined with 0 and announced once, as for SDRAM_BA_MASK (7.3.10: R/W, reset value 0)"
+                                                                 -> O2, O3, X1, B2
+
+GUARD FIELD vs BODY FIELD -- per arm (mask shown; the offset arm is the same with its own latch):
+  dominating predicates, walked to DEVICE_ACCESS(footbridge)'s boundary, never into callers or callees:
+    switch (relative_addr) case SDRAM_BA_MASK   relative_addr: ONE value inside the arm (0x100); the timer fold
+                                                 above the switch rewrites only 0x300..0x36c
+    if (writeflag == MEM_READ)                   writeflag: {MEM_READ = 0, MEM_WRITE = 1}
+    if (!d->warned_sdram_mask_r)   (added)       the latch: {0, set}
+  body fields -- what the decline reads or writes: d->warned_sdram_mask_r (read and written); odata (NOT assigned:
+    it keeps the function's initial 0); the common tail's len (memory_writemax64(cpu, data, len, odata)).
+  partition the body induces on each: writeflag {READ, WRITE}; latch {0, set}; odata {0} -- no test; len: NONE --
+    the decline tests no width, so a width conjunct is clause (e), DISCLOSED (d_predlen_mask predicted GREEN).
+  guard field vs body field: the latch is both; who else writes it: `grep -c warned_sdram_mask_r` = 3 (declaration,
+    test, set) -- only its own read arm.  No collision exists in the tree; the collisions are BUILT:
+    d_shared_*, d_setswap_*, d_wsetlatch_*, d_exchanged.
+  joint cells {READ, WRITE} x {latch 0, set}, per arm, and the rows holding each:
+    (READ, 0)    the first read: M3/O3, X1, B1/B2       (READ, set)   reads 2-3: M3/O3 (count stays 1), M2/O2, X1
+    (WRITE, 0)   W1, W2; B's first two writes           (WRITE, set)  B3: B's writes AFTER its reads
+  operand swaps from body-read fields (clause d for a de-fatalisation): writeflag -> the latch (d_opswap_*).
+
+CHANNEL CHECK -- the first mandated application, so it is CHECKED rather than obeyed: every row's predicted killers
+and the observable that differs are written below before the table runs.  A variant that reds a row not listed for
+it, or leaves a listed row green, is a MISS and is reported as one.
+
+CHANNEL -- per row: the observable that differs, and the variants predicted to red it:
+  MC  arm M's pre-read `reg`: CP15 c1 bit 0, r5, r6 = 0x1011, r1, the r7-r9 sentinels
+      killed by: no product variant -- a CONTROL; red only on the null media (no prompt, no `reg`)
+  M1  arm M's status and exit code (SURVIVED, 0)
+      killed by: b_exit_mask, b_exitkept_mask
+  M2  r7, r8, r9 after the three mask reads (each 0; each held 0x12345678 before)
+      killed by: b_exit_mask, b_exitkept_mask, d_value_mask, d_value_inlatch_mask
+  M3  arm M's bracketed footbridge diagnostics as a list (exactly [mask announce])
+      killed by: b_exit_mask, d_latchnever_mask, d_latchpass_mask, d_latchinv_mask, d_setswap_mask, d_predinv_mask, d_prednever_mask, d_announcedel_mask, d_oldtext_mask, d_misname_mask
+  OC  arm O's pre-read `reg` (as MC)
+      killed by: no product variant -- a CONTROL; red only on the null media (no prompt, no `reg`)
+  O1  arm O's status and exit code
+      killed by: b_exit_offset
+  O2  r7, r8, r9 after the three offset reads
+      killed by: b_exit_offset, d_value_offset
+  O3  arm O's diagnostics as a list (exactly [offset announce])
+      killed by: b_exit_offset, d_latchnever_offset, d_latchpass_offset, d_latchinv_offset, d_setswap_offset, d_predinv_offset, d_prednever_offset, d_announcedel_offset
+  XC  arm X's pre-read `reg` (as MC, plus sl)
+      killed by: no product variant -- a CONTROL; red only on the null media (no prompt, no `reg`)
+  X1  arm X's diagnostics as a list (exactly [mask announce, offset announce])
+      killed by: b_exit_mask, b_exit_offset, b_exitkept_mask, d_latchnever_mask, d_latchnever_offset, d_latchpass_mask, d_latchpass_offset, d_latchinv_mask, d_latchinv_offset, d_shared_offusesmask, d_shared_maskusesoff, d_setswap_mask, d_setswap_offset, d_predinv_mask, d_predinv_offset, d_prednever_mask, d_prednever_offset, d_announcedel_mask, d_announcedel_offset, d_oldtext_mask, d_misname_mask
+  WC  arm W's pre-write `reg`: the operands 0x01FC0000, 0, 0x40000, 0x12345678
+      killed by: no product variant -- a CONTROL; red only on the null media (no prompt, no `reg`)
+  W1  arm W alive, exit 0, and no read announce among its diagnostics
+      killed by: d_predinv_mask, d_predinv_offset, d_predalways_mask, d_predalways_offset, d_opswap_mask, d_opswap_offset
+  W2  arm W's write announces as a list (exactly [mask 0x12345678, offset 0x40000])
+      killed by: d_predinv_mask, d_predinv_offset, d_predalways_mask, d_predalways_offset
+  BC  arm B's pre-write `reg`: the operands and the r7/r8 sentinels
+      killed by: no product variant -- a CONTROL; red only on the null media (no prompt, no `reg`)
+  B1  r7 after B's mask read (0, not 0x03FC0000) and the mask announce count (1)
+      killed by: b_exit_mask, b_exit_offset, b_exitkept_mask, d_latchinv_mask, d_value_mask, d_value_inlatch_mask, d_prednever_mask, d_announcedel_mask, d_oldtext_mask, d_misname_mask, d_wsetlatch_mask, d_backing_mask
+  B2  r8 after B's offset read (0, not 0x40000) and the offset announce count (1)
+      killed by: b_exit_mask, b_exit_offset, b_exitkept_mask, d_latchinv_offset, d_shared_offusesmask, d_shared_maskusesoff, d_setswap_mask, d_value_offset, d_prednever_offset, d_announcedel_offset, d_misname_mask, d_wsetlatch_offset, d_backing_offset
+  B3  the counts of B's two after-the-read write announces (mask 0x12345678, offset 0x80000), 1 each
+      killed by: b_exit_mask, b_exit_offset, b_exitkept_mask, d_predinv_mask, d_predinv_offset, d_predalways_mask, d_predalways_offset, d_predorlatch_mask, d_predorlatch_offset
+  UC  arm U's pre-read `reg`: CP15 c1 bit 0 SET, r6 present and != 0x1011, sentinels
+      killed by: no product variant -- a CONTROL; red only on the null media (no prompt, no `reg`)
+  U1  arm U alive, exit 0, no footbridge diagnostic, r7 = r9 = 0 (zero fill)
+      killed by: no product variant -- a CONTROL; red only on the null media (no prompt, no `reg`)
+  The 37 older rows (arms L, T, E, S, Q, H) touch neither SDRAM register: predicted GREEN under every variant, red only on the null media (all but D1).
+
+VARIANTS -- 40, exact predicted RED sets (CONTROL=OK for every variant):
+  b_exit_mask            clause (b): HEAD's fatal()+exit(1) reinstated verbatim at +0x100 RED=B1,B2,B3,M1,M2,M3,X1
+  b_exit_offset          clause (b): HEAD's fatal()+exit(1) reinstated verbatim at +0x104 RED=B1,B2,B3,O1,O2,O3,X1
+  b_exitkept_mask        exit(1) kept after the NEW announce at +0x100              RED=B1,B2,B3,M1,M2,X1
+  d_latchnever_mask      the mask latch never set                                   RED=M3,X1
+  d_latchnever_offset    the offset latch never set                                 RED=O3,X1
+  d_latchpass_mask       mask latch test always passes                              RED=M3,X1
+  d_latchpass_offset     offset latch test always passes                            RED=O3,X1
+  d_latchinv_mask        mask latch test inverted                                   RED=B1,M3,X1
+  d_latchinv_offset      offset latch test inverted                                 RED=B2,O3,X1
+  d_shared_offusesmask   latch collision: the offset arm tests and sets the MASK latch RED=B2,X1
+  d_shared_maskusesoff   latch collision: the mask arm tests and sets the OFFSET latch RED=B2,X1
+  d_setswap_mask         the mask arm sets the OFFSET latch (tests its own)         RED=B2,M3,X1
+  d_setswap_offset       the offset arm sets the MASK latch (tests its own)         RED=O3,X1
+  d_exchanged            both arms use the other's latch consistently (a renaming)  RED=none -- GREEN (EQUIVALENT: each arm still tests and sets ONE latch of its own; the names are swapped)
+  d_value_mask           declined value 0x00FC0000 at +0x100 (outside the latch)    RED=B1,M2
+  d_value_offset         declined value 0x00FC0000 at +0x104 (outside the latch)    RED=B2,O2
+  d_value_inlatch_mask   0x00FC0000 assigned INSIDE the mask latch (first read only) RED=B1,M2
+  d_predinv_mask         mask read predicate inverted                               RED=B3,M3,W1,W2,X1
+  d_predinv_offset       offset read predicate inverted                             RED=B3,O3,W1,W2,X1
+  d_predalways_mask      mask read predicate always true                            RED=B3,W1,W2
+  d_predalways_offset    offset read predicate always true                          RED=B3,W1,W2
+  d_prednever_mask       mask read predicate never true (relative_addr conditioning) RED=B1,M3,X1
+  d_prednever_offset     offset read predicate never true (relative_addr conditioning) RED=B2,O3,X1
+  d_predlatch_mask       mask read predicate qualified by its latch                 RED=none -- GREEN (EQUIVALENT under a 0 decline: reads after the first take the write arm with idata 0, which the mask whitelists (SDRAM_MASK_256KB == 0); odata stays 0)
+  d_predlatch_offset     offset read predicate qualified by its latch               RED=none -- GREEN (EQUIVALENT under a 0 decline: reads after the first take the write arm, where `idata != 0` is false; odata stays 0)
+  d_predorlatch_mask     mask read predicate widened by its latch (a write after a read takes the read path) RED=B3
+  d_predorlatch_offset   offset read predicate widened by its latch                 RED=B3
+  d_opswap_mask          clause (d) operand swap: writeflag -> the body-read mask latch RED=W1
+  d_opswap_offset        clause (d) operand swap: writeflag -> the body-read offset latch RED=W1
+  d_predlen_mask         a width conjunct on the mask read predicate                RED=none -- GREEN (ESCAPE, disclosed (clause e): every SDRAM row is a word access and the decline tests no width)
+  d_announcedel_mask     the mask announce removed (latch kept)                     RED=B1,M3,X1
+  d_announcedel_offset   the offset announce removed (latch kept)                   RED=B2,O3,X1
+  d_oldtext_mask         HEAD's exit text kept at +0x100 WITHOUT the exit           RED=B1,M3,X1
+  d_misname_mask         the mask arm prints the OFFSET's text                      RED=B1,B2,M3,X1
+  d_earlyret_mask        the mask decline returns early (skips the common tail)     RED=none -- GREEN (EQUIVALENT: memory_rw.c (#95) zeroes the read buffer before the handler runs and the declined value is 0, so skipping the tail still hands the guest 0)
+  d_earlyret_offset      the offset decline returns early                           RED=none -- GREEN (EQUIVALENT: as d_earlyret_mask)
+  d_wsetlatch_mask       the mask WRITE path sets the read latch                    RED=B1
+  d_wsetlatch_offset     the offset WRITE path sets the read latch                  RED=B2
+  d_backing_mask         a written mask value KEPT and returned (fiq_status as storage: no SDRAM arm reads FIQ) RED=B1
+  d_backing_offset       a written offset value KEPT and returned                   RED=B2
+
+PREDICTED GREEN: 6 of 40 (d_exchanged, d_predlatch_mask, d_predlatch_offset, d_predlen_mask, d_earlyret_mask, d_earlyret_offset) -- 5 EQUIVALENT, 1 disclosed clause-(e) escape (d_predlen_mask).  Counts derived from WHY, not typed.

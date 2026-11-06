@@ -49,7 +49,8 @@
 > 10. `pvrrenderexit` (HIGH, FIXED by `#583` on 2026-11-05, closed) -- the zwrite exit only.  T5; shipped: the Z-write-disable
 >     bit honoured in both rasterizers (depth test kept, depth store skipped), a 164-row rung-3 detector in gate 14.
 >
-> Tail, in order: (1) `fbsdrampair`, T12, DECLINE, narrow; (2) `wdclbaaddr`, T4 -- FIXED by `#572` on 2026-10-24 (held for
+> Tail, in order: (1) `fbsdrampair`, T12 -- FIXED by `#585` on 2026-11-06 (DECLINE, narrow: both reads declined with 0 and a
+> once-per-register announce, a 56-row rung-3 detector in gate 14; the dated section below); (2) `wdclbaaddr`, T4 -- FIXED by `#572` on 2026-10-24 (held for
 > the Fable review; word 49 kept at 0, the advertisement filed as `wdclbaadvertise`; the dated section below);
 > (3) `exitunowned76`'s dev_clmpcc.c exits, T8, after item 8 with the same disposition; (4) one dev_osiop.c site
 > of `exitunowned76`, T10, not the 2^24-byte MEMORY MOVE; (5) `x11cursorclip`, T13; (6) `ppc64xlateexit`, N3, a large
@@ -2743,7 +2744,7 @@
 > #215–#217 Alpha/PPC/SH host-crashes → guest faults; #218–#223 OF + footbridge/mp/kn02ba/8253 guest-reachable
 > `exit(1)`s → graceful.  *[Corrected 2026-09-19 by `#539`: NOT ALL of footbridge's -- #220 removed two of its ten
 > `exit(1)`, eight guest-reachable ones stayed (the `n6` row); `#539` accepted the IRQEnable read, seven remain as
-> `fbdeclinefive` (5) and `fbsdrampair` (2).]* [2026-11-02, records: #545 (4264ee20) then removed fbdeclinefive's five; DEVICE_ACCESS(footbridge) keeps two, fbsdrampair's, at dev_footbridge.c:735 and :760 (987cb596)]
+> `fbdeclinefive` (5) and `fbsdrampair` (2).]* [2026-11-02, records: #545 (4264ee20) then removed fbdeclinefive's five; DEVICE_ACCESS(footbridge) keeps two, fbsdrampair's, at dev_footbridge.c:735 and :760 (987cb596)] [`#585`, 2026-11-06: both reads declined -- FIXED (`fbsdrampair`)]
 > **New deferred (broad device-exit tail):** the same untagged `fatal("…TODO/unimplemented…"); exit(1)` inside
 > many other guest-writable `DEVICE_ACCESS` handlers persists (Fable-A's list: `dev_adb.c`, `dev_clmpcc.c`,
 > `dev_igsfb.c`, `dev_lca.c`, `dev_m8820x.c`, the `dev_pcc2.c` remainder, `dev_mb8696x.c`, `dev_mvme187.c`,
@@ -22155,12 +22156,13 @@ bounded reap, `HARNESS-KILL`/`HARNESS-CLOSE` labels) and every K row requires th
 tables in a scratch clone: pre-fix RED 10/19; 11/12 mutants killed, (j) ESCAPED as disclosed; x_exit2, y_sigkill and
 z_silentexit each red 3/3 K rows.  **The record sentence this row was opened against is the one at :2681-2682 above**
 ("#218-#223 ... footbridge ... guest-reachable `exit(1)`s -> graceful"): corrected in place -- footbridge's ten
-`exit(1)` became eight in #220, seven now; the remaining seven are `fbdeclinefive` (5) and `fbsdrampair` (2). [2026-11-02, records: #545 (4264ee20) then removed fbdeclinefive's five; DEVICE_ACCESS(footbridge) keeps two, fbsdrampair's, at dev_footbridge.c:735 and :760 (987cb596)]
+`exit(1)` became eight in #220, seven now; the remaining seven are `fbdeclinefive` (5) and `fbsdrampair` (2). [2026-11-02, records: #545 (4264ee20) then removed fbdeclinefive's five; DEVICE_ACCESS(footbridge) keeps two, fbsdrampair's, at dev_footbridge.c:735 and :760 (987cb596)] [`#585`, 2026-11-06: both reads declined -- FIXED (`fbsdrampair`)]
 
 ### `fbsdrampair` (HIGH; it said LOW until #554 re-graded it, 2026-10-02) — SDRAM_BA_MASK / SDRAM_BA_OFFSET reads: documented R/W, write arms discard the value
 `:712, :737` at 78360718^ (before #539); at 987cb596 the read arms are :732 and :757, their exits :735 and :760 [corrected 2026-11-02, records: said "HEAD :712, :737"].  DECLINE by default (member 3); BACKED ACCEPT only on a warrant -- a guest in the rig set that reads
 them back after writing (0/2 backing fields, 0/2 consumers today; codex M2).  With it: the mask whitelist rejects the
 documented no-window value 0x8ffc0000 (Table 7-7).
+**[`#585`, 2026-11-06: FIXED -- see the `#585` section at the end of this file; the write side is filed as `fbsdramwrites`.]**
 
 ### `fbirqdeliverywitness` (MED) — no row observes the CPU IRQ line; mutant (j) escaped 19/19 and is disclosed
 A FREE-RUNNING arm (vector 0x18, CPSR I cleared, write P to Set, breakpoint, `continue`) with IRQSoft (+0x190)
@@ -24338,7 +24340,7 @@ the prose: 4139-4145 (line numbers of this file as of commit `db8b1a33`) -- `reg
 * 5686-5691 -> `mrwgrind` (ledger: dropped)
 * 5692-5697 -> `mrwstore2` (ledger: held)
 * 5701-5709 -> `optrow` (ledger: held)
-* 5868-5881 -> `fbsdrampair`
+* 5868-5881 -> `fbsdrampair`  [`#585`, 2026-11-06: FIXED]
 * 5894-5898 -> `fbmode` (ledger: held)
 * 5899-5902 -> `fbmode` (ledger: held)
 * 5903-5907 -> `fbmode` (ledger: held)
@@ -26689,3 +26691,10 @@ src/devices/dev_dec5800.c:359-367 at 987cb596: The DEC 5800 CPU-mask registers a
 * **Filed, new (LOW):** `fmttruncinherited` -- narrowings the round inherited and left (luna88k, lunafb, memory.c, arcbios, ps2_bios, dev_ether, LE's writes, bt455), each printing the low 32 bits of a value that can be wider.
 * **Owed:** Fable's final ruling on the round as committed (`_scratchpad/pipe/FABLE_QUEUE.md` item 4), held on `fmtattr`'s and `fmtmissarg`'s regress stage with its question -- it is also the repair chain's closing pass on pass 2b's repair.
 * **Uncommitted beside it:** the peer session's lines in `src/cpus/cpu_alpha_palcode.c` (~:421) stay in its working copy and the four trees; this round's two lines (:136-137) were applied to them in place.
+
+## 2026-11-06 -- `#585` fbsdrampair: a guest read of the Footbridge SDRAM base-address mask or offset register no longer ends the emulator
+
+* **FIXED** -- `fbsdrampair` (HIGH): `src/devices/dev_footbridge.c`, `DEVICE_ACCESS(footbridge)` called `fatal()` and `exit(1)` on a guest READ of SDRAM_BA_MASK (+0x100) or SDRAM_BA_OFFSET (+0x104), both read/write registers (DC21285 7.3.9, 7.3.10).  Both reads now decline with 0 and announce once per register (`warned_sdram_mask_r`, `warned_sdram_offset_r`); the write arms are unchanged.  Witness (rung 3, unmodified `-E cats`): both sites died with exit status 1 on the committed build (`regress/artifacts/fbsdrampair/witness_20261105/witness_HEAD.out`).  Detector: `regress/footbridge_sites_probe.py`, 56 rows (was 37), gate 14 (HEAD 46/56, fix 56/56); test-variant table 1 (46 legs on their exact predicted red sets).  See the `#585` round block in CHANGELOG.md.
+* **REGRESS** -- Fable 5.1: FABLEREGFBS: 34 CHECKS 0 FLOOR-BREACHES 1 RECORD-FINDING 1 FILED VERDICT:LAND (`regress/artifacts/fbsdrampair/regress_20261106/REG_FABLE.md`).
+* **Filed, new (LOW):** `fbsdramwrites` (the write side: 0x8FFC0000 missing from the mask whitelist, the mask's rejection announce unlatched, the offset announcing every non-zero write; member 7 IMPLEMENT named as its natural joint disposition); `fbsdramwidth` (dev_footbridge.c: byte and halfword reads of SDRAM_BA_MASK (+0x100) / SDRAM_BA_OFFSET (+0x104) are unrowed -- a width co).
+* **Uncommitted beside it:** nothing of this round; the working copy and the four trees take the committed `dev_footbridge.c` (its `#NNN` tags filled) in the landing window.

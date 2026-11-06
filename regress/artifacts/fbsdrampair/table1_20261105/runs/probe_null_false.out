@@ -1,0 +1,85 @@
+BINARY=/bin/false
+machine: cats/SA110, cold debugger, MMU disabled by the guest, no boot
+  arm L  live      (MMU off)               NO-PROMPT exit=1     signal=None
+  arm T  trap ctrl (MMU LEFT ON)           NO-PROMPT exit=1     signal=None
+  arm E  enable    (MMU off,#539)          NO-PROMPT exit=1     signal=None
+  arm S  declines  (MMU off,#545)          NO-PROMPT exit=1     signal=None
+  arm Q  quit leg  (MMU off,#545)          NO-PROMPT exit=1     signal=None
+  arm H  startup reject (-E no-such-machine-fbd5) NO-PROMPT exit=1     signal=None
+  arm M  sdram mask x3      (fbsdram)      NO-PROMPT exit=1     signal=None
+  arm O  sdram offset x3    (fbsdram)      NO-PROMPT exit=1     signal=None
+  arm X  sdram mask+offset  (fbsdram)      NO-PROMPT exit=1     signal=None
+  arm W  sdram writes only  (fbsdram)      NO-PROMPT exit=1     signal=None
+  arm B  sdram write/read/write (fbsdram)  NO-PROMPT exit=1     signal=None
+  arm U  sdram reads, MMU ON (fbsdram)     NO-PROMPT exit=1     signal=None
+
+C1   liveness: guest ran, plain RAM readback  got=-            want=0x11223344   FAIL
+C2   MMU really OFF in arm L (CP15 c1 bit 0)  got=-            want=0x00000000   FAIL
+C3   MMU really ON in arm T (the arms differ) got=-            want=0x00000001   FAIL
+C4   MMU-on arm CANNOT see the device         got=-            want=!= 0x1011    FAIL
+      *** THE DISCRIMINATOR IS DEAD: the device answered with the boot-time MMU
+      *** still enabled, so arm L proves nothing about turning it off.  Either the
+      *** cats translation table changed (machine_cats.c:131, cpu_arm.c:239-255)
+      *** or the device moved into the low 256 MB.  Re-derive before believing A1/A2.
+C5   MMU-on arm SURVIVES, exit 0              status=NO-PROMPT exit=1        FAIL
+A1   VENDOR_ID through a real guest ldr       got=-            want=0x00001011   FAIL
+A2   TIMER_1_LOAD masked to 24 bits (MAX_VAL) got=-            want=0x00345678   FAIL
+      *** THE MMU TRAP, and A1/A2 are NOT evidence about the device: arm L's
+      *** CP15 c1 bit 0 is still SET, so VA 0x42000000 aliased to PA 0x02000000
+      *** (machine_cats.c:131 -> cpu_arm.c:239-255 maps only the low 256 MB) and
+      *** nothing ever addressed the footbridge.  Fix the MMU-off sequence first.
+A2b  the value the guest actually stored      got=-            want=0x12345678   FAIL
+I1   isolation arm SURVIVES untouched         status=NO-PROMPT exit=1        FAIL
+H1   startup leg: unknown -E named, exit 1    status=NO-PROMPT exit=1 named=False FAIL
+      startup leg said: (the diagnostic did not name the input)
+H2   quit leg: verified prologue, dead, exit 0 prologue=None next=None dead=None exit=1 FAIL
+SC1  arm S liveness: plain RAM readback       got=-            want=0x11223344   FAIL
+SA1  arm S reaches the device: VENDOR_ID      got=-            want=0x00001011   FAIL
+S1   IRQ_STATUS read (0 & 0x30) between declines got=-            want=0x00000000   FAIL
+S2   IRQ_RAW_STATUS read between declines     got=-            want=0x00000000   FAIL
+S3   IRQEnable intact through the declines    got=-            want=0x00000030   FAIL
+S4   FIQ_STATUS read (0 & 0xc0) between declines got=-            want=0x00000000   FAIL
+S5   FIQ_RAW_STATUS read between declines     got=-            want=0x00000000   FAIL
+SF1  FINAL raw IRQ status after all declines  got=-            want=0x00000000   FAIL
+SF2  FINAL raw FIQ status after all declines  got=-            want=0x00000000   FAIL
+N1   write to irq status? announced ONCE over two accesses count=0                        FAIL
+N2   write to irq_raw_status announced ONCE over two accesses count=0                        FAIL
+N3   read from ENABLE CLEAR? announced ONCE over two accesses count=0 r9=- r8=-              FAIL
+N4   write to fiq status? announced ONCE over two accesses count=0                        FAIL
+N5   write to fiq_raw_status announced ONCE over two accesses count=0                        FAIL
+N0   five sites, one process, five distinct once distinct-once=0 fatals=0 exit=1 FAIL
+NO   the five announces arrive in access order order=-                        FAIL
+EC1  arm E liveness: plain RAM readback       got=-            want=0x11223344   FAIL
+EA1  arm E reaches the device: VENDOR_ID      got=-            want=0x00001011   FAIL
+E0   IRQEnable reads 0 before any write       got=-            want=0x00000000   FAIL
+E1   Set <- P, read back                      got=-            want=0x00002002   FAIL
+E2   Set <- Q, read back (|=)                 got=-            want=0x60002002   FAIL
+E3   byte read: low byte                      got=-            want=0x00000002   FAIL
+E6   halfword read: low two bytes             got=-            want=0x00002002   FAIL
+E5   Clear <- P, read Set back                got=-            want=0x60000000   FAIL
+E4   arm E: no footbridge diagnostic, exit 0  status=NO-PROMPT exit=1 fatals=0 FAIL
+MC   arm M prologue + sentinels (pre-read)    mmu=- r6=- ops=0/4             FAIL
+M1   3 SDRAM_BA_MASK reads survived, exit 0   status=NO-PROMPT exit=1        FAIL
+M2   each SDRAM_BA_MASK read returns 0        r7=- r8=- r9=-                 FAIL
+M3   mask read announced ONCE over 3 reads    seen=-                         FAIL
+OC   arm O prologue + sentinels (pre-read)    mmu=- r6=- ops=0/4             FAIL
+O1   3 SDRAM_BA_OFFSET reads survived, exit 0 status=NO-PROMPT exit=1        FAIL
+O2   each SDRAM_BA_OFFSET read returns 0      r7=- r8=- r9=-                 FAIL
+O3   offset read announced ONCE over 3 reads  seen=-                         FAIL
+XC   arm X prologue + sentinels (pre-read)    mmu=- r6=- ops=0/5             FAIL
+X1   one announce per register, mask first    order=-                        FAIL
+WC   arm W prologue + operands (pre-write)    mmu=- r6=- ops=0/5             FAIL
+W1   writes: alive, exit 0, no read announce  status=NO-PROMPT seen=-        FAIL
+W2   write announces exactly wmask, woff4     writes=-                       FAIL
+BC   arm B prologue + operands (pre-write)    mmu=- r6=- ops=0/7             FAIL
+B1   mask read after a write: 0, once         r7=- mask=0                    FAIL
+B2   offset read after a write: 0, once       r8=- offset=0                  FAIL
+B3   writes after the reads still announce    seen=-                         FAIL
+UC   arm U: MMU ON, cannot see the device     mmu=- r6=- ops=0/2             FAIL
+U1   MMU-on SDRAM reads: alive, no diagnostic status=NO-PROMPT seen=- r7=- r9=- FAIL
+D1   every planted word disassembled as meant 0 mismatches                   ok
+
+ROWS=1 of 56
+FOOTBRIDGE_SITES_CONTROL=BAD
+FOOTBRIDGE_SITES_FAIL
+PROBE_WALL=0.1s for 12 cold-debugger arms

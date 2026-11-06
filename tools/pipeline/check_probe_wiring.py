@@ -3977,6 +3977,24 @@ MANIFEST = {
     "artifacts/fmtattr/stage_20261105/fix_misc_h.py":
         (CLASS_TOOL, "#584 fmtattr: misc.h's GX_PRINTF definition (the format attribute under __GNUC__) and its four "
                      "declarations -- preserved as run"),
+    #  #585 fbsdrampair: the DC21285 footbridge's SDRAM_BA_MASK / SDRAM_BA_OFFSET reads ended the emulator (fatal() + exit(1)); both now
+    #  decline with 0 and announce once per register.  The SHIPPING detector is footbridge_sites_probe.py (its entry above, gated
+    #  in gate_arm.sh since #432).  The round's own artifacts, classified by the round; none is a gated detector.
+    "artifacts/fbsdrampair/impl_20261105/fbsdram_witness.py":
+        (CLASS_RESEARCH, "#585 fbsdrampair: the same witness, an unchanged copy beside the implementation's fix-leg run "
+                         "(impl_20261105/witness_FIX.out: FBSDRAM_WITNESS=NOT-SHOWN), preserved as evidence; not a gate"),
+    "artifacts/fbsdrampair/table1_20261105/fbs_variants_1.py":
+        (CLASS_TOOL, "#585 fbsdrampair: test-variant table 1's writer -- 40 exact-text edits of "
+                     "table1_20261105/dev_footbridge.c.fix1 with each one's predicted red rows (`list', `apply', `compare')"),
+    "artifacts/fbsdrampair/table1_20261105/probe56_frozen.py":
+        (CLASS_RESEARCH, "#585 fbsdrampair: the 56-row detector, frozen -- the instrument test-variant table 1 ran "
+                         "(table1_20261105/SCORES.txt: base 56/56, HEAD 46/56, 40 variants); the shipped "
+                         "regress/footbridge_sites_probe.py equals it but for its docstrings "
+                         "(landing_20261105/PROBE_IDENTITY_fbs.md), preserved as evidence"),
+    "artifacts/fbsdrampair/witness_20261105/fbsdram_witness.py":
+        (CLASS_RESEARCH, "#585 fbsdrampair: the rung-3 WITNESS as run on the committed build before any edit "
+                         "(witness_20261105/witness_HEAD.out: FBSDRAM_WITNESS=SHOWN, both SDRAM reads ending the process with exit "
+                         "status 1), preserved as evidence; not a gate"),
 }
 
 #  DATED, NAMED DEBT -- not a count and not a silent allowlist.  gate_offline.sh MEASURED that

@@ -92,6 +92,11 @@ struct footbridge_data {
 	int		warned_irq_clear_r;
 	int		warned_fiq_status_w;
 	int		warned_fiq_raw_w;
+	/*  #585: one warn-once latch per SDRAM register READ that used to end
+	    the process (7.3.9, 7.3.10: both registers are R/W).  Zeroed by
+	    the same memset and calloc as the five above.  */
+	int		warned_sdram_mask_r;
+	int		warned_sdram_offset_r;
 };
 
 
@@ -731,8 +736,22 @@ DEVICE_ACCESS(footbridge)
 
 	case SDRAM_BA_MASK:
 		if (writeflag == MEM_READ) {
-			fatal("[ footbridge read from sdram_ba_mask ]\n");
-			exit(1);
+			/*  #585: an R/W register (DC21285 7.3.9; 7.3.10 for
+			    104h), so this read is legal -- it used to end the
+			    emulator with exit(1).  The write arms keep nothing
+			    (hardware would read back W & 0x8ffc0000 here,
+			    W & 0x0ffc0000 at 104h; keeping writes is filed),
+			    so the read is declined: odata stays 0 and the
+			    common tail below returns it -- keep the break.
+			    0 is also both registers' normal reset value;
+			    00FC0000h is only the mask's blank-ROM-programming
+			    default.  Announced once per register.  */
+			if (!d->warned_sdram_mask_r) {
+				d->warned_sdram_mask_r = 1;
+				fatal("[ footbridge: read of sdram_ba_mask "
+				    "declined, reads 0 (written values are "
+				    "not kept) (once) ]\n");
+			}
 		} else {
 			switch (idata) {
 			case SDRAM_MASK_256KB:
@@ -756,8 +775,14 @@ DEVICE_ACCESS(footbridge)
 		break;
 	case SDRAM_BA_OFFSET:
 		if (writeflag == MEM_READ) {
-			fatal("[ footbridge read from sdram_ba_offset ]\n");
-			exit(1);
+			/*  #585: declined with 0 and announced once, as for
+			    SDRAM_BA_MASK (7.3.10: R/W, reset value 0).  */
+			if (!d->warned_sdram_offset_r) {
+				d->warned_sdram_offset_r = 1;
+				fatal("[ footbridge: read of sdram_ba_offset "
+				    "declined, reads 0 (written values are "
+				    "not kept) (once) ]\n");
+			}
 		} else {
 			if (idata != 0)
 				fatal("[ footbridge write to sdram_ba_offset "

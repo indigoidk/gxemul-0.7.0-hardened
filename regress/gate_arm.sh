@@ -1080,7 +1080,7 @@ done
 #  reads CP15 c1 back and requires bit 0 clear.  Negative-controlled in both directions.
 FBLOG=$LOGDIR/footbridge_sites.log
 python3 footbridge_sites_probe.py "$PMAX" "$STUB" > "$FBLOG" 2>&1 || true
-grep -E "^(  arm |C[0-9]|A[0-9]|I1|H[12]|D1|E(C1|A1|[0-6])|S(C1|A1|[1-5]|F[12])|N[0-5O]) " "$FBLOG" | sed 's/^/       /'
+grep -E "^(  arm |C[0-9]|A[0-9]|I1|H[12]|D1|E(C1|A1|[0-6])|S(C1|A1|[1-5]|F[12])|N[0-5O]|[MOXWBU](C|[1-3])) " "$FBLOG" | sed 's/^/       /'
 
 if ! grep -q "FOOTBRIDGE_SITES_" "$FBLOG"; then
     note "footbridge probe produced no verdict; last lines follow"
@@ -1123,9 +1123,10 @@ else
     #  requires the announces in site order (ORDER, not emitter); S1-S5 and SF1/SF2 pin every
     #  interrupt register unchanged through the declines, with the FINAL raw reads after the last write
     #  of every pair.  Every family is pinned by its DISTINCT green ids (a duplicated green line cannot
-    #  stand in for a missing id -- pass 2), and the probe's own total by ROWS=.
-    check "footbridge: the sites probe ran all 37 rows green (ROWS=37 of 37)" \
-          "$(grep -cE '^ROWS=37 of 37$' "$FBLOG")" "1"
+    #  stand in for a missing id -- pass 2), and the probe's own total by ROWS= (37 at #545; 56 since
+    #  #585 added the nineteen SDRAM rows below).
+    check "footbridge: the sites probe ran all 56 rows green (ROWS=56 of 56)" \
+          "$(grep -cE '^ROWS=56 of 56$' "$FBLOG")" "1"
     check "footbridge: arm S controls SC1, SA1 -- two DISTINCT green ids" \
           "$(grep -E '^S(C1|A1) .*ok$' "$FBLOG" | cut -d' ' -f1 | sort -u | wc -l | tr -d ' ')" "2"
     check "footbridge: N0 five sites, one process, five distinct once" \
@@ -1162,6 +1163,28 @@ else
           "$(grep -cE '^E0 .*got=0x00000000 .*ok$' "$FBLOG")" "1"
     check "footbridge: Set ORs (E2 = P|Q; Clear is pinned by E5)" \
           "$(grep -cE '^E2 .*got=0x60002002 .*ok$' "$FBLOG")" "1"
+    #  #585 fbsdrampair: a guest READ of SDRAM_BA_MASK (+0x100) or SDRAM_BA_OFFSET (+0x104) used to end
+    #  the emulator (fatal() then exit(1)); both are R/W (DC21285 7.3.9, 7.3.10) and both write arms keep
+    #  nothing, so the read is DECLINED with 0 and announced once per register.  Six arms, one process
+    #  each: M and O read one register three times (one site per process, so the pre-fix build shows
+    #  each site's own death), X reads both (per-register latches), W only writes (a write never takes the
+    #  read path; HEAD's write announces intact), B writes, reads, writes again (writes are not kept; a
+    #  write with the read latch set still takes the write path), U is M's reads with the MMU left ON
+    #  (never the device).  Each control (MC OC XC WC BC UC) is a `reg` taken BEFORE the arm's first
+    #  SDRAM access, so the pre-fix build reds M1-M3 O1-O3 X1 B1-B3 under green controls (measured,
+    #  regress/artifacts/fbsdrampair/impl_20261105/probe_HEAD.out: ROWS=46 of 56, CONTROL=OK).
+    check "footbridge: SDRAM controls MC OC XC WC BC UC -- six DISTINCT green ids" \
+          "$(grep -E '^[MOXWBU]C .*ok$' "$FBLOG" | cut -d' ' -f1 | sort -u | wc -l | tr -d ' ')" "6"
+    check "footbridge: SDRAM rows M1-M3 O1-O3 X1 W1 W2 B1-B3 U1 -- thirteen DISTINCT green ids" \
+          "$(grep -E '^([MOB][1-3]|X1|W[12]|U1) .*ok$' "$FBLOG" | cut -d' ' -f1 | sort -u | wc -l | tr -d ' ')" "13"
+    check "footbridge: M2 three SDRAM_BA_MASK reads each return 0 (the declined value)" \
+          "$(grep -cE '^M2 .*r7=0x00000000 r8=0x00000000 r9=0x00000000 .*ok$' "$FBLOG")" "1"
+    check "footbridge: O2 three SDRAM_BA_OFFSET reads each return 0" \
+          "$(grep -cE '^O2 .*r7=0x00000000 r8=0x00000000 r9=0x00000000 .*ok$' "$FBLOG")" "1"
+    check "footbridge: X1 one read announce per register, mask first" \
+          "$(grep -cE '^X1 .*order=mask,offset .*ok$' "$FBLOG")" "1"
+    check "footbridge: B1/B2 a written mask/offset is not kept (reads 0 after a write)" \
+          "$(grep -cE '^B[12] .*r[78]=0x00000000 .*ok$' "$FBLOG")" "2"
     #  The defence against the hand-assembled-encoding trap: every planted word is compared
     #  against the disassembly the emulator printed AS IT STEPPED IT.
     check "footbridge: no planted word failed its disassembly check" \

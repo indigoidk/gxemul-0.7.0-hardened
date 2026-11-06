@@ -1,3 +1,64 @@
+# `#585` (2026-11-06) -- `fbsdrampair`: a guest read of the Footbridge SDRAM base-address mask or offset register no longer ends the emulator; both reads are declined with 0 and announced once
+
+Short paths below are under `regress/artifacts/fbsdrampair/`.
+
+**The defect.**  `src/devices/dev_footbridge.c`, `DEVICE_ACCESS(footbridge)`: a guest READ of SDRAM_BA_MASK (+0x100) or SDRAM_BA_OFFSET
+(+0x104) hit `fatal("[ footbridge read from sdram_ba_mask ]\n"); exit(1);` (and its offset twin), though the DC21285 datasheet gives
+both registers as read/write (7.3.9, 7.3.10).  Filed 2026-09-19 from `#539`'s panels, re-graded HIGH by `#554`
+(`regress/artifacts/astraretro_20260926/DISPOSITIONS.md`), queued 2026-10-22 as the external-research batch tail 1
+(`regress/artifacts/research_20261022/TRIAGE.md` T12; `regress/artifacts/research_20261022/adj_20261022/ADJ_RULINGS.md` D: DECLINE).
+
+**Witness (rung 3, before any edit).**  `regress/artifacts/fbsdrampair/witness_20261105/witness_HEAD.out`: `fbsdram_witness.py` on
+unmodified `-E cats` (cold debugger, one SDRAM site per run) against `build/gxemul` built from the pre-fix source
+(`witness_20261105/CLEARANCE.txt`): W1 (+0x100) and W2 (+0x104) died at the site with exit status 1, each printing HEAD's fatal text
+once; W3, the same load with the MMU left on, survived with no diagnostic; `FBSDRAM_WITNESS=SHOWN`, controls OK.  On the fix
+(`impl_20261105/witness_FIX.out`) both reads survive and return 0: `FBSDRAM_WITNESS=NOT-SHOWN`.
+
+**The fix** (three hunks, `regress/artifacts/fbsdrampair/landing_20261105/STAGED_DIFFS_fbs.md`).  `struct footbridge_data` gains
+`warned_sdram_mask_r` and `warned_sdram_offset_r`; each read arm now declines: `odata` stays 0, the common tail returns it (the
+`break` is kept), and the register announces once -- `[ footbridge: read of sdram_ba_mask declined, reads 0 (written values are
+not kept) (once) ]`, likewise for the offset.  The write arms are unchanged.  The three `#NNN` comment tags are filled with
+`#585` (comment-only).  Design: option-set member 3, DECLINE with a per-register latched announce, the declined value ZERO
+(`regress/artifacts/fbsdrampair/adj_p1_20261105/ADJ_MYTHOS.md`, `MYTHOSADJP1FBSDRAM: 6 RULINGS 7 ROWS 1 FILED VERDICT:3/ZERO`).  Its two
+replications ruled 0x00FC0000 for the mask on the packet's premise that it is the documented reset value; read in the datasheet it
+is the blank-ROM programming default, and 7.3.9 and 7.3.10 give reset 0 (`adj_p1_20261105/RESET_PREMISE_NOTE.md`), so ZERO was
+implemented (`impl_20261105/IMPL_NOTE.md`).  The SEC working copy and the four trees took the staged dev_footbridge.c in the landing window (comment-only), the three build trees rebuilt with both clearance parts passing (compiler warnings 0 0 0), and the staged probe scored 56 of 56, CONTROL=OK, on the rebuilt build/ (`regress/artifacts/fbsdrampair/landing_20261105/UPDATE_FBS.out`).
+
+**Detector.**  `regress/footbridge_sites_probe.py` grows from 37 to 56 rows: six cold-debugger arms, one process each -- M and O read
+one register three times, X reads both, W only writes, B writes, reads and writes again, U repeats M's reads with the MMU on as a
+control -- each arm's control taken before its first SDRAM access, so the pre-fix build reds the defect rows under green controls;
+the 37 older rows print as before (`impl_20261105/IMPL_NOTE.md`).  In `regress/gate_arm.sh` (gate 14) the footbridge block pins
+`ROWS=56 of 56` and adds six checks -- the six controls and the thirteen SDRAM rows by distinct green id, M2's and O2's three zero
+reads, X1's announce order, B1's and B2's unkept writes: 29 checks on a run.  Measured: the fix 56 of 56, CONTROL=OK
+(`impl_20261105/probe_FIX.out`); the pre-fix build 46 of 56, CONTROL=OK, red M1-M3, O1-O3, X1, B1-B3 (`impl_20261105/probe_HEAD.out`);
+the block alone on the fix, 29 checks, 0 FAIL (`impl_20261105/fbblock_check.out`).  `check_probe_wiring.py` entries for 4
+artifact scripts (`landing_20261105/MANIFEST_fbs.txt`).  Gate 14's footbridge block ran in situ alone at the landing on the updated build/gxemul: 29 checks, 0 FAIL, ROWS=56 of 56, FOOTBRIDGE_SITES_CONTROL=OK (`regress/artifacts/fbsdrampair/landing_20261105/INSITU_fbs.out`).
+
+**Table and floor.**  Test-variant table 1 in a scratch clone under a sentinel, its PRETABLE first: 46 legs, each on exactly its
+predicted red set and control (`table1_20261105/VERDICT.md`, `table1_20261105/COMPARE.txt`).  Floor (`table1_20261105/SCORES.txt`): (a) HEAD 46/56;
+(b) HEAD's two lines reinstated verbatim, `b_exit_mask` and `b_exit_offset`, 49/56 each; (c) an absent binary, `/bin/true` and
+`/bin/false`, 1/56 each with CONTROL=FAIL; (d) of all 40 variants (those two, the mask's kept exit and 37 null-repair, latch and announce edits) 34 red, the six
+green all predicted: five equivalent (`d_exchanged`, `d_predlatch_mask`, `d_predlatch_offset`, `d_earlyret_mask`, `d_earlyret_offset`) and `d_predlen_mask`,
+the disclosed width debt; (e) the probe's SDRAM CONTRACT and NOT COVERED list.  The settle run (`settle_20261105/SCORES.txt`):
+`b_exitkept_offset` 51/56, red O1, O2, B1, B2, B3 -- the contract's offset kept-exit, now measured; `d_latchafter_mask` 56/56,
+equivalent as predicted.
+
+**Pass 2.**  GPT-6 Astra (ultra), `CODEXP2FBS: 8 CELLS SWEPT 0 BREACHES 3 FALSE RECORDS VERDICT:REPAIR`
+(`p2_20261105/codex_codex_fbs_p2.txt`): the floor chain closes over two registers x read/write x own latch; width is clause-(e) debt;
+three coverage records repaired text-only (`p2_20261105/RECORD_FIXES.md`, `p2_20261105/AST_PROOF.txt`), read by Gemini 4 Argon, the
+third then measured by the settle run.  Argon on the pass itself, GLM 5.3 and Grok 4.7: seat failures (`p2_20261105/DISPOSITION.md`).
+
+**Regress review** (the Fable-only stage): `FABLEREGFBS: 34 CHECKS 0 FLOOR-BREACHES 1 RECORD-FINDING 1 FILED VERDICT:LAND` (`regress/artifacts/fbsdrampair/regress_20261106/REG_FABLE.md`): the 56-row detector as it ships discharges the floor -- (a) HEAD 46/56 under green controls; (b) the verbatim reinstatement 49/56 at each site, the exit kept after the announce 50/56 (mask) and 51/56 (offset, settle run); (c) three null media 1/56 with CONTROL=FAIL (`table1_20261105/SCORES.txt`), ROWS=56 pinned by equality; (d) the DEPENDS-ON closure (`writeflag` x each arm's latch) rowed in all four cells per arm, accept rows W1/W2/B3 measured failable, and the six green variants re-derived from source -- five equivalent, one disclosed clause-(e) width escape (`len` is tested nowhere in `DEVICE_ACCESS(footbridge)`); (e) the SDRAM CONTRACT's row lists are true of `table1_20261105/SCORES.txt` and `table1_20261105/KILLS.txt`; (f) the zero-valued rows are anchored by their announce rows and the VENDOR_ID control, never alone.  The pass-2 record repairs ship (AST minus docstrings == table 1's frozen instrument).  Gemini 4 Argon's B2 question is settled: `d_misname_mask` prints the offset's line, so B2's `count(SD_OFFSET) == 1` reds, as PRETABLE predicted.  Findings: one INFO (the NOT COVERED list omits the measured-equivalent latch-after-announce form); the width escape is FILED as `fbsdramwidth` (LOW).  No floor breach, no repair owed: land.
+
+**Replay.**  Gate 14's footbridge block, as staged, replayed over table 1's 46 banked logs and 11 synthetic logs, the probe call replaced by each log (`regress/artifacts/fbsdrampair/landing_20261105/DRYRUN_fbs.out`): green on exactly the 8 logs the probe scored 56/56 (base, restored, d_earlyret_mask, d_earlyret_offset, d_exchanged, d_predlatch_mask, d_predlatch_offset, d_predlen_mask); HEAD red (7 of 29 checks); the null media red (absent 28 of 29, true 28 of 29, false 28 of 29); every variant the probe scored red, red; the 11 synthetic logs each red on exactly their target pin; every one of the block's 30 checks failed on at least one leg.  The probe ships table 1's instrument with its twelve `#NNN` tags filled
+(`landing_20261105/PROBE_IDENTITY_fbs.md`).
+
+**Seats.**  One ledger entry per seat file of every stage, from a MECHANICAL inventory (`landing_20261105/inv/fbs_inventory.jsonl`: each file's seat, transport and verdict line, the note naming the stage's ruling or disposition), the non-firings and seat failures by name.  Research: 20 entries, 13 of them answers (agy 4, codex 1, deepseek 1, fable5 9, glm 1, grok 1, kimi 1, minimax 1, opus5 1).  Review: 12 entries, 3 answers (agy 3, codex 1, deepseek 1, fable5 1, glm 1, grok 1, kimi 1, minimax 1, opus5 2).  Regress: the hold and Fable 5.1's answer.  **Filed** (ledger and OUTSTANDING_BUGS.md's `#585` section; LOW): `fbsdramwrites` (the write side: 0x8FFC0000 missing from the mask whitelist, the mask's rejection announce unlatched, the offset announcing every non-zero write; member 7 IMPLEMENT its natural joint disposition with this round's two declines); `fbsdramwidth`.
+
+**Of the round's folder** the commit carries 59 of 177 files, 0.76 of 1.86 MB (the coordinator's rule, `landing_20261105/ARTSET_RULE.md`: what a committed record cites, the records, each table's base, HEAD and null logs; `landing_20261105/ARTSET_fbs_why.txt` gives each file's rule).  The other 118 (per-variant build and probe logs, run scripts, pty transcripts, the codex reasoning stream, the generated stubs) stay on disk, denied by the folder's new `.gitignore`, which re-includes the selection and leaves any later file visible (`landing_20261105/ARTGI_fbs.txt`; `landing_20261105/ARTSET_fbs_excluded.txt`).
+
+**Landing.**  The citation gate cannot select this block (`check_cited_artifacts.py` keys on `## Round <digits>` headings: `citeprefixblind`, filed by `#554`); its own resolver, run over the block by hand at the landing, resolves all 19 citations to this round's files or the sources it names.
+
 # `#584` Records (follow-up, 2026-11-05): `fmtattr` names its landing commit `ccd1c502`; the committed-tree proofs; the pass-2 receipt
 
 `git ls-tree ccd1c502`, md5s hashed in Python from the committed bytes: `src/include/misc.h` blob `39fe40c52198`, md5 `a824683b06a8`; `src/disk/bootblock.c` blob `1fa97b1392d4`, md5 `1f1fb1da6288`; `src/cpus/cpu_alpha_palcode.c` blob `39ae212f6487`, md5 `f69c02e83030`; `regress/fmt_bootblock_probe.py` blob `29526c98e48e`, md5 `5728fc0761fd`; `regress/gate_build.sh` blob `07409171f4f4`, md5 `362b6640ce40`; `tools/precommit_check.sh` blob `014582d94c23`, md5 `7c878c20dc21`; `tools/pipeline/check_probe_wiring.py` blob `804c1cff80fb`, md5 `eacfa4ff9575`; `.github/workflows/codeql.yml` blob `3c1a4c7e1d4b`, md5 `271a042209e9`; the 47 committed `src/` files' blob md5s, hashed in order, `0172902f0f14`.  The working copy against each: misc.h the same; bootblock.c the same; cpu_alpha_palcode.c plus the peer session's uncommitted lines (1 hunk(s), 23 lines); fmt_bootblock_probe.py the same; gate_build.sh the same; precommit_check.sh the same; check_probe_wiring.py plus other rounds' uncommitted MANIFEST entries (2 hunk(s)); codeql.yml the same.
