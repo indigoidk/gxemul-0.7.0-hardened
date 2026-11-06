@@ -913,13 +913,13 @@ DEVICE_ACCESS(luna88k)
 	default:
 		if (writeflag == MEM_WRITE)
 			debugmsg_cpu(cpu, SUBSYS_DEVICE, "luna88k", VERBOSITY_ERROR,
-		    	    "unimplemented %i-bit WRITE to address 0x%x: 0x%x",
+		    	    "unimplemented %zu-bit WRITE to address 0x%x: 0x%x",
 		    	    len * 8,
 			    (int) addr,
 			    (int) idata);
 		else
 			debugmsg_cpu(cpu, SUBSYS_DEVICE, "luna88k", VERBOSITY_ERROR,
-		    	    "unimplemented %i-bit READ from address 0x%x",
+		    	    "unimplemented %zu-bit READ from address 0x%x",
 		    	    len * 8,
 			    (int) addr);
 

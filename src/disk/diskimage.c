@@ -2457,8 +2457,8 @@ void diskimage_dump_info(struct machine *machine)
 			debug("%lli MB", (long long) (s / 1048576));
 
 		if (d->type == DISKIMAGE_FLOPPY || d->chs_override)
-			debug(" (CHS=%i,%i,%i)", d->cylinders, d->heads,
-			    d->sectors_per_track);
+			debug(" (CHS=%" PRIi64 ",%i,%" PRIi64 ")", (int64_t)d->cylinders, d->heads,
+			    (int64_t)d->sectors_per_track);
 		else
 			debug(" (%lli %i-byte blocks)", (long long)d->nr_of_logical_blocks, d->logical_block_size);
 

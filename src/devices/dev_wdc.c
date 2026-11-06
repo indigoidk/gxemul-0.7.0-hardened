@@ -1604,7 +1604,7 @@ DEVICE_ACCESS(wdc)
 				        if (!d->warned_badlen) {
 						d->warned_badlen = 1;
 						fatal("wdc: unimplemented "
-						    "write len %i (ignored)\n",
+						    "write len %zu (ignored)\n",
 						    len);
 					}
 					break;
@@ -1638,7 +1638,7 @@ DEVICE_ACCESS(wdc)
 				        if (!d->warned_badlen) {
 						d->warned_badlen = 1;
 						fatal("wdc: unimplemented "
-						    "write len %i (ignored)\n",
+						    "write len %zu (ignored)\n",
 						    len);
 					}
 					break;

@@ -1223,7 +1223,7 @@ static void debugger_cmd_machine(struct machine *m, char *args)
 	if (m->name != NULL && m->name[0])
 		debugmsg(SUBSYS_MACHINE, "", VERBOSITY_INFO, "%s", m->name);
 	else
-		debugmsg(SUBSYS_MACHINE, "", VERBOSITY_INFO, "");
+		debugmsg(SUBSYS_MACHINE, "", VERBOSITY_INFO, "%s", "");
 
 	debug_indentation(1);
 	machine_dumpinfo(m);

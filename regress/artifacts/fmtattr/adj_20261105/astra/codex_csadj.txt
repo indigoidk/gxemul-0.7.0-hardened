@@ -1,0 +1,118 @@
+VERDICT: Three items are real; `disasmnullmnem` is a false positive. Combine the format work, revise the ARC fix, and correct several no-action justifications.
+
+I read only the permitted fork sources and reports. I did not modify files, run the emulator, or change GitHub state. Runtime probes below are proposed witnesses, not measured results.
+
+1. **The premise audit gives these results.**
+
+| Premise | Verdict | Evidence |
+|---|---|---|
+| **a. All 52 GCC-only warnings existed at 759f7131** | **UNSETTLED** | The permitted reports assert this but do not supply the historical comparison. Matching one line’s text does not establish unchanged surrounding arguments, concatenated format strings, declarations, or typedefs. Establish this using complete historical call/type context or the same attributed build at 759f7131. |
+| **b. Resize bounds establish the copy-loop product bound** | **TRUE for the fork’s reachable resize paths** | [dev_fb.c:134](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_fb.c:134) rejects dimensions below 10; line 147 rejects dimensions above 16384. The actual callers use 24-bit framebuffers. Generic/GBE initial widths are bounded; VGA’s initial and supported resized widths are both `640*scaleup`, so a successful resize also bounds its old stride. Consequently either stride times `y` is at most `3*16384*16383 = 805257216 < 2^30`. The dimension guards alone are not the complete proof. |
+| **c. Guest-controlled below-base A0; result used only through V0** | **TRUE** | [arcbios.c:1560](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/promemul/arcbios.c:1560) consumes the guest register without descriptor-membership validation. The computed address is assigned to V0, followed by `break`; the caller returns through guest RA without dereferencing V0. This does **not** eliminate the signed-arithmetic UB discussed below. |
+| **d. MB89352 has three conversions and two arguments** | **TRUE** | [dev_mb89352.c:307](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_mb89352.c:307) has `%i`, `%x`, `%x`, supplied with only `len*8` and `(int)relative_addr`. |
+| **e. An uncovered opcode reaches a flagged call with NULL `mnem`** | **FALSE** | None can. Every enclosing case set is completely covered by its inner mnemonic switch, as detailed immediately below. |
+
+The NULL-mnemonic proof is:
+
+| Call | Values admitted by enclosing switch | Inner assignments |
+|---|---|---|
+| [Alpha:357](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha.c:307) | `0x0a..0x0f`, `0x20..0x2f` | Exactly those values |
+| [Alpha:651](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha.c:623) | `0x31`, `0x35`, `0x38..0x3f` | Exactly those values |
+| [M88K:1437](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_m88k.c:1422) | `op10 = 0x20,22,24,26,28,2a` | Exactly those values |
+
+There is no alternate entry or preceding fallthrough bypassing those assignments. Four warnings describe **three calls**, with Alpha:651 reported twice.
+
+The arithmetic assertion accompanying **c** needs correction. On the scanned GCC target, with descriptor size `s`:
+
+| A0 | Final `nr` | Current result |
+|---|---:|---|
+| `base-1` | 1 | `base+s` |
+| `base-s` | 0 | `base` |
+| `base-2*s` | −1 | `base-s` |
+
+Thus below-base input establishes a real bug, but does **not universally produce `nr <= 0`**. The proposed `nr < 1` guard still accepts `base-1`.
+
+Also, `s*nr` is signed `int` arithmetic: overflow is **undefined behavior**, not guaranteed wrapping. An initial narrowed difference of `INT_MAX` produces a product of `2147483652` for both descriptor sizes, before the upper-bound check clears V0.
+
+2. **The grades and witness classes are as follows.**
+
+Severity order on established effects: **`fmtmissarg` ≈ `arcmemdescnr` > `fmtattr`; `disasmnullmnem` has no defect severity.** The real items are low severity on the reviewed paths; this evidence does not establish a host-memory corruption primitive.
+
+| Item | Grade | Witness it can carry |
+|---|---|---|
+| `fmtmissarg` | Real: three missing arguments, hence UB when formatted | Existing **`detector: GCC format diagnostics`** evidence. Rung-3 candidates are timer 2/3 hold reads, a non-byte MB89352 access, and a PPC601 register dump. Check the actual diagnostic values, not merely continued execution. |
+| `disasmnullmnem` | Not real at these sites | A source construction proving exhaustive coverage. There is no valid NULL-opcode runtime witness. |
+| `arcmemdescnr` | Real: invalid descriptor results, narrowing aliases, and signed overflow | Source construction now; a rung-3 witness is feasible. For ARC32, `A0=base-24` should currently return `base-12` on the scanned target. Invoke the existing firmware entry on an unmodified machine and inspect V0. |
+| `fmtattr` | Real diagnostic-correctness class; extra arguments alone are not UB | **`detector: GCC format diagnostics`** is the right term. A successful attributed build is compiler evidence, not a rung-3 behavioral reproduction. |
+
+3. **Use one combined format round and one separate ARC round.**
+
+Keep `fmtmissarg` separately identified in the review and witness inventory, but fold its edits into `fmtattr`. Guest reachability warrants stronger behavioral checks; it does not require a separate implementation round when the same declarations and compiler checks cover both.
+
+Do not split the mechanical format work per file or subsystem. However, correct these premises before calling it mechanical:
+
+- The TSV contains **145 `-Wformat=` warnings, including three missing-argument warnings**, plus 13 extra-argument warnings. These occupy **127 unique lines**. Wrong-type/extra-argument warnings alone occupy **125 lines**; MB89352 belongs to both groups.
+- Preserve intended meaning and radix. Use suitable decimal, size, signed, and hexadecimal formats; do not convert everything to hexadecimal or silence warnings with unjustified narrowing casts.
+- Attributes alone do **not** make builds reject violations. The inspected [Makefile:8](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/Makefile:8) enables warnings without `-Werror`. Add an enforced format-warning failure policy for the covered build configurations.
+- The declaration indices are `(1,2)` for `debug`/`fatal`, `(4,5)` for `debugmsg`, and `(5,6)` for `debugmsg_cpu`. A `__GNUC__` guard also means this protection is conditional, not literally universal across compilers.
+- Handle the intentional empty formats explicitly. Treat the proven NULL warnings separately from actual format defects.
+
+`disasmnullmnem` needs **zero bug-fix rounds**. If warning-free compilation requires a source accommodation, one small two-CPU cleanup is sufficient, documented as false-positive accommodation.
+
+Another finding affects this round: [x11.c:551](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/console/x11.c:551) contains a stray comma separating two intended format-string fragments. `%i` consumes a string pointer, and the warning’s remaining text and depth argument are discarded. Removing that comma repairs the message; casting the pointer would merely silence the detector.
+
+4. **These mutations expose detector limits.**
+
+The packet supplies no executable acceptance-row definitions. The “green checks” below therefore name specific proposed checks, not tests I ran.
+
+| Item | Small mutation or escape | Check that stays green |
+|---|---|---|
+| `fmtmissarg` | After supplying PPC’s missing `x`, change it to `0` | Compiler format checks, and a CPU-0-only register-dump row; another CPU’s diagnostic becomes wrong |
+| `disasmnullmnem` | No actual defect fix exists to break. If a warning accommodation is added, change `"ldbu"` to `"ldwu"` | A “no NULL-format warnings” check remains green despite wrong disassembly |
+| `arcmemdescnr` | Change proposed `nr < 1` to `nr < 0` | A `base-2*s → NULL` row stays green, while `base-s` incorrectly returns `base` |
+| `fmtattr` | Remove one function’s attribute after correcting its callers | A clean positive build remains green while future checking for that function disappears |
+
+For `fmtattr`, independently replacing a correct wide value with `(uint64_t)(uint32_t)value` also passes type checking while restoring truncation. Include a value above `UINT32_MAX` where full-width output matters.
+
+The format gate needs negative controls for **each of the four functions**. MB89352 additionally illustrates why semantics matter: appending `idata` would satisfy the missing conversion, but `idata` is still initialized zero there; it is populated only after the diagnostic. Removing the unsupported trailing value field is cleaner unless its meaning is explicitly implemented.
+
+The proposed ARC patch already has a detector escape with **zero mutations**: testing only `base-2*s` misses its continued acceptance of `base-1`.
+
+5. **The ARC option set is incomplete.**
+
+Exact descriptor membership is a locally supported option. The pointer-validation search found [GetConfigurationData:1480](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/promemul/arcbios.c:1480), which initializes an error result and accepts its node only when the guest pointer exactly equals a registered component pointer. Conversely, GetPeer/GetChild/GetParent use different validation patterns; there is no universal ARC policy to inherit blindly.
+
+The meaningful alternatives are:
+
+- Range-check before division, retaining rounding within the table if that compatibility behavior is deliberate.
+- Require an in-range pointer **exactly on a descriptor boundary**.
+- Compare against registered descriptor addresses directly, avoiding input-derived index arithmetic.
+
+I recommend boundary membership: normalize the pointer according to the ARC ABI; handle NULL; reject below-base input; compute an unsigned wide difference; reject a nonzero remainder and an out-of-range index; then return the successor only when one exists. Perform bounds checks before multiplication.
+
+Include NULL, first/last descriptor, `base-1`, `base-s`, `base-2*s`, an interior misaligned pointer, and large-offset aliases in the acceptance rows.
+
+Also settle [the low-32-bit NULL test:1565](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/promemul/arcbios.c:1565): it currently treats nonzero ARC64 values such as `0x100000000` as NULL. Merely widening the final multiplication fixes neither that alias nor the original narrowing.
+
+6. **The no-action decisions need these recorded reasons.**
+
+| Entry | Decision and GitHub reason |
+|---|---|
+| **FDC #117** | **Agree — false positive.** `DEV_FDC_LENGTH=6`; the buffer has 19 bytes. At most six byte values produce exactly three characters each, leaving room for the terminator on every call. |
+| **Diskimage #137** | **Agree under the stated threat model — won’t fix.** The host-filesystem check/use race is real. CLI/configuration supplies the image path; absence of guest control is a scope decision, not proof of a false positive. |
+| **Standalone ROM tool #1/#2** | **Conditional agreement — won’t fix.** The TSV describes real pointer/format mismatches. Being excluded from the emulator build supports deprioritization, not “false positive” or “used in tests.” Root build exclusion is supplied by the brief, not independently established within the permitted reads. |
+| **MIPS #121/#122** | **Agree — false positive.** Access widths are 4 or 8, and direction is ±1; the products lie in −7…7. |
+| **SH #123** | **Agree — false positive.** `lo8` is masked to 255; the multiplier is 2 or 4. |
+| **Framebuffer initialization #124** | **Disagree with BOUNDED; dismissal requires won’t fix / HOST.** Resize guards do not protect initialization. Host VGA scale 53 yields `33920*21200*3 = 2157312000`, exceeding signed `INT_MAX` at [dev_fb.c:905](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_fb.c:905). This is a real host-configuration quality defect. |
+| **Framebuffer #125** | **Agree — false positive.** Coordinates are clipped and reversed spans rejected; actual callers use small fixed framebuffers. |
+| **Framebuffer resize #126/#127** | **Agree — false positive.** Use the complete caller/stride proof from premise b. |
+| **PS2 GIF #128/#129** | **Agree to no action — won’t fix, disabled demonstration code.** Both expressions are inside `test_triangle`; its only calls are under [the `#if 0` block:424](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_ps2_gif.c:424). The claimed guest 16-bit-coordinate provenance belongs to another path. |
+| **PVR #130** | **Agree — false positive.** Masked geometry bounds the byte-span product to at most 4,194,304. In the supplied fork the expression is at line **2330**, a 13-line shift from the packet. |
+| **PX #131** | **Agree — false positive.** Span length and both rows are checked against fixed framebuffer bounds before multiplication. |
+| **VGA #132** | **Agree — won’t fix / HOST.** The potentially excessive scale originates in host configuration; do not describe all host values as mathematically bounded. |
+| **ELF #133/#134** | **Agree — false positive**, stronger than HOST. Counts are 16-bit, and entry sizes must equal fixed structure sizes or loading exits. The products remain below `2^22`, even for adversarial files. |
+| **ARC initialization #136** | **Agree — false positive.** The 32-bit RAM-size field permits at most `2 + ceil(UINT32_MAX/256)` descriptors. Multiplying that conservative count by 24 gives `402653232`, safely within signed `int`. |
+
+The footer counts the five explicitly requested premises **a–e**; the additional incorrect arithmetic, counting, enforcement, and dismissal claims are identified above.
+
+CSADJ: 4 ITEMS GRADED, 1 PREMISES FALSE, 1 UNSETTLED; ROUND SHAPE combined formats plus separate ARC

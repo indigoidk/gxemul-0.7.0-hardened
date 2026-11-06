@@ -185,7 +185,7 @@ DEVICE_ACCESS(8253)
 				else
 					d->hz[relative_addr] = 0;
 				debug("[ 8253: counter %i set to %i (%i Hz) "
-				    "]\n", relative_addr, d->counter[
+				    "]\n", (int)relative_addr, d->counter[
 				    relative_addr], d->hz[relative_addr]);
 				switch (relative_addr) {
 				case 0:	if (d->timer0 == NULL)
@@ -203,7 +203,7 @@ DEVICE_ACCESS(8253)
 				break;
 			default:fatal("[ 8253: huh? writing to counter"
 				    " %i but neither from msb nor lsb? ]\n",
-				    relative_addr);
+				    (int)relative_addr);
 				break;	/*  #223: (Codex/Fable) don't exit() the host  */
 			}
 		} else if (d->latched[relative_addr]) {
@@ -269,7 +269,7 @@ DEVICE_ACCESS(8253)
 				break;
 			default:fatal("[ 8253: huh? reading from counter"
 				    " %i but neither from msb nor lsb? ]\n",
-				    relative_addr);
+				    (int)relative_addr);
 				break;	/*  #223: (Codex/Fable) don't exit() the host  */
 			}
 		}

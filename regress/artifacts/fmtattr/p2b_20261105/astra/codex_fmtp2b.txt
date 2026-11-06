@@ -1,0 +1,49 @@
+**VERDICT: All seven repairs are correct. One additional incomplete format repair remains in the composite. One output-checking row is owed; inherited truncations should be filed separately.**
+
+1. **The seven repairs are right.** PPC supplies the existing integer CPU ID `x`. Both ARM expressions have type `size_t`, so `%zu` is correct. BT455 and both DC7085 calls now print unrestricted `idata` using `PRIx64` and `(uint64_t)`; `02`/`04` remain minimum widths, without clipping larger values. LE correctly uses `PRIu64`: masking `reg_select` does not mask `idata`.
+
+2. **The newly added material is correct.**
+   
+   All 19 `"%s", ""` rewrites preserve behavior. The logger formats through `vsnprintf` and then processes the resulting buffer; both forms produce the same empty buffer, with identical decoration, newline, verbosity, and breakpoint behavior.
+
+   All three defaults are unreachable on defined execution paths. The enclosing and inner selector sets match exactly:
+   
+   - Alpha first switch: `0x0a..0x0f` and `0x20..0x2f`.
+   - Alpha second switch: `{0x31, 0x35, 0x38..0x3f}`.
+   - M88K: `{0x20, 0x22, 0x24, 0x26, 0x28, 0x2a}`.
+   
+   No intervening selector mutation or alternate entry reaches a new default. Alpha’s other `mnem == NULL` paths remain intact.
+
+   [`GX_PRINTF`](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/codescan/fmtfix/stage/src/include/misc.h:263) uses the correct indices: `(1,2)`, `(1,2)`, `(4,5)`, `(5,6)`. Without `__GNUC__`, it restores the original declarations. GNU-compatible compilers receive attributes without changing the ABI or runtime calls. I found no caller or macro collision.
+
+   **An additional composite defect:** [`file_ecoff.c:407`](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/codescan/fmtfix/stage/src/file/file_ecoff.c:407) changes two conversions to `%08lx`, but both arguments are uncast **`off_t`**, declared at line 273. The source does not guarantee `off_t == long`. A host with 64-bit `off_t` and 32-bit `long` still has a width mismatch; the successful measured build cannot establish portability here. Correct both arguments explicitly:
+
+   ```c
+   debug("%i symbols @ 0x%08" PRIx64
+       " (strings @ 0x%08" PRIx64 ")\n",
+       iextMax, (uint64_t)cbExtOffset, (uint64_t)cbSsExtOffset);
+   ```
+
+   I count this as **one newly identified incomplete replacement, affecting two conversions**. The old `%x` was already broken on wide-`off_t` hosts; this is not a demonstrated new runtime regression on the measured host.
+
+3. **Yes, both named mutants pass the stated detector. ONE row is owed.** At the changed [SGI loading diagnostic](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/codescan/fmtfix/stage/src/disk/bootblock.c:442), both `PRIx64 → PRIu64` and `(uint64_t)(uint32_t)diskoffset` retain a compatible argument type. Neither produces a format warning, and neither disables the four seeded mismatch controls.
+
+   Supply a valid SGI header with `sash`, block `0x00800000`, and byte count `512`. With diagnostic output enabled, assert this loading-message payload:
+
+   ```text
+   Loading voldir entry "sash", 0x200 bytes from disk offset 0x100000000
+   ```
+
+   The radix mutant prints `0x4294967296`; the narrowing mutant prints `0x0`.
+
+   **The assertion must identify that loading message.** A whole-output search for `0x100000000` is insufficient: the later, unchanged read-failure warning independently prints the correct offset and can mask either mutant. The loading message precedes the read, so a large backing image is unnecessary.
+
+   The bound is **one representative semantic regression row for this round’s wide hexadecimal repair**, not mutation coverage at every call. The attributed build enforces compiler-detectable format compatibility; untested, type-compatible radix/value mistakes remain disclosed coverage limits.
+
+4. **File the inherited truncations separately.** That includes luna88k, lunafb, `memory.c:626`, ARCBIOS A1/A2, PS2 BIOS A1, `dev_ether`, and LE writes. ARCBIOS A2 and PS2 A1 become consumed by repaired calls, but their narrowing expressions predate this round. Full diagnostic fidelity should not be claimed.
+
+   Another inherited instance surfaced: [BT455’s `addr_cmap_data` diagnostic](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/codescan/fmtfix/stage/src/devices/dev_bt455.c:82) still casts unrestricted `idata` to `int` before register assignment. Add it to that filing.
+
+I also checked artifact consistency: applying `COMPOSITE.diff` in memory to all 47 files at **79df4277** reproduces the stage exactly. The Alpha audit-comment correction exists only in the working source, so its absence is not a composite deletion. The log’s “want 5 … 6” is bookkeeping: there are two alternative macro definitions and four uses. I made no changes or new builds.
+
+FMTP2B: 0 REPAIRS WRONG, 1 NEW DEFECTS, ROW owed, TRUNCATIONS file

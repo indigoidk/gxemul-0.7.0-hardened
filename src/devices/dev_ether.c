@@ -175,7 +175,7 @@ DEVICE_ACCESS(ether)
 			break;
 
 		default:fatal("[ ether: UNIMPLEMENTED command 0x"
-			    "%02x ]\n", idata);
+			    "%02" PRIx64 " ]\n", (uint64_t)idata);
 			cpu->running = 0;
 		}
 		break;

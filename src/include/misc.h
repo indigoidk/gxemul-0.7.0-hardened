@@ -257,17 +257,25 @@ int decstation_prom_emul(struct cpu *cpu);
 #define	ENOUGH_VERBOSITY(subsys,reqverb)	(debugmsg_current_verbosity[(subsys)] >= (reqverb))
 extern int *debugmsg_current_verbosity;
 extern int debugmsg_break_on_error;		/*  #261  */
+/*  #584: the diagnostic functions are printf-like; with GCC or clang a format
+    that does not match its arguments is a compiler warning, which gate 1
+    refuses.  Other compilers see nothing.  */
+#ifdef __GNUC__
+#define	GX_PRINTF(f, a)	__attribute__((format(printf, f, a)))
+#else
+#define	GX_PRINTF(f, a)
+#endif
 void debug_indentation(int diff);
-void debug(const char *fmt, ...);
-void fatal(const char *fmt, ...);
+void debug(const char *fmt, ...) GX_PRINTF(1, 2);
+void fatal(const char *fmt, ...) GX_PRINTF(1, 2);
 void debugmsg_init();
 int debugmsg_register_subsystem(const char* name);
 void debugmsg_change_settings(char *subsystem_name, char *n);
 void debugmsg_print_settings(const char *subsystem_name);
 void debugmsg_add_verbosity_level(int subsystem, int verbosity_delta);
 void debugmsg_set_verbosity_level(int subsystem, int verbosity);
-void debugmsg(int subsystem, const char *name, int verbosity_required, const char *fmt, ...);
-void debugmsg_cpu(struct cpu* cpu, int subsystem, const char *name, int verbosity_required, const char *fmt, ...);
+void debugmsg(int subsystem, const char *name, int verbosity_required, const char *fmt, ...) GX_PRINTF(4, 5);
+void debugmsg_cpu(struct cpu* cpu, int subsystem, const char *name, int verbosity_required, const char *fmt, ...) GX_PRINTF(5, 6);
 int debugmsg_set_breakpoint(const char *subsystem_name, int level);
 void debugmsg_print_breakpoints(void);
 

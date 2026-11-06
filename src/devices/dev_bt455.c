@@ -68,12 +68,13 @@ DEVICE_ACCESS(bt455)
 	switch (relative_addr) {
 	case 0x00:		/*  addr_cmap  */
 		if (writeflag == MEM_WRITE) {
-			debug("[ bt455: write to addr_cmap, 0x%02x ]\n", idata);
+			debug("[ bt455: write to addr_cmap, 0x%02" PRIx64
+			    " ]\n", (uint64_t)idata);
 			d->addr_cmap = idata;
 			d->cur_rgb_offset = (d->addr_cmap & 0xf) * 3;
 		} else {
 			odata = d->addr_cmap;
-			debug("[ bt455: read from addr_cmap: 0x%0x ]\n", odata);
+			debug("[ bt455: read from addr_cmap: 0x%0x ]\n", (int)odata);
 		}
 		break;
 	case 0x04:		/*  addr_cmap_data  */

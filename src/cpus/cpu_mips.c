@@ -2115,7 +2115,7 @@ void mips_cpu_exception(struct cpu *cpu, int exccode, int tlb, uint64_t vaddr,
 
 				if ((reg[COP0_ENTRYHI] & ENTRYHI_ASID) != (uint32_t)vaddr_asid)
 					fatal("[ huh? vaddr_asid 0x%02x not same as in ENTRYHI 0x%02x ]\n",
-						vaddr_asid, reg[COP0_ENTRYHI] & ENTRYHI_ASID);
+						vaddr_asid, (int)(reg[COP0_ENTRYHI] & ENTRYHI_ASID));
 
 				if (cpu->cd.mips.cpu_type.mmu_model == MMU10K)
 					reg[COP0_ENTRYHI] = (vaddr & (ENTRYHI_R_MASK | ENTRYHI_VPN2_MASK_R10K)) | vaddr_asid;

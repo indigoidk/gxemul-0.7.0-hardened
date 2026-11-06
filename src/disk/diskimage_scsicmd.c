@@ -297,7 +297,7 @@ int diskimage_scsicommand(struct cpu *cpu, int id, int type,
 
 	if (xferp->cmd_len < 1) {
 		debugmsg_cpu(cpu, SUBSYS_DISK, "scsi",
-		    VERBOSITY_ERROR, "cmd_len = %i",
+		    VERBOSITY_ERROR, "cmd_len = %zu",
 		    xferp->cmd_len);
 		return 0;
 	}
@@ -310,7 +310,7 @@ int diskimage_scsicommand(struct cpu *cpu, int id, int type,
 		int need = cdb_group_len[(xferp->cmd[0] >> 5) & 7];
 		if (xferp->cmd_len < (size_t)need) {
 			debugmsg_cpu(cpu, SUBSYS_DISK, "scsi", VERBOSITY_ERROR,
-			    "short CDB: cmd_len %i < %i (op 0x%02x)",
+			    "short CDB: cmd_len %zu < %i (op 0x%02x)",
 			    xferp->cmd_len, need, xferp->cmd[0]);
 			return 0;
 		}
@@ -345,7 +345,7 @@ if (xferp->cmd_len > 7 && xferp->cmd[5] == 0x11)
 	case SCSICMD_TEST_UNIT_READY:
 		debug("TEST_UNIT_READY");
 		if (xferp->cmd_len != 6)
-			debug(" (weird len=%i)", xferp->cmd_len);
+			debug(" (weird len=%zu)", xferp->cmd_len);
 
 		/*  TODO: bits 765 of buf[1] contains the LUN  */
 		if (xferp->cmd[1] != 0x00)
@@ -359,7 +359,7 @@ if (xferp->cmd_len > 7 && xferp->cmd[5] == 0x11)
 	case SCSICMD_INQUIRY:
 		debug("INQUIRY");
 		if (xferp->cmd_len != 6)
-			debug(" (weird len=%i)", xferp->cmd_len);
+			debug(" (weird len=%zu)", xferp->cmd_len);
 		if (xferp->cmd[1] != 0x00) {
 			debugmsg(SUBSYS_DISK, "scsi", VERBOSITY_WARNING,
 			    "WARNING: INQUIRY with cmd[1]=0x%02x not yet "
@@ -472,7 +472,7 @@ xferp->data_in[4] = 0x2c - 4;	/*  Additional length  */
 		debug("READ_CAPACITY");
 
 		if (xferp->cmd_len != 10)
-			fatal(" [ weird READ_CAPACITY len=%i, should be 10 ] ",
+			fatal(" [ weird READ_CAPACITY len=%zu, should be 10 ] ",
 			    xferp->cmd_len);
 		else {
 			if (xferp->cmd[8] & 1) {
@@ -575,7 +575,7 @@ xferp->data_in[4] = 0x2c - 4;	/*  Additional length  */
 		case 10:q = 8;
 			retlen = xferp->cmd[7] * 256 + xferp->cmd[8];
 			break;
-		default:fatal(" (unimplemented mode_sense len=%i)",
+		default:fatal(" (unimplemented mode_sense len=%zu)",
 			    xferp->cmd_len);
 		}
 
@@ -730,7 +730,7 @@ xferp->data_in[4] = 0x2c - 4;	/*  Additional length  */
 		} else {
 			if (xferp->cmd[0] == SCSICMD_READ) {
 				if (xferp->cmd_len != 6)
-					debug(" (weird len=%i)",
+					debug(" (weird len=%zu)",
 					    xferp->cmd_len);
 
 				/*
@@ -748,7 +748,7 @@ xferp->data_in[4] = 0x2c - 4;	/*  Additional length  */
 					retlen = 256;
 			} else {
 				if (xferp->cmd_len != 10)
-					debug(" (weird len=%i)",
+					debug(" (weird len=%zu)",
 					    xferp->cmd_len);
 
 				/*
@@ -840,7 +840,7 @@ xferp->data_in[4] = 0x2c - 4;	/*  Additional length  */
 
 		if (xferp->cmd[0] == SCSICMD_WRITE) {
 			if (xferp->cmd_len != 6)
-				debug(" (weird len=%i)", xferp->cmd_len);
+				debug(" (weird len=%zu)", xferp->cmd_len);
 
 			/*
 			 *  bits 4..0 of cmd[1], and cmd[2] and cmd[3] hold the
@@ -857,7 +857,7 @@ xferp->data_in[4] = 0x2c - 4;	/*  Additional length  */
 				retlen = 256;
 		} else {
 			if (xferp->cmd_len != 10)
-				debug(" (weird len=%i)", xferp->cmd_len);
+				debug(" (weird len=%zu)", xferp->cmd_len);
 
 			/*
 			 *  cmd[2..5] hold the logical block address.
@@ -916,7 +916,7 @@ xferp->data_in[4] = 0x2c - 4;	/*  Additional length  */
 		debug("SYNCHRONIZE_CACHE");
 
 		if (xferp->cmd_len != 10)
-			debug(" (weird len=%i)", xferp->cmd_len);
+			debug(" (weird len=%zu)", xferp->cmd_len);
 
 		/*  TODO: actualy care about cmd[]  */
 		/*  #437: was fsync(fileno(d->f)) inline, which flushed no
@@ -941,7 +941,7 @@ xferp->data_in[4] = 0x2c - 4;	/*  Additional length  */
 		debug("START_STOP_UNIT");
 
 		if (xferp->cmd_len != 6)
-			debug(" (weird len=%i)", xferp->cmd_len);
+			debug(" (weird len=%zu)", xferp->cmd_len);
 
 		for (i=0; i<(ssize_t)xferp->cmd_len; i++)
 			debug(" %02x", xferp->cmd[i]);
@@ -1348,7 +1348,7 @@ xferp->data_in[4] = 0x2c - 4;	/*  Additional length  */
 		break;
 
 	case 0xbd:
-		fatal("[ SCSI 0x%02x (len %i), TODO: ", xferp->cmd[0],
+		fatal("[ SCSI 0x%02x (len %zu), TODO: ", xferp->cmd[0],
 		    xferp->cmd_len);
 		for (i=0; i<(ssize_t)xferp->cmd_len; i++)
 			fatal(" %02x", xferp->cmd[i]);

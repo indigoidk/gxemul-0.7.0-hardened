@@ -458,8 +458,8 @@ DEVICE_ACCESS(sgi_mec)
 		}
 	} else if (len == sizeof(uint16_t)) {
 		if (writeflag == MEM_WRITE) {
-			fatal("[ sgi_mec: unimplemented %s len %i (addr 0x%x) ]\n",
-				writeflag ? "write" : "read", len, (long long)relative_addr);
+			fatal("[ sgi_mec: unimplemented %s len %zu (addr 0x%" PRIx64 ") ]\n",
+				writeflag ? "write" : "read", len, (uint64_t)relative_addr);
 		} else if ((relative_addr & 7) == 4) {
 			odata = d->reg[regnr];
 			odata = (uint16_t)(odata >> 16);
@@ -467,12 +467,12 @@ DEVICE_ACCESS(sgi_mec)
 			odata = d->reg[regnr];
 			odata = (uint16_t)odata;
 		} else {
-			fatal("[ sgi_mec: unimplemented %s len %i (addr 0x%x) ]\n",
-				writeflag ? "write" : "read", len, (long long)relative_addr);
+			fatal("[ sgi_mec: unimplemented %s len %zu (addr 0x%" PRIx64 ") ]\n",
+				writeflag ? "write" : "read", len, (uint64_t)relative_addr);
 		}
 	} else {
-		fatal("[ sgi_mec: unimplemented %s len %i (addr 0x%x) ]\n",
-			writeflag ? "write" : "read", len, (long long)relative_addr);
+		fatal("[ sgi_mec: unimplemented %s len %zu (addr 0x%" PRIx64 ") ]\n",
+			writeflag ? "write" : "read", len, (uint64_t)relative_addr);
 	}
 
 #ifdef MEC_DEBUG
@@ -604,29 +604,29 @@ DEVICE_ACCESS(sgi_mec)
 		if (writeflag)
 			debug("[ sgi_mec: setting the MAC address to "
 			    "%02x:%02x:%02x:%02x:%02x:%02x ]\n",
-			    (idata >> 40) & 255, (idata >> 32) & 255,
-			    (idata >> 24) & 255, (idata >> 16) & 255,
-			    (idata >>  8) & 255, (idata >>  0) & 255);
+			    (int)((idata >> 40) & 255), (int)((idata >> 32) & 255),
+			    (int)((idata >> 24) & 255), (int)((idata >> 16) & 255),
+			    (int)((idata >>  8) & 255), (int)((idata >>  0) & 255));
 		else
 			fatal("[ sgi_mec: reading the MAC address as "
 			    "%02x:%02x:%02x:%02x:%02x:%02x ]\n",
-			    (odata >> 40) & 255, (odata >> 32) & 255,
-			    (odata >> 24) & 255, (odata >> 16) & 255,
-			    (odata >>  8) & 255, (odata >>  0) & 255);
+			    (int)((odata >> 40) & 255), (int)((odata >> 32) & 255),
+			    (int)((odata >> 24) & 255), (int)((odata >> 16) & 255),
+			    (int)((odata >>  8) & 255), (int)((odata >>  0) & 255));
 		break;
 	case MEC_STATION_ALT:	/*  0xa8  */
 		if (writeflag)
 			debug("[ sgi_mec: setting the ALTERNATIVE MAC address"
 			    " to %02x:%02x:%02x:%02x:%02x:%02x ]\n",
-			    (idata >> 40) & 255, (idata >> 32) & 255,
-			    (idata >> 24) & 255, (idata >> 16) & 255,
-			    (idata >>  8) & 255, (idata >>  0) & 255);
+			    (int)((idata >> 40) & 255), (int)((idata >> 32) & 255),
+			    (int)((idata >> 24) & 255), (int)((idata >> 16) & 255),
+			    (int)((idata >>  8) & 255), (int)((idata >>  0) & 255));
 		else
 			debug("[ sgi_mec: reading the ALTERNATIVE MAC address"
 			    " as %02x:%02x:%02x:%02x:%02x:%02x ]\n",
-			    (odata >> 40) & 255, (odata >> 32) & 255,
-			    (odata >> 24) & 255, (odata >> 16) & 255,
-			    (odata >>  8) & 255, (odata >>  0) & 255);
+			    (int)((odata >> 40) & 255), (int)((odata >> 32) & 255),
+			    (int)((odata >> 24) & 255), (int)((odata >> 16) & 255),
+			    (int)((odata >>  8) & 255), (int)((odata >>  0) & 255));
 		break;
 	case MEC_MULTICAST:	/*  0xb0  */
 		if (writeflag)

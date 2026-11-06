@@ -79,13 +79,13 @@ DEVICE_ACCESS(lunafb_a)
 	default:
 		if (writeflag == MEM_WRITE)
 			debugmsg_cpu(cpu, SUBSYS_DEVICE, "lunafb_a", VERBOSITY_ERROR,
-		    	    "unimplemented %i-bit WRITE to address 0x%x: 0x%x",
+		    	    "unimplemented %zu-bit WRITE to address 0x%x: 0x%x",
 		    	    len * 8,
 			    (int) addr,
 			    (int) idata);
 		else
 			debugmsg_cpu(cpu, SUBSYS_DEVICE, "lunafb_a", VERBOSITY_ERROR,
-		    	    "unimplemented %i-bit READ from address 0x%x",
+		    	    "unimplemented %zu-bit READ from address 0x%x",
 		    	    len * 8,
 			    (int) addr);
 
@@ -171,13 +171,13 @@ DEVICE_ACCESS(lunafb_b)
 	default:
 		if (writeflag == MEM_WRITE)
 			debugmsg_cpu(cpu, SUBSYS_DEVICE, "lunafb_b", VERBOSITY_ERROR,
-		    	    "unimplemented %i-bit WRITE to address 0x%x: 0x%x",
+		    	    "unimplemented %zu-bit WRITE to address 0x%x: 0x%x",
 		    	    len * 8,
 			    (int) addr,
 			    (int) idata);
 		else
 			debugmsg_cpu(cpu, SUBSYS_DEVICE, "lunafb_b", VERBOSITY_ERROR,
-		    	    "unimplemented %i-bit READ from address 0x%x",
+		    	    "unimplemented %zu-bit READ from address 0x%x",
 		    	    len * 8,
 			    (int) addr);
 

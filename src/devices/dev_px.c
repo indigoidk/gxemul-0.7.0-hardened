@@ -486,7 +486,7 @@ void dev_px_dma(struct cpu *cpu, uint32_t sys_addr, struct px_data *d)
 
 		if (px_debug)
 			debug("[ px putchar: v1 = 0x%08x  v2 = 0x%08x x=%i y=%i ]\n",
-			    (int)v1, (int)v2, x,y, x2,y2);
+			    (int)v1, (int)v2, x,y);
 
 		x %= PX_XSIZE;
 		y %= PX_YSIZE;

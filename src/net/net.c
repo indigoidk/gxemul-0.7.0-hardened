@@ -695,7 +695,7 @@ void net_dumpinfo(struct net *net)
 	int iadd = 1;
 	struct remote_net *rnp;
 
-	debugmsg(SUBSYS_NET, "", VERBOSITY_INFO, "");
+	debugmsg(SUBSYS_NET, "", VERBOSITY_INFO, "%s", "");
 
 	debug_indentation(iadd);
 
@@ -706,7 +706,7 @@ void net_dumpinfo(struct net *net)
 		return;
 	}
 
-	debugmsg(SUBSYS_NET, "simulated network", VERBOSITY_INFO, "");
+	debugmsg(SUBSYS_NET, "simulated network", VERBOSITY_INFO, "%s", "");
 
 	debug_indentation(iadd);
 

@@ -244,8 +244,8 @@ DEVICE_ACCESS(mp)
 		break;
 
 	default:
-		fatal("[ dev_mp: unimplemented relative addr 0x%x ]\n",
-		    relative_addr);
+		fatal("[ dev_mp: unimplemented relative addr 0x%" PRIx64 " ]\n",
+		    (uint64_t)relative_addr);
 	}
 
 	if (writeflag == MEM_READ)

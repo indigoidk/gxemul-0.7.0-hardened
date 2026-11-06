@@ -77,7 +77,7 @@ DEVICE_ACCESS(ahc)
 		relative_addr ^= 3;
 
 	if (len != 1)
-		fatal("[ ahc: ERROR! Unimplemented len %i ]\n", len);
+		fatal("[ ahc: ERROR! Unimplemented len %zu ]\n", len);
 
 	if (writeflag == MEM_READ)
 		odata = d->reg[relative_addr];

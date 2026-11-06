@@ -1618,7 +1618,7 @@ void net_tcp_rx_avail(struct net *net, struct nic_data *nic)
 			    net->tcp_connections[con_id].outside_seqnr;
 			debugmsg(SUBSYS_NET, "TCP", VERBOSITY_DEBUG,
 			    "  putting %i bytes (seqnr %u) in the incoming "
-			    "buf", res, net->tcp_connections[con_id].
+			    "buf", (int)res, net->tcp_connections[con_id].
 			    incoming_buf_seqnr);
 			memcpy(net->tcp_connections[con_id].incoming_buf,
 			    buf, res);

@@ -379,7 +379,9 @@ elif out=$(python "$SCORECHK" 2>&1); then
 	#  (#582 qhslowifetch, pinned UNQUOTED in gate_ppc.sh at 249 rows under the stem ppc_ifetch; its docstring is checked).
 	#  RAISED 48 -> 49 ON 2026-11-05, DELIBERATELY.  One newly gated probe: pvr_zwrite_probe.py
 	#  (#583 pvrrenderexit, pinned UNQUOTED in gate_arm.sh at 164 rows under the stem pvr_zwrite; its docstring is checked).
-	SCORE_CLAIMS_MANIFEST=49
+	#  RAISED 49 -> 50 ON 2026-11-05, DELIBERATELY.  One newly gated probe: fmt_bootblock_probe.py
+	#  (#584 fmtattr, pinned UNQUOTED in gate_build.sh at 3 rows under the stem fmt_bootblock; its docstring is checked).
+	SCORE_CLAIMS_MANIFEST=50
 	_spinned=$(printf '%s\n' "$out" | sed -n 's/^SCORE_CLAIMS_PINNED=//p')
 	if [ -z "$_spinned" ]; then
 		bad "check_score_claims printed no SCORE_CLAIMS_PINNED line -- the count cannot be pinned"

@@ -86,9 +86,9 @@ DEVICE_ACCESS(dec_ioasic)
 		else
 			odata = d->scsi_dmaptr;
 
-		debug("[ dec_ioasic: %s SCSI_DMAPTR, data=0x%08x ]\n",
+		debug("[ dec_ioasic: %s SCSI_DMAPTR, data=0x%08" PRIx64 " ]\n",
 			writeflag == MEM_WRITE ? "write to" : "read from",
-			writeflag == MEM_WRITE ? idata : odata);
+			(uint64_t)(writeflag == MEM_WRITE ? idata : odata));
 		break;
 
 	case IOASIC_SCSI_NEXTPTR:
@@ -97,9 +97,9 @@ DEVICE_ACCESS(dec_ioasic)
 		else
 			odata = d->scsi_nextptr;
 
-		debug("[ dec_ioasic: %s SCSI_NEXTPTR, data=0x%08x ]\n",
+		debug("[ dec_ioasic: %s SCSI_NEXTPTR, data=0x%08" PRIx64 " ]\n",
 			writeflag == MEM_WRITE ? "write to" : "read from",
-			writeflag == MEM_WRITE ? idata : odata);
+			(uint64_t)(writeflag == MEM_WRITE ? idata : odata));
 		break;
 
 	case IOASIC_LANCE_DMAPTR:
@@ -108,9 +108,9 @@ DEVICE_ACCESS(dec_ioasic)
 		else
 			odata = d->lance_dmaptr;
 
-		debug("[ dec_ioasic: %s LANCE_DMAPTR, data=0x%08x ]\n",
+		debug("[ dec_ioasic: %s LANCE_DMAPTR, data=0x%08" PRIx64 " ]\n",
 			writeflag == MEM_WRITE ? "write to" : "read from",
-			writeflag == MEM_WRITE ? idata : odata);
+			(uint64_t)(writeflag == MEM_WRITE ? idata : odata));
 		break;
 
 	case IOASIC_FLOPPY_DMAPTR:
@@ -119,9 +119,9 @@ DEVICE_ACCESS(dec_ioasic)
 		else
 			odata = d->floppy_dmaptr;
 
-		debug("[ dec_ioasic: %s FLOPPY_DMAPTR, data=0x%08x ]\n",
+		debug("[ dec_ioasic: %s FLOPPY_DMAPTR, data=0x%08" PRIx64 " ]\n",
 			writeflag == MEM_WRITE ? "write to" : "read from",
-			writeflag == MEM_WRITE ? idata : odata);
+			(uint64_t)(writeflag == MEM_WRITE ? idata : odata));
 		break;
 
 	case IOASIC_ISDN_X_DMAPTR:
@@ -130,9 +130,9 @@ DEVICE_ACCESS(dec_ioasic)
 		else
 			odata = d->isdn_x_dmaptr;
 
-		debug("[ dec_ioasic: %s ISDN_X_DMAPTR, data=0x%08x ]\n",
+		debug("[ dec_ioasic: %s ISDN_X_DMAPTR, data=0x%08" PRIx64 " ]\n",
 			writeflag == MEM_WRITE ? "write to" : "read from",
-			writeflag == MEM_WRITE ? idata : odata);
+			(uint64_t)(writeflag == MEM_WRITE ? idata : odata));
 		break;
 
 	case IOASIC_ISDN_X_NEXTPTR:
@@ -141,9 +141,9 @@ DEVICE_ACCESS(dec_ioasic)
 		else
 			odata = d->isdn_x_nextptr;
 
-		debug("[ dec_ioasic: %s ISDN_X_NEXTPTR, data=0x%08x ]\n",
+		debug("[ dec_ioasic: %s ISDN_X_NEXTPTR, data=0x%08" PRIx64 " ]\n",
 			writeflag == MEM_WRITE ? "write to" : "read from",
-			writeflag == MEM_WRITE ? idata : odata);
+			(uint64_t)(writeflag == MEM_WRITE ? idata : odata));
 		break;
 
 	case IOASIC_ISDN_R_DMAPTR:
@@ -152,9 +152,9 @@ DEVICE_ACCESS(dec_ioasic)
 		else
 			odata = d->isdn_r_dmaptr;
 
-		debug("[ dec_ioasic: %s ISDN_R_DMAPTR, data=0x%08x ]\n",
+		debug("[ dec_ioasic: %s ISDN_R_DMAPTR, data=0x%08" PRIx64 " ]\n",
 			writeflag == MEM_WRITE ? "write to" : "read from",
-			writeflag == MEM_WRITE ? idata : odata);
+			(uint64_t)(writeflag == MEM_WRITE ? idata : odata));
 		break;
 
 	case IOASIC_ISDN_R_NEXTPTR:
@@ -163,9 +163,9 @@ DEVICE_ACCESS(dec_ioasic)
 		else
 			odata = d->isdn_r_nextptr;
 
-		debug("[ dec_ioasic: %s ISDN_R_NEXTPTR, data=0x%08x ]\n",
+		debug("[ dec_ioasic: %s ISDN_R_NEXTPTR, data=0x%08" PRIx64 " ]\n",
 			writeflag == MEM_WRITE ? "write to" : "read from",
-			writeflag == MEM_WRITE ? idata : odata);
+			(uint64_t)(writeflag == MEM_WRITE ? idata : odata));
 		break;
 
 	case IOASIC_CSR:
@@ -174,9 +174,9 @@ DEVICE_ACCESS(dec_ioasic)
 		else
 			odata = d->csr;
 
-		debug("[ dec_ioasic: %s CSR, data=0x%08x ]\n",
+		debug("[ dec_ioasic: %s CSR, data=0x%08" PRIx64 " ]\n",
 			writeflag == MEM_WRITE ? "write to" : "read from",
-			writeflag == MEM_WRITE ? idata : odata);
+			(uint64_t)(writeflag == MEM_WRITE ? idata : odata));
 #if 0
 		if (writeflag == MEM_WRITE) {
 			csr = d->reg[(IOASIC_CSR - IOASIC_SLOT_1_START) / 0x10];
@@ -271,9 +271,9 @@ DEVICE_ACCESS(dec_ioasic)
 			//	odata |= KN03_INTR_PROD_JUMPER;
 		}
 
-		debug("[ dec_ioasic: %s INTR, data=0x%08x ]\n",
+		debug("[ dec_ioasic: %s INTR, data=0x%08" PRIx64 " ]\n",
 			writeflag == MEM_WRITE ? "write to" : "read from",
-			writeflag == MEM_WRITE ? idata : odata);
+			(uint64_t)(writeflag == MEM_WRITE ? idata : odata));
 
 		break;
 
@@ -285,9 +285,9 @@ DEVICE_ACCESS(dec_ioasic)
 			odata = d->imsk;
 		}
 
-		debug("[ dec_ioasic: %s IMSK, data=0x%08x ]\n",
+		debug("[ dec_ioasic: %s IMSK, data=0x%08" PRIx64 " ]\n",
 			writeflag == MEM_WRITE ? "write to" : "read from",
-			writeflag == MEM_WRITE ? idata : odata);
+			(uint64_t)(writeflag == MEM_WRITE ? idata : odata));
 		break;
 
 	case IOASIC_ISDN_X_DATA:
@@ -296,9 +296,9 @@ DEVICE_ACCESS(dec_ioasic)
 		else
 			odata = d->isdn_x_data;
 
-		debug("[ dec_ioasic: %s ISDN_X_DATA, data=0x%08x ]\n",
+		debug("[ dec_ioasic: %s ISDN_X_DATA, data=0x%08" PRIx64 " ]\n",
 			writeflag == MEM_WRITE ? "write to" : "read from",
-			writeflag == MEM_WRITE ? idata : odata);
+			(uint64_t)(writeflag == MEM_WRITE ? idata : odata));
 		break;
 
 	case IOASIC_ISDN_R_DATA:
@@ -307,9 +307,9 @@ DEVICE_ACCESS(dec_ioasic)
 		else
 			odata = d->isdn_r_data;
 
-		debug("[ dec_ioasic: %s ISDN_R_DATA, data=0x%08x ]\n",
+		debug("[ dec_ioasic: %s ISDN_R_DATA, data=0x%08" PRIx64 " ]\n",
 			writeflag == MEM_WRITE ? "write to" : "read from",
-			writeflag == MEM_WRITE ? idata : odata);
+			(uint64_t)(writeflag == MEM_WRITE ? idata : odata));
 		break;
 
 	case IOASIC_LANCE_DECODE:
@@ -318,9 +318,9 @@ DEVICE_ACCESS(dec_ioasic)
 		else
 			odata = d->lance_decode;
 
-		debug("[ dec_ioasic: %s LANCE_DECODE, data=0x%08x ]\n",
+		debug("[ dec_ioasic: %s LANCE_DECODE, data=0x%08" PRIx64 " ]\n",
 			writeflag == MEM_WRITE ? "write to" : "read from",
-			writeflag == MEM_WRITE ? idata : odata);
+			(uint64_t)(writeflag == MEM_WRITE ? idata : odata));
 		break;
 
 	case IOASIC_SCSI_DECODE:
@@ -329,9 +329,9 @@ DEVICE_ACCESS(dec_ioasic)
 		else
 			odata = d->scsi_decode;
 
-		debug("[ dec_ioasic: %s SCSI_DECODE, data=0x%08x ]\n",
+		debug("[ dec_ioasic: %s SCSI_DECODE, data=0x%08" PRIx64 " ]\n",
 			writeflag == MEM_WRITE ? "write to" : "read from",
-			writeflag == MEM_WRITE ? idata : odata);
+			(uint64_t)(writeflag == MEM_WRITE ? idata : odata));
 		break;
 
 	case IOASIC_SCC0_DECODE:
@@ -340,9 +340,9 @@ DEVICE_ACCESS(dec_ioasic)
 		else
 			odata = d->scc0_decode;
 
-		debug("[ dec_ioasic: %s SCC0_DECODE, data=0x%08x ]\n",
+		debug("[ dec_ioasic: %s SCC0_DECODE, data=0x%08" PRIx64 " ]\n",
 			writeflag == MEM_WRITE ? "write to" : "read from",
-			writeflag == MEM_WRITE ? idata : odata);
+			(uint64_t)(writeflag == MEM_WRITE ? idata : odata));
 		break;
 
 	case IOASIC_SCC1_DECODE:
@@ -351,9 +351,9 @@ DEVICE_ACCESS(dec_ioasic)
 		else
 			odata = d->scc1_decode;
 
-		debug("[ dec_ioasic: %s SCC1_DECODE, data=0x%08x ]\n",
+		debug("[ dec_ioasic: %s SCC1_DECODE, data=0x%08" PRIx64 " ]\n",
 			writeflag == MEM_WRITE ? "write to" : "read from",
-			writeflag == MEM_WRITE ? idata : odata);
+			(uint64_t)(writeflag == MEM_WRITE ? idata : odata));
 		break;
 
 	case IOASIC_FLOPPY_DECODE:
@@ -362,9 +362,9 @@ DEVICE_ACCESS(dec_ioasic)
 		else
 			odata = d->floppy_decode;
 
-		debug("[ dec_ioasic: %s FLOPPY_DECODE, data=0x%08x ]\n",
+		debug("[ dec_ioasic: %s FLOPPY_DECODE, data=0x%08" PRIx64 " ]\n",
 			writeflag == MEM_WRITE ? "write to" : "read from",
-			writeflag == MEM_WRITE ? idata : odata);
+			(uint64_t)(writeflag == MEM_WRITE ? idata : odata));
 		break;
 
 	case IOASIC_SCSI_SCR:
@@ -373,9 +373,9 @@ DEVICE_ACCESS(dec_ioasic)
 		else
 			odata = d->scsi_scr;
 
-		debug("[ dec_ioasic: %s SCSI_SCR, data=0x%08x ]\n",
+		debug("[ dec_ioasic: %s SCSI_SCR, data=0x%08" PRIx64 " ]\n",
 			writeflag == MEM_WRITE ? "write to" : "read from",
-			writeflag == MEM_WRITE ? idata : odata);
+			(uint64_t)(writeflag == MEM_WRITE ? idata : odata));
 		break;
 
 	case IOASIC_SCSI_SDR0:
@@ -384,9 +384,9 @@ DEVICE_ACCESS(dec_ioasic)
 		else
 			odata = d->scsi_sdr0;
 
-		debug("[ dec_ioasic: %s SCSI_SDR0, data=0x%08x ]\n",
+		debug("[ dec_ioasic: %s SCSI_SDR0, data=0x%08" PRIx64 " ]\n",
 			writeflag == MEM_WRITE ? "write to" : "read from",
-			writeflag == MEM_WRITE ? idata : odata);
+			(uint64_t)(writeflag == MEM_WRITE ? idata : odata));
 		break;
 
 	case IOASIC_SCSI_SDR1:
@@ -395,9 +395,9 @@ DEVICE_ACCESS(dec_ioasic)
 		else
 			odata = d->scsi_sdr1;
 
-		debug("[ dec_ioasic: %s SCSI_SDR1, data=0x%08x ]\n",
+		debug("[ dec_ioasic: %s SCSI_SDR1, data=0x%08" PRIx64 " ]\n",
 			writeflag == MEM_WRITE ? "write to" : "read from",
-			writeflag == MEM_WRITE ? idata : odata);
+			(uint64_t)(writeflag == MEM_WRITE ? idata : odata));
 		break;
 
 

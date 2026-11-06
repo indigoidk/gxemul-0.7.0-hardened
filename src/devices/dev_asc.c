@@ -927,7 +927,7 @@ static int dev_asc_select(struct cpu *cpu, struct asc_data *d, int from_id,
 
 		if (d->xferp->msg_out_len > 1) {
 			fatal(" (Long msg out, not implemented yet;"
-			    " len=%i) }", d->xferp->msg_out_len);
+			    " len=%zu) }", d->xferp->msg_out_len);
 			return 0;
 		}
 	} else {
@@ -940,7 +940,7 @@ static int dev_asc_select(struct cpu *cpu, struct asc_data *d, int from_id,
 		if (!quiet_mode)
 			debug(" MSG OUT DEBUG");
 		if (d->xferp->msg_out_len != 1) {
-			fatal(" (SELATNS: msg out len == %i, should be 1)",
+			fatal(" (SELATNS: msg out len == %zu, should be 1)",
 			    d->xferp->msg_out_len);
 			return 0;
 		}
@@ -1171,7 +1171,7 @@ DEVICE_ACCESS(asc)
 	} else if (relative_addr >= 0x300 && relative_addr < 0x600
 	    && d->turbochannel != NULL) {
 		debug("[ asc: offset 0x%x, redirecting to turbochannel"
-		    " access ]\n", relative_addr);
+		    " access ]\n", (int)relative_addr);
 		return dev_turbochannel_access(cpu, mem,
 		    relative_addr, data, len, writeflag,
 		    d->turbochannel);

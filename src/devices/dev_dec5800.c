@@ -294,8 +294,7 @@ DEVICE_ACCESS(decbi)
 	default:
 		if (writeflag==MEM_READ) {
 			debug("[ decbi: (node %i) read from unimplemented "
-			    "0x%08lx ]\n", node_nr, (long)relative_addr,
-			    (int)odata);
+			    "0x%08lx ]\n", node_nr, (long)relative_addr);
 		} else {
 			debug("[ decbi: (node %i) write to unimplemented "
 			    "0x%08lx: 0x%08x ]\n", node_nr,
@@ -479,8 +478,7 @@ DEVICE_ACCESS(decxmi)
 	default:
 		if (writeflag==MEM_READ) {
 			debug("[ decxmi: (node %i) read from unimplemented "
-			    "0x%08lx ]\n", node_nr, (long)relative_addr,
-			    (int)odata);
+			    "0x%08lx ]\n", node_nr, (long)relative_addr);
 		} else {
 			debug("[ decxmi: (node %i) write to unimplemented "
 			    "0x%08lx: 0x%08x ]\n", node_nr,

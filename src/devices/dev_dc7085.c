@@ -178,7 +178,8 @@ DEVICE_ACCESS(dc7085)
 
 	case 0x00:	/*  CSR:  Control and Status  */
 		if (writeflag == MEM_WRITE) {
-			debug("[ dc7085 write to CSR: 0x%04x ]\n", idata);
+			debug("[ dc7085 write to CSR: 0x%04" PRIx64 " ]\n",
+			    (uint64_t)idata);
 			idata &= (CSR_TIE | CSR_RIE | CSR_MSE | CSR_CLR
 			    | CSR_MAINT);
 			d->regs.dc_csr &= ~(CSR_TIE | CSR_RIE | CSR_MSE
@@ -198,7 +199,8 @@ DEVICE_ACCESS(dc7085)
 
 	case 0x08:	/*  LPR:  */
 		if (writeflag == MEM_WRITE) {
-			debug("[ dc7085 write to LPR: 0x%04x ]\n", idata);
+			debug("[ dc7085 write to LPR: 0x%04" PRIx64 " ]\n",
+			    (uint64_t)idata);
 			d->regs.dc_rbuf_lpr = idata;
 			goto do_return;
 		} else {

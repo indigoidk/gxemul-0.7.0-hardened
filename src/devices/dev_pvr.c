@@ -1139,7 +1139,7 @@ void pvr_render(struct cpu *cpu, struct pvr_data *d)
 				    not inherit the previous render's value.  */
 
 	debug("[ pvr_render: rendering to FB offset 0x%x, "
-	    "%i Tile Accelerator commands ]\n", fb_base, d->n_ta_commands);
+	    "%zu Tile Accelerator commands ]\n", fb_base, d->n_ta_commands);
 
 	/*
 	 *  Clear all pixels first.

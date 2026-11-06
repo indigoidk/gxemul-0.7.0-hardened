@@ -350,6 +350,9 @@ int alpha_cpu_disassemble_instr(struct cpu *cpu, unsigned char *ib,
 		case 0x2d: mnem = "stq"; break;
 		case 0x2e: mnem = "stl_c"; break;
 		case 0x2f: mnem = "stq_c"; break;
+		/*  #584: unreachable (the enclosing switch admits only the
+		    cases above); keeps GCC's -Wformat-overflow quiet.  */
+		default:   mnem = "?"; break;
 		}
 		if (opcode == 0x0b && ra == ALPHA_ZERO) {
 			debug("unop");
@@ -642,6 +645,9 @@ int alpha_cpu_disassemble_instr(struct cpu *cpu, unsigned char *ib,
 		case 0x3d: mnem = "bne"; break;
 		case 0x3e: mnem = "bge"; break;
 		case 0x3f: mnem = "bgt"; break;
+		/*  #584: unreachable (the enclosing switch admits only the
+		    cases above); keeps GCC's -Wformat-overflow quiet.  */
+		default:   mnem = "?"; break;
 		}
 		tmp = iw & 0x1fffff;
 		if (tmp & 0x100000)

@@ -250,7 +250,7 @@ void mb89352_dreg_write(struct cpu* cpu, struct mb89352_data *d, int writeflag, 
 
 	debugmsg_cpu(cpu, d->subsys, "",
 	    VERBOSITY_DEBUG,
-    	    "%i bytes written", d->transfer_bufpos);
+    	    "%zu bytes written", d->transfer_bufpos);
 
 	int res;
 
@@ -304,7 +304,7 @@ DEVICE_ACCESS(mb89352)
 	if (len != 1) {
 		debugmsg_cpu(cpu, d->subsys, "",
 		    mb89352_abort_on_unimplemented_stuff ? VERBOSITY_ERROR : VERBOSITY_WARNING,
-	    	    "unimplemented LEN: %i-bit access, address 0x%x: 0x%x",
+	    	    "unimplemented LEN: %zu-bit access, address 0x%x",
 	    	    len * 8,
 	    	    (int) relative_addr);
 
@@ -430,7 +430,7 @@ DEVICE_ACCESS(mb89352)
 
 					debugmsg_cpu(cpu, d->subsys, "",
 					    VERBOSITY_DEBUG,
-				    	    "Transfer command: phase %i, len %i",
+				    	    "Transfer command: phase %i, len %zu",
 				    	    d->phase, d->transfer_count);
 
 					switch (d->phase) {
@@ -675,14 +675,14 @@ DEVICE_ACCESS(mb89352)
 		if (writeflag == MEM_WRITE)
 			debugmsg_cpu(cpu, d->subsys, "",
 			    mb89352_abort_on_unimplemented_stuff ? VERBOSITY_ERROR : VERBOSITY_WARNING,
-		    	    "unimplemented %i-bit WRITE to address 0x%x: 0x%x",
+		    	    "unimplemented %zu-bit WRITE to address 0x%x: 0x%x",
 		    	    len * 8,
 			    (int) relative_addr,
 			    (int) idata);
 		else
 			debugmsg_cpu(cpu, d->subsys, "",
 			    mb89352_abort_on_unimplemented_stuff ? VERBOSITY_ERROR : VERBOSITY_WARNING,
-		    	    "unimplemented %i-bit READ from address 0x%x",
+		    	    "unimplemented %zu-bit READ from address 0x%x",
 		    	    len * 8,
 			    (int) relative_addr);
 

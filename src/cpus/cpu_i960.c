@@ -455,7 +455,7 @@ int i960_cpu_disassemble_instr(struct cpu *cpu, unsigned char *ib,
 			is_64bit_long_instruction = true;		
 	}
 
-	debug("%08 " PRIx32, (uint32_t) iw);
+	debug("%08" PRIx32, (uint32_t) iw);
 
 	if (is_64bit_long_instruction) {
 		if (cpu->byte_order == EMUL_LITTLE_ENDIAN)

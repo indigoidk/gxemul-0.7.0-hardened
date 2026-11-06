@@ -1,0 +1,125 @@
+**VERDICT: fix first — 7 wrong replacements, including 4 newly unsafe narrowing casts, plus 3 other finding classes.**
+
+Counts refer to newly introduced defects; inherited truncations are reported separately below. Line numbers refer to staged files unless marked “fork.” I reviewed only the permitted material and made no changes.
+
+1. **Meaning, radix, and value changes**
+
+   Three wrong replacements are independent of narrowing:
+
+   | Site | Finding | Smallest correction |
+   |---|---|---|
+   | [cpu_ppc.c:478](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/codescan/fmtfix/stage/src/cpus/cpu_ppc.c:478) | Removes CPU identity from the PPC601 message although `x = cpu->cpu_id` exists. | Restore `cpu%i` and supply `x`. |
+   | [cpu_arm.c:1041](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/codescan/fmtfix/stage/src/cpus/cpu_arm.c:1041) | `offset5 * (b_bit ? sizeof(uint8_t) : sizeof(uint32_t))` has type **`size_t`**, not `int64_t`. | Use `%zu`. |
+   | cpu_arm.c:1051 | Likewise, `offset5 * sizeof(uint16_t)` has type `size_t`. | Use `%zu`. |
+
+   The ARM values are small, but that does not make the conversion correct. Ordinary LP64 format checking tolerates the corresponding signed/unsigned pair; with 32-bit `size_t`, the new conversion expects a 64-bit argument. `WHY.txt`’s “64-bit value” premise is wrong.
+
+   **No decimal-to-hex or hex-to-decimal change was introduced.** The intentional observable repairs are:
+
+   - `x11.c:551`: restores the full concatenated warning and supplies the screen depth instead of interpreting a string pointer as the depth.
+   - `arcbios.c:1594`: changes the two fields from **A0/A1 to A1/A2**, correctly selecting mode and file-ID pointer. A0’s pathname was already printed. Retained narrowing remains an issue, discussed below.
+   - `cpu_i960.c:458`, `ps2_bios.c:166`, and `dev_vr41xx.c:244,253`: repair malformed conversions and restore instruction-word, argument, and escape-byte output.
+   - `dev_ps2_stuff.c:240`: supplies the actual timer number.
+   - `dev_mb89352.c:307`: removes the unsupported data field.
+   - Full-width numerical output can differ at `cpu_alpha_palcode.c:136`, `dev_dec21030.c:200,205`, all 21 changed `dev_dec_ioasic.c` payload calls, `dev_ether.c:178`, `bootblock.c:442`, `diskimage.c:2460`’s **cylinders**, and both `file_ecoff.c` calls at 256 and 407. These are appropriate corrections.
+
+   Two concrete examples: boot-loader block `0x800001` produces offset `0x100000200`, previously commonly displayed as `0x200`; Alpha GETENV A1=`0x100000000` now displays decimal `4294967296`.
+
+   **ECOFF requires checking the decoder, not merely the header-field declaration:** [`unencode`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/file/file.c:75) sign-extends even when its `typ` parameter is `uint32_t`. Thus `0x80000000` can become `0xffffffff80000000` in the printed address/offset.
+
+   The `%i`→`%zu` edits retain decimal and the original argument expression. They intentionally change signed/truncated output when supplied values exceed `INT_MAX`; several sites are bounded or unreachable. Their complete inventory is:
+
+   | File | Lines |
+   |---|---|
+   | `memory.c` | 624, 636 |
+   | `dev_ahc.c`; `dev_asc.c` | 80; 930, 943 |
+   | `dev_luna88k.c`; `dev_lunafb.c` | 916, 922; 82, 88, 174, 180 |
+   | `dev_mb89352.c` | 253, 307, 433, 678, 685 |
+   | `dev_ps2_gif.c`; `dev_pvr.c` | 385; 1142 |
+   | `dev_sgi_ip32.c` | 398, 407, 640, 652, 657, 729 |
+   | `dev_sgi_mec.c`; `dev_sgi_re.c` | 461, 470, 474; 1774 |
+   | `dev_wdc.c`; `bootblock.c` | 1607, 1641; 435 |
+   | `diskimage_scsicmd.c` | 300, 313, 348, 362, 475, 578, 733, 751, 843, 860, 919, 944, 1351 |
+
+   Old mismatched varargs calls do not have portable, defined output. The numerical “before” examples above describe ordinary LP64 behavior, not a C-language guarantee.
+
+2. **Four new narrowing casts are unsafe**
+
+   | Site | Why “small by construction” is false |
+   |---|---|
+   | [dev_bt455.c:71](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/codescan/fmtfix/stage/src/devices/dev_bt455.c:71), `(int)idata` | Logs the unrestricted input **before** assignment to byte-sized `addr_cmap`. |
+   | [dev_dc7085.c:181](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/codescan/fmtfix/stage/src/devices/dev_dc7085.c:181), `(int)idata` | CSR masking occurs **after** this log. |
+   | dev_dc7085.c:201, `(int)idata` | Logs the unrestricted input before assignment to LPR. |
+   | [dev_le.c:1040](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/codescan/fmtfix/stage/src/devices/dev_le.c:1040), `(int)idata` | Masking `d->reg_select` does not mask `idata`. The warning expressly handles `idata >= N_REGISTERS`. |
+
+   A concrete existing path reaches all four:
+
+   `debugger put d` → [`store_64bit_word`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/memory.c:763) → `memory_rw(..., len=8, MEM_WRITE, CACHE_DATA)` → [device dispatch](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:587) → `memory_readmax64()` → diagnostic.
+
+   Write `0x100000001` at BT455 offset `0`, DC7085 offsets `0`/`8`, or LE offset `4`. These accesses fit their windows; all four diagnostics print `1`. For LE’s unaligned offset, debugger `put d` warns but proceeds.
+
+   Use full-width hex for the first three and full-width decimal for LE.
+
+   The remaining new casts are bounded: 8253 counters `0..2`, ASC offsets `0x300..0x5ff`, BT455 readback from an unsigned byte, 24 MEC expressions masked with `255`, network reads capped at 1400 bytes, and MIPS ASID masked with `0xff`. No new `(unsigned)` or `(uint32_t)` casts were introduced.
+
+3. **The missing-argument fixes: two right, one wrong**
+
+   - **PS2 timer hold: right.** `timer_nr` is computed from masked address bits and is `2` or `3` in this warning.
+   - **MB89352 wide access: right.** `idata` is still its initialized zero; decoding happens later. Removing the data field follows the stated rule.
+   - **PPC601 dump: wrong.** The correct repair is:
+     ```c
+     debug("cpu%i:  PPC601-style, TODO!\n", x);
+     ```
+
+4. **The supplied artifacts disagree, and the stage contains a non-diagnostic difference**
+
+   All hunks **represented in `FIX.diff`** concern diagnostics. However:
+
+   - [`FIX.diff`](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/codescan/fmtfix/FIX.diff:1) still contains the broken X11 draft: `fbwin->x11_screen_depth` is immediately followed by `"work..."`. Staged X11 correctly contains only the comma removal.
+   - The staged MIPS hand fix at `cpu_mips.c:2118` is absent from `FIX.diff`.
+   - Compared with the supplied fork, staged Alpha PALcode omits the **23-line audit correction** beginning at [fork cpu_alpha_palcode.c:421](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c:421), headed “THE COUNT IS FIVE, NOT FOUR.” This is outside a diagnostic call and absent from `FIX.diff`. It changes documentation, not executable behavior. The permitted files cannot distinguish accidental staging loss from base/working-tree drift.
+
+   The build log also changed during this review. My initial read contained the stated 19 zero-length and four overflow warnings; the later file contained no warning lines. Both showed a final link command. That is an artifact-consistency issue, not evidence that the source findings disappeared—the seven replacements remained unchanged on recheck.
+
+5. **A format-clean regression is easy; an output-checking row is owed**
+
+   The smallest example is one character: **`PRIx64` → `PRIu64`**. It changes radix without changing the required argument type.
+
+   Simply replacing `(uint64_t)` with `(uint32_t)` normally **would** trigger the attributed checker. The silent truncation variant retains the final expected type:
+
+   ```c
+   (uint64_t)(uint32_t)diskoffset
+   ```
+
+   For that high-bit-loss mutation, these **39 changed calls / 40 values** have demonstrably reachable values exceeding 32 bits:
+
+   | File | Sites |
+   |---|---|
+   | `dev_dec21030.c` | 200, 205 |
+   | `dev_dec_ioasic.c` | 89, 100, 111, 122, 133, 144, 155, 166, 177, 274, 288, 299, 310, 321, 332, 343, 354, 365, 376, 387, 398 |
+   | `dev_ether.c` | 178 |
+   | `dev_sgi_re.c` | 1258, 1272, 1280, 1288, 1296, 1304, 1312, 1321, 1335, 1343 |
+   | `bootblock.c` | 442 |
+   | `cpu_alpha_palcode.c` | 136 |
+   | `diskimage.c` | 2460, cylinders |
+   | `file_ecoff.c` | 256; 407’s two offsets |
+
+   Preserve the corresponding outer signed/`long` type when constructing mutations for the decimal/offset cases. Device reachability includes debugger `put d`; notably, this admits the `SCISSOR+4` eight-byte write.
+
+   Important exclusions: SH’s three address expressions wrap in **32-bit arithmetic before assignment**; SGI MTE `fill_addr` is explicitly `uint32_t`; LE’s changed offsets/readbacks and MP/MEC offsets are bounded. WHY’s claim that MTE `fill_addr` can be wider is false.
+
+   There are **48 calls with 49 newly introduced `PRIx64` conversions** exposed to the radix mutation. More generally, format checking cannot detect a type-compatible wrong argument. Also, **158 is a warning count, not 158 distinct source calls**; WHY records duplicate compiler reports.
+
+   A useful regression row supplies an SGI loader block of `0x00800000`, byte count 512, and asserts the diagnostic contains **`0x100000000`**. The message precedes the attempted disk read, so the output check does not require a huge backing image. The nested cast prints zero while remaining format-clean.
+
+**Other truncations found while checking those premises:** these are inherited, not included in the four-new-cast count.
+
+- `dev_luna88k.c:919`, `dev_lunafb.c:85,177` retain `(int)idata`. M88K `st.d` can deliver `0x100000001` to unimplemented addresses such as `0x41000008`, `0xb1000008`, and `0xb1100008`; the logs print `1`.
+- [memory.c:626](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/codescan/fmtfix/stage/src/core/memory.c:626) retains `(uint32_t)paddr`. `is_32bit` does not bound physical addresses: MIPS32/4Kc EntryLo `0x04000007` can translate to physical `0x100000000`, which this warning displays as zero.
+- `arcbios.c:1594–1595` retains casts on A1/A2. **A2 is a real full-width pointer in ARC64**, and the corrected argument list now actually prints it. A1 can also contain high bits, although the documented mode parameter is `uint32_t`.
+- `ps2_bios.c:167` retains `(uint32_t)A1`, now consumed after adding `%`. The register is unrestricted before this log; distinguish arbitrary high bits from intentional display of a sign-extended 32-bit pointer.
+- Adjacent, already format-clean truncations also exist in `dev_ether.c:125,130` and LE’s write diagnostics at 1014, 1034, and 1052.
+
+The three **OTHER** classes counted here are artifact inconsistency, the Alpha comment discrepancy, and inherited diagnostic truncations.
+
+FMTP2: 7 EDITS WRONG, 4 NARROWINGS UNSAFE, 3 OTHER; VERDICT fix first

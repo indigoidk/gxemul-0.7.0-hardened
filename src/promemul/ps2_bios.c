@@ -163,7 +163,7 @@ int playstation2_sifbios_emul(struct cpu *cpu)
 		cpu->cd.mips.gpr[MIPS_GPR_V0] = 0;
 		break;
 	case 65:
-		fatal("[ SIFBIOS alloc iop heap(0x" PRIx32") ]\n",
+		fatal("[ SIFBIOS alloc iop heap(0x%" PRIx32") ]\n",
 		    (uint32_t)cpu->cd.mips.gpr[MIPS_GPR_A1]);
 
 		/*

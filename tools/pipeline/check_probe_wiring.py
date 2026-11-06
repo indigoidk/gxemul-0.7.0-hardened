@@ -3942,6 +3942,41 @@ MANIFEST = {
     "artifacts/pvrrenderexit/witness_20261104/probe_frozen.py":
         (CLASS_RESEARCH, "#583 pvrrenderexit: the rung-3 witness as run on 2026-11-04 before any edit, the 9-row first form "
                          "(witness_20261104/WITNESS.md: 7/9 on the committed build), preserved as evidence"),
+    #  #584 fmtattr: the printf-format class.  The SHIPPING detector is CLASS_DETECTOR and gated in gate_build.sh (gate 1) in the same
+    #  commit, beside the four seeded format controls; its wiring is DERIVED, not asserted here.  The class detector is the
+    #  compiler (GX_PRINTF in misc.h, gate 1's zero-warning check).  Every artifact script below is CLASS_TOOL: an editor or
+    #  generator that built the round's stage, preserved as run, run by no gate.
+    "fmt_bootblock_probe.py":
+        (CLASS_DETECTOR, "#584 fmtattr: the printf-format round's one OUTPUT row (GPT-6 Astra pass 2b) -- bootblock.c's SGI "
+                         "loading line on unmodified -E sgi -e ip32 -M 64 must print disk offset 0x100000000 for a one-sector "
+                         "image whose voldir names sash at block 0x00800000; three rows (the session ended, the voldir parsed, the "
+                         "loading line); gate_build.sh pins RESULT 3/3 by EQUALITY, CONTROL=OK and every row by name.  HEAD prints "
+                         "the low 32 bits (0x0); the radix and narrowing mutants, which no compiler sees, red the loading row "
+                         "(artifacts/fmtattr/row_20261105/bb_kill.out; artifacts/fmtattr/landing_20261105/DRYRUN_fmt.out)."),
+    "artifacts/fmtattr/drafts_20261105/mkpk_fmt.py":
+        (CLASS_TOOL, "#584 fmtattr: builds the eight packet-fed draft packets (drafts_20261105/PKT_1..8.md) from HEAD's "
+                     "sources and the attributed GCC scan's warnings -- preserved as run"),
+    "artifacts/fmtattr/row_20261105/mk_bb_mutants.py":
+        (CLASS_TOOL, "#584 fmtattr: writes the two type-compatible bootblock.c mutants the output row was measured on "
+                     "(row_20261105/bb_mutants/M1_radix.c, M2_narrow.c; row_20261105/bb_kill.out) -- preserved as run"),
+    "artifacts/fmtattr/stage_20261105/apply_fmt.py":
+        (CLASS_TOOL, "#584 fmtattr: applies Gemini 4 Argon's drafted edits to HEAD's sources OUTSIDE the repo, each by exact "
+                     "text asserted once (stage_20261105/SUMMARY.txt: 126 applied; REJECTS.txt: 2 rejected) -- preserved as "
+                     "run"),
+    "artifacts/fmtattr/stage_20261105/fix_hand.py":
+        (CLASS_TOOL, "#584 fmtattr: the main loop's two hand fixes on the applied drafts: x11.c's stray comma removed, "
+                     "cpu_mips.c's ASID cast -- preserved as run"),
+    "artifacts/fmtattr/stage_20261105/fix_hand2.py":
+        (CLASS_TOOL, "#584 fmtattr: the 19 -Wformat-zero-length calls rewritten with \"%s\", \"\" and the three unreachable "
+                     "default: arms in the Alpha and m88k disassemblers -- preserved as run"),
+    "artifacts/fmtattr/stage_20261105/fix_hand3.py":
+        (CLASS_TOOL, "#584 fmtattr: GPT-6 Astra pass 2's seven repairs (p2_20261105/astra/codex_fmtp2.txt) -- preserved as run"),
+    "artifacts/fmtattr/stage_20261105/fix_hand4.py":
+        (CLASS_TOOL, "#584 fmtattr: GPT-6 Astra pass 2b's file_ecoff.c repair, two off_t values printed full width "
+                     "(p2b_20261105/astra/codex_fmtp2b.txt) -- preserved as run"),
+    "artifacts/fmtattr/stage_20261105/fix_misc_h.py":
+        (CLASS_TOOL, "#584 fmtattr: misc.h's GX_PRINTF definition (the format attribute under __GNUC__) and its four "
+                     "declarations -- preserved as run"),
 }
 
 #  DATED, NAMED DEBT -- not a count and not a silent allowlist.  gate_offline.sh MEASURED that

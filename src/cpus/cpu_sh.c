@@ -1173,7 +1173,7 @@ int sh_cpu_disassemble_instr(struct cpu *cpu, unsigned char *instr,
 				if (symbol != NULL)
 					debug("<%s>", symbol);
 				else
-					debug("0x%08" PRIx32, addr);
+					debug("0x%08" PRIx64, (uint64_t)addr);
 			}
 			debug("\n");
 		} else if (lo4 == 0x7)
@@ -1202,7 +1202,7 @@ int sh_cpu_disassemble_instr(struct cpu *cpu, unsigned char *instr,
 				if (symbol != NULL)
 					debug("<%s>", symbol);
 				else
-					debug("0x%08" PRIx32, addr);
+					debug("0x%08" PRIx64, (uint64_t)addr);
 			}
 			debug("\n");
 		} else if (lo8 == 0x12)
@@ -1272,7 +1272,7 @@ int sh_cpu_disassemble_instr(struct cpu *cpu, unsigned char *instr,
 			if (symbol != NULL)
 				debug("<%s>", symbol);
 			else
-				debug("0x%08" PRIx32, addr);
+				debug("0x%08" PRIx64, (uint64_t)addr);
 		}
 		debug("\n");
 		break;
@@ -1462,7 +1462,7 @@ int sh_cpu_disassemble_instr(struct cpu *cpu, unsigned char *instr,
 		else if ((lo8 & 0x8f) == 0x83)
 			debug("stc.l\tr%i_bank,@-r%i\n", (lo8 >> 4) & 7, r8);
 		else if ((lo8 & 0x8f) == 0x87)
-			debug("ldc.l\t@r%i,r%i_bank\n", r8, (lo8 >> 4) & 7, r8);
+			debug("ldc.l\t@r%i,r%i_bank\n", r8, (lo8 >> 4) & 7);
 		else if ((lo8 & 0x8f) == 0x8e)
 			debug("ldc\tr%i,r%i_bank\n", r8, (lo8 >> 4) & 7);
 		else if (lo8 == 0xfa)

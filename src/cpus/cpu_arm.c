@@ -1038,7 +1038,7 @@ int arm_cpu_disassemble_instr_thumb(struct cpu *cpu, unsigned char *ib,
 	case 0x6:
 	case 0x7:
 		// Load/Store with immediate offset.
-		debug("%s%s\tr%i,[r%i,#%i]\n",
+		debug("%s%s\tr%i,[r%i,#%zu]\n",
 			l_bit ? "ldr" : "str",
 			b_bit ? "b" : "",
 			rd,
@@ -1048,7 +1048,7 @@ int arm_cpu_disassemble_instr_thumb(struct cpu *cpu, unsigned char *ib,
 
 	case 0x8:
 		// Load/Store halfword.
-		debug("%sh\tr%i,[r%i,#%i]\n",
+		debug("%sh\tr%i,[r%i,#%zu]\n",
 			l_bit ? "ldr" : "str",
 			rd,
 			rs_rb,

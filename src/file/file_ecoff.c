@@ -253,8 +253,8 @@ static void file_load_ecoff(struct machine *m, struct memory *mem,
 			}
 			
 			if (!relocated) {
-				debug("relocating from base 0x%08x to 0x%08x\n",
-					a_tstart, relocationTarget);
+				debug("relocating from base 0x%08" PRIx64 " to 0x%08x\n",
+					(uint64_t)a_tstart, relocationTarget);
 				a_tstart += relocationOffset;
 				a_dstart += relocationOffset;
 				a_bstart += relocationOffset;
@@ -404,8 +404,9 @@ static void file_load_ecoff(struct machine *m, struct memory *mem,
 
 		debug("symbol header: magic = 0x%x\n", sym_magic);
 
-		debug("%i symbols @ 0x%08x (strings @ 0x%08x)\n",
-		    iextMax, cbExtOffset, cbSsExtOffset);
+		debug("%i symbols @ 0x%08" PRIx64
+		    " (strings @ 0x%08" PRIx64 ")\n",
+		    iextMax, (uint64_t)cbExtOffset, (uint64_t)cbSsExtOffset);
 
 		/*  issExtMax/iextMax/cbSsExtOffset/cbExtOffset are file-controlled;
 		    require both tables to lie within the file before allocating and

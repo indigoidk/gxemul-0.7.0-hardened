@@ -700,66 +700,66 @@ void m88k_exception(struct cpu *cpu, int vector, int is_trap)
 	switch (vector) {
 
 	case M88K_EXCEPTION_RESET:
-		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "RESET", VERBOSITY_INFO, "");
+		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "RESET", VERBOSITY_INFO, "%s", "");
 		implemented = true;
 		break;
 
 	case M88K_EXCEPTION_INTERRUPT:
-		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "INTERRUPT", VERBOSITY_INFO, "");
+		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "INTERRUPT", VERBOSITY_INFO, "%s", "");
 		implemented = true;
 		break;
 
 	case M88K_EXCEPTION_INSTRUCTION_ACCESS:
-		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "INSTRUCTION_ACCESS", VERBOSITY_INFO, "");
+		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "INSTRUCTION_ACCESS", VERBOSITY_INFO, "%s", "");
 		implemented = true;
 		break;
 
 	case M88K_EXCEPTION_DATA_ACCESS:
-		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "DATA_ACCESS", VERBOSITY_INFO, "");
+		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "DATA_ACCESS", VERBOSITY_INFO, "%s", "");
 		implemented = true;
 		break;
 
 	case M88K_EXCEPTION_MISALIGNED_ACCESS:
-		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "MISALIGNED_ACCESS", VERBOSITY_INFO, "");
+		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "MISALIGNED_ACCESS", VERBOSITY_INFO, "%s", "");
 		implemented = true;	/*  m88kexcdeliver  */
 		break;
 
 	case M88K_EXCEPTION_UNIMPLEMENTED_OPCODE:
-		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "UNIMPLEMENTED_OPCODE", VERBOSITY_INFO, "");
+		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "UNIMPLEMENTED_OPCODE", VERBOSITY_INFO, "%s", "");
 		implemented = true;	/*  m88kexcdeliver  */
 		break;
 
 	case M88K_EXCEPTION_PRIVILEGE_VIOLATION:
-		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "PRIVILEGE_VIOLATION", VERBOSITY_INFO, "");
+		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "PRIVILEGE_VIOLATION", VERBOSITY_INFO, "%s", "");
 		implemented = true;	/*  m88kexcdeliver  */
 		break;
 
 	case M88K_EXCEPTION_BOUNDS_CHECK_VIOLATION:
-		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "BOUNDS_CHECK_VIOLATION", VERBOSITY_INFO, "");
+		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "BOUNDS_CHECK_VIOLATION", VERBOSITY_INFO, "%s", "");
 		implemented = true;	/*  m88kexcdeliver  */
 		break;
 
 	case M88K_EXCEPTION_ILLEGAL_INTEGER_DIVIDE:
-		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "ILLEGAL_INTEGER_DIVIDE", VERBOSITY_INFO, "");
+		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "ILLEGAL_INTEGER_DIVIDE", VERBOSITY_INFO, "%s", "");
 		implemented = true;	/*  m88kexcdeliver  */
 		break;
 
 	case M88K_EXCEPTION_INTEGER_OVERFLOW:
-		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "INTEGER_OVERFLOW", VERBOSITY_INFO, "");
+		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "INTEGER_OVERFLOW", VERBOSITY_INFO, "%s", "");
 		implemented = true;	/*  m88kexcdeliver  */
 		break;
 
 	case M88K_EXCEPTION_ERROR:
-		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "ERROR", VERBOSITY_INFO, "");
+		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "ERROR", VERBOSITY_INFO, "%s", "");
 		implemented = true;	/*  m88kexcdeliver  */
 		break;
 
 	case M88K_EXCEPTION_SFU1_PRECISE:
-		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "SFU1_PRECISE", VERBOSITY_ERROR, "");
+		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "SFU1_PRECISE", VERBOSITY_ERROR, "%s", "");
 		break;
 
 	case M88K_EXCEPTION_SFU1_IMPRECISE:
-		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "SFU1_IMPRECISE", VERBOSITY_ERROR, "");
+		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "SFU1_IMPRECISE", VERBOSITY_ERROR, "%s", "");
 		break;
 
 	case 0x80:	/*  up to OpenBSD 5.2  */
@@ -774,7 +774,7 @@ void m88k_exception(struct cpu *cpu, int vector, int is_trap)
 		break;
 
 	case MVMEPROM_VECTOR:
-		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "MVMEPROM_VECTOR", VERBOSITY_INFO, "");
+		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "MVMEPROM_VECTOR", VERBOSITY_INFO, "%s", "");
 		break;
 
 	default:
@@ -1433,6 +1433,9 @@ int m88k_cpu_disassemble_instr(struct cpu *cpu, unsigned char *ib,
 			case 0x26: mnem = "extu"; break;
 			case 0x28: mnem = "mak"; break;
 			case 0x2a: mnem = "rot"; break;
+			/*  #584: unreachable (the enclosing switch admits only the
+			    cases above); keeps GCC's -Wformat-overflow quiet.  */
+			default:   mnem = "?"; break;
 			}
 			debug("%s\tr%i,r%i,", mnem, d, s1);
 			/*  Don't include w5 for the rot instruction:  */

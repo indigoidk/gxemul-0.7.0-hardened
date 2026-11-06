@@ -435,7 +435,7 @@ bool emul_machine_setup(struct machine *m, int n_load, char **load_names,
 	if (m->name != NULL && m->name[0])
 		debugmsg(SUBSYS_MACHINE, "", VERBOSITY_INFO, "%s", m->name);
 	else
-		debugmsg(SUBSYS_MACHINE, "", VERBOSITY_INFO, "");
+		debugmsg(SUBSYS_MACHINE, "", VERBOSITY_INFO, "%s", "");
 
 	debug_indentation(1);
 
@@ -835,7 +835,7 @@ void emul_dumpinfo(struct emul *e)
 		if (e->n_machines > 1)
 			debugmsg(SUBSYS_MACHINE, "", VERBOSITY_INFO, "%s (%i)", e->machines[i]->name, i);
 		else
-			debugmsg(SUBSYS_MACHINE, "", VERBOSITY_INFO, "");
+			debugmsg(SUBSYS_MACHINE, "", VERBOSITY_INFO, "%s", "");
 
 		debug_indentation(1);
 		machine_dumpinfo(e->machines[i]);

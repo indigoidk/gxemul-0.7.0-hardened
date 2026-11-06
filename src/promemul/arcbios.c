@@ -1591,8 +1591,7 @@ int arcbios_emul(struct cpu *cpu)
 	case 0x5c:  /*  Open(char *path, uint32_t mode, uint32_t *fileID)  */
 		debug("[ ARCBIOS Open(\"");
 		dump_mem_string(cpu, cpu->cd.mips.gpr[MIPS_GPR_A0]);
-		debug("\",0x%x,0x%x)", (int)cpu->cd.mips.gpr[MIPS_GPR_A0],
-		    (int)cpu->cd.mips.gpr[MIPS_GPR_A1],
+		debug("\",0x%x,0x%x)", (int)cpu->cd.mips.gpr[MIPS_GPR_A1],
 		    (int)cpu->cd.mips.gpr[MIPS_GPR_A2]);
 
 		cpu->cd.mips.gpr[MIPS_GPR_V0] = ARCBIOS_ENOENT;

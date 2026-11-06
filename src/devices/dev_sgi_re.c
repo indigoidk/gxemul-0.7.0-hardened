@@ -1255,7 +1255,7 @@ DEVICE_ACCESS(sgi_de)
 		    writeflag == MEM_WRITE ? "write to" : "read from",
 		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
 		if (writeflag == MEM_WRITE && idata != 0)
-			fatal("[ sgi_de: TODO: non-zero CRIME_DE_CLIPMODE: 0x%016llx ]\n", idata);
+			fatal("[ sgi_de: TODO: non-zero CRIME_DE_CLIPMODE: 0x%016" PRIx64 " ]\n", (uint64_t)idata);
 		break;
 
 	case CRIME_DE_DRAWMODE:
@@ -1269,7 +1269,7 @@ DEVICE_ACCESS(sgi_de)
 		    writeflag == MEM_WRITE ? "write to" : "read from",
 		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
 		if (writeflag == MEM_WRITE && idata != 0)
-			fatal("[ sgi_de: TODO: non-zero CRIME_DE_SCRMASK0: 0x%016llx ]\n", idata);
+			fatal("[ sgi_de: TODO: non-zero CRIME_DE_SCRMASK0: 0x%016" PRIx64 " ]\n", (uint64_t)idata);
 		break;
 
 	case CRIME_DE_SCRMASK1:
@@ -1277,7 +1277,7 @@ DEVICE_ACCESS(sgi_de)
 		    writeflag == MEM_WRITE ? "write to" : "read from",
 		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
 		if (writeflag == MEM_WRITE && idata != 0)
-			fatal("[ sgi_de: TODO: non-zero CRIME_DE_SCRMASK1: 0x%016llx ]\n", idata);
+			fatal("[ sgi_de: TODO: non-zero CRIME_DE_SCRMASK1: 0x%016" PRIx64 " ]\n", (uint64_t)idata);
 		break;
 
 	case CRIME_DE_SCRMASK2:
@@ -1285,7 +1285,7 @@ DEVICE_ACCESS(sgi_de)
 		    writeflag == MEM_WRITE ? "write to" : "read from",
 		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
 		if (writeflag == MEM_WRITE && idata != 0)
-			fatal("[ sgi_de: TODO: non-zero CRIME_DE_SCRMASK2: 0x%016llx ]\n", idata);
+			fatal("[ sgi_de: TODO: non-zero CRIME_DE_SCRMASK2: 0x%016" PRIx64 " ]\n", (uint64_t)idata);
 		break;
 
 	case CRIME_DE_SCRMASK3:
@@ -1293,7 +1293,7 @@ DEVICE_ACCESS(sgi_de)
 		    writeflag == MEM_WRITE ? "write to" : "read from",
 		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
 		if (writeflag == MEM_WRITE && idata != 0)
-			fatal("[ sgi_de: TODO: non-zero CRIME_DE_SCRMASK3: 0x%016llx ]\n", idata);
+			fatal("[ sgi_de: TODO: non-zero CRIME_DE_SCRMASK3: 0x%016" PRIx64 " ]\n", (uint64_t)idata);
 		break;
 
 	case CRIME_DE_SCRMASK4:
@@ -1301,7 +1301,7 @@ DEVICE_ACCESS(sgi_de)
 		    writeflag == MEM_WRITE ? "write to" : "read from",
 		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
 		if (writeflag == MEM_WRITE && idata != 0)
-			fatal("[ sgi_de: TODO: non-zero CRIME_DE_SCRMASK4: 0x%016llx ]\n", idata);
+			fatal("[ sgi_de: TODO: non-zero CRIME_DE_SCRMASK4: 0x%016" PRIx64 " ]\n", (uint64_t)idata);
 		break;
 
 	case CRIME_DE_SCISSOR:
@@ -1309,7 +1309,7 @@ DEVICE_ACCESS(sgi_de)
 		    writeflag == MEM_WRITE ? "write to" : "read from",
 		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
 		if (writeflag == MEM_WRITE && idata != 0)
-			fatal("[ sgi_de: TODO: non-zero CRIME_DE_SCISSOR: 0x%016llx ]\n", idata);
+			fatal("[ sgi_de: TODO: non-zero CRIME_DE_SCISSOR: 0x%016" PRIx64 " ]\n", (uint64_t)idata);
 		break;
 
 	case CRIME_DE_SCISSOR + 4:
@@ -1318,7 +1318,7 @@ DEVICE_ACCESS(sgi_de)
 		    writeflag == MEM_WRITE ? "write to" : "read from",
 		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
 		if (writeflag == MEM_WRITE && idata != 0x3fff3fff)
-			fatal("[ sgi_de: TODO: CRIME_DE_SCISSOR+4: 0x%016llx ]\n", idata);
+			fatal("[ sgi_de: TODO: CRIME_DE_SCISSOR+4: 0x%016" PRIx64 " ]\n", (uint64_t)idata);
 		break;
 
 	case CRIME_DE_PRIMITIVE:
@@ -1332,7 +1332,7 @@ DEVICE_ACCESS(sgi_de)
 		    writeflag == MEM_WRITE ? "write to" : "read from",
 		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
 		if (writeflag == MEM_WRITE && idata != 0)
-			fatal("[ sgi_de: TODO: non-zero CRIME_DE_WINOFFSET_SRC: 0x%016llx ]\n", idata);
+			fatal("[ sgi_de: TODO: non-zero CRIME_DE_WINOFFSET_SRC: 0x%016" PRIx64 " ]\n", (uint64_t)idata);
 		break;
 
 	case CRIME_DE_WINOFFSET_DST:
@@ -1340,7 +1340,7 @@ DEVICE_ACCESS(sgi_de)
 		    writeflag == MEM_WRITE ? "write to" : "read from",
 		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
 		if (writeflag == MEM_WRITE && idata != 0)
-			fatal("[ sgi_de: TODO: non-zero CRIME_DE_WINOFFSET_DST: 0x%016llx ]\n", idata);
+			fatal("[ sgi_de: TODO: non-zero CRIME_DE_WINOFFSET_DST: 0x%016" PRIx64 " ]\n", (uint64_t)idata);
 		break;
 
 	case CRIME_DE_X_VERTEX_0:
@@ -1723,8 +1723,8 @@ void do_mte_transfer(struct cpu* cpu, struct sgi_re_data *d)
 				cpu->memory_rw(cpu, cpu->mem, fill_addr, zerobuf, fill_len,
 					MEM_WRITE, NO_EXCEPTIONS | PHYSICAL);
 			} else {
-				debug("[ sgi_mte: WARNING: address 0x%x not found in TLB? Ignoring fill. ]\n",
-					(long long)fill_addr);
+				debug("[ sgi_mte: WARNING: address 0x%" PRIx64 " not found in TLB? Ignoring fill. ]\n",
+					(uint64_t)fill_addr);
 			}
 
 			fill_addr += fill_len;
@@ -1771,7 +1771,7 @@ DEVICE_ACCESS(sgi_mte)
 			    d->mte_reg[regnr];
 		}
 	} else {
-		fatal("[ sgi_mte: UNIMPLEMENTED read/write len %i ]\n", len);
+		fatal("[ sgi_mte: UNIMPLEMENTED read/write len %zu ]\n", len);
 		exit(1);
 	}
 

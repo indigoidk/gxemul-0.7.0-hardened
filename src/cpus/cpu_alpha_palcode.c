@@ -133,8 +133,8 @@ void alpha_prom_call(struct cpu *cpu)
 		case PROM_E_TTY_DEV:
 			s = "";		/*  TODO  */
 			break;
-		default:fatal("[ Alpha PALcode: GXemul PROM getenv %i: TODO "
-			    "]\n", cpu->cd.alpha.r[ALPHA_A1]);
+		default:fatal("[ Alpha PALcode: GXemul PROM getenv %" PRIi64 ": TODO "
+			    "]\n", (int64_t)cpu->cd.alpha.r[ALPHA_A1]);
 			cpu->running = 0;
 		}
 		/*  Copy at most a3 bytes.  */

@@ -383,13 +383,13 @@ void ppc_cpu_register_dump(struct cpu *cpu, int gprs, int coprocs)
 			debug("  ");
 		else
 			debug("\ncpu%i: ", x);
-		debug("ctr = 0x", x);
+		debug("ctr = 0x");
 		if (bits32)
 			debug("%08" PRIx32, (uint32_t)cpu->cd.ppc.spr[SPR_CTR]);
 		else
 			debug("%016" PRIx64, (uint64_t)cpu->cd.ppc.spr[SPR_CTR]);
 
-		debug("  xer = 0x", x);
+		debug("  xer = 0x");
 		if (bits32)
 			debug("%08" PRIx32, (uint32_t)cpu->cd.ppc.spr[SPR_XER]);
 		else
@@ -475,7 +475,7 @@ void ppc_cpu_register_dump(struct cpu *cpu, int gprs, int coprocs)
 		debug("cpu%i:  sdr1 = 0x%" PRIx64"\n", x,
 		    (uint64_t) cpu->cd.ppc.spr[SPR_SDR1]);
 		if (cpu->cd.ppc.cpu_type.flags & PPC_601)
-			debug("cpu%i:  PPC601-style, TODO!\n");
+			debug("cpu%i:  PPC601-style, TODO!\n", x);
 		else {
 			for (i=0; i<8; i++) {
 				int spr = SPR_IBAT0U + i*2;

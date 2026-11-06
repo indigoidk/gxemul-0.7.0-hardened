@@ -548,7 +548,7 @@ struct fb_window *x11_fb_init(int xsize, int ysize, char *name,
 	    fbwin->x11_screen_depth != 24) {
 		debugmsg(SUBSYS_X11, "fb_init", VERBOSITY_WARNING,
 		    "***\n***  WARNING! Your X server is running %i-bit "
-		    "color mode. This is not really\n",
+		    "color mode. This is not really\n"
 		    "***  supported yet.  8, 15, 16, and 24 bits should "
 		    "work.\n***  24-bit server gives color.  Any other bit "
 		    "depth gives undefined result!\n***",

@@ -111,7 +111,7 @@ static void file_load_aout(struct machine *m, struct memory *mem,
 		entry = buf[20] + (buf[21] << 8) +
 		    (buf[22] << 16) + ((uint64_t)buf[23] << 24);
 		debug("OSF1 a.out, load address 0x%08lx, "
-		    "entry point 0x%08x\n", (long)vaddr, (long)entry);
+		    "entry point 0x%08lx\n", (long)vaddr, (long)entry);
 		symbsize = 0;
 		fseek(f, 0, SEEK_END);
 		/*  This is of course wrong, but should work anyway:  */

@@ -244,6 +244,54 @@ build_tree pmax "$EST" "$PMAX_TREE" 223; rc_pmax=$?
 build_tree arc  "$SEC" "$ARC_TREE"  224; rc_arc=$?
 check "pmax: build_tree ran to completion" "$rc_pmax" "0"
 check "arc: build_tree ran to completion"  "$rc_arc"  "0"
+#  ------------------------------------------------------------ fmtattr (#584)
+#  THE PRINTF-FORMAT CLASS IS ENFORCED HERE.  src/include/misc.h declares debug(), fatal(),
+#  debugmsg() and debugmsg_cpu() with GX_PRINTF -- format(printf, ...) under __GNUC__ -- so a
+#  format that does not match its arguments is a compiler WARNING, and build_tree() above
+#  already fails this gate on any warning in either tree.  The build itself stays
+#  warning-only, not -Werror: owner ruling 2026-11-05, the enforcement is a gate check.
+#  The warning count cannot see two things, so they are checked here:
+#
+#   * THE ATTRIBUTES THEMSELVES.  Drop GX_PRINTF from a declaration, or define it empty,
+#     and every mismatch goes silent while the count stays 0.  So one deliberate mismatch
+#     per function, each on its own line, compiled with this tree's own CC and CWARNINGS
+#     against the headers just built, must warn: four controls, four warnings, no others.
+#   * A TYPE-COMPATIBLE WRONG VALUE.  PRIx64 -> PRIu64, or (uint64_t)(uint32_t)x, keeps the
+#     argument's type, so no compiler sees it.  fmt_bootblock_probe.py pins ONE
+#     representative wide-hex repair by its OUTPUT: bootblock.c's SGI loading line must
+#     print disk offset 0x100000000, where it printed the low 32 bits before the fix.  The
+#     rest of that class is disclosed in the probe's contract, not claimed.
+FMTCTL=$LOGDIR/fmtctl.c
+printf '%s\n' '#include <stdio.h>' '#include <stdint.h>' 'struct cpu;' '#include "misc.h"' \
+    'void fmtctl(struct cpu *c) {' \
+    'debug("%i", (int64_t)1);' \
+    'fatal("%i", (int64_t)1);' \
+    'debugmsg(0, "x", 0, "%i", (int64_t)1);' \
+    'debugmsg_cpu(c, 0, "x", 0, "%i", (int64_t)1);' \
+    '}' > "$FMTCTL"
+fmtcc=$(sed -n 's/^CC=//p' "$ARC_TREE/src/Makefile" 2>/dev/null | head -1)
+fmtcw=$(sed -n 's/^CWARNINGS=//p' "$ARC_TREE/src/Makefile" 2>/dev/null | head -1)
+( cd "$LOGDIR" && ${fmtcc:-cc} $fmtcw -fsyntax-only -I"$ARC_TREE/src/include" fmtctl.c ) \
+    > "$LOGDIR/fmtctl.log" 2>&1
+check "fmt controls: the control file compiled"   "$?" "0"
+check "fmt controls: warnings of every kind"      "$(grep -c 'warning:' "$LOGDIR/fmtctl.log")" "4"
+for fmtfn in 6:debug 7:fatal 8:debugmsg 9:debugmsg_cpu; do
+    check "fmt control ${fmtfn#*:} (line ${fmtfn%%:*}) warns" \
+        "$(grep -cE "^fmtctl\.c:${fmtfn%%:*}:[0-9]+: warning: format .*\[-Wformat=?\]" "$LOGDIR/fmtctl.log")" "1"
+done
+FMTBBLOG=$LOGDIR/fmt_bootblock.log
+python3 -u "$HERE/fmt_bootblock_probe.py" "$ARC_TREE/gxemul" gate > "$FMTBBLOG" 2>&1
+fbres=$(grep -x 'FMTBB_RESULT=[0-9]*/[0-9]*' "$FMTBBLOG" | tail -1)
+fbres=${fbres#FMTBB_RESULT=}
+check "fmt_bootblock rows run"      "${fbres#*/}" 3
+check "fmt_bootblock rows correct"  "${fbres%/*}" "3"
+check "fmt_bootblock result line"   "$(grep -cx 'FMTBB_RESULT=3/3' "$FMTBBLOG")" "1"
+check "fmt_bootblock control"       "$(grep -cx 'FMTBB_CONTROL=OK' "$FMTBBLOG")" "1"
+check "fmt_bootblock sentinel last" "$(tail -n 1 "$FMTBBLOG")" "FMTBB_DONE"
+for fmtrow in "session ended" "voldir parsed" "loading offset"; do
+    check "fmt_bootblock row: $fmtrow" "$(grep -c "^$fmtrow .* ok$" "$FMTBBLOG")" "1"
+done
+#  ------------------------------------------------------------ end fmtattr (#584)
 
 # Publish the arc binary where the rigs expect it -- but ONLY after the VERDICT says pass.
 #

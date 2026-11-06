@@ -780,8 +780,8 @@ DEVICE_ACCESS(vga)
 			debug("[ vga: read from 0x%08lx ]\n",
 			    (long)relative_addr);
 		} else {
-			debug("[ vga: write to  0x%08lx: 0x%08x ]\n",
-			    (long)relative_addr, idata);
+			debug("[ vga: write to  0x%08lx: 0x%08" PRIx64 " ]\n",
+			    (long)relative_addr, (uint64_t)idata);
 		}
 	}
 

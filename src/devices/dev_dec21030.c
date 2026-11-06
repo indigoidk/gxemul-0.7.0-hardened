@@ -197,12 +197,12 @@ DEVICE_ACCESS(dec21030)
 	/*  Block copy source:  */
 	case TGA_REG_GCSR:
 		d->copy_source = idata;
-		debug("[ dec21030: block copy source = 0x%08x ]\n", idata);
+		debug("[ dec21030: block copy source = 0x%08" PRIx64 " ]\n", (uint64_t)idata);
 		break;
 
 	/*  Block copy destination:  */
 	case TGA_REG_GCDR:
-		debug("[ dec21030: block copy destination = 0x%08x ]\n", idata);
+		debug("[ dec21030: block copy destination = 0x%08" PRIx64 " ]\n", (uint64_t)idata);
 		newlen = 64;
 		/*  Both source and destination are raw framebuffer addresses,
 		    offset by 0x1000.  */

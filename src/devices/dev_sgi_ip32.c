@@ -395,7 +395,7 @@ DEVICE_ACCESS(crime)
 
 	default:
 		if (writeflag==MEM_READ) {
-			debug("[ crime: read from 0x%x, len=%i:",
+			debug("[ crime: read from 0x%x, len=%zu:",
 			    (int)relative_addr, len);
 			for (i=0; i<len; i++)
 				debug(" %02x", data[i]);
@@ -404,7 +404,7 @@ DEVICE_ACCESS(crime)
 			debug("[ crime: write to 0x%x:", (int)relative_addr);
 			for (i=0; i<len; i++)
 				debug(" %02x", data[i]);
-			debug(" (len=%i) ]\n", len);
+			debug(" (len=%zu) ]\n", len);
 		}
 	}
 
@@ -637,7 +637,7 @@ DEVICE_ACCESS(mace)
 			    "reladdr=0x%x data=", (int)relative_addr);
 			for (i=0; i<len; i++)
 				fatal(" %02x", data[i]);
-			fatal(" (len=%i) ]\n", len);
+			fatal(" (len=%zu) ]\n", len);
 		}
 		break;
 	case MACE_ISA_INT_MASK:		/*  Current interrupt mask  */
@@ -649,12 +649,12 @@ DEVICE_ACCESS(mace)
 			debug("[ mace: read from 0x%x:", (int)relative_addr);
 			for (i=0; i<len; i++)
 				debug(" %02x", data[i]);
-			debug(" (len=%i) ]\n", len);
+			debug(" (len=%zu) ]\n", len);
 		} else {
 			debug("[ mace: write to 0x%x:", (int)relative_addr);
 			for (i=0; i<len; i++)
 				debug(" %02x", data[i]);
-			debug(" (len=%i) ]\n", len);
+			debug(" (len=%zu) ]\n", len);
 		}
 	}
 
@@ -726,7 +726,7 @@ DEVICE_ACCESS(macepci)
 	int res = 1, bus, dev, func, pcireg;
 
 	if (len != 4)
-		fatal("[ macepci: unimplemented len %i ]\n", len);
+		fatal("[ macepci: unimplemented len %zu ]\n", len);
 
 	if (writeflag == MEM_WRITE) {
 		idata = memory_readmax64(cpu, data, len);

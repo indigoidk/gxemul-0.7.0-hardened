@@ -1,0 +1,38 @@
+**VERDICT LINE FIRST**
+CSADJ: 5 ITEMS GRADED, 1 PREMISES FALSE, 2 UNSETTLED; ROUND SHAPE ONE MECHANICAL ROUND FOR FORMATS
+
+1. **Premise audit**
+   a. UNSETTLED. The text mentions 137 CodeQL alerts and 127 GCC format lines, but there is no mention of "52 GCC warnings" or verification of their presence at 759f7131 in the provided text. File needed: full GCC and CodeQL output logs for 759f7131.
+   b. UNSETTLED. The function `dev_fb_resize()` is not present in the provided text. File needed: `src/devices/dev_fb.c`.
+   c. TRUE. `arcbios.c:1572-1579` shows `a0` is an uncontrolled guest register cast to a signed `int` prior to the subtraction, allowing negative results. The result is only assigned to `cpu->cd.mips.gpr[MIPS_GPR_V0]` with no host access.
+   d. TRUE. `dev_mb89352.c:307-309` uses format `"%i... %x... %x"` (three conversions) but only supplies `len * 8` and `(int) relative_addr` (two arguments).
+   e. FALSE. None can. In `cpu_alpha.c:307-353`, every opcode matching the outer switch is explicitly covered by a case in the inner switch that assigns `mnem`. In `cpu_m88k.c:1423-1436`, the exact same six opcodes are in both the outer and inner switches. The compiler's deduction is a false positive.
+
+2. **Grade each item**
+   *   **fmtmissarg**: Real. Severity 1 (Highest - undefined behavior/potential host memory leak). Witness: `detector: compiler`.
+   *   **arcmemdescnr**: Real. Severity 2 (Logic error returning bad guest data). Witness: rung-3 cold-debugger probe.
+   *   **fmtattr**: Real. Severity 3 (Truncated diagnostics). Witness: `detector: compiler` (this is the correct witness term for a compiler-detected class).
+   *   **disasmnullmnem**: Not real. Severity 4 (False positive). Witness: `detector: compiler`.
+
+3. **Round shape**
+   *   **fmtattr**: ONE round for all 127 lines plus the attribute, since adding the attribute enforces the fix project-wide and requires all calls to comply simultaneously.
+   *   **fmtmissarg**: Fold into `fmtattr`. Adding the compiler attribute will flag these missing arguments anyway, so fixing them simultaneously keeps the build green.
+   *   **disasmnullmnem**: One round (or skip entirely if we suppress the warning, as it is a false positive).
+
+4. **Smallest edit that breaks each proposed fix and still passes**
+   *   **fmtattr**: Casting the value to `(uint32_t)` but pairing it with `PRIx64`. This passes format checks on 32-bit platforms but breaks on 64-bit platforms.
+   *   **fmtmissarg**: Supplying a literal `0` for the missing argument. It passes the compiler check but prints nonsense instead of the actual intended value.
+   *   **disasmnullmnem**: Initializing `mnem = "unknown";` at the top of the block. It passes the null check but prints an incorrect mnemonic if an unhandled opcode somehow bypassed the outer switch.
+   *   **arcmemdescnr**: The proposed `nr < 1 ||` fix is intrinsically broken. If `s=8` and `A0 = base - 1`, `(base - 1) - base` is `-1`. `-1 / 8` is `0`. `0 + 1` is `1`. Since `1 < 1` is false, it passes the proposed `nr < 1` check and returns a bad descriptor pointer.
+
+5. **Option-set completeness**
+   The fix misses alignment checks. Declining any guest `a0` where `(a0 - base) % s != 0` is necessary; otherwise, unaligned addresses will round toward zero and return valid-looking but misaligned base addresses.
+
+6. **The no-action list**
+   *   **dev_fdc.c:101**: Agree. False positive. The loop writes up to `DEV_FDC_LENGTH` items, each consuming 3 bytes (` %02x`), which fits safely within `3 * DEV_FDC_LENGTH + 1`.
+   *   **diskimage.c**: Agree. Won't fix. The emulator opening a user-provided image path is a standard local operation where TOCTOU is an accepted operational pattern.
+   *   **dump-hp700rx-rom.c**: Agree. Won't fix. It is an uncompiled standalone experiment tool outside the main build.
+   *   **15 integer-multiplication alerts**: Agree. Won't fix. Triage confirmed they are bounded or strictly host-side operations.
+
+P-CSADJ-ff9c
+CSADJ: 5 ATTACKS 1 BROKEN 2 HOLDS 2 UNSETTLED DRAFTABLE:NO

@@ -117,7 +117,7 @@ static void file_load_macho(struct machine *m, struct memory *mem,
 	}
 	if (!(flags & 1)) {
 		fatal("Error: File has 'undefined references'. Cannot"
-		    " be executed.\n", flags);
+		    " be executed.\n");
 		exit(1);
 	}
 

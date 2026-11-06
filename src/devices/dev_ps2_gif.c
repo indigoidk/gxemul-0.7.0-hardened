@@ -382,7 +382,7 @@ DEVICE_ACCESS(ps2_gif)
 					    MEM_WRITE, d->vfb_data);
 				}
 		} else {		/*  Unknown command:  */
-			fatal("[ gif write to addr 0x%x (len=%i):",
+			fatal("[ gif write to addr 0x%x (len=%zu):",
 			    (int)relative_addr, len);
 			for (i=0; i<len; i++)
 				fatal(" %02x", data[i]);

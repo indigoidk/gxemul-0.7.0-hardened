@@ -1,3 +1,73 @@
+# `#584` (2026-11-05) -- `fmtattr`: the four diagnostic functions are printf-checked by the compiler, every call matches its format (`fmtmissarg`'s three missing arguments included), and gate 1 enforces it
+
+**The defect.**  `debug()`, `fatal()`, `debugmsg()` and `debugmsg_cpu()` (`src/include/misc.h`) are printf-like and carried no
+format attribute, so nothing checked their calls.  GitHub CodeQL raised 116 wrong-type and 3 wrong-number format alerts on the
+pushed `759f7131`; GCC, with the four declarations given `format(printf, ...)` in a scratch build of HEAD `f58105b7`, gave 181
+format warnings -- 145 `-Wformat=` (the three missing arguments among them), 13 `-Wformat-extra-args`, 19 `-Wformat-zero-length`,
+4 `-Wformat-overflow=` (`regress/artifacts/fmtattr/scan_20261105/fmtscan.out`, `regress/artifacts/fmtattr/scan_20261105/fmt_warnings.tsv`) -- none of them introduced after the push
+(`regress/artifacts/fmtattr/scan_20261105/PREMISE_A.txt`).  On x86-64 the effect is a truncated, garbled or unspecified number in a diagnostic: `x11.c`'s stray
+comma made a `%i` consume a string pointer, and `fmtmissarg`'s three calls (a guest read of a PS2 timer 2/3 hold register, a
+non-byte MB89352 access, the debugger's PPC601 register dump) printed whatever the varargs held.  Filed by `79df4277` from the
+code-scanning triage (`regress/artifacts/fmtattr/scan_20261105/CODESCAN_TRIAGE.md`).
+
+**Adjudication.**  GPT-6 Astra at ultra (`regress/artifacts/fmtattr/adj_20261105/astra/codex_csadj.txt`) and Gemini 4 Argon (`regress/artifacts/fmtattr/adj_20261105/gemini_adj_items/reply.txt`)
+agree on one combined format round with `fmtmissarg` folded in, `disasmnullmnem` a false positive (no row) and the no-action list;
+Astra adds an ENFORCED failure policy, a negative control per function, each message's radix and meaning kept, and mb89352's
+unsupported value field removed.  Owner rulings 2026-11-05: the enforcement is a gate check and the build stays warning-only; `cpu_alpha_palcode.c` is
+fixed in HEAD and in the peer session's working copy, two lines only; the round is tagged in this block, not per call.
+
+**The fix** (47 files, 124 hunks, +236 -217 lines: `regress/artifacts/fmtattr/landing_20261105/COMPOSITE.diff`).  Built outside the repo from HEAD
+`79df4277`: Gemini 4 Argon drafted 127 exact-text edits in eight packets (`regress/artifacts/fmtattr/drafts_20261105/`); 126 call sites replaced, 2
+rejected (`regress/artifacts/fmtattr/stage_20261105/SUMMARY.txt`, `regress/artifacts/fmtattr/stage_20261105/REJECTS.txt`, `regress/artifacts/fmtattr/stage_20261105/WHY.txt`); x11.c's comma removed and cpu_mips.c's ASID cast by hand (`fix_hand.py`);
+the 19 empty-line calls given `"%s", ""` and an unreachable `default: mnem = "?"` in the three disassembler switches the overflow
+warnings named (`fix_hand2.py`); `GX_PRINTF(f, a)` -- the attribute under `__GNUC__`, empty elsewhere -- on the four
+declarations (`fix_misc_h.py`); pass 2's seven repairs (`fix_hand3.py`) and pass 2b's one (`fix_hand4.py`).  The rules: `PRIx64`
+with a `(uint64_t)` cast for a wide hex value, an `(int)` cast only where the value is small by construction, `%zu` for
+`size_t`, a missing argument added only where its value exists.  The round number fills the four structural comments (misc.h's
+macro, the three `default:`s); the one-line call fixes carry no tag.  `cpu_alpha_palcode.c` is HEAD plus its two lines (:136-137);
+the peer session's uncommitted lines in that file stay in its working copy and the four trees, which took the two lines in place.
+The SEC working copy and the four trees took the 46 staged files, and the palcode copy only its two lines, in the landing window; the three build trees rebuilt from scratch with both clearance parts passing on all 47 files (compiler warnings: build 0 build-asan 6 gxsec-build 0; build-asan's are sanitizer-only, 0 format-class), and on each rebuilt binary the staged probe scored FMTBB_RESULT=3/3, CONTROL=OK and the four seeded controls warned 4 of 4 (`regress/artifacts/fmtattr/landing_20261105/UPDATE_FMT.out`).  For the commit's hook only, est/, build/, build-asan/ and /tmp/gxsec-build held the committed cpu_alpha_palcode.c (the peer session's copies backed up byte for byte and put back after the commit by palcode_hookrestore_fmt.sh), with cpu_alpha_palcode.o rebuilt and both clearance parts passing (`regress/artifacts/fmtattr/landing_20261105/HOOKSWAP_FMT.out`).
+
+**Detector.**  The class detector is the compiler: with `GX_PRINTF` permanent a mismatched call is a warning, and gate 1
+(`regress/gate_build.sh`) already fails on any warning in either tree.  Its new fmtattr block (14 checks, above `gate_end`):
+one deliberate mismatch per function, each on its own line, compiled with the tree's own CC and CWARNINGS, must warn -- 4 of 4,
+no other warning; and `regress/fmt_bootblock_probe.py` (new, 3 rows; Astra pass 2b's output row) pins the one representative
+type-compatible repair no compiler sees -- bootblock.c's SGI loading line on unmodified `-E sgi -e ip32` must print disk offset
+`0x100000000` (a one-sector image naming `sash` at block 0x00800000) -- RESULT pinned 3/3 by equality, CONTROL=OK, every row by
+name.  `tools/precommit_check.sh` SCORE_CLAIMS_MANIFEST 49 -> 50; `tools/pipeline/check_probe_wiring.py` entries for the probe and
+8 artifact scripts (`regress/artifacts/fmtattr/landing_20261105/MANIFEST_fmt.txt`).  Measured on the stage before the landing: HEAD + the stage, built as a user
+builds it, 0 warnings and 4/4 controls (`regress/artifacts/fmtattr/stage_20261105/fmtverify2.out`); the probe 3/3 on the fix, and the radix (`PRIx64` -> `PRIu64`)
+and narrowing (`(uint64_t)(uint32_t)`) mutants 2/3 each with 0 build warnings (`regress/artifacts/fmtattr/row_20261105/bb_kill.out` and its build logs; its base
+predates pass 2b's file_ecoff.c repair by seconds, a file off the probe's path).  Gate 1's fmtattr block, as staged, ran alone before the landing over fifteen legs and the restored base, 16 of 16 red sets as predicted (`regress/artifacts/fmtattr/landing_20261105/DRYRUN_fmt.out`; the predictions written first, `regress/artifacts/fmtattr/landing_20261105/PRETABLE_fmt.out`): the fix's scratch build (`git archive HEAD` plus the 47 staged files, 0 warnings) green on all 14 checks before and after the product legs, and every check red on at least one leg.
+Gate 1 ran in situ at the landing with the staged gate_build.sh on the updated trees: clean-build: PASS (32 checks), the fmtattr block's 14 checks ok, FMTBB_RESULT=3/3, the four controls 4 of 4 (`regress/artifacts/fmtattr/landing_20261105/GATE1_INSITU_fmt.out`).
+
+**Floor** (`regress/artifacts/fmtattr/landing_20261105/DRYRUN_fmt.out`).  (a) HEAD: controls 0 of 4 and the probe 2/3 (offset 0x0) on both HEAD build trees; (b) HEAD's bootblock.c
+restored in the fixed tree: its build warns twice and the probe reds; (c) /bin/true, /bin/false and an absent binary: CONTROL=FAIL;
+(d) the attribute nulled -- dropped from one declaration, defined empty, or `(4, 0)` -- reds exactly the controls it silences; (e)
+the probe's contract: one representative wide-hex row; the other type-compatible radix and value edits -- Astra counted 48 calls
+exposed to the radix mutation and 39 to the narrowing one (`regress/artifacts/fmtattr/p2_20261105/astra/codex_fmtp2.txt`) -- are disclosed, not claimed.
+
+**Review (pass 2).**  GPT-6 Astra on the diff (`regress/artifacts/fmtattr/p2_20261105/astra/codex_fmtp2.txt`: `FMTP2: 7 EDITS WRONG, 4 NARROWINGS UNSAFE, 3 OTHER; VERDICT
+fix first`) -- the seven repaired; then on the composite (`regress/artifacts/fmtattr/p2b_20261105/astra/codex_fmtp2b.txt`: `FMTP2B: 0 REPAIRS WRONG, 1 NEW DEFECTS, ROW owed,
+TRUNCATIONS file`) -- file_ecoff.c's two `off_t` values repaired, the row built as the probe, the inherited narrowings filed.  Owed,
+and held with its question on the rows' regress stage (`_scratchpad/pipe/FABLE_QUEUE.md` item 4): Fable's final ruling on the
+round as committed, which is also the repair chain's closing pass on pass 2b's repair.
+
+**Filed** (ledger and OUTSTANDING_BUGS.md's `#584` section): `fmttruncinherited` (LOW) -- narrowings this round inherited and left
+(Astra: luna88k :919, lunafb :85/:177, memory.c :626, arcbios's A1/A2, ps2_bios's A1, dev_ether :125/:130, LE's writes
+:1014/:1034/:1052, bt455 :82, staged numbering), each printing the low 32 bits of a value that can be wider.  `codeqlscope`
+stays open: the CodeQL advanced-setup workflow and config land here (`.github/workflows/codeql.yml`,
+`.github/codeql/codeql-config.yml`: paths-ignore regress/artifacts and experiments); the OWNER switches Code scanning to Advanced
+after the next push.
+
+**Seats.**  One ledger entry per seat file of each stage on `fmtattr`, the non-firings and seat failures by name.  Research: 17 entries, 10 of them answers (codex 1, the adjudication; agy 9, Gemini 4 Argon's adjudication and its eight fix drafts); review: 10 entries, 2 answers (codex 2, Astra's passes 2 and 2b).  Grok 4.7 (402) and GLM 5.3 (monthly limit) are seat failures; kimi, deepseek and minimax were off the roster; Opus 5.5 built the round and Gemini drafted it, so neither reviewed it.  Fable's final is HELD on `fmtattr`'s and `fmtmissarg`'s regress stage with its question.
+
+**Of the round's evidence** the commit carries 94 files under `regress/artifacts/fmtattr/` (`regress/artifacts/fmtattr/landing_20261105/ART_fmt.txt`: destination, md5,
+source), copied from `_scratchpad/codescan/` and `_scratchpad/gweb/`, with the five measurement scripts that lived only in the
+session scratchpad.
+
+**Landing.**  The citation gate cannot select this block (`check_cited_artifacts.py` keys on `## Round <digits>` headings: `citeprefixblind`, filed by `#554`); its own resolver, run over the block by hand at the landing, resolves all 18 citations to this round's files.
+
 # `#583` Records (follow-up, 2026-11-05): `pvrrenderexit` names its landing commit `e1a091e4`; the committed-tree proofs; the pass-2 receipt
 
 `git ls-tree e1a091e4`, md5s hashed in Python from the committed bytes: `src/devices/dev_pvr.c` blob `0b92af702196`, md5 `f2fc508e34c5`; `regress/pvr_zwrite_probe.py` blob `c3b6a971b29b`, md5 `c70b1d2fd8f7`; `regress/gate_arm.sh` blob `3c18ef5026ba`, md5 `36f7b1bed04c`; `tools/precommit_check.sh` blob `b73e831d38d2`, md5 `ce25fc040cc2`; `tools/pipeline/check_probe_wiring.py` blob `807f15c11c1c`, md5 `88b4d0728cf5`.  The working copy against each: dev_pvr.c the same; pvr_zwrite_probe.py the same; gate_arm.sh plus other rounds' uncommitted edits (4 hunk(s)), none touching the pvr block; precommit_check.sh the same; check_probe_wiring.py plus other rounds' uncommitted MANIFEST entries (2 hunk(s)).

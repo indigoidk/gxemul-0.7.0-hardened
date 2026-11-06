@@ -228,9 +228,9 @@ static void le_chip_init(struct le_data *d)
 	      macaddr[3], macaddr[4], macaddr[5]);
 	debug("[ le: DEBUG: ladrf %04x:%04x:%04x:%04x ]\n",
 	      d->ladrf[0], d->ladrf[1], d->ladrf[2], d->ladrf[3]);
-	debug("[ le: DEBUG: rdra               %06llx ]\n", d->rdra);
+	debug("[ le: DEBUG: rdra               %06x ]\n", d->rdra);
 	debug("[ le: DEBUG: rlen                  %3i ]\n", d->rlen);
-	debug("[ le: DEBUG: tdra               %06llx ]\n", d->tdra);
+	debug("[ le: DEBUG: tdra               %06x ]\n", d->tdra);
 	debug("[ le: DEBUG: tlen                  %3i ]\n", d->tlen);
 
 	/*  Set TXON and RXON, unless they are disabled by 'mode':  */
@@ -925,8 +925,8 @@ DEVICE_ACCESS(le_sram)
 		if (writeflag == MEM_READ) {
 			memcpy(data, d->sram + relative_addr, len);
 			if (!quiet_mode) {
-				debug("[ le: read from SRAM offset 0x%05x:",
-				    relative_addr);
+				debug("[ le: read from SRAM offset 0x%05" PRIx64 ":",
+				    (uint64_t)relative_addr);
 				for (i=0; i<len; i++)
 					debug(" %02x", data[i]);
 				debug(" ]\n");
@@ -935,8 +935,8 @@ DEVICE_ACCESS(le_sram)
 		} else {
 			memcpy(d->sram + relative_addr, data, len);
 			if (!quiet_mode) {
-				debug("[ le: write to SRAM offset 0x%05x:",
-				    relative_addr);
+				debug("[ le: write to SRAM offset 0x%05" PRIx64 ":",
+				    (uint64_t)relative_addr);
 				for (i=0; i<len; i++)
 					debug(" %02x", data[i]);
 				debug(" ]\n");
@@ -1036,8 +1036,9 @@ DEVICE_ACCESS(le)
 
 			if (idata >= N_REGISTERS)
 				debugmsg(d->subsys, "register select", VERBOSITY_WARNING,
-				    "WARNING! register %i (max is %i)",
-				    idata, N_REGISTERS - 1);
+				    "WARNING! register %" PRIu64
+				    " (max is %i)", (uint64_t)idata,
+				    N_REGISTERS - 1);
 		}
 		break;
 
@@ -1057,7 +1058,7 @@ do_return:
 	if (writeflag == MEM_READ) {
 		memory_writemax64(cpu, data, len, odata);
 		debugmsg(d->subsys, "access", VERBOSITY_DEBUG,
-		    "read from addr 0x%06x: 0x%08x", relative_addr, odata);
+		    "read from addr 0x%06" PRIx64 ": 0x%08" PRIx64, (uint64_t)relative_addr, (uint64_t)odata);
 	}
 
 	dev_le_tick(cpu, extra);
