@@ -4054,7 +4054,10 @@ EXEMPT = {
     #  #550 (2026-09-25, re-dated individually by owner ruling 2026-09-24): owes an exit
     #  status (`wdcaltoffleg' (a): the probe exits 0 whatever its `ok' says) and a single-leg form: four
     #  of its 18 rows want the committed build's defect, which the gate's one binary cannot supply.
-    "wdc_altoffset_probe.py":     ("2026-11-05",
+    #  Re-dated 2026-11-05 -> 2026-11-19 on 2026-11-06 by owner ruling, in its own commit (the 04f3e7c0 shape): it came
+    #  due with its single-leg redesign (`wdcaltoffleg') still owed -- its gate 10 home, gate_sh_rounding.sh, is held by
+    #  another session -- and refused every commit.  Matched to its sibling's date below.  A re-date is not a discharge.
+    "wdc_altoffset_probe.py":     ("2026-11-19",
                                    "two-leg differential; wants a single-leg mode "
                                    "before gate 10 can assert anything"),
     #  #550 (2026-09-25, re-dated individually by owner ruling 2026-09-24): owes a redesign -- its oracle cannot tell the outcomes apart -- `wdcaltoffleg' (c).
