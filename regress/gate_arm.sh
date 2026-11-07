@@ -1169,8 +1169,10 @@ else
     #  each: M and O read one register three times (one site per process, so the pre-fix build shows
     #  each site's own death), X reads both (per-register latches), W only writes (a write never takes the
     #  read path; HEAD's write announces intact), B writes, reads, writes again (writes are not kept; a
-    #  write with the read latch set still takes the write path), U is M's reads with the MMU left ON
-    #  (never the device).  Each control (MC OC XC WC BC UC) is a `reg` taken BEFORE the arm's first
+    #  write with the read latch set still takes the write path), U makes one read of each register
+    #  (+0x100 into r7, +0x104 into r9) with the MMU left ON (never the device) [#585 records follow-up,
+    #  2026-11-06: this said "U is M's reads"; arm M is three reads of +0x100].  Each control
+    #  (MC OC XC WC BC UC) is a `reg` taken BEFORE the arm's first
     #  SDRAM access, so the pre-fix build reds M1-M3 O1-O3 X1 B1-B3 under green controls (measured,
     #  regress/artifacts/fbsdrampair/impl_20261105/probe_HEAD.out: ROWS=46 of 56, CONTROL=OK).
     check "footbridge: SDRAM controls MC OC XC WC BC UC -- six DISTINCT green ids" \

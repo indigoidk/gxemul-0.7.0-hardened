@@ -197,11 +197,19 @@ proves the load wrote it; every SDRAM operand is loaded from RAM (SD_DATA, DATA+
      read mask, read offset,                 B2 offset read = 0 (not 0x40000), announced once
      mask <- 0x12345678, offset <- 0x80000   B3 both AFTER-THE-READ writes still announce: a write
                                             with the read latch SET still takes the write path
-  U  arm M's reads with the MMU LEFT ON      U1 survived, exit 0, NO footbridge diagnostic, both
-     (VA 0x42000100/104 -> PA 0x02000100/104,  loads completed with 0 -- a CONTROL: it never
-     past -M 32's RAM end: zero fill)           reaches the device, so no product edit can red it
-The announces are matched as WHOLE bracketed lines (SD_MASK, SD_OFFSET), so a misnamed register,
-HEAD's exit text kept without its exit, or any extra footbridge diagnostic reds the row.
+  U  mask -> r7, offset -> r9: one read of  U1 survived, exit 0, NO footbridge diagnostic, both
+     each, with the MMU LEFT ON (VA            loads completed with 0 -- a CONTROL: it never
+     0x42000100/104 -> PA 0x02000100/104,      reaches the device, so no product edit can red it
+     past -M 32's RAM end: zero fill)
+The announces are matched as WHOLE bracketed lines (SD_MASK, SD_OFFSET), so a misnamed register
+or HEAD's exit text kept without its exit reds B1/B2 and the list rows; ANY extra footbridge
+diagnostic reds only the rows that compare the whole list (M3, O3, X1, U1) -- W1 tests only the
+two read texts, W2 filters by the write-announce prefix, B1-B3 count named texts.
+[Corrected in place 2026-11-06 by #585's records follow-up, from GPT-6 Astra's and Grok 4.7's
+reviews of the REGRESS ruling as Fable 5.1 adjudicated them (A2 and G3 in
+regress/artifacts/fbsdrampair/regress_20261106/ADJ_FBS.md): arm U's line said "arm M's reads with
+the MMU LEFT ON" -- arm M is three reads of +0x100 -- and the sentence above said "so a misnamed
+register, HEAD's exit text kept without its exit, or any extra footbridge diagnostic reds the row".]
 Values are DERIVED from the code, not fitted: odata is initialised to 0 and the read arms never
 assign it; the write arms' announce texts are `%#llx` of the value written, and 0x01FC0000 /
 0x03FC0000 are Table 7-7 values the mask whitelist accepts silently.
@@ -417,7 +425,8 @@ SD_BACK = [                             # arm B: write, read, write again
     _w(0x54, _str("fp", 0x104), "B3: offset <- 0x00080000, read latch SET: still the write arm's announce"),
     (0x58, NOP, NOPTXT, "landing pad -- planted, never stepped"),
 ]
-SD_MMUON = [                            # arm U: arm M's reads with the boot MMU LEFT ON
+SD_MMUON = [                            # arm U: one read of each register (+0x100 -> r7, +0x104 -> r9), boot MMU LEFT ON
+                                        # [corrected 2026-11-06, #585 records follow-up: this said "arm M's reads"]
     _w(0x2c, _ldr4("r7", 4), "r7 <- sentinel"),
     _w(0x30, _ldr4("r9", 4), "r9 <- sentinel"),
     _w(0x34, _ldr("r7", 0x100), "U: VA 0x42000100 -> PA 0x02000100, zero fill, never the device (snap_at)"),
@@ -897,8 +906,10 @@ results.append(sd_row("B2", "offset read after a write: 0, once",
 results.append(sd_row("B3", "writes after the reads still announce",
                       SB["fatals"].count(SD_WMASK) == 1 and SB["fatals"].count(SD_WOFF8) == 1,
                       "seen=%s" % sd_seen(SB["fatals"])))
-#  U: arm M's reads with the boot MMU LEFT ON -- a CONTROL.  It never reaches the device, so no product
-#  edit can red it; it shows that M/O/X/B's deaths and announces come from PA 0x42000100/104.
+#  U: one read of each register (+0x100 -> r7, +0x104 -> r9) with the boot MMU LEFT ON -- a CONTROL.  It
+#  never reaches the device, so no product edit can red it; it shows that M/O/X/B's deaths and announces
+#  come from PA 0x42000100/104.  [#585 records follow-up, 2026-11-06: this said "arm M's reads"; arm M is
+#  three reads of +0x100 -- regress/artifacts/fbsdrampair/regress_20261106/ADJ_FBS.md G3.]
 uc = sd_ctrl("UC", "arm U: MMU ON, cannot see the device", SU, 1, [(7, SD_SENT), (9, SD_SENT)])
 results.append(uc)
 u1 = sd_row("U1", "MMU-on SDRAM reads: alive, no diagnostic",
