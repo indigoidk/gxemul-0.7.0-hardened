@@ -4007,6 +4007,35 @@ MANIFEST = {
         (CLASS_RESEARCH, "ghostround: the PROTOTYPE ghost-round checker (a round block's header-named and in-work rows must be "
                          "closed or name the round; cutoff 2026-11-05), wired into no gate -- whether to wire it is the owner's "
                          "question on the row; census.out and controls/run_controls.out beside it -- preserved as evidence"),
+    #  #586 qhmutcrashscore: gate 3's crash-scoring fix.  Its evidence, artifacts/qhmutcrashscore/wkdc_20261105/,
+    #  is the killdrivercrash research as run on 2026-11-05 -- stub detectors, their drivers, the controls and one
+    #  census reader -- and landing_20261105/pass2/q2/ is pass 2's Q2 measurement through the same controls.  None
+    #  is a detector: the round's subject is gate 3 (regress/selftest_mutation.sh), a .sh, outside this domain; the
+    #  scripts below are preserved as run and run by no gate.
+    "artifacts/qhmutcrashscore/landing_20261105/pass2/q2/compare_q2.py":
+        (CLASS_TOOL, "#586 qhmutcrashscore: scores each Q2 leg against the research's own W2 control expectations "
+                     "(wkdc_20261105/controls/compare.py, imported); its output is Q2_CONTROLS.txt -- preserved as run"),
+    "artifacts/qhmutcrashscore/landing_20261105/pass2/q2/mk_q2.py":
+        (CLASS_TOOL, "#586 qhmutcrashscore: writes pass 2's Q2 mutants of the staged gate 3 -- Gemini 4 Argon's `|| echo 0` "
+                     "and the null repair `|| { echo 0; return; }` -- each an exact replacement of the fix's one guard line -- "
+                     "preserved as run"),
+    "artifacts/qhmutcrashscore/wkdc_20261105/census/retro_logs.py":
+        (CLASS_TOOL, "#586 qhmutcrashscore: reads the affected frozen drivers' preserved per-mutant logs for their completion "
+                     "sentinel; its output is census/RETRO_LOGS.out -- preserved as run"),
+    "artifacts/qhmutcrashscore/wkdc_20261105/controls/compare.py":
+        (CLASS_TOOL, "#586 qhmutcrashscore: reads the W1, W1R, W2 and W3 logs against expectations written in it before they "
+                     "were read, and writes controls/CONTROLS.txt -- preserved as run"),
+    "artifacts/qhmutcrashscore/wkdc_20261105/controls/mm_parse_control.py":
+        (CLASS_TOOL, "#586 qhmutcrashscore: measures the session pipeline's mutmeasure.py parse() (a scratch tool outside the "
+                     "repo) on synthetic run logs it writes itself; its output is controls/mm_parse_control.out -- preserved "
+                     "as run"),
+    "artifacts/qhmutcrashscore/wkdc_20261105/witness/mkstub_wdc.py":
+        (CLASS_TOOL, "#586 qhmutcrashscore: writes the six stub wdc detectors witness W1 ran the frozen kill479.sh against -- "
+                     "a genuine kill, a genuine survivor, SIGFPE before and after the first row, exit(1) after it, and one "
+                     "that does not compile -- preserved as run"),
+    "artifacts/qhmutcrashscore/wkdc_20261105/witness/stub_census.py":
+        (CLASS_RESEARCH, "#586 qhmutcrashscore: the stub census tool witness W3 ran killrow5c.sh's scorer against (a crash before "
+                         "any token, and after two of the four) -- preserved as evidence"),
 }
 
 #  DATED, NAMED DEBT -- not a count and not a silent allowlist.  gate_offline.sh MEASURED that

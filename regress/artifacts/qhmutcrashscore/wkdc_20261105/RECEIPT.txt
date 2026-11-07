@@ -1,0 +1,152 @@
+[PRESERVED COPY -- #586, 2026-11-07.  This is _scratchpad/wkdc/RECEIPT.txt (md5 55a5e139fc68d960e34f8eac3c93362d), the
+ killdrivercrash research receipt, kept as regress/artifacts/qhmutcrashscore/wkdc_20261105/RECEIPT.txt.
+ Its paths are relative to the research directory; this directory mirrors that layout for the files
+ preserved here, each listed in MD5SUMS.txt with its scratch source and md5.  Everything else it names
+ stayed in the session scratchpad and is not part of the repository record: headsrc/, headsrc_src/,
+ r479src/, fake/, controls/frozen/, controls/ks_unit/, controls/mm_rundir/, witness/first_runs/,
+ witness/W1_HEAD_try1 and try2 outputs, the per-leg trees under witness/g3/, witness/k479/,
+ witness/k479real/ and witness/r5c/ (their logs and driver outputs are kept), census/ other than
+ AFFECTED.tsv, RETRO_LOGS.out and retro_logs.py, and fix/ other than its three diffs and
+ killscore.sh.  One path below is rewritten, marked [#586: ...].  The scripts and logs beside it are
+ byte copies, so the /mnt/c/.../_scratchpad/wkdc paths inside them are the paths they ran at.]
+
+killdrivercrash -- "Kill drivers score a CRASHED mutant as a table result"           wkdc, 2026-11-05
+=====================================================================================================
+Every input read from HEAD ccd1c502 (wkdc/headsrc = `git archive HEAD regress tools`, *.sh *.py;
+wkdc/headsrc_src = HEAD's float_emul.c, dev_wdc.c, src/include, diff_ieee_store.c, diff_wdc_identify.c;
+wkdc/r479src = the same files at 23430365, the #479 commit).  Nothing in GXEMUL-SEC, est/ or a build tree
+was written; the only build-tree read is build/config.h, copied to wkdc/fake/config.h.  All runs in WSL Gentoo.
+Witness kind: harness: (the subject is the test apparatus; proven with STUB detectors, never an emulator defect).
+HEAD advanced to 2632277f during this work (a peer's records-only commit; `git diff --name-only ccd1c502 HEAD`
+lists no .sh or .py file, and gate 3 is still md5 00ab9a20), so every finding below holds at the current HEAD.
+
+WHAT THE DEFECT IS, measured
+----------------------------
+A driver that scores a run by COUNTING lines in its log, or by COMPARING extracted tokens with an expected
+value, scores a run that died by HOW FAR IT GOT -- and a crash leaves no trace in the table.
+
+  W1  HEAD kill479.sh (only its S/M/O path lines re-pointed; witness/k479/HEAD/driver_vs_input.diff = 2,4c2,4),
+      stub detectors (witness/mkstub_wdc.py):                                    witness/k479/W1_HEAD.log
+        SIGFPE before any row (buffered output lost, log 0 bytes)  ->  *ESCAPED* (clean sweep of 5 rows)
+        SIGFPE after one FAIL row, no sentinel                     ->  KILLED  1 red
+        fatal + exit(1) after one FAIL row (the host-kill shape)   ->  KILLED  1 red
+        does not compile                                           ->  KILLED  does not compile
+        genuine kill / genuine survivor                            ->  KILLED 2 red / *ESCAPED*  (correct)
+  W2  HEAD gate 3, regress/selftest_mutation.sh, run WHOLE in a fake ROOT with a stub differential
+      (witness/stub_diff_ieee_store.c; gate and lib.sh are HEAD's bytes, md5 00ab9a20 / 63b3aa8c):
+        all seven mutants raise SIGFPE before printing anything  ->  "selftest-float-emul-can-fail: PASS (15 checks)"
+                                                                     witness/g3/W2_HEAD.allcrash.log
+        mixed: SIGFPE x2, exit(1), and an EMPTY log each scored "DETECTED (must fail)" ok; the genuine
+        survivor correctly FAILs                                     witness/g3/W2_HEAD.mixed.log
+  W3  HEAD killrow5c.sh's scorer (its lines 26-54, extracted verbatim, md5 aed22a21), stub census tool:
+        census crashes before any token    ->  "///      killed"
+        census crashes after 2 of 4 tokens ->  "6/6//    killed"         witness/r5c/W3_HEAD.log
+      This is the shape the ledger row recommends ("score from a token the run only emits when it
+      finishes") -- and it is still affected: a MISSING token reads as a MISMATCH, and a mismatch is "killed".
+  Apparatus notes, both measured on the way: `1 / zero' did NOT trap (gcc rewrites 1/x as a compare, so the
+  "crash" stubs ran to their sentinel -- witness/W1_HEAD_try1_stub_did_not_crash.out), so the stubs use
+  raise(SIGFPE); and stdout+stderr relayed through wsl.exe into one file landed at different offsets (the
+  stderr lines overwrote the log's head -- witness/W1_HEAD_try2_relay_overwrote_head.out), so every witness
+  writes its own log inside WSL.  witness/first_runs/ keeps the witness logs as first produced, before
+  controls/run_controls.sh re-ran every leg from frozen copies (controls/frozen/, md5s in run_controls.log).
+
+THE CENSUS (census/)
+--------------------
+  Population deriver: census/drivers.py -- non-comment code that RUNS a script/binary and emits a kill word or
+  extracts a k/n score; pty probes, gate/precommit copies and *probe*/*witness* names excluded.  At HEAD:
+  191 files, 154 distinct after path-normalisation.  KNOWN MISSES by construction (count-only drivers that
+  print no kill word): kill482.sh and author_kill483.sh were found by shapes.py instead.
+  Hand-read: the live drivers (5), the ledger row's named drivers + drainscore.sh (12), and a SEEDED random
+  sample of 30 (census/sample.py 30 20261105 -> census/sample_30_20261105.txt).  All in census/CLASSIFIED.tsv.
+  Sample result: 3 not drivers; of 27 drivers 3 AFFECTED (S11, S28, S29), 7 GUARDED (refuse without the
+  sentinel), 11 SENT COLUMN (print rc / tail -1 beside the score -- the ledger row's EXIT+SENT remedy, no
+  verdict word), 6 END TOKEN (score only from a RESULT line printed 2-3 lines above the sentinel; a missing
+  token renders blank).  All three affected sample members fall in shapes the exhaustive set had found;
+  0 of the 24 others did.
+  Shape enumeration over ALL 2762 HEAD scripts: census/shapes.py -> census/SHAPES_raw.txt, every hit read.
+
+  AFFECTED: 20 drivers (census/AFFECTED.tsv) -- 1 LIVE, 19 frozen artifact records.
+    LIVE   regress/selftest_mutation.sh (gate 3, run.sh position 3)  -- already filed as task #55
+           (OUTSTANDING_BUGS.md 2026-08-12) and idless LOW `qhmutcrashscore`: the same defect.
+    A  2026-08-27 the wdc compile-and-count family, one build_run function copied nine times:
+           kill479 killalt kill482 kill480 kill480b kill477b kill478 author_kill483 drainscore
+           (the ledger row named seven; author_kill483.sh and drainscore.sh are new.  drainscore.sh is the
+           WORST direction: a crashed variant reads CLOSED on every row and "all green".)
+    D  2026-08-29 killrow5.sh, killrow5c.sh (token compare)
+    B  2026-08-30 kill495.sh kill495_M5.sh kill495_M6.sh kill495_M7.sh kill494.sh -- KILLED/ESCAPED from a
+           prediction count the probe prints BEFORE its sentinel (the gap the row fixed in killswap.sh)
+    other  pcc2widthkills pass6 measure.sh (2026-09-03, "differ"); asiceventaddr asic_mutants.sh (2026-10-09,
+           escape direction only); dashokclass run_mutants.py v1 (2026-10-16; its v3-v7 check the sentinel)
+  NOT affected (read): selftest_mutation_295.sh, selfmutant.py, absorb_census.py, check_probe_wiring --selftest,
+    killswap.sh (fixed 08-30), kill489d.sh (renders NORESULT).  table499.sh DELEGATES scoring to a detector
+    that is not preserved (detector.run.py was a scratchpad copy) -- unverifiable at HEAD.
+  DID IT CORRUPT A RECORDED TABLE?  census/retro_logs.py -> census/RETRO_LOGS.out: 89 preserved per-mutant
+    logs of the affected frozen drivers read at HEAD, 0 without their completion sentinel (63
+    WDC_IDENTIFY_FAIL, 9 WDC_IDENTIFY_PASS, 9 ADDTOINBUF_RUNG3_DONE, 8 ALTOFF_*_DONE).  The defect is in the
+    drivers, not -- as far as the preserved logs show -- in any recorded result.  (killrow5/5c, measure.sh,
+    asic_mutants.sh and run_mutants.py v1 preserved no per-run logs, so they are not covered by this check.)
+
+THE FIX (fix/; each a counted, exact-replacement edit of HEAD's bytes by fix/mkfix.py, diff beside it)
+--------------------------------------------------------------------------------------------------
+  fix/selftest_mutation.diff  THE LIVE ONE: build_and_run (HEAD lines 169-174) +7 -1 -- capture the run's
+      status, then `grep -qE '^DIFF_(PASS|FAIL)' || { echo "NOLOG rc=$rc"; return; }` before the count.
+      The differential's verdict line is its last line, so it is the sentinel.  Check rows unchanged.
+  fix/killscore.sh            the SHARED helper, ks_score LOG RC SENTINEL_ERE COUNT_ERE: the last non-blank
+      line must be the sentinel, else "NOLOG rc=<RC>"; otherwise the count.  mutmeasure.py's parse() rule.
+      Proposed landing path regress/killscore.sh.
+  fix/kill479.diff (+7 -4), fix/killrow5c.diff (+8 -3)  how the two driver shapes use it -- DEMONSTRATIONS:
+      the 19 frozen drivers are records of what ran and must NOT be patched in the tree.
+      kill479's edit also makes a compile failure BUILDFAIL instead of KILLED (precommit E2's own rule:
+      "a build fault is a FAULT, not a detection") -- a separable second hunk.
+
+CONTROLS (controls/)
+--------------------
+  CONTROLS.txt (compare.py; expectations written in the script before the logs were read):
+                        "CONTROLS: 33 of 33 rows as expected".  Both directions, per witness:
+                        REFUSED by the fix, scored by HEAD -- W1 Mc_early/Mc_late/Mx_exit1 -> NOLOG rc=136/136/1,
+                          Mcf -> BUILDFAIL; W2 mixed: 4 crashed runs -> NOLOG (gate FAIL 5 of 15 vs HEAD's 1 of 15);
+                          W2 allcrash: HEAD PASS (15 checks) -> FIX FAIL (7 of 15), every mutant NOLOG rc=136;
+                          W3 Mc/Mc2 -> NOLOG rc=1.
+                        UNCHANGED, byte-identical to HEAD -- every genuine kill and survivor line (W1 Mk/Ms and
+                          the baseline, W2 revert287/flushband/tiesaway and the control row, W3 BASE/Ms/Mk), gate 3's
+                          WHOLE output with every mutant a genuine kill (allkill), and gate 3's WHOLE output on
+                          HEAD's REAL diff_ieee_store.c and float_emul.c with its seven real mutants (real: PASS,
+                          15 checks, under both; each real mutant's log ends DIFF_FAIL, the control's DIFF_PASS).
+                        Every FIX leg that sources the helper ran with fix/killscore.sh md5 a1cf62d5
+                        (controls/rerun_ks_legs.log); every leg ran from a frozen copy (controls/frozen/).
+  ks_unit.out           ks_score on synthetic logs, both directions: 10 of 10 (and ks_unit.frozen.out on the
+                        frozen copy: 10 of 10).
+  mm_parse_control.out  mutmeasure.py's parse() [#586: _scratchpad/pipe/, a session tool outside the repo] MEASURED (not read): truncated, late-crash
+                        and empty runs -> NOLOG with rc; build failure -> BUILDFAIL; kill/survivor -> OK: 7 of 7.
+                        (imported with bytecode OFF; pipe/__pycache__ mtimes unchanged.)
+  W1R valid-run control: kill479 HEAD vs FIX against the REAL #479 detector (r479src, 80 rows, 0 failures,
+                        WDC_IDENTIFY_PASS): driver output byte-identical (md5 29d6477d both).  Against HEAD's
+                        detector the frozen driver reads "BASELINE NOT GREEN" under BOTH (HEAD's detector now prints
+                        22 deliberate @@SELFCHECK@@ FAIL lines on the healthy path) -- an unrelated reason the
+                        frozen drivers cannot be re-run as-is: witness/k479real/headsrc_src_run1/.
+
+IS ONE SHARED HELPER THE MINIMAL FIX?
+-------------------------------------
+  For the LIVE member, no: gate 3's minimal fix is its own two-line guard (fix/selftest_mutation.diff), and it
+  needs no new file.  For the CLASS, yes -- with a condition.  19 of the 20 are one-off drivers, each written
+  from scratch per round, and the class recurred after it was filed: 08-27 (nine), 08-29, 08-30 (five, the
+  same day killswap.sh was fixed), 09-03, 10-09, 10-16.  Patching frozen records fixes nothing that will run
+  again; a shared ks_score stops the NEXT driver -- but only if something makes the next driver use it.  That
+  is this project's structure-first rule: a helper nobody is pointed at is prose with a file extension.
+  The trigger is an OWNER decision, not made here: a BRIEF_TEMPLATE / PRETABLE line ("the driver scores through
+  regress/killscore.sh, or runs under mutmeasure.py"), or a precommit check that a new killtable dir's
+  driver calls ks_score or prints NOLOG.  mutmeasure.py already implements the same rule for whole tables
+  (controls/mm_parse_control.out), so the helper is for ad-hoc shell drivers only.
+
+OWED (not done here)
+--------------------
+  1. Land fix/selftest_mutation.diff as a round (test-first is satisfied by W2: HEAD gate 3 PASSes with every
+     mutant crashed).  It closes task #55 / `qhmutcrashscore` as well -- the same defect; do not run it twice.
+  2. Land fix/killscore.sh as regress/killscore.sh, plus the trigger above (owner decision).
+  3. Gate 3 has no RUN timeout: a mutant that hangs wedges the gate (no false pass, no result).  The
+     `qhmutcrashscore` text names "times out" too.  selfmutant.py's per-phase budgets are the in-tree idiom.
+  4. table499.sh is unverifiable: its detector (detector.run.py) was never preserved.
+  5. The census of shapes OTHER than the five found rests on a sample (0 of 24); full enumeration is not done.
+  6. The 19 frozen drivers are records: do not patch them; the retro check above found no recorded result
+     resting on a truncated run.  A frozen driver should never be re-run as-is against HEAD's detectors
+     (W1R: HEAD's wdc detector already breaks kill479's FAIL count for an unrelated reason).

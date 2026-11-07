@@ -1,0 +1,27 @@
+--- HEAD:regress/artifacts/batteryreds/row5_20260829/killrow5c.sh
++++ fix/killrow5c.sh
+@@ -24,8 +24,12 @@
+ WANT="6/6/6/11"
+ 
+ score () {
+-	local o
+-	o=$(python3 "$CEN" "$1" 2>/dev/null)
++	local o rc
++	o=$(python3 "$CEN" "$1" 2>/dev/null); rc=$?
++	#  killdrivercrash: a census run that did not finish is NOT a mismatch.  The tool's
++	#  last line is WDC_LATCH_DECL=, so that is its sentinel; without it, refuse.
++	printf '%s\n' "$o" | tail -n 1 | grep -qE '^WDC_LATCH_DECL=[0-9]+$' \
++	    || { printf 'NOLOG rc=%s' "$rc"; return; }
+ 	printf '%s/%s/%s/%s' \
+ 	  "$(printf '%s\n' "$o" | grep -oE 'WDC_LATCH_SET=[0-9]+'      | cut -d= -f2)" \
+ 	  "$(printf '%s\n' "$o" | grep -oE 'WDC_LATCH_READ=[0-9]+'     | cut -d= -f2)" \
+@@ -47,7 +51,8 @@
+ row () {
+ 	local got v
+ 	if [ ! -f "$2" ]; then got="(no file)"; else got=$(score "$2"); fi
+-	if [ "$3" = yes ]; then [ "$got" = "$WANT" ] && v="*** ESCAPED ***" || v="killed"
++	if [ "${got%% *}" = NOLOG ]; then v="NOLOG -- the census did not finish; not scored"
++	elif [ "$3" = yes ]; then [ "$got" = "$WANT" ] && v="*** ESCAPED ***" || v="killed"
+ 	else [ "$got" = "$WANT" ] && v="ok" || v="*** FALSE POSITIVE ***"; fi
+ 	printf '  %-46s %-14s %s\n' "$1" "$got" "$v"
+ }

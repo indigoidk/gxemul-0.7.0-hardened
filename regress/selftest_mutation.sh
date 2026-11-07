@@ -166,10 +166,20 @@ PY
     [ $? -eq 0 ] && echo ok || echo FAIL
 }
 
-build_and_run() {   # label, source file -> prints DIFF_PASS count
+build_and_run() {   # label, source file -> prints DIFF_PASS count, BUILDFAIL, or NOLOG rc=<n>
     $CC -O2 -I"$TREE/src/include" -o "$T/$1" \
         "$HERE/diff_ieee_store.c" "$2" -lm > "$T/$1.build" 2>&1 || { echo "BUILDFAIL"; return; }
     "$T/$1" > "$T/$1.out" 2>&1
+    local rc=$?
+    #  #586 qhmutcrashscore (task #55): a run that never printed its verdict is NOT a detection.
+    #  Counting DIFF_PASS alone scored a mutant run that crashed, called exit(1) or printed
+    #  nothing as "DETECTED (must fail)"; with all seven mutants killed by SIGFPE before any
+    #  output this gate went PASS -- measured with a stub differential, kept at
+    #  regress/artifacts/qhmutcrashscore/wkdc_20261105/witness/g3/W2_HEAD.allcrash.log.
+    #  The differential's verdict line is its last line, so it is the sentinel: a run without
+    #  one prints NOLOG and its check reds.  A run that HANGS still wedges this gate -- there is
+    #  no per-run time bound (ledger row gate3runbound).
+    grep -qE '^DIFF_(PASS|FAIL)' "$T/$1.out" || { echo "NOLOG rc=$rc"; return; }
     grep -c 'DIFF_PASS' "$T/$1.out"
 }
 

@@ -1,0 +1,31 @@
+**Q1: Premise Audit**
+
+*   **P1: UNSETTLED.** Section 3 shows that the tail of `main()` prints `DIFF_PASS` or `DIFF_FAIL` as its final action before `return 0;`, establishing that it is the verdict and the last line. However, because Section 3 only provides the end of the file, it is impossible to verify from this packet alone that the differential prints *nothing else* matching `^DIFF_(PASS|FAIL)` earlier in its execution. Settling this requires the full source of `regress/diff_ieee_store.c`.
+*   **P2: TRUE.** In Section 2 (the staged `build_and_run`), `local rc=$?` immediately follows `"$T/$1" > "$T/$1.out" 2>&1`, meaning `$?` holds the exit status of the run. Nothing intercepts or resets it.
+*   **P3: TRUE.** Under Section 2's `check()` function, `"$2" = "$3"` compares strings. `"NOLOG rc=<n>"` will never equal the strings `"1"` or `"0"`, regardless of the status code `<n>`. 
+*   **P4:** 
+    *   *Verdict printed and exit 0:* `grep -qE` succeeds; it drops to `grep -c` and counts `DIFF_PASS`. **Scored (Right).**
+    *   *Killed by signal before output:* No verdict line. `grep -qE` fails; it prints `NOLOG rc=<n>` and returns. **Refused (Right).**
+    *   *Exit(1) after one output line:* No verdict line. `grep -qE` fails; it prints `NOLOG rc=1` and returns. **Refused (Right).**
+    *   *No output and exit 0:* No verdict line. `grep -qE` fails; it prints `NOLOG rc=0` and returns. **Refused (Right).**
+    *   *Verdict printed and then killed:* `grep -qE` succeeds (the file has the verdict); it drops to `grep -c` and scores. **Scored (Right).** It successfully printed its verdict before the crash, so the verdict is intact.
+*   **P5: TRUE.** The Section 2 callers block loops exactly identically to HEAD: 7 mutants for "could be applied", 1 real for "passes gate 2", 7 mutants for "is DETECTED". Total of 15 checks, keeping the same check text structure and sequence.
+*   **P6: NO (TRUE that they do not differ).** For any completed run containing `DIFF_PASS` or `DIFF_FAIL`, the staged `grep -qE` evaluates to true, skipping the `NOLOG` trap and executing the exact same `grep -c 'DIFF_PASS'` as HEAD. The output (an integer count) remains byte-identical.
+
+**Q2: The smallest edit that breaks the fix and still passes**
+
+Changing `|| { echo "NOLOG rc=$rc"; return; }` to `|| echo 0`. 
+If a mutant crashes and produces no output, the modified regex check fails and echoes `0`. Because `check()` expects `"0"` (`want=0`) for mutants to register as detections, the crashed runs would once again score as successful detections. Meanwhile, the `allkill` and `real` completed sets (which successfully print their verdicts) bypass the `|| echo 0` and correctly output `0` and `1` from `grep -c`, keeping them perfectly green.
+
+**Q3: Option-set completeness**
+
+The chosen disposition (refusing the run by forcing a mismatched string `NOLOG rc=...`) is correct because it explicitly captures the harness failure while preventing false positives. A missing disposition from the listed options is **checking for a specific required exit code alongside the verdict token** (e.g., `[ $rc -eq 0 ] && grep -c ...`), which ensures the binary successfully terminated rather than printing its verdict, flushing, and subsequently faulting on teardown.
+
+**Q4: Records**
+
+*   *"with all seven mutants killed by SIGFPE the gate printed PASS (15 checks)"*: **TRUE**. Confirmed in Section 5's inline of "HEAD's gate, all seven mutants crashed".
+*   *"the fixed gate printed FAIL (7 of 15 checks), every mutant NOLOG rc=136"*: **TRUE**. Confirmed in Section 5's inline of "The fixed gate on the same set".
+*   *"the gate's fifteen checks, their names and its output on completed runs are unchanged"*: **TRUE**. Confirmed by the loop structure in Section 2 and the `byte-identical` claims in Section 5 (`W2 gate 3, allkill` and `real`).
+
+P-GWEBKDCP2-bb09
+GWEBKDCP2: 9 ATTACKS 0 BROKEN 8 HOLDS 1 UNSETTLED DRAFTABLE:YES

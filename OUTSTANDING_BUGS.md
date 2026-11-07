@@ -687,6 +687,11 @@
 > `tail -1`), so a truncated run yields a MISSING token rather than a plausible number --
 > the completion-sentinel rule applied to the SCORER instead of the log reader.
 >
+> **[`#586`, 2026-11-07: the class's one LIVE member, gate 3 (`regress/selftest_mutation.sh`), is FIXED as `qhmutcrashscore`;
+> the research's census names 20 affected drivers, the other 19 frozen records, not patched
+> (`regress/artifacts/qhmutcrashscore/wkdc_20261105/census/AFFECTED.tsv`).  `killdrivercrash` is HELD for the owner's decision on a shared scoring
+> helper and its trigger, on the Mythos route -- see the `#586` section at the end of this file.]**
+>
 > ### OPEN -- filed 2026-08-29: *** A GUEST WRITE TO A READ-ONLY REGISTER ABORTS A LIVE TRANSFER ***
 >
 > ✅ **`wdcaltoffset` RESOLVED. Ticked in place 2026-09-11: ledger `closed`, sev high, shipped as `#493`
@@ -1575,7 +1580,7 @@
 >   privilege-by-construction note, the once-per-BREAK semantic limit
 >   (harness task #61).
 > - **#376 harness residuals** — the mutation selftest counts a crashing mutant as
->   detection (task #55); the rounding-probe parser lacks address binding (task #56);
+>   detection (task #55; **FIXED by `#586`, 2026-11-07**); the rounding-probe parser lacks address binding (task #56);
 >   arc-only `.l` rows owed (task #57).
 >
 > **Ready to work — reproduced, and an instrument already exists**
@@ -4713,6 +4718,9 @@ corruption without a clear host-OOB path.
 >   caught; the crash-after-build case is not). `selftest_mutation_295.sh` already refuses this (`grep M295_RESULT= ||
 >   SETUP_FAIL`); port the same discipline back. Test-first: swap a mutant binary for
 >   `/bin/false` and watch the old check "detect" it.
+>   **[`#586`, 2026-11-07: FIXED -- a run with no `DIFF_PASS`/`DIFF_FAIL` line now prints `NOLOG rc=<status>` and its
+>   check reds (ledger `qhmutcrashscore`); the "times out" case is `gate3runbound`.  See the `#586` section at the
+>   end of this file.]**
 > - **(#56) `mips_rounding_probe.py`'s readback accepts any dump-shaped line** (`:151` regex) —
 >   no binding between the parsed line's address and the requested one, so a stale or
 >   interleaved dump line can satisfy a row. The #376 probe binds its parse to the aligned
@@ -24176,7 +24184,7 @@ the prose: 4139-4145 (line numbers of this file as of commit `db8b1a33`) -- `reg
 
 * `qharmwbdebt` -- Owed record correction of the stale general-load coverage claims, cross-referencing qharmgenstore for the cold general-store row and qharmpathaudit for the measured inventory re-audit (lines 1518-1521 at `db8b1a33`)
 * `qharmmultiorder` -- One order-blind ARM multi emitter, latent behind the little-endian install gate; a future big-endian path must emit endian variants and swap the memcpy fold's raw publishes in that same change (lines 1522-1525 and 4580-4591 at `db8b1a33`)
-* `qhmutcrashscore` -- selftest_mutation.sh treats a mutant that crashes, times out, or prints nothing as detected, because it ignores the exit status and counts DIFF_PASS (lines 1529-1531 (task #55 only) and 4621-4628 at `db8b1a33`)
+* `qhmutcrashscore` -- selftest_mutation.sh treats a mutant that crashes, times out, or prints nothing as detected, because it ignores the exit status and counts DIFF_PASS (lines 1529-1531 (task #55 only) and 4621-4628 at `db8b1a33`) **[`#586`, 2026-11-07: promoted to its own ledger row and FIXED; the "times out" case is `gate3runbound`.]**
 * `qharmpcmeasure` -- ARM PC 0xfffff000 case is still unmeasured (lines 1794-1805 at `db8b1a33`)
 * `qhshapprox` -- fsca and fsrra rounding choice is still marked unsourced (lines 1974-1976 at `db8b1a33`)
 * `qhdiagrest` -- Unlatched ASC diagnostics remain owed, and the repaired DEBUG-gated FDC diagnostics leave this debt. (lines 2319-2342 at `db8b1a33`)
@@ -26737,3 +26745,28 @@ src/devices/dev_dec5800.c:359-367 at 987cb596: The DEC 5800 CPU-mask registers a
 * **`fmtmissargwitness` (LOW, open) -- new**, filed by the ruling under the late-dissent rule (disposition 3): the two
   guest-reachable `fmtmissarg` sites were not offered to one seat for a single rung-3 attempt before the round was recorded on a
   `detector:` witness.  The owner may drop it as documented-only.
+
+## 2026-11-07 -- `#586` qhmutcrashscore: gate 3 no longer scores a mutant run that never printed its verdict as a detection
+
+* **FIXED** -- `qhmutcrashscore` (LOW; task #55; a member of `idlesslow`, promoted to its own ledger row by this round):
+  `regress/selftest_mutation.sh`'s `build_and_run()` counted DIFF_PASS lines, so a mutant run that crashed, called
+  `exit(1)` or printed nothing scored `DETECTED (must fail)`.  A run with no line beginning `DIFF_PASS` or `DIFF_FAIL`
+  now prints `NOLOG rc=<status>` and its check reds.  Witness (harness:): HEAD's gate PASS (15 checks) with every mutant
+  crashed, the fixed gate FAIL (7 of 15 checks); controls 33 of 33 (`regress/artifacts/qhmutcrashscore/wkdc_20261105/controls/CONTROLS.txt`).  See the `#586` round
+  block in CHANGELOG.md.
+* **Landed** -- in the commit that adds this section; the records commit after it names it.
+* **Filed, new (LOW):** `gate3runbound` -- gate 3 runs each mutant's differential with no time bound, so a mutant that
+  hangs wedges the gate and the battery behind it (no false pass, no verdict).
+* **Filed, new (LOW):** `g3nologselfpin` -- from the regress review: the NOLOG guard has no standing
+  control, so deleting it reds no check.  The ruling's shape: an eighth gate-3 mutant, a constructor
+  that raises SIGFPE before `main`, whose check wants `NOLOG rc=136`.
+* **Held for the owner's decision, on the Mythos route:** `killdrivercrash` -- the class.  Its one live member is fixed here; its 19 other members are
+  frozen records, not patched, and their 89 preserved per-mutant logs all end in their sentinel.  The decision: land
+  `regress/artifacts/qhmutcrashscore/wkdc_20261105/fix/killscore.sh` as a shared helper and choose its trigger (a brief-template line -- `tools/BRIEF_TEMPLATE.md`
+  is not committable now -- or a precommit check), or not.  The question is in the row's `hold_question`,
+  with the regress review's note on gate 3's anywhere-in-the-log rule against the helper's last-line rule.
+* **Regress review:** Fable 5.1 ruled before the landing -- `FABLEREGKDC: 16 CHECKS 0 FLOOR-BREACHES 1 RECORD-NIT(commit.msg five->seven, pre-FINAL) 1 DEBT-TO-FILE(g3 guard self-pin, LOW) INSITU:OWED-BY-STEP-4 VERDICT:LAND`
+  (`regress/artifacts/qhmutcrashscore/regress_20261106/RULING.md`).  Its one record nit was corrected before this commit.
+  Two confirming reviews of the ruling were adjudicated by Fable 5.1 -- `FABLEADJ_KDC: 10 ACCEPTED 0 REJECTED VERDICT:LAND-AFTER-RECORDS`
+  (`regress/artifacts/qhmutcrashscore/regress_20261106/ADJ_KDC.md`): no repair; its ten record corrections are made, the ruling's in `regress/artifacts/qhmutcrashscore/regress_20261106/RULING_ERRATA.md`.
+* **Uncommitted beside it:** nothing of this round.
