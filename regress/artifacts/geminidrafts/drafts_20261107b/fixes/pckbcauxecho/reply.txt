@@ -1,0 +1,36 @@
+This is a defensive review of the provided issue and code.
+
+**Claim Analysis:**
+1. *GXemul is a computer-architecture emulator* - UNSETTLED. Needs project README or main documentation.
+2. *this fork removes crash-on-malformed-input and wrong-behaviour defects from its device and CPU models* - UNSETTLED. Needs commit history or project charter.
+3. *Below is one filed issue, inlined from the project's ledger* - HOLDS. The text contains the formatted issue.
+4. *the current code at each source line it cites (HEAD 8d9df658)* - HOLDS. Source is inlined.
+5. *You cannot read files; work from the text* - HOLDS. Environmental constraint.
+6. *This is a DRAFTING task: write the FIX ONLY, as exact edits* - HOLDS. Procedural constraint.
+7. *Do not write tests, probes or reproduction steps* - HOLDS. Procedural constraint.
+
+STILL PRESENT: YES -- 1010| default:d->reg[relative_addr] = idata; dev_pckbc_command(d, port_nr);
+
+```json
+[
+  {
+    "file": "src/devices/dev_pckbc.c",
+    "old": "\t\t\tcase STATE_LDOUTPUT:\n\t\t\t\td->output_byte = idata;\n\t\t\t\td->state[port_nr] = STATE_NORMAL;\n\t\t\t\tbreak;\n\t\t\tdefault:d->reg[relative_addr] = idata;\n\t\t\t\tdev_pckbc_command(d, port_nr);\n\t\t\t}",
+    "new": "\t\t\tcase STATE_LDOUTPUT:\n\t\t\t\td->output_byte = idata;\n\t\t\t\td->state[port_nr] = STATE_NORMAL;\n\t\t\t\tbreak;\n\t\t\tcase STATE_WAITING_FOR_AUX:\n\t\t\tcase STATE_WAITING_FOR_AUX_OUT:\n\t\t\t\td->reg[relative_addr] = idata;\n\t\t\t\tdev_pckbc_command(d, 1);\n\t\t\t\td->state[port_nr] = STATE_NORMAL;\n\t\t\t\tbreak;\n\t\t\tdefault:d->reg[relative_addr] = idata;\n\t\t\t\tdev_pckbc_command(d, port_nr);\n\t\t\t}",
+    "why": "Route data written during STATE_WAITING_FOR_AUX and STATE_WAITING_FOR_AUX_OUT to the auxiliary device (port 1) and reset state, preventing echoing into the keyboard stream (port 0)."
+  }
+]
+```
+
+**Deliberately not changed:**
+- The handling of normal writes to the data port remains directed to the active `port_nr`.
+- We do not modify how `dev_pckbc_command` behaves internally.
+- We leave `0xd3` (aux out) and `0xd4` (aux) handled by the exact same state machine injection logic, as both pertain to interacting with the aux interface.
+
+**Unsettled:**
+- Whether `0xd3` (write to aux output buffer) requires pushing directly via `pckbc_add_code` instead of invoking `dev_pckbc_command(d, 1)`. I assumed `dev_pckbc_command` can properly interpret the written data byte for both commands when routed to port 1, but this depends on `dev_pckbc_command`'s implementation which is omitted.
+
+FIXDRAFT_PCKBCAUXECHO: YES PRESENT, 1 EDITS
+
+P-GWEBFIXPCKBCAUXECHO-f02c
+GWEBFIXPCKBCAUXECHO: 7 ATTACKS 0 BROKEN 5 HOLDS 2 UNSETTLED DRAFTABLE:YES

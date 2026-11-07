@@ -1,0 +1,23 @@
+FIXREVIEW_M88KEXCSFU1: DEFECT, 3 FINDINGS
+
+1. Does the diff remove the defect the issue describes, at every site the issue names?
+No. The issue explicitly states that "faithful delivery needs the FP exception registers" and "also owes the scoreboard... the SSBR holds the scoreboard in effect". The diff merely sets `implemented = true` to pass execution to the generic exception tail. It fails to write the required FP registers (FPHS1, FPLS1, etc.), and the generic tail actively clears the scoreboard. 
+
+2. CONTROL FLOW: does any added `return`, `goto`, `break` or early exit skip code the function would otherwise run?
+No. The diff does not add any early exits that skip the function's common tail. In fact, by setting `implemented = true`, it prevents the early exit that previously halted the guest.
+
+3. RETURN VALUE: does any path now return something different?
+No. The `m88k_exception` function has a `void` return type, and no return values are altered.
+
+4. What ELSE does the diff change -- state left set or cleared, a value the guest can now see, a message on a path that did not print one -- beyond removing the defect?
+By reaching the common exception tail instead of halting, the function now modifies the guest's control registers (`EPSR`, `PSR`, `SXIP`, `SNIP`, `SFIP`). Most critically, it actively clears `SSBR` to 0 (line 839), destroying the scoreboard state that the issue explicitly notes `rte` needs to restore.
+
+5. House idioms (low severity): a diagnostic a guest can trigger repeatedly should print ONCE... a new comment carries a `/* #NNN: ... */` tag...
+The diff adds a comment tag `/* #380 */` but fails to include the required descriptive text after the issue number.
+
+src/cpus/cpu_m88k.c:759 DEFECT: The exception is delivered without populating the required FPHS1/FPLS1/FPPT registers required by the architecture. Fix: Populate SFU1 exception state before breaking.
+src/cpus/cpu_m88k.c:839 DEFECT: Proceeding to the common tail unconditionally executes `cpu->cd.m88k.cr[M88K_CR_SSBR] = 0;`, destroying the scoreboard needed for FP exception delivery. Fix: Bypass zeroing SSBR for SFU1 exceptions.
+src/cpus/cpu_m88k.c:759 STYLE: The issue tag `/* #380 */` lacks descriptive text. Fix: `/* #380: Deliver SFU1 exception */`.
+
+P-GWEBREVM88KEXCSFU1-f145
+GWEBREVM88KEXCSFU1: 5 ATTACKS 3 BROKEN 2 HOLDS 0 UNSETTLED DRAFTABLE:NO

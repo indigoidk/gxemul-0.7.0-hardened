@@ -1,0 +1,30 @@
+FIXREVIEW_PIT8253LSBNOTIMER: DEFECT, 2 FINDINGS
+
+1. **Does the diff remove the defect the issue describes, at every site the issue names? Name any site it misses.**
+   Yes, the diff removes the defect at the sites it targets. By zeroing the opposite byte for one-byte formats, it prevents keeping the other byte stale against the datasheet. By moving the timer setup outside of `case I8253_TIMER_MSB:`, it allows the LSB arm to install the timer, which resolves the wrong host rate on counter 0. It misses no named sites.
+
+2. **CONTROL FLOW: does any added return, goto, break or early exit skip code the function would otherwise run -- above all its COMMON TAIL?**
+   No. The only added `break;` is at `AFTER:189` inside the relocated `default:` case. This correctly exits `switch (rw)` without skipping the function's common tail; execution simply proceeds to the timer setup condition (which correctly evaluates to false), exits the outer switch, and reaches the `memory_writemax64` and `return 1;` tail normally.
+
+3. **RETURN VALUE: does any path now return something different?**
+   No. Every execution path still finishes at `AFTER:371` and returns `1`. This implies that the memory access attempt was successfully intercepted and handled by the 8253 emulator logic.
+
+4. **What ELSE does the diff change -- state left set or cleared, a value the guest can now see, a message on a path that did not print one -- beyond removing the defect?**
+   Beyond removing the core defect, moving the timer setup logic makes the `switch (relative_addr)` statement at `AFTER:203-215` reachable from LSB writes. As a result, writing to counter 1 or 2 in an LSB-only format will now print a `fatal("TODO: ...")` warning message on a path that previously did not print one.
+
+5. **House idioms (low severity):**
+   The diff introduces lines that exceed the 79-column width limit.
+
+***
+
+* `src/devices/dev_8253.c:192`
+  severity: DEFECT
+  fix: `			if (rw == I8253_TIMER_MSB || (d->mode_byte & 0x30) == I8253_TIMER_LSB) {`
+  *(Note: The current fix triggers timer setup prematurely on the first byte of a 16-bit format write because `rw` resolves to `I8253_TIMER_LSB`. The timer should only start after the entire programmed format is written.)*
+
+* `src/devices/dev_8253.c:178`
+  severity: STYLE
+  fix: `					d->counter[relative_addr] = (d->counter[relative_addr] & 0xff00) |`
+
+P-GWEBREVPIT8253LSBNOTIMER-be4c
+GWEBREVPIT8253LSBNOTIMER: 2 ATTACKS 2 BROKEN 0 HOLDS 0 UNSETTLED DRAFTABLE:NO

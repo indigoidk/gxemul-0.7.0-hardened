@@ -1,0 +1,85 @@
+#!/usr/bin/env python3
+"""mk_next4.py N... -- records-only checks (agy prompt + Gemini-web packet) for further HELD landed rounds, after the five
+oldest (#569-#573, mk_oldest3.py / mk_oldest5.py).  Each round's range is DERIVED from CHANGELOG.md at 116c5aa9: from its
+first `# `#N`` header to the line before the next column-0 `# ` header that is not the same round's -- the #572 packet ran
+past its block into #571's records section, and this guard exists because of that.  Records only -- no reproduction, test
+design or code review is asked for."""
+import io
+import os
+import re
+import sys
+
+H = os.path.dirname(os.path.abspath(__file__)).replace("\\", "/") + "/"
+SNAP = os.environ.get("SNAP", "CHANGELOG_116c5aa9.md")
+CL = io.open(H + SNAP, encoding="utf-8").read().split("\n")
+HDR = re.compile(r"^# ")
+ROWS = {"574": "i8259eoiirr", "576": "shfcnvsdfpul", "577": "shblreset", "578": "jazzvecdeassert", "579": "ppcllscrcexit",
+        "580": "mipsprimundec", "581": "mvme187memcoob", "582": "qhslowifetch", "583": "pvrrenderexit", "584": "fmtattr",
+        "585": "fbsdrampair", "586": "qhmutcrashscore", "562": "armmsrmodekill", "564": "sgirekills",
+        "565": "wiringcliff", "566": "wiringcliff", "567": "fbctrlcmdkill", "568": "vmedefaultkill", "513": "sgirekills", "519": "sgirandomcolour",
+        "524": "armbdt", "531": "ip30abortkill", "450": "arcbiosubsan", "452": "sh4tlbda2", "472": "b115",
+        #  04:3x 11-07: the remaining HELD rows that already carry their fix (ledger at 8d9df658, state held + commits)
+        "424": "b1w", "473": "wdcrearmzero", "477": "wdccdbmidxfer", "526": "xscaleinten", "527": "ppcrlwimiwidth",
+        "528": "mapledmaaddr"}
+
+
+def span(n):
+    old_hdr = re.compile(r"^##? .*\(#%s\)" % n)
+    if not any(HDR.match(l) and l.startswith("# `#%s`" % n) for l in CL):
+        first = next(i for i, l in enumerate(CL) if old_hdr.match(l))
+        end = first + 1
+        while end < len(CL) and not re.match(r"^##? ", CL[end]):
+            end += 1
+        return first + 1, end
+    tag = "`#%s`" % n
+    first = next(i for i, l in enumerate(CL) if HDR.match(l) and l.startswith("# " + tag))
+    end = first + 1
+    while end < len(CL) and not (HDR.match(CL[end]) and not CL[end].startswith("# " + tag)):
+        end += 1
+    body = CL[first:end]
+    others = [l[:40] for l in body if re.match(r"^# `#(\d+)`", l) and not l.startswith("# " + tag)]
+    assert not others, (n, others)
+    return first + 1, end          # 1-based inclusive range
+
+
+for n in sys.argv[1:]:
+    row = ROWS[n]
+    a, b = span(n)
+    agy = "\n".join([
+        "READ-ONLY TASK: write NOTHING to disk, run no builds, gates or scripts -- read files and answer on stdout only.",
+        "You are a RECORDS-CHECK seat for the GXemul hardened fork, a defensive software-robustness project.",
+        "Round #%s (%s) has landed in C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC; its record is the CHANGELOG.md block at HEAD"
+        " (%s), lines %d-%d" % (n, row, SNAP, a, b),
+        "(read it with `git show 116c5aa9:CHANGELOG.md` or the file C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/gweb/jobs_20261106_kits/"
+        "CHANGELOG_116c5aa9.md).",
+        "Its artifacts are under GXEMUL-SEC/regress/artifacts/%s/ .  IGNORE C:/DocumentNoSnc/CC/GXEMUL/src (a pristine 2021 copy)." % row,
+        "Check every NUMBER in the block (a score like 46/56, a count, a row or check total, a commit hash, a line number into a cited",
+        "file) against the artifact the block cites for it: SUPPORTED, CONTRADICTED (quote both), or NO ARTIFACT CITED.  A line number",
+        "into a source file is judged at the round's OWN landing commit (find it with `git log --oneline --grep='#%s'`), not at HEAD:" % n,
+        "say DRIFTED (not CONTRADICTED) when it was right at landing and a later commit moved it.  Also check that every cited path",
+        "exists at HEAD, and QUOTE the block's own words for every item you list -- never paraphrase a quotation.",
+        "First line: RECCHECK_%s: <n> NUMBERS, <s> SUPPORTED, <c> CONTRADICTED, <d> DRIFTED, <u> UNCITED, <m> MISSING PATHS; then" % n,
+        "each CONTRADICTED, DRIFTED, UNCITED and MISSING item with the block's line and the artifact's file:line.", ""])
+    io.open(H + "agy_rec%s.txt" % n, "w", encoding="utf-8", newline="\n").write(agy)
+    #  04:2x 11-07: defang as mk_oldbatch.py does -- #526's block quotes "read the source", and mk_gweb_job.py refuses a
+    #  packet that tells a packet-fed seat to read files (the phrase's spaces become hyphens; the line numbers are unchanged).
+    FANGS = re.compile(r"(grep the fork|check the premises against the source|read the source|open the file)", re.I)
+    block = "\n".join("%5d| %s" % (i, FANGS.sub(lambda m: m.group(1).replace(" ", "-"), CL[i - 1])) for i in range(a, b + 1))
+    gem = "\n".join([
+        "# GXemul hardened fork -- RECORDS CHECK of one landed round's CHANGELOG block: #%s %s (a defensive project's bookkeeping)" % (n, row), "",
+        "PROJECT FRAMING -- a defensive software-robustness project: GXemul is a computer-architecture emulator and this fork records each",
+        "fix in a CHANGELOG round block.  The block below has landed; a flagship review of it is still owed.  You cannot read files, so",
+        "judge the block AS WRITTEN.  Do not simply ratify it.  A bracketed dated note inside the block is this project's in-place",
+        "correction form (it quotes the text it corrects); it is not by itself a contradiction.", "",
+        "## The round block (CHANGELOG.md lines %d-%d of %s; each line carries its own number -- cite those numbers)" % (a, b, SNAP),
+        "", "```text", block, "```", "",
+        "## Questions -- verdict line first", "",
+        "1. Does the block contradict itself anywhere -- two different numbers for one quantity, a total that its own parts do not sum",
+        "   to, a claim in one paragraph that another paragraph undoes?  Quote both places, with their line numbers.",
+        "2. Which claims are stated as MEASURED but cite no artifact, or cite one only by a bare file name that could be ambiguous?",
+        "3. Which sentences overclaim -- 'every', 'all', 'never', 'exactly' -- where the block's own evidence covers less?",
+        "4. What would a reviewer checking this block against its artifacts most likely find wrong?",
+        "When you count items the block enumerates, list them by name before giving the count.", "",
+        "End with one line: `RECBLOCK_%s: <c> CONTRADICTIONS, <u> UNCITED, <o> OVERCLAIMS`." % n, ""])
+    io.open(H + "gem_rec%s.md" % n, "w", encoding="utf-8", newline="\n").write(gem)
+    print(n, row, "lines %d-%d" % (a, b), "agy", len(agy.encode()), "gem", len(gem.encode()))

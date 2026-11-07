@@ -1,0 +1,14 @@
+FIXREVIEW_SCSIMODESENSEPC: DEFECT, 2 FINDINGS
+
+1. **Defect removal:** Yes, the diff addresses the WRONG-RESULT defect at the specified site (src/disk/diskimage_scsicmd.c:591-593) by explicitly catching unsupported Page Control values (PC != 0) and preventing the code from proceeding to return the current values.
+2. **CONTROL FLOW:** Yes, the added `return 0;` (AFTER:595) causes an early exit from the function. It skips the main switch's common tail, specifically the lines `debug(" ]\n");` (AFTER:1389) and `return 1;` (AFTER:1391). Skipping this common tail leaves the command status unwritten and the debug bracket unclosed.
+3. **RETURN VALUE:** The new path returns `0` (AFTER:595). The common tail returns `1` (AFTER:1391). In this context, the shown code implies that returning `1` means the command was successfully handled/dispatched, while returning `0` likely signals an unhandled command or emulator failure, which changes the contract.
+4. **ELSE changed:** Beyond returning early, the diff changes the `fatal()` message to a `debug()` message (AFTER:593), effectively downgrading the severity of an unsupported PC request so it no longer causes a fatal-level log flood.
+5. **House idioms:** The added `debug()` log (AFTER:593) violates the house idiom for guest-triggerable diagnostics: it prints every time the condition is met rather than latching, and it lacks the required `(once)` tag in the format string.
+
+**Findings:**
+* `src/disk/diskimage_scsicmd.c:595`: DEFECT - The added `return 0;` exits the function early, skipping the common tail at AFTER:1389 and AFTER:1391, returning 0 instead of 1. Smallest fix: `break;`
+* `src/disk/diskimage_scsicmd.c:593`: STYLE - Guest-triggerable diagnostic lacks a latch and `(once)` string. Smallest fix: `static int l = 0; if (!l) { debug("WARNING: mode sense, cmd[2] = 0x%02x (once)\n", xferp->cmd[2]); l = 1; }`
+
+P-GWEBREVSCSIMODESENSEPC-ce33
+GWEBREVSCSIMODESENSEPC: 5 ATTACKS 2 BROKEN 3 HOLDS 0 UNSETTLED DRAFTABLE:NO

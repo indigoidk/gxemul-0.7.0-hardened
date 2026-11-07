@@ -1,0 +1,31 @@
+1. ACCEPT: The diff successfully sets `res = a` (INT_MIN) for both `X(div)` and `X(ddiv)`, addressing the reported wrong-result defect on lines 1840 and 1864.
+2. ACCEPT: The diff does not add any early returns or breaks, allowing execution to proceed to the common tail (lines 1843-1844, 1868-1869).
+3. ACCEPT: The functions are `void` and no paths return a value; state updates happen via register assignments correctly.
+4. REJECT (but accept overflow core): The unconditional evaluation is at line 1867 (`rem = a - b*res;`), not 1869. The overflow finding holds for 1867: when `b = -1` and `res = a`, `b*res` overflows `int64_t`. We must compute `rem` inside the branches as `X(div)` does.
+5. REJECT: The previous draft used the comment `/* #mipsdivwrap: ... */`, not `#CHERI PR#1:`. We reject the factual premise but will apply the requested `/* #1: ... */` format.
+
+STILL PRESENT: YES -- src/cpus/cpu_mips_instr.c:1840
+
+```json
+[
+  {
+    "file": "src/cpus/cpu_mips_instr.c",
+    "old": "\telse if (a == (int32_t)0x80000000U && b == -1)\n\t\tres = 0, rem = 0;",
+    "new": "\telse if (a == (int32_t)0x80000000U && b == -1)\n\t\tres = a, rem = 0;",
+    "why": "/* #1: INT_MIN / -1 wrapped quotient is INT_MIN, rem 0 */"
+  },
+  {
+    "file": "src/cpus/cpu_mips_instr.c",
+    "old": "\tif (b == 0)\n\t\tres = 0;\n\telse if (a == (int64_t)0x8000000000000000ULL && b == -1)\n\t\tres = 0;\n\telse\n\t\tres = a / b;\n\trem = a - b*res;",
+    "new": "\tif (b == 0)\n\t\tres = 0, rem = a;\n\telse if (a == (int64_t)0x8000000000000000ULL && b == -1)\n\t\tres = a, rem = 0;\n\telse\n\t\tres = a / b, rem = a - b*res;",
+    "why": "/* #1: INT_MIN / -1 wrapped quotient is INT_MIN, rem 0; compute rem in branches to prevent overflow */"
+  }
+]
+```
+
+The fix deliberately does not change the host-trap guard logic (not shown, but noted as already present in the issue), and does not change the trailing assignments to `cpu->cd.mips.lo` and `hi`.
+
+REVISION_MIPSDIVWRAP: 3 ACCEPTED, 2 REJECTED
+FIXDRAFT_MIPSDIVWRAP: YES PRESENT, 2 EDITS
+P-GWEBFIXMIPSDIVWRAP-0269
+GWEBFIXMIPSDIVWRAP: 5 ATTACKS 2 BROKEN 3 HOLDS 0 UNSETTLED DRAFTABLE:YES

@@ -1,0 +1,24 @@
+FIXREVIEW_X11CURSORCLIP: DEFECT, 4 FINDINGS
+
+1. Does the diff remove the defect the issue describes, at every site the issue names? Name any site it misses.
+No. The diff misses the sites at `src/devices/dev_fb.c:913-914` and `src/devices/dev_turbochannel.c:250-251` listed in the issue text. Additionally, it fails to clip the removal of the old cursor at `src/console/x11.c:233-241`, which continues to use unclipped `fbwin->OLD_cursor_xsize` and will read past the host heap `fb_ximage` if the old cursor was positioned partially off-screen.
+
+2. CONTROL FLOW: does any added `return`, `goto`, `break` or early exit skip code the function would otherwise run -- above all its COMMON TAIL?
+No. The newly added `if (xtmp != NULL)` prevents drawing but correctly allows execution to reach the common tail at `src/console/x11.c:317` (`fbwin->OLD_cursor_on = fbwin->cursor_on;`), ensuring the state is still reliably saved. The `continue` at line 267 only skips the rest of the loop body for out-of-bounds pixels.
+
+3. RETURN VALUE: does any path now return something different?
+No. Both edited functions (`x11_redraw_cursor` and `dev_fb_setcursor`) have a `void` return type, so no path returns a different value.
+
+4. What ELSE does the diff change?
+Beyond removing the crash for the new cursor, `dev_fb_setcursor` now forcibly zero-anchors the cursor axis if the requested cursor size is larger than the visible size (`d->visible_xsize > cursor_xsize ? ... : 0`), and `x11_redraw_cursor` avoids allocating `xtmp` and completely skips the draw loops if the clamped intersection size is <= 0.
+
+5. House idioms:
+The diff introduces multiple lines that exceed the 79-column limit (e.g., lines 250 and 252 in `dev_fb.c` are 90+ characters wide).
+
+file:src/devices/dev_fb.c:913, DEFECT, UNSETTLED (missing dev_fb.c lines 913-914 to apply the visible_xsize clamp).
+file:src/devices/dev_turbochannel.c:250, DEFECT, UNSETTLED (missing dev_turbochannel.c lines 250-251 to apply the visible_xsize clamp).
+file:src/console/x11.c:233, DEFECT, clip `fbwin->OLD_cursor_...` bounds against `fbwin->fb_ximage->width` and `height` before calling `XPutImage`.
+file:src/devices/dev_fb.c:250, STYLE, break the ternary expression to stay within 79 columns.
+
+P-GWEBREVX11CURSORCLIP-8d9a
+GWEBREVX11CURSORCLIP: 7 ATTACKS 2 BROKEN 2 HOLDS 3 UNSETTLED DRAFTABLE:NO

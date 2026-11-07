@@ -1,0 +1,14 @@
+FIXREVIEW_ARMDESC3KILL: SOUND, 0 FINDINGS
+
+1. **Defect removal**: The diff successfully removes the defect described in the issue at the named site. It removes the host-crashing `fatal` and `exit(1)` block for a type 3 descriptor at `memory_arm.c:252-254`, correctly substituting it with a guest-level fault (`fs = FAULT_TRANS_S;`) as requested.
+
+2. **CONTROL FLOW**: The added `goto exception_return;` at `memory_arm.c:254` does not skip any code the function would otherwise run on a normal success path. Successful translation paths return early (e.g., `return access;` at `memory_arm.c:248` or `memory_arm.c:235`). The `goto` simply replaces process termination with a jump to the intended exception-handling tail at `memory_arm.c:257`.
+
+3. **RETURN VALUE**: Yes, the path now actually returns instead of killing the host emulator process. By joining the exception tail, it will now return `0` (at `memory_arm.c:259` or `memory_arm.c:276`). In this function, returning `0` implies a translation failure or denied access, which correctly mirrors the fault condition.
+
+4. **WHAT ELSE**: Beyond removing the defect, the change means the emulator remains alive and actively modifies guest state. For a type 3 descriptor, the emulator will now update the Fault Address Register (`cpu->cd.arm.far`) and Fault Status Register (`cpu->cd.arm.fsr`) at `memory_arm.c:271-272` and deliver an ARM exception to the guest (`memory_arm.c:269` or `273`). It will also print the standard exception block message at `memory_arm.c:262-265` instead of the old custom "TODO" string. 
+
+5. **House idioms**: The diff follows house idioms nicely. It adds the required issue tag comment (`/* #554: unimpl fine page table (type 3) */`) at `memory_arm.c:252` and keeps all new code strictly within the 79-column limit.
+
+P-GWEBREVARMDESC3KILL-99da
+GWEBREVARMDESC3KILL: 5 ATTACKS 0 BROKEN 5 HOLDS 0 UNSETTLED DRAFTABLE:YES

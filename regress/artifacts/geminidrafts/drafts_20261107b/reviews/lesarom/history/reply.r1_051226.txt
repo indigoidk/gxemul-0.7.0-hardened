@@ -1,0 +1,15 @@
+FIXREVIEW_LESAROM: DEFECT, 2 FINDINGS
+
+1. No, the diff does not remove the defect at every site the issue names. It successfully addresses the decoding alias at `0x180000`, but completely misses the ESAR checksum bug. The issue states "bytes 6-7 carry MAC copies instead of the ESAR checksum" and notes the ROM fill occurs at lines 1103-1113. The diff leaves the ROM fill entirely untouched.
+2. CONTROL FLOW: No added `return`, `goto`, or `break` skips code. The diff only expands the boolean expression in the `if` condition with an `||` operator. Execution correctly falls through to the existing `goto do_return;` at line 990, which accurately routes execution to the common tail (`do_return:` at line 1058).
+3. RETURN VALUE: Yes. Accesses to the `0x180000`-`0x1bffff` range previously fell through to the `default:` switch case and returned `1`. Now, they enter the ROM block and return `13` (via `retval = 13;`). The shown code (`/*  13 cycles  */`) implies this value represents the number of clock/bus cycles the device takes to complete the read.
+4. Beyond removing the read defect, routing the alias into this block means a guest write to the `0x180000` range now triggers a `fatal()` error at line 982 instead of safely warning about an UNIMPLEMENTED address. Because this is a hardened fork designed to remove crash-on-malformed-input defects, exposing a path where guest software can crash the host emulator on an alias write is a regression/defect.
+5. House idioms: The diff introduces no new comments and stays within 79 columns. However, as noted above, keeping the `fatal()` on the write path violates the project's robustness goals (crash-on-malformed-input).
+
+src/devices/dev_le.c:UNSETTLED (lines 1103-1113 missing from excerpt), severity DEFECT. Fix in ONE line: Update the ROM fill sequence to calculate and write the correct ESAR checksum to bytes 6 and 7 instead of copying the MAC.
+src/devices/dev_le.c:982, severity DEFECT. Fix in ONE line: `debugmsg(d->subsys, "access", VERBOSITY_WARNING, "[ le: WRITE to ethernet addr (%08lx) ]\n", (long)relative_addr);`
+
+FIXREVIEW_LESAROM: DEFECT, 2 FINDINGS
+
+P-GWEBREVLESAROM-d03b
+GWEBREVLESAROM: 5 ATTACKS 2 BROKEN 3 HOLDS 0 UNSETTLED DRAFTABLE:NO

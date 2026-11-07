@@ -1,0 +1,25 @@
+1. ACCEPT: The split switch removed the `default` case from the first block, allowing invalid `rw` values to fall through into the timer setup rather than trapping immediately at `fatal()`, citing the draft's omission of the `default` arm.
+2. ACCEPT: The draft introduces no `return`, `break`, or `goto` after the timer setup, so execution legitimately falls through to the end of the function (reaching the read logic at HEAD line 360, though the review cites 372).
+3. ACCEPT: No return paths are altered; line 363's `return 1;` remains unconditionally reachable at the end.
+4. ACCEPT: On fall-through from an unhandled `rw`, `d->hz` and the timer structures (`timer_add` / `timer_update_frequency`) are incorrectly processed using the existing counter state before hitting the `fatal()` in the second switch.
+5. ACCEPT: The format of `/* #442: Setup timer for all write formats */` is consistent with the house style seen in HEAD at lines 199 and 207 (`/* #223: ... */`).
+
+STILL PRESENT: YES -- `src/devices/dev_8253.c:188` (timer setup runs for invalid `rw` values).
+
+```json
+[
+  {
+    "file": "src/devices/dev_8253.c",
+    "old": "\t\t\tswitch (rw) {\n\t\t\tcase I8253_TIMER_LSB:\n\t\t\t\td->counter[relative_addr] &= 0xff00;\n\t\t\t\td->counter[relative_addr] |= (idata & 0xff);\n\t\t\t\tbreak;\n\t\t\tcase I8253_TIMER_MSB:\n\t\t\t\td->counter[relative_addr] &= 0x00ff;\n\t\t\t\td->counter[relative_addr] |= ((idata&0xff)<<8);\n\t\t\t\tif (d->counter[relative_addr] != 0)\n\t\t\t\t\td->hz[relative_addr] = (int) (\n\t\t\t\t\t    I8253_TIMER_FREQ / (float)\n\t\t\t\t\t    d->counter[relative_addr] + 0.5);\n\t\t\t\telse\n\t\t\t\t\td->hz[relative_addr] = 0;\n\t\t\t\tdebug(\"[ 8253: counter %i set to %i (%i Hz) \"\n\t\t\t\t    \"]\\n\", (int)relative_addr, d->counter[\n\t\t\t\t    relative_addr], d->hz[relative_addr]);\n\t\t\t\tswitch (relative_addr) {\n\t\t\t\tcase 0:\tif (d->timer0 == NULL)\n\t\t\t\t\t\td->timer0 = timer_add(\n\t\t\t\t\t\t    d->hz[0], timer0_tick, d);\n\t\t\t\t\telse\n\t\t\t\t\t\ttimer_update_frequency(\n\t\t\t\t\t\t    d->timer0, d->hz[0]);\n\t\t\t\t\tbreak;\n\t\t\t\tcase 1:\tfatal(\"TODO: DMA refresh?\\n\");\n\t\t\t\t\tbreak;\t/*  #223: (Codex/Fable) warn+ignore, don't exit() the host  */\n\t\t\t\tcase 2:\tfatal(\"TODO: 8253 tone generation?\\n\");\n\t\t\t\t\tbreak;\n\t\t\t\t}\n\t\t\t\tbreak;\n\t\t\tdefault:fatal(\"[ 8253: huh? writing to counter\"\n\t\t\t\t    \" %i but neither from msb nor lsb? ]\\n\",\n\t\t\t\t    (int)relative_addr);\n\t\t\t\tbreak;\t/*  #223: (Codex/Fable) don't exit() the host  */\n\t\t\t}",
+    "new": "\t\t\tswitch (rw) {\n\t\t\tcase I8253_TIMER_LSB:\n\t\t\t\tif ((d->mode_byte & 0x30) == I8253_TIMER_LSB)\n\t\t\t\t\td->counter[relative_addr] = (idata & 0xff);\n\t\t\t\telse\n\t\t\t\t\td->counter[relative_addr] = (d->counter[relative_addr] & 0xff00) | (idata & 0xff);\n\t\t\t\tbreak;\n\t\t\tcase I8253_TIMER_MSB:\n\t\t\t\tif ((d->mode_byte & 0x30) == I8253_TIMER_MSB)\n\t\t\t\t\td->counter[relative_addr] = ((idata & 0xff) << 8);\n\t\t\t\telse\n\t\t\t\t\td->counter[relative_addr] = (d->counter[relative_addr] & 0x00ff) | ((idata & 0xff) << 8);\n\t\t\t\tbreak;\n\t\t\tdefault:fatal(\"[ 8253: huh? writing to counter\"\n\t\t\t\t    \" %i but neither from msb nor lsb? ]\\n\",\n\t\t\t\t    (int)relative_addr);\n\t\t\t\tbreak;\t/*  #223: (Codex/Fable) don't exit() the host  */\n\t\t\t}\n\n\t\t\tif (rw == I8253_TIMER_LSB || rw == I8253_TIMER_MSB) {\n\t\t\t\t/* #442: Setup timer for all write formats */\n\t\t\t\tif (d->counter[relative_addr] != 0)\n\t\t\t\t\td->hz[relative_addr] = (int) (\n\t\t\t\t\t    I8253_TIMER_FREQ / (float)\n\t\t\t\t\t    d->counter[relative_addr] + 0.5);\n\t\t\t\telse\n\t\t\t\t\td->hz[relative_addr] = 0;\n\t\t\t\tdebug(\"[ 8253: counter %i set to %i (%i Hz) \"\n\t\t\t\t    \"]\\n\", (int)relative_addr, d->counter[\n\t\t\t\t    relative_addr], d->hz[relative_addr]);\n\t\t\t\tswitch (relative_addr) {\n\t\t\t\tcase 0:\tif (d->timer0 == NULL)\n\t\t\t\t\t\td->timer0 = timer_add(\n\t\t\t\t\t\t    d->hz[0], timer0_tick, d);\n\t\t\t\t\telse\n\t\t\t\t\t\ttimer_update_frequency(\n\t\t\t\t\t\t    d->timer0, d->hz[0]);\n\t\t\t\t\tbreak;\n\t\t\t\tcase 1:\tfatal(\"TODO: DMA refresh?\\n\");\n\t\t\t\t\tbreak;\t/*  #223: (Codex/Fable) warn+ignore, don't exit() the host  */\n\t\t\t\tcase 2:\tfatal(\"TODO: 8253 tone generation?\\n\");\n\t\t\t\t\tbreak;\n\t\t\t\t}\n\t\t\t}",
+    "why": "Clear stale byte on one-byte formats and safely ensure timer installs for valid LSB and MSB writes alike without executing on invalid rw."
+  }
+]
+```
+
+The fix deliberately does not alter how `rw` is calculated originally, neither does it affect the `I8253_TIMER_MODE` programming, the counter latch consumption behavior, nor the subsequent `MEM_READ` handling paths.
+
+REVISION_PIT8253LSBNOTIMER: 5 ACCEPTED, 0 REJECTED
+FIXDRAFT_PIT8253LSBNOTIMER: YES PRESENT, 1 EDITS
+P-GWEBFIXPIT8253LSBNOTIMER-8778
+GWEBFIXPIT8253LSBNOTIMER: 5 ATTACKS 0 BROKEN 5 HOLDS 0 UNSETTLED DRAFTABLE:NO

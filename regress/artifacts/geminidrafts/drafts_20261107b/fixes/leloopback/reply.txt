@@ -1,0 +1,27 @@
+1. ACCEPT: The issue explicitly names two sites: "Our site at de8c7547: src/devices/dev_le.c:438, :74." and the provided diff only alters the site at 438.
+2. ACCEPT: The added `if` statement wraps the transmission call but does not introduce any early returns, `goto`, or `break` statements, allowing the loop to continue at `src/devices/dev_le.c:441`.
+3. ACCEPT: The function is declared as `void le_tx` at `src/devices/dev_le.c:319` and the patch does not add any `return` statements, preserving the original return behavior.
+4. ACCEPT: The `free(d->tx_packet);` (line 441) and interrupt assertion `d->reg[0] |= LE_TINT;` (line 445) remain outside the new `if` condition and execute exactly as before.
+5. ACCEPT: The draft uses `/* #T60: do not send out self-test frames */`, which matches the issue row T60, and correctly breaks lines to stay under 79 columns.
+6. ACCEPT: The context provided only includes `dev_le.c` lines 84-128 and 319-464. Line 74 is missing from this snippet, making it impossible to evaluate or draft a fix for that location based on this text.
+
+STILL PRESENT: UNSETTLED -- `src/devices/dev_le.c:74` is not provided in the context, so the missing fix at that site cannot be drafted.
+
+```json
+[
+  {
+    "file": "src/devices/dev_le.c",
+    "old": "\t\tif (enp) {\n\t\t\tnet_ethernet_tx(net, &d->nic, d->tx_packet,\n\t\t\t    d->tx_packet_len);\n\n\t\t\tfree(d->tx_packet);",
+    "new": "\t\tif (enp) {\n\t\t\t/* #T60: do not send out self-test frames */\n\t\t\tif (!(d->mode & LE_MODE_LOOP))\n\t\t\t\tnet_ethernet_tx(net, &d->nic, d->tx_packet,\n\t\t\t\t    d->tx_packet_len);\n\n\t\t\tfree(d->tx_packet);",
+    "why": "Prevent frames from leaking to the network or tap when the device is in loopback mode."
+  }
+]
+```
+
+The fix deliberately does not alter the normal cleanup operations (freeing the packet buffer, asserting the LE_TINT interrupt, or clearing the LE_OWN bit). It specifically skips only the `net_ethernet_tx` call for self-test frames.
+
+REVISION_LELOOPBACK: 6 ACCEPTED, 0 REJECTED
+FIXDRAFT_LELOOPBACK: UNSETTLED PRESENT, 0 EDITS
+
+P-GWEBFIXLELOOPBACK-7e39
+GWEBFIXLELOOPBACK: 6 ATTACKS 0 BROKEN 6 HOLDS 0 UNSETTLED DRAFTABLE:NO

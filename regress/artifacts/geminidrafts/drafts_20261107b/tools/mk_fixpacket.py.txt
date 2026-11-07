@@ -1,0 +1,129 @@
+#!/usr/bin/env python3
+"""mk_fixpacket.py --list | ROWID -- Gemini-web FIX-DRAFT packet for one of the oldest unfixed rows (owner 2026-11-06/07: "keep
+utilizing gemini web on the oldest set of the issues that we need to resolve").
+
+--list prints the candidates, oldest first: rows Gemini's adjudication draft (OLDBATCH_DRAFTS.md) proposed FIX-NOW, whose ledger
+`commits` field is EMPTY, and whose text cites a `src/...:<line>`.  ROWID writes fix_<row>/packet_body.md: the row's ledger text
+(trimmed, defanged as mk_oldbatch.py does) and HEAD's code around EACH distinct cited src line (up to three sites, 45 lines
+either side), and asks (1) whether the defect described is still present in the code shown and (2) for the minimal fix as exact
+edits.  FIX ONLY -- no tests, probes or reproduction steps.  A draft is a proposal: it is compile-checked and reviewed before
+anything lands."""
+import io
+import json
+import os
+import re
+import subprocess
+import sys
+
+H = "C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/gweb/jobs_20261106_kits/"
+REPO = "C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC"
+FANGS = re.compile(r"(grep the fork|check the premises against the source|read the source|open the file)", re.I)
+CITE = re.compile(r"(src/[A-Za-z0-9_/]+\.[ch]):(\d+)")
+head = subprocess.run(["git", "-C", REPO, "rev-parse", "--short=8", "HEAD"], capture_output=True, text=True).stdout.strip()
+raw = subprocess.run(["git", "-C", REPO, "show", "HEAD:tools/pipeline/ledger.json"], capture_output=True).stdout
+d = json.loads(raw.decode("utf-8"))
+rows = d["rows"] if isinstance(d, dict) and "rows" in d else d
+by = {r.get("id"): r for r in rows}
+order = {}
+for r in rows:
+    ds = re.findall(r"20\d\d-\d\d-\d\d", json.dumps(r, ensure_ascii=False))
+    order[r.get("id")] = (min(ds) if ds else "9999", r.get("id"))
+drafts = io.open(H + "OLDBATCH_DRAFTS.md", encoding="utf-8").read()
+
+
+def candidates():
+    out = []
+    for m in re.finditer(r"^\* ROW ([A-Za-z0-9_]+): FIX-NOW(.*)$", drafts, re.M):
+        rid = m.group(1)
+        r = by.get(rid)
+        if not r or r.get("commits") or r.get("state") not in ("open", "held"):
+            continue
+        if CITE.search(json.dumps(r, ensure_ascii=False)):
+            out.append(rid)
+    return sorted(set(out), key=lambda x: order.get(x, ("9999", x)))
+
+
+def clip(s, n):
+    s = FANGS.sub(lambda m: m.group(1).replace(" ", "-"), (s or "").strip())
+    return s if len(s) <= n else s[:n] + " [... %d more characters not shown]" % (len(s) - n)
+
+
+if sys.argv[1] == "--list":
+    c = candidates()
+    print(len(c), "candidates")
+    print(" ".join(c))
+    sys.exit(0)
+rid = sys.argv[1]
+r = by[rid]
+s = json.dumps(r, ensure_ascii=False)
+sites, seen, STRUCTS = [], set(), []
+for f, ln in CITE.findall(s):
+    if (f, int(ln) // 60) in seen:
+        continue
+    seen.add((f, int(ln) // 60))
+    src = subprocess.run(["git", "-C", REPO, "show", "HEAD:" + f], capture_output=True).stdout.decode("latin-1").split("\n")
+    if len(src) < 2:
+        continue
+    ln = int(ln)
+    W_ = 120 if os.environ.get("WIDE") == "1" else 45     # v3: a wider window for drafts that came back UNSETTLED
+    a, b = max(1, ln - W_), min(len(src), ln + W_)
+    sites.append("### `%s` around the row's cited line %d (HEAD %s, lines %d-%d)\n\n```c\n%s\n```\n" % (
+        f, ln, head, a, b, "\n".join("%5d| %s" % (i, src[i - 1]) for i in range(a, b + 1))))
+    #  v2 (01:3x): the first compile check found drafts using struct fields the packet never showed (ioasic3minscc,
+    #  ioasicesar); inline the file's own `struct ..._data {` definitions so a draft can only use fields that exist.
+    if f not in [s_[0] for s_ in STRUCTS]:
+        for i, l in enumerate(src):
+            if re.match(r"^struct [a-z0-9_]+_data\s*\{", l):
+                j = i
+                while j < len(src) and not src[j].startswith("};") and j - i < 80:
+                    j += 1
+                STRUCTS.append((f, "### `%s` -- `%s` (HEAD lines %d-%d)\n\n```c\n%s\n```\n" % (
+                    f, l.strip(), i + 1, j + 1, "\n".join("%5d| %s" % (k + 1, src[k]) for k in range(i, j + 1)))))
+    if len(sites) == 3:
+        break
+#  v2b: a struct the shown code names may be defined in a HEADER (dec_ioasic_data is) -- find each `struct X_data` the sites
+#  mention and inline its definition from wherever HEAD defines it.
+have = {re.search(r"struct ([a-z0-9_]+_data)", s_[1]).group(1) for s_ in STRUCTS if re.search(r"struct ([a-z0-9_]+_data)", s_[1])}
+for name in sorted(set(re.findall(r"struct ([a-z0-9_]+_data)\b", "\n".join(sites))) - have):
+    g = subprocess.run(["git", "-C", REPO, "grep", "-n", "-E", r"^struct %s\s*\{" % name, "HEAD", "--", "src"],
+                       capture_output=True).stdout.decode("latin-1").strip().split("\n")
+    if not g or not g[0]:
+        continue
+    _, gf, gl = g[0].split(":", 3)[:3]
+    src = subprocess.run(["git", "-C", REPO, "show", "HEAD:" + gf], capture_output=True).stdout.decode("latin-1").split("\n")
+    i = int(gl) - 1
+    j = i
+    while j < len(src) and not src[j].startswith("};") and j - i < 80:
+        j += 1
+    STRUCTS.append((gf, "### `%s` -- `struct %s` (HEAD lines %d-%d)\n\n```c\n%s\n```\n" % (
+        gf, name, i + 1, j + 1, "\n".join("%5d| %s" % (k + 1, src[k]) for k in range(i, j + 1)))))
+gm = re.search(r"^\* ROW %s: FIX-NOW -- (.*)$" % re.escape(rid), drafts, re.M)
+body = "\n".join([
+    "# GXemul hardened fork -- DRAFT A FIX for one filed issue, `%s` (a defensive code-quality task)" % rid, "",
+    "PROJECT FRAMING -- a defensive software-robustness project: GXemul is a computer-architecture emulator, and this fork removes",
+    "crash-on-malformed-input and wrong-behaviour defects from its device and CPU models.  Below is one filed issue, inlined from",
+    "the project's ledger, and the current code at each source line it cites (HEAD %s).  You cannot read files; work from the text." % head,
+    "This is a DRAFTING task: write the FIX ONLY, as exact edits.  Do not write tests, probes or reproduction steps.", "",
+    "## The issue (ledger row `%s`, state `%s`, severity `%s`)" % (rid, r.get("state"), r.get("severity") or r.get("sev") or "-"), "",
+    "**title:** " + clip(r.get("title") or r.get("summary") or "", 500), "",
+    "**state_note (head):**", "", clip(r.get("state_note") or r.get("note") or "", 3500), "",
+    "**hold_question:** " + (clip(r.get("hold_question"), 900) or "(none)"), "",
+    "**An earlier triage pass proposed:** FIX-NOW -- " + (gm.group(1).strip() if gm else "(no line)"), "",
+    "## The code at the cited lines", "", "\n".join(sites) if sites else "(no cited line could be read at HEAD)",
+    ("## The data structures those files define (every field that exists)\n\n" + "\n".join(s_[1] for s_ in STRUCTS)) if STRUCTS else "",
+    "RULES FOR THE EDITS: change ONLY text that appears in this packet; use ONLY fields, functions and macros that appear in it",
+    "(a draft that calls an undeclared function or a field that does not exist does not compile); make each `old` long enough to",
+    "occur exactly once in its file -- include a distinctive neighbouring line when a statement repeats.", "",
+    "## WHAT TO RETURN", "",
+    "1. One line: `STILL PRESENT: YES|NO|UNSETTLED -- <the line of code shown that shows it>`.  The cited line numbers may have",
+    "   moved since the row was written; judge from the code shown.  If NO, say what already fixed it and STOP (no edits).",
+    "2. If YES: EXACTLY ONE fenced ```json block -- a list of edits, the smallest fix that removes the defect without changing any",
+    '   other behaviour: [{"file": "src/...", "old": "<exact text from the code above, without the line-number prefix; it must occur',
+    '   EXACTLY ONCE in that file>", "new": "<replacement>", "why": "<one line>"}].  Use JSON escapes (\\t, \\n).  Tabs stay tabs;',
+    "   lines within 79 columns; tag a new comment `/* #NNN: ... */`.  Prefer the file's existing idioms (a decline, a once-per-",
+    "   device announce, a clamp) over new machinery.",
+    "3. After the block: what the fix deliberately does NOT change, and anything you could not settle from the code shown.", "",
+    "End with one line: `FIXDRAFT_%s: <YES|NO|UNSETTLED> PRESENT, <n> EDITS`." % rid.upper(), ""])
+os.makedirs(H + "fix_" + rid, exist_ok=True)
+io.open(H + "fix_%s/packet_body.md" % rid, "w", encoding="utf-8", newline="\n").write(body)
+print(rid, len(body.encode()), "bytes,", len(sites), "sites")

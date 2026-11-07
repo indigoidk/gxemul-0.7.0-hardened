@@ -1,0 +1,26 @@
+STILL PRESENT: YES -- src/cpus/cpu_arm_instr.c:221
+
+```json
+[
+  {
+    "file": "src/cpus/cpu_arm_instr.c",
+    "old": "\tfatal(\"FATAL ERROR: An internal error occured in the ARM\"\n\t    \" dyntrans code. This could be due to an unimplemented instruction\"\n\t    \" encoding. pc = 0x%08\" PRIx32\"\\n\",\n\t    (uint32_t)cpu->pc);\n\n\tcpu->cd.arm.next_ic = &nothing_call;",
+    "new": "\tfatal(\"FATAL ERROR: An internal error occured in the ARM\"\n\t    \" dyntrans code. This could be due to an unimplemented instruction\"\n\t    \" encoding. pc = 0x%08\" PRIx32\"\\n\",\n\t    (uint32_t)cpu->pc);\n\n\t/* #001: Move the PC to avoid livelocking on the same instruction */\n\tcpu->pc += (1 << ARM_INSTR_ALIGNMENT_SHIFT);\n\tcpu->cd.arm.next_ic = &nothing_call;",
+    "why": "Advance the PC past the invalid instruction to skip it instead of repeating it endlessly."
+  },
+  {
+    "file": "src/cpus/cpu_arm_instr.c",
+    "old": "\tfatal(\"[ ARM: unimplemented 0xf instruction at pc = 0x%08\" PRIx32\" ]\\n\", (uint32_t)cpu->pc);\n\n\tcpu->cd.arm.next_ic = &nothing_call;",
+    "new": "\tfatal(\"[ ARM: unimplemented 0xf instruction at pc = 0x%08\" PRIx32\" ]\\n\", (uint32_t)cpu->pc);\n\n\t/* #002: Move the PC to avoid livelocking on the same instruction */\n\tcpu->pc += (1 << ARM_INSTR_ALIGNMENT_SHIFT);\n\tcpu->cd.arm.next_ic = &nothing_call;",
+    "why": "Advance the PC past the unimplemented instruction to skip it instead of repeating it endlessly."
+  }
+]
+```
+
+The fix deliberately does NOT change the emulator's lack of formal ARM exception generation for these unimplemented instructions (as those functions are undeclared in this context), nor does it change how `fatal` reports the error or how `nothing_call` ends the current translation run. The changed step correctly alters the program counter by exactly one instruction footprint (using the existing `ARM_INSTR_ALIGNMENT_SHIFT` idiom), leaving all other saved states of the emulator alone.
+
+I could not settle from the code shown whether `LDREXB/H/D` and `STREXB/H/D` actually decode to `X(invalid)`'s `s = 0, h = 0` entry, because the decoding tables and logic are not present in the provided text. I also could not settle whether the host execution loop conclusively livelocks or if `fatal` / `nothing_call` terminates the process, as their definitions and the outer CPU loop are not shown.
+
+FIXDRAFT_ARMLDREXBHDSPIN: YES PRESENT, 2 EDITS
+P-GWEBFIXARMLDREXBHDSPIN-341b
+GWEBFIXARMLDREXBHDSPIN: 3 ATTACKS 0 BROKEN 1 HOLDS 2 UNSETTLED DRAFTABLE:YES

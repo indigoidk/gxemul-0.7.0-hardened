@@ -1,0 +1,78 @@
+#!/usr/bin/env python3
+"""mk_fixretry.py -- RETRY-WITH-FEEDBACK packets for the Gemini fix drafts that did not compile or did not apply
+(fixcheck_results.tsv BUILD_FAIL / APPLY_FAIL).  Each packet = the row's v2 fix packet (mk_fixpacket.py) + its PREVIOUS draft's
+edit block + the exact failure (the apply_edits.py line, or the compiler's error lines from fixcheck_all.log) + for every
+"'X' undeclared ... did you mean 'Y'" the lines that DEFINE Y in HEAD's src/ (git grep), so the corrected draft can use names
+that exist.  Writes fix_<row>/packet_body.md (the previous packet kept as packet_body.v1.md, the previous reply as reply.v2.txt).
+FIX ONLY.  Prints the rows it prepared."""
+import io
+import os
+import re
+import shutil
+import subprocess
+
+H = "C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/gweb/jobs_20261106_kits/"
+REPO = "C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC"
+res = [l.rstrip("\n").split("\t") for l in io.open(H + "fixcheck_results.tsv", encoding="utf-8") if l.strip()]
+fails = [(p[0], p[1], p[2] if len(p) > 2 else "") for p in res if p[1] in ("BUILD_FAIL", "APPLY_FAIL", "NO_EDITS")]
+#  04:4x 11-07: a draft that COMPILES and fixes nothing is a failure too -- an empty edit list (NO_EDITS), or edits that change only
+#  comments where the row's defect is in code (scan_commentonly.py's COMMENT_ONLY; heldrecedits is excluded, its defect IS comments)
+LEGIT_COMMENT = {"heldrecedits", "i8259pollcomment", "wdcatadocstale"}      # RECORD rows: the defect IS a comment
+if os.path.exists(H + "commentonly.tsv"):
+    for l in io.open(H + "commentonly.tsv", encoding="utf-8"):
+        p = l.rstrip("\n").split("\t")
+        if len(p) >= 2 and p[1] == "COMMENT_ONLY" and p[0] not in LEGIT_COMMENT:
+            fails.append((p[0], "COMMENT_ONLY", ""))
+log = io.open(H + "fixcheck_all.log", encoding="utf-8", errors="replace").read()
+done = []
+for row, kind, detail in fails:
+    d = H + "fix_%s/" % row
+    if not os.path.exists(d + "reply.txt"):
+        continue
+    subprocess.run(["python", H + "mk_fixpacket.py", row], capture_output=True)      # the v2 packet, fresh
+    base = io.open(d + "packet_body.md", encoding="utf-8").read()
+    prev = io.open(d + "reply.txt", encoding="utf-8").read()
+    blk = re.findall(r"```json\s*\n(.*?)```", prev, re.S)
+    errs = sorted(set(re.findall(r"^  %s: (.*error:.*)$" % re.escape(row), log, re.M)))[-6:]
+    extra = []
+    for name in sorted(set(re.findall(r"did you mean '([A-Za-z_][A-Za-z0-9_]*)'", "\n".join(errs)))):
+        g = subprocess.run(["git", "-C", REPO, "grep", "-n", "-w", name, "HEAD", "--", "src/include"], capture_output=True).stdout.decode("latin-1").split("\n")
+        g = [x for x in g if x][:1]
+        for hit in g:
+            _, f, ln = hit.split(":", 3)[:3]
+            src = subprocess.run(["git", "-C", REPO, "show", "HEAD:" + f], capture_output=True).stdout.decode("latin-1").split("\n")
+            a, b = max(1, int(ln) - 12), min(len(src), int(ln) + 12)
+            extra.append("### `%s` lines %d-%d (where HEAD defines `%s`)\n\n```c\n%s\n```\n" % (
+                f, a, b, name, "\n".join("%5d| %s" % (i, src[i - 1]) for i in range(a, b + 1))))
+    if kind == "APPLY_FAIL":
+        why = "APPLY FAILED: %s" % detail.strip()
+    elif kind == "NO_EDITS":
+        why = ("NO EDITS: the draft returned an EMPTY edit list, so nothing was changed and nothing was fixed.  If the defect is\n"
+               "present, write the executable change; if the code shown cannot settle it, say UNSETTLED and name exactly which\n"
+               "function or definition you would need to see.")
+    elif kind == "COMMENT_ONLY":
+        why = ("COMMENT ONLY: every edit changes a comment and no executable line changes, but the defect is in the code's\n"
+               "BEHAVIOUR.  A comment saying what the code should do does not change what it does.  Write the executable change,\n"
+               "or say UNSETTLED and name what is missing.")
+    else:
+        why = "BUILD FAILED (%s):\n%s" % (detail.strip(), "\n".join(errs))
+    retry = "\n".join([
+        "", "## YOUR PREVIOUS DRAFT FAILED -- correct it", "",
+        "An earlier draft for this row was applied to the code above and checked.  It failed like this:", "", "```text", why, "```", "",
+        "The previous edits:", "", "```json", (blk[0].strip() if blk else "(no edit block was returned)"), "```", "",
+        ("\n".join(extra) if extra else ""),
+        "Return a CORRECTED draft in the same form.  If an `old` string occurred more than once, lengthen it with a distinctive",
+        "neighbouring line; if it occurred zero times, copy it exactly from the code shown; use only names that appear in this",
+        "packet.  If the fix cannot be written from what is shown, say `STILL PRESENT: UNSETTLED` and name what is missing.", ""])
+    import time
+    stamp = time.strftime("%H%M%S")
+    shutil.copyfile(d + "packet_body.md", d + ("packet_body.v1.md" if not os.path.exists(d + "packet_body.v1.md") else "packet_body.%s.md" % stamp))
+    shutil.copyfile(d + "reply.txt", d + ("reply.v2.txt" if not os.path.exists(d + "reply.v2.txt") else "reply.%s.txt" % stamp))
+    io.open(d + "packet_body.md", "w", encoding="utf-8", newline="\n").write(base + retry)
+    os.remove(d + "reply.txt")
+    if os.path.exists(d + "gemini_web.out"):
+        os.replace(d + "gemini_web.out", d + "gemini_web.v2.out")
+    io.open(d + "gemini_web.exit", "w", encoding="utf-8").write("exit 0 retry-with-feedback queued\n")
+    done.append(row)
+io.open(H + "fixretry2.txt", "w", encoding="utf-8", newline="\n").write("\n".join(done) + "\n")
+print(len(done), "retry packets:", " ".join(done))

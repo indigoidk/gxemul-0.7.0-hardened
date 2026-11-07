@@ -1,0 +1,38 @@
+#!/usr/bin/env python3
+"""agg_fixreviews.py -- 04:5x 11-07: one table of the Gemini second-lens fix reviews (rev_<row>/reply.txt), oldest first
+(fixcand.txt order): verdict, finding count, and each finding line that names a severity (DEFECT / QUESTION / STYLE), trimmed.
+Rows whose draft was WITHDRAWN after the review (redrafted to UNSETTLED, so the reviewed diff no longer exists) are marked.
+Writes FIXREVIEWS.md.  The reviews are PROPOSALS from the same model that drafted the fixes (badge `s`) -- pointers, not verdicts."""
+import io
+import os
+import re
+from collections import Counter
+
+H = "C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/gweb/jobs_20261106_kits/"
+order = [l.strip() for l in io.open(H + "fixcand.txt", encoding="utf-8") if l.strip()]
+res = {l.split("\t")[0]: l.split("\t")[1] for l in io.open(H + "fixcheck_results.tsv", encoding="utf-8") if "\t" in l}
+rows = sorted([d[4:] for d in os.listdir(H) if d.startswith("rev_") and os.path.exists(H + d + "/packet_body.md")],
+              key=lambda r: (order.index(r) if r in order else 9999, r))
+out, c = [], Counter()
+for r in rows:
+    p = H + "rev_%s/reply.txt" % r
+    t = io.open(p, encoding="utf-8", errors="replace").read() if os.path.exists(p) else ""
+    m = re.findall(r"^FIXREVIEW_%s:\s*(SOUND|DEFECT|UNSETTLED)\s*,\s*(\d+)" % re.escape(r.upper()), t, re.M)
+    v, n = m[-1] if m else ("NO-ANSWER", "-")
+    withdrawn = res.get(r) != "BUILD_OK"
+    c[("WITHDRAWN " if withdrawn else "") + v] += 1
+    finds = []
+    for l in t.split("\n"):
+        s = l.strip(" *-")
+        if re.search(r"\b(DEFECT|QUESTION|STYLE)\b", s) and not s.startswith(("FIXREVIEW_", "GWEB", "Line 1")) \
+                and re.search(r"[A-Za-z0-9_/]+\.[ch]:\d+", s):
+            finds.append(re.sub(r"\s+", " ", s)[:260])
+    out.append("### `%s` -- %s, %s finding(s)%s\n" % (r, v, n, " -- **DRAFT WITHDRAWN after this review** (redrafted; "
+               "fixcheck now %s)" % res.get(r, "?") if withdrawn else ""))
+    out += ["* " + f for f in finds[:6]] + ([""] if finds else ["* (no file:line finding line)", ""])
+head = ["# Gemini second-lens reviews of the compiled fix drafts -- %d rows, oldest first" % len(rows), "",
+        "Same model as the drafter (badge `s`): POINTERS for the Fable/Mythos adjudication, not verdicts.  Each packet carried the",
+        "row, the draft's APPLIED.diff and every edited function in full (mk_fixreview.py).  Tally: " +
+        ", ".join("%s %d" % (k, v) for k, v in sorted(c.items())), ""]
+io.open(H + "FIXREVIEWS.md", "w", encoding="utf-8", newline="\n").write("\n".join(head + out) + "\n")
+print(dict(c))

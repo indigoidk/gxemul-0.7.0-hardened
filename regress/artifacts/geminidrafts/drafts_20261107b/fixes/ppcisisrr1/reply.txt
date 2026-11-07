@@ -1,0 +1,23 @@
+1. `src/cpus/cpu_ppc.c:328`: REJECT the suggestion to add an argument to `ppc_exception`, as its full set of callers is not shown in this packet and modifying its signature is unsafe; however, ACCEPT the defect finding (state leak) and replace the idiom by setting `SPR_SRR1` in `memory_ppc.c` after `ppc_exception` returns.
+2. `src/cpus/memory_ppc.c:322`: ACCEPT, the comment exceeds 79 columns; it will be shortened.
+
+STILL PRESENT: YES -- cpu_ppc.c:328 (the draft reads potentially stale SRR1 state)
+
+```json
+[
+  {
+    "file": "src/cpus/memory_ppc.c",
+    "old": "\t} else {\n\t\tif (!instr) {\n\t\t\tcpu->cd.ppc.spr[SPR_DAR] = vaddr;\n\t\t\tcpu->cd.ppc.spr[SPR_DSISR] = match?\n\t\t\t    DSISR_PROTECT : DSISR_NOTFOUND;\n\t\t\tif (writeflag)\n\t\t\t\tcpu->cd.ppc.spr[SPR_DSISR] |= DSISR_STORE;\n\t\t}\n\t\tppc_exception(cpu, instr?\n\t\t    PPC_EXCEPTION_ISI : PPC_EXCEPTION_DSI);\n\t}",
+    "new": "\t} else {\n\t\tif (!instr) {\n\t\t\tcpu->cd.ppc.spr[SPR_DAR] = vaddr;\n\t\t\tcpu->cd.ppc.spr[SPR_DSISR] = match?\n\t\t\t    DSISR_PROTECT : DSISR_NOTFOUND;\n\t\t\tif (writeflag)\n\t\t\t\tcpu->cd.ppc.spr[SPR_DSISR] |= DSISR_STORE;\n\t\t}\n\t\tppc_exception(cpu, instr?\n\t\t    PPC_EXCEPTION_ISI : PPC_EXCEPTION_DSI);\n\t\tif (instr) {\n\t\t\t/* #ppcisisrr1: ISI uses DSISR layout. */\n\t\t\tcpu->cd.ppc.spr[SPR_SRR1] |= match?\n\t\t\t    DSISR_PROTECT : DSISR_NOTFOUND;\n\t\t}\n\t}",
+    "why": "Set SRR1 reason bits after the exception logic to avoid leaking stale guest state from other call paths."
+  }
+]
+```
+
+The fix deliberately does not modify `src/cpus/cpu_ppc.c` or the signature of `ppc_exception()`, avoiding breakage to any other exception call sites outside this packet while safely preventing the state leak.
+
+REVISION_PPCISISRR1: 1 ACCEPTED, 1 REJECTED
+FIXDRAFT_PPCISISRR1: YES PRESENT, 1 EDITS
+
+P-GWEBFIXPPCISISRR1-37a6
+GWEBFIXPPCISISRR1: 2 ATTACKS 0 BROKEN 2 HOLDS 0 UNSETTLED DRAFTABLE:YES

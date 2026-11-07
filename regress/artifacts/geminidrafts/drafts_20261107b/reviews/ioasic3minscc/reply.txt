@@ -1,0 +1,19 @@
+FIXREVIEW_IOASIC3MINSCC: DEFECT, 5 FINDINGS
+
+1. **Defect Removal & Scope**: The diff successfully removes the `#if 0` block, activating the DMA processing logic (`src/devices/dev_dec_ioasic.c:181`). It also transitions the register accesses from generic `d->reg[]` arrays to explicit struct fields like `d->isdn_x_dmaptr`. The claim that "Ultrix 4.5 serial console waits forever" is UNSETTLED; determining if the guest OS successfully proceeds requires a runtime test.
+2. **CONTROL FLOW**: The diff adds no early exits (`return`, `goto`, or `break`). In fact, it removes an existing `break;` (`src/devices/dev_dec_ioasic.c:191`) by placing the TX DMA execution inside an `if ((curptr & 0xfff) != 0)` condition instead. This preserves execution fall-through so that RX DMA (`IOASIC_CSR_DMAEN_R2`) is processed, and it guarantees execution of the common tail `memory_writemax64` and `return 1;` at `src/devices/dev_dec_ioasic.c:417-420`.
+3. **RETURN VALUE**: No return values are changed. All branches within this case eventually fall through to the common tail and return `1` (`src/devices/dev_dec_ioasic.c:420`), implying successful completion of the memory access.
+4. **State & Secondary Changes**: 
+   - The diff removes the `fatal()` calls that previously caused the emulator to crash if `d->dma_func[3] == NULL` (`src/devices/dev_dec_ioasic.c:192`), fulfilling the fork's mandate against crash-on-malformed-input.
+   - It introduces a call to `dec_ioasic_reassert(d)` at `src/devices/dev_dec_ioasic.c:229`, appropriately signaling the interrupt controller after modifying `d->intr`.
+5. **House Idioms**: The code correctly uses the `/* #NNN: ... */` comment format (`src/devices/dev_dec_ioasic.c:180`). However, multiple lines violate the 79-column limit, confirming the drafter's note.
+
+**Findings List**:
+- `src/devices/dev_dec_ioasic.c:180`, QUESTION, The guest OS runtime behavior (Ultrix 4.5 issue resolution) is UNSETTLED without runtime testing. Fix: run the OS and verify console output.
+- `src/devices/dev_dec_ioasic.c:191`, QUESTION, removed an early `break` ensuring control flow correctly reaches RX DMA and common tail. Fix: none needed.
+- `src/devices/dev_dec_ioasic.c:420`, QUESTION, function still returns 1 to the caller. Fix: none needed.
+- `src/devices/dev_dec_ioasic.c:192`, QUESTION, removes `fatal()` crash, but completely silences the unhandled DMA condition instead of converting it to a `(once)` diagnostic. Fix: add a rate-limited `debug(once)` warning.
+- `src/devices/dev_dec_ioasic.c:223`, STYLE, line exceeds 79 columns due to deep indentation. Fix: refactor indentation or wrap line.
+
+P-GWEBREVIOASIC3MINSCC-18b0
+GWEBREVIOASIC3MINSCC: 5 ATTACKS 1 BROKEN 3 HOLDS 1 UNSETTLED DRAFTABLE:NO

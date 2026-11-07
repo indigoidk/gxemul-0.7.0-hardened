@@ -1,0 +1,27 @@
+1. **Site coverage**: UNSETTLED. The issue mentions `src/cpus/cpu_dyntrans.c`, but the file is not provided in this message so it cannot be verified.
+2. **CONTROL FLOW**: ACCEPT. The diff only adds an `if` block with an assignment; no early exits or control flow keywords are added.
+3. **RETURN VALUE**: ACCEPT. The function `X(mtspr)` has no `return` statements in the diff.
+4. **State changes**: ACCEPT. The diff only reads values and sets `cpu->cd.ppc.dec_intr_pending = 1`.
+5. **House idioms**: ACCEPT. The comment `/* #575: ... */` matches the idiom seen at `<src/cpus/cpu_ppc_instr.c>:2735`.
+6. **Findings**: UNSETTLED. Cannot evaluate missing file `src/cpus/cpu_dyntrans.c`.
+
+STILL PRESENT: YES -- `<src/cpus/cpu_ppc_instr.c>:2820` (unfixed `mtspr` logic)
+
+```json
+[
+  {
+    "file": "src/cpus/cpu_ppc_instr.c",
+    "old": "X(mtspr) {\n\t/*  TODO: Check permission  */\n\treg(ic->arg[1]) = reg(ic->arg[0]);\n}",
+    "new": "X(mtspr) {\n\t/*  TODO: Check permission  */\n\tuint32_t old = reg(ic->arg[1]);\n\treg(ic->arg[1]) = reg(ic->arg[0]);\n\n\t/* #575: Signal decrementer exception if MSB flips 0 -> 1 */\n\tif (&reg(ic->arg[1]) == &cpu->cd.ppc.spr[SPR_DEC]) {\n\t\tif ((old >> 31) == 0 && (cpu->cd.ppc.spr[SPR_DEC] >> 31) == 1\n\t\t    && !(cpu->cd.ppc.cpu_type.flags & PPC_NO_DEC))\n\t\t\tcpu->cd.ppc.dec_intr_pending = 1;\n\t}\n}",
+    "why": "Intercept mtspr to SPR_DEC and assert dec_intr_pending when the sign bit flips."
+  }
+]
+```
+
+The fix deliberately does not alter other SPR write behaviors or return values, nor does it address `cpu_dyntrans.c` which cannot be seen.
+
+REVISION_PPCDECWRITE: 4 ACCEPTED, 0 REJECTED
+FIXDRAFT_PPCDECWRITE: YES PRESENT, 1 EDITS
+
+P-GWEBFIXPPCDECWRITE-001c
+GWEBFIXPPCDECWRITE: 6 ATTACKS 0 BROKEN 4 HOLDS 2 UNSETTLED DRAFTABLE:NO

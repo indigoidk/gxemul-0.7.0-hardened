@@ -1,0 +1,109 @@
+#!/usr/bin/env python3
+"""mk_fixdefs.py LISTFILE -- 04:4x 11-07: a THIRD fix-draft packet for rows whose redraft came back `STILL PRESENT: UNSETTLED`
+naming what it could not see.  For each row: the wide v2 packet (mk_fixpacket.py, WIDE=1), the previous reply's UNSETTLED
+explanation, and a section "What you said was missing": every identifier the reply names (backticked, or an ALL_CAPS macro-like
+word) whose DEFINITION HEAD's src/ carries (#define, struct/union/enum, a column-0 function definition or a .h prototype), shown
+with +-8 lines; and, when the reply says the START of a function is not visible, that whole function (to 400 lines).  FIX ONLY.
+Writes fix_<row>/packet_body.md (previous packet and reply kept with a time stamp) and fixdefs_list.txt."""
+import io
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+
+H = "C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/gweb/jobs_20261106_kits/"
+REPO = "C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC"
+STOP = set("""if else for while do switch case default break return goto struct union enum typedef static const int char long short
+unsigned signed void uint8_t uint16_t uint32_t uint64_t int8_t int16_t int32_t int64_t size_t NULL d cpu idata odata data len
+relative_addr writeflag MEM_READ MEM_WRITE TRUE FALSE YES NO UNSETTLED PRESENT STILL FIX FIXDRAFT DEFECT HEAD SOUND JSON""".split())
+
+
+def git_show(f):
+    return subprocess.run(["git", "-C", REPO, "show", "HEAD:" + f], capture_output=True).stdout.decode("latin-1").split("\n")
+
+
+def find_def(name):
+    pat = (r"^#[[:space:]]*define[[:space:]]+%s\b|^(struct|union|enum)[[:space:]]+%s\b|^[A-Za-z_][A-Za-z0-9_ *]*[[:space:]*]%s\(|"
+           r"^%s\(|^}[[:space:]]*%s;" % ((re.escape(name),) * 5))
+    g = subprocess.run(["git", "-C", REPO, "grep", "-n", "-E", pat, "HEAD", "--", "src"], capture_output=True).stdout.decode("latin-1")
+    hits = [x for x in g.split("\n") if x][:2]
+    out = []
+    for hit in hits:
+        _, f, ln = hit.split(":", 3)[:3]
+        src = git_show(f)
+        a, b = max(1, int(ln) - 8), min(len(src), int(ln) + 8)
+        out.append("### `%s` lines %d-%d (where HEAD defines `%s`)\n\n```c\n%s\n```\n" % (
+            f, a, b, name, "\n".join("%5d| %s" % (i, src[i - 1]) for i in range(a, b + 1))))
+    return out
+
+
+def whole_function(f, ln):
+    src = git_show(f)
+    i = min(max(0, ln - 1), len(src) - 1)
+    o = i
+    while o >= 0 and not re.match(r"^\{\s*$", src[o]):
+        o -= 1
+    c = i
+    while c < len(src) and not src[c].startswith("}"):
+        c += 1
+    if o < 0 or c >= len(src):
+        return None
+    a = max(0, o - 3)
+    b = min(c, a + 400)
+    return "### `%s` -- the whole enclosing function, lines %d-%d%s\n\n```c\n%s\n```\n" % (
+        f, a + 1, b + 1, "" if b == c else " (cut at 400 lines)", "\n".join("%5d| %s" % (k + 1, src[k]) for k in range(a, b + 1)))
+
+
+rows = [l.strip() for l in io.open(sys.argv[1], encoding="utf-8") if l.strip()]
+done = []
+env = dict(os.environ, WIDE="1")
+for rid in rows:
+    d = H + "fix_%s/" % rid
+    rep = io.open(d + "reply.txt", encoding="utf-8", errors="replace").read()
+    if not re.search(r"STILL PRESENT:\s*UNSETTLED", rep):
+        print("skip", rid, "(not UNSETTLED)")
+        continue
+    names = []
+    for span in re.findall(r"`([^`\n]{1,80})`", rep):
+        names += re.findall(r"[A-Za-z_][A-Za-z0-9_]{2,}", span)
+    names += re.findall(r"\b[A-Z][A-Z0-9]*_[A-Z0-9_]{2,}\b", rep)
+    seen, defs = set(), []
+    for n in names:
+        if n in STOP or n in seen or n.startswith(("FIXDRAFT_", "GWEB", "P-GWEB")):
+            continue
+        seen.add(n)
+        defs += find_def(n)
+        if len(defs) >= 10:
+            break
+    fn = []
+    if re.search(r"(start|signature|beginning|top) of (the )?(function|`?\w+`?)|lines before \d+ are missing", rep, re.I):
+        for f, ln in re.findall(r"(src/[A-Za-z0-9_/]+\.[ch]):(\d+)", rep)[:1] or re.findall(
+                r"(src/[A-Za-z0-9_/]+\.[ch]):(\d+)", io.open(d + "packet_body.md", encoding="utf-8").read())[:1]:
+            w = whole_function(f, int(ln))
+            if w:
+                fn.append(w)
+    subprocess.run(["python", H + "mk_fixpacket.py", rid], capture_output=True, env=env)
+    base = io.open(d + "packet_body.md", encoding="utf-8").read()
+    expl = "\n".join(l for l in rep.split("\n") if l.strip() and not l.startswith(("P-GWEB", "GWEB")))[-2500:]
+    add = "\n".join([
+        "", "## YOUR PREVIOUS DRAFT SAID `STILL PRESENT: UNSETTLED` -- here is what it said was missing", "",
+        "```text", expl, "```", "",
+        "## What you said was missing, from HEAD", "",
+        ("\n".join(defs) if defs else "(no definition of a name you used was found in HEAD's src/ -- the name may not exist)"),
+        ("\n".join(fn) if fn else ""),
+        "Now draft the fix, or -- if it still cannot be written from what is shown -- say `STILL PRESENT: UNSETTLED` and name the",
+        "exact definition or function still missing.  A name that appears in no section of this packet does not exist in HEAD; do",
+        "not use it.  Do not return an empty edit list, and do not return edits that change only comments.", ""])
+    stamp = time.strftime("%H%M%S")
+    shutil.copyfile(d + "reply.txt", d + "reply.%s.txt" % stamp)
+    io.open(d + "packet_body.md", "w", encoding="utf-8", newline="\n").write(base + add)
+    os.remove(d + "reply.txt")
+    if os.path.exists(d + "gemini_web.out"):
+        os.replace(d + "gemini_web.out", d + "gemini_web.%s.out" % stamp)
+    io.open(d + "gemini_web.exit", "w", encoding="utf-8").write("exit 0 fixdefs queued\n")
+    done.append(rid)
+    print(rid, len((base + add).encode()), "bytes", len(defs), "defs", len(fn), "functions")
+io.open(H + "fixdefs_list.txt", "w", encoding="utf-8", newline="\n").write("\n".join(done) + "\n")
+print("PREPARED", len(done))

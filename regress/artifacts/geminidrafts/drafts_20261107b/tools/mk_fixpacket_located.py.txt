@@ -1,0 +1,44 @@
+#!/usr/bin/env python3
+"""mk_fixpacket_located.py -- 06:0x 11-07: fix-draft packets for FIX-NOW rows that name a source FILE but cite no LINE.  The sites
+come from fixcand_file_keep.json: a SPECIFIC identifier the row names (a register, field or function -- generic macros dropped),
+found by `git grep -n -w` in the named file at HEAD (at most 6 hits, the first taken).  mk_fixpacket.py's own code builds each
+packet (WIDE window), run with the located sites added to the row, and every site header is rewritten to say the line was
+LOCATED BY NAME -- the row cites no line, so the drafter must check the shown code really is the defect's site.  Excludes the
+peer's alpha/lca rows (owner ruling 2026-10-07) and the held ARC / vr41 rows.  Writes fix_<row>/packet_body.md, fixcand_located.txt."""
+import io
+import json
+import os
+import re
+import sys
+
+H = "C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/gweb/jobs_20261106_kits/"
+SKIP = {"alphaifetchkill", "vr41xxgiuwidth", "vr41xx1kpage", "arcmemdescnr"}
+src = io.open(H + "mk_fixpacket.py", encoding="utf-8").read()
+marker = 'if sys.argv[1] == "--list":'
+pre, post = src.split(marker, 1)
+os.environ["WIDE"] = "1"
+done = []
+for rid, sites in json.load(io.open(H + "fixcand_file_keep.json", encoding="utf-8")):
+    if rid in SKIP or rid.startswith(("lca", "alpha")):
+        continue
+    if os.path.exists(H + "fix_%s/reply.txt" % rid):
+        print("skip", rid, "(already drafted)")
+        continue
+    ns = {"__name__": "located"}
+    sys.argv = ["mk_fixpacket.py", rid]
+    exec(pre, ns)
+    ns["by"][rid] = dict(ns["by"][rid], located_sites=" ".join("%s:%d" % (f, l) for f, l, _ in sites))
+    exec(marker + post, ns)
+    p = H + "fix_%s/packet_body.md" % rid
+    t = io.open(p, encoding="utf-8").read()
+    for f, l, ident in sites:
+        t = t.replace("around the row's cited line %d " % l,
+                      "around line %d -- LOCATED BY THE COORDINATOR from the name `%s` the row uses (the row cites no line; "
+                      "check this is the defect's site) " % (l, ident))
+    t = t.replace("and the current code at each source line it cites",
+                  "and the current code at lines the coordinator LOCATED from names the row uses (the row cites none)")
+    io.open(p, "w", encoding="utf-8", newline="\n").write(t)
+    done.append(rid)
+    print(rid, len(t.encode()), "bytes", len(sites), "sites")
+io.open(H + "fixcand_located.txt", "w", encoding="utf-8", newline="\n").write("\n".join(done) + "\n")
+print("PREPARED", len(done))

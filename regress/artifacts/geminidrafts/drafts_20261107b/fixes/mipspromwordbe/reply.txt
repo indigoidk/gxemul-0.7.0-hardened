@@ -1,0 +1,28 @@
+1. ACCEPT Review Finding 1. `src/cpus/cpu_mips.c:296-297` explicitly documents that the default behavior jumps to `0xbfc00000`, so instruction fetches for the PROM word will indeed occur at the kseg1 address `0xffffffffbfc00000ULL`.
+2. ACCEPT Review Finding 2. The project requires issue tags format `/* #NNN: ... */` and limits line length to 79 columns, which the previous comment violated.
+
+STILL PRESENT: YES -- `src/cpus/cpu_mips_instr.c:4341`
+
+```json
+[
+  {
+    "file": "src/cpus/cpu_mips.c",
+    "old": "\t\t *  Note: Specifically big-endian machines should override\n\t\t *  this, since the default MIPS CPU is little-endian!\n\t\t */\n\t\tstore_32bit_word(cpu, 0xffffffff9fc00000ULL, 0x00c0de0d);",
+    "new": "\t\t *  Note: The instruction translator detects the byte-swapped\n\t\t *  word for big-endian machines that do not override this.\n\t\t */\n\t\tstore_32bit_word(cpu, 0xffffffff9fc00000ULL, 0x00c0de0d);",
+    "why": "Update the comment to reflect that big-endian machines no longer need to manually override the little-endian PROM word"
+  },
+  {
+    "file": "src/cpus/cpu_mips_instr.c",
+    "old": "\tif (cpu->byte_order == EMUL_LITTLE_ENDIAN)\n\t\tiword = LE32_TO_HOST(iword);\n\telse\n\t\tiword = BE32_TO_HOST(iword);",
+    "new": "\tif (cpu->byte_order == EMUL_LITTLE_ENDIAN)\n\t\tiword = LE32_TO_HOST(iword);\n\telse {\n\t\tiword = BE32_TO_HOST(iword);\n\t\t/* #mipspromwordbe: fix BE keeping LE PROM word */\n\t\tif (iword == 0x0ddec000 &&\n\t\t    (addr == 0xffffffff9fc00000ULL ||\n\t\t     addr == 0xffffffffbfc00000ULL))\n\t\t\tiword = 0x00c0de0d;\n\t}",
+    "why": "Intercept the byte-swapped PROM word (decoded as JAL) on big-endian machines in both kseg0 and kseg1 and correct it back to the BREAK instruction"
+  }
+]
+```
+
+This fix deliberately does not change how the PROM word is originally written into memory by `mips_cpu_new` (it remains little-endian); it only patches the word at translation time on big-endian machines fetching from the boot vectors.
+
+REVISION_MIPSPROMWORDBE: 2 ACCEPTED, 0 REJECTED
+FIXDRAFT_MIPSPROMWORDBE: YES PRESENT, 2 EDITS
+P-GWEBFIXMIPSPROMWORDBE-2b91
+GWEBFIXMIPSPROMWORDBE: 2 ATTACKS 2 BROKEN 0 HOLDS 0 UNSETTLED DRAFTABLE:YES

@@ -1,0 +1,23 @@
+STILL PRESENT: YES -- 2397
+
+```json
+[
+  {
+    "file": "src/devices/dev_sh4.c",
+    "old": "\tcase SH4_RFCR:\n\t\t/*  Refresh Count Register (10 bits):  */\n\t\tif (writeflag == MEM_WRITE)\n\t\t\td->bsc_rfcr = idata & 0x03ff;\n\t\telse\n\t\t\todata = d->bsc_rfcr & 0x03ff;\n\t\tbreak;",
+    "new": "\tcase SH4_RFCR:\n\t\t/*  Refresh Count Register (10 bits):  */\n\t\tif (writeflag == MEM_WRITE) {\n\t\t\tif ((idata >> 10) == 0x29)\n\t\t\t\td->bsc_rfcr = idata & 0x03ff;\n\t\t} else\n\t\t\todata = d->bsc_rfcr & 0x03ff;\n\t\tbreak;",
+    "why": "Require write key B'101001 (0x29) in the upper 6 bits of the 16-bit write value to RFCR."
+  }
+]
+```
+
+**Analysis:**
+- The fix correctly addresses the issue by adding a check for the required write-key (B'101001, which is 0x29 in hex) in the top 6 bits of a 16-bit write (`idata >> 10`). This gates the state update to `d->bsc_rfcr`.
+- It deliberately does NOT change the read path for RFCR, ensuring legitimate reads continue to return the lower 10 bits.
+- It deliberately does NOT add key checks to RTCSR or RTCOR (which are also usually key-protected on real hardware but were not cited in the filed issue), leaving those states functionally identical to before.
+- UNSETTLED: Whether `idata` may arrive with garbage in bits 16-31 if the emulator core passes a 32-bit register value without masking it down to `len` (16 bits) first. If it does, `((idata >> 10) & 0x3f) == 0x29` would be required, but `(idata >> 10) == 0x29` correctly rejects writes that have invalid upper bits, which remains defensively sound. We cannot check the caller from this snippet to confirm.
+
+FIXDRAFT_SHRFCRKEY: YES PRESENT, 1 EDITS
+
+P-GWEBFIXSHRFCRKEY-615d
+GWEBFIXSHRFCRKEY: 1 ATTACKS 0 BROKEN 1 HOLDS 0 UNSETTLED DRAFTABLE:YES

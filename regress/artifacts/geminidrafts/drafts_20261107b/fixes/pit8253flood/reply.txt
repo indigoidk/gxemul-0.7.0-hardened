@@ -1,0 +1,50 @@
+1. ACCEPT: The ticket explicitly requested to LATCH 270 and 342 and DELETE 351 and 354, which the previous draft missed (`src/devices/dev_8253.c:270`, `src/devices/dev_8253.c:342`, `src/devices/dev_8253.c:351`).
+2. ACCEPT: The control flow correctly falls through to the common return, as the `fatal` calls no longer exit (`src/devices/dev_8253.c:363`).
+3. ACCEPT: The function correctly reaches `return 1;` when `fatal` is skipped (`src/devices/dev_8253.c:363`).
+4. ACCEPT: The changes are isolated to preventing spurious fatal log floods on malformed input without altering device semantics.
+5. REJECT: The `(once)` idiom does not appear anywhere in the provided source block so it must be rejected; however, the issue tag `#pit8253flood` is valid and will be applied.
+
+STILL PRESENT: YES -- `src/devices/dev_8253.c:270`
+
+```json
+[
+  {
+    "file": "src/devices/dev_8253.c",
+    "old": "\t\t\t\tcase 1:\tfatal(\"TODO: DMA refresh?\\n\");\n\t\t\t\t\tbreak;\t/*  #223: (Codex/Fable) warn+ignore, don't exit() the host  */\n\t\t\t\tcase 2:\tfatal(\"TODO: 8253 tone generation?\\n\");\n\t\t\t\t\tbreak;",
+    "new": "\t\t\t\tcase 1:\t/* #pit8253flood: deleted TODO: DMA refresh? */\n\t\t\t\t\tbreak;\t/*  #223: (Codex/Fable) warn+ignore, don't exit() the host  */\n\t\t\t\tcase 2:\t/* #pit8253flood: deleted TODO: 8253 tone generation? */\n\t\t\t\t\tbreak;",
+    "why": "Delete unconditional emissions at 198 and 200."
+  },
+  {
+    "file": "src/devices/dev_8253.c",
+    "old": "\t\t\tdefault:fatal(\"[ 8253: huh? writing to counter\"\n\t\t\t\t    \" %i but neither from msb nor lsb? ]\\n\",\n\t\t\t\t    (int)relative_addr);\n\t\t\t\tbreak;\t/*  #223: (Codex/Fable) don't exit() the host  */",
+    "new": "\t\t\tdefault:if (!d->latched[relative_addr]) {\n\t\t\t\t\tfatal(\"[ 8253: huh? writing to counter\"\n\t\t\t\t\t    \" %i but neither from msb nor lsb? ]\\n\",\n\t\t\t\t\t    (int)relative_addr);\n\t\t\t\t}\n\t\t\t\tbreak;\t/*  #223: (Codex/Fable) don't exit() the host  */",
+    "why": "Latch emission at 204."
+  },
+  {
+    "file": "src/devices/dev_8253.c",
+    "old": "\t\t\tdefault:fatal(\"[ 8253: huh? reading from counter\"\n\t\t\t\t    \" %i but neither from msb nor lsb? ]\\n\",\n\t\t\t\t    (int)relative_addr);\n\t\t\t\tbreak;\t/*  #223: (Codex/Fable) don't exit() the host  */",
+    "new": "\t\t\tdefault:if (!d->latched[relative_addr]) {\n\t\t\t\t\tfatal(\"[ 8253: huh? reading from counter\"\n\t\t\t\t\t    \" %i but neither from msb nor lsb? ]\\n\",\n\t\t\t\t\t    (int)relative_addr);\n\t\t\t\t}\n\t\t\t\tbreak;\t/*  #223: (Codex/Fable) don't exit() the host  */",
+    "why": "Latch emission at 270."
+  },
+  {
+    "file": "src/devices/dev_8253.c",
+    "old": "\t\t\tif (idata & I8253_TIMER_BCD) {\n\t\t\t\t/*  #223: (Codex/Fable) warn+ignore BCD mode instead of\n\t\t\t\t    exit()ing the host.  */\n\t\t\t\tfatal(\"[ 8253: BCD not yet implemented ]\\n\");\n\t\t\t}",
+    "new": "\t\t\tif (idata & I8253_TIMER_BCD) {\n\t\t\t\t/*  #223: (Codex/Fable) warn+ignore BCD mode instead of\n\t\t\t\t    exit()ing the host.  */\n\t\t\t\tif (!d->latched[d->counter_select]) {\n\t\t\t\t\tfatal(\"[ 8253: BCD not yet implemented ]\\n\");\n\t\t\t\t}\n\t\t\t}",
+    "why": "Latch emission at 342."
+  },
+  {
+    "file": "src/devices/dev_8253.c",
+    "old": "\tdefault:if (writeflag == MEM_WRITE) {\n\t\t\tfatal(\"[ 8253: unimplemented write to address 0x%x\"\n\t\t\t    \" data=0x%02x ]\\n\", (int)relative_addr, (int)idata);\n\t\t} else {\n\t\t\tfatal(\"[ 8253: unimplemented read from address 0x%x \"\n\t\t\t    \"]\\n\", (int)relative_addr);\n\t\t}\n\t\tbreak;\t/*  #223: (Codex/Fable) warn+ignore, don't exit() the host  */",
+    "new": "\tdefault:/* #pit8253flood: deleted dead code */\n\t\tbreak;\t/*  #223: (Codex/Fable) warn+ignore, don't exit() the host  */",
+    "why": "Delete dead code emissions at 351 and 354."
+  }
+]
+```
+
+The fix deliberately does not alter state updates, read/write routing, or timing behavior; it strictly applies conditional wrappers or deletions to `fatal` calls.
+
+REVISION_PIT8253FLOOD: 4 ACCEPTED, 1 REJECTED
+FIXDRAFT_PIT8253FLOOD: YES PRESENT, 5 EDITS
+
+P-GWEBFIXPIT8253FLOOD-7c56
+GWEBFIXPIT8253FLOOD: 5 ATTACKS 1 BROKEN 4 HOLDS 0 UNSETTLED DRAFTABLE:YES

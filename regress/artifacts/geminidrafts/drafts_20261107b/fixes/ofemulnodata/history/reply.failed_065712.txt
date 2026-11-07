@@ -1,0 +1,21 @@
+Here is the defensive review of the claims and proposed steps in the issue description and instructions, evaluated strictly against the provided source text.
+
+### BROKEN Claims and Steps
+
+*   **BROKEN:** The routing claim that the PowerPC decoder targets `X(openfirmware) :3956-3958` is false. In `src/cpus/cpu_ppc_instr.c:3956-3958`, the code shown is actually PC synchronization logic belonging to the preceding function (`ppc_exception`). The `X(openfirmware)` routine actually begins at `src/cpus/cpu_ppc_instr.c:3969`.
+*   **BROKEN:** The proposed changed step to "PREFER the single site both callers share (`of_emul()`'s missing-`of_data` arm) over editing each caller" is incorrect and fails to leave machine state intact. If `of_emul` is modified to return early instead of exiting, it violates the constraint in the text's DESIGN section to gate at the decoders. If `of_emul` returns, the caller at `src/cpus/cpu_arm_instr.c:992` will unconditionally overwrite state by executing `cpu->pc = cpu->cd.arm.r[ARM_LR];`, and the caller at `src/cpus/cpu_ppc_instr.c:3973` will execute `cpu->pc = cpu->cd.ppc.spr[SPR_LR];`. This improperly treats an invalid instruction as a successful function call return, clobbering the program counter instead of triggering the architectural exception (FAULT).
+*   **BROKEN:** The proposed instruction to "Say what `of_emul()`'s return value means to each caller as the code shows it" is based on a false premise. As seen at `src/cpus/cpu_arm_instr.c:991` and `src/cpus/cpu_ppc_instr.c:3971`, both callers invoke `of_emul(cpu);` as a void expression. The return value means nothing to them because they discard it entirely.
+
+### UNSETTLED Claims
+
+*   **UNSETTLED:** The claim that "ARM decode cpu_arm_instr.c:5034-5036 ->" routes to the instruction cannot be verified. `src/cpus/cpu_arm_instr.c` is missing lines 5034-5036.
+*   **UNSETTLED:** The claim that "PowerPC decode cpu_ppc_instr.c:4400-4402 ->" routes to the instruction cannot be verified. `src/cpus/cpu_ppc_instr.c` is missing lines 4400-4402.
+*   **UNSETTLED:** The claim that "macppc without PROM emulation also has of_data NULL (read at machine_macppc.c's `if (!machine->prom_emulation) return;` before of_emul_init)" cannot be verified. The file `machine_macppc.c` is not provided.
+*   **UNSETTLED:** The claim that ":1078 (the only writer, of_emul_init, called only from machine_macppc.c:99)" cannot be verified. `src/promemul/of.c` is missing line 1078, and `machine_macppc.c` is missing.
+*   **UNSETTLED:** The claim "Not covered by ofopenexit or ofpeerexit (other sites in the same file)" cannot be verified. `src/promemul/of.c` is missing the lines where these sites are located.
+*   **UNSETTLED:** The claim that "of.c:1100 (this row), :394 (ofpeerexit) and :448 (ofopenexit) differ in semantic class" cannot be verified. `src/promemul/of.c` is missing lines 394 and 448.
+*   **UNSETTLED:** The claim that "of.c:549, :577, :1120 and :1201 are UNREACHABLE" (because "arch-switch defaults only ARM and PowerPC reach") cannot be settled. Global reachability cannot be proven without seeing all callers of `of_emul` and architecture definitions across the codebase.
+*   **UNSETTLED:** The claim regarding the "rung-3 ATTEMPT" and its execution behavior (printing `'of_emul(): no of_data struct?'`) cannot be verified. Test execution artifacts or the ability to run the emulator are required but not provided.
+
+P-GWEBFIXOFEMULNODATA-3399
+GWEBFIXOFEMULNODATA: 17 ATTACKS 3 BROKEN 6 HOLDS 8 UNSETTLED DRAFTABLE:NO

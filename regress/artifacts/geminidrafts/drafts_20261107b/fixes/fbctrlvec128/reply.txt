@@ -1,0 +1,22 @@
+1. ACCEPT: The review's DEFECT finding correctly identifies that an early `return 1;` on a read path skips the `memory_writemax64()` call at lines 184-185, leaving the guest read buffer unwritten. Replacing it with `exit(1);` correctly handles the error by terminating the emulator, matching the existing idiom at lines 148 and 181.
+2. REJECT: The review's STYLE finding suggests using `d->warned_len`, a field that appears nowhere in the provided `struct fbctrl_data` packet, which violates the strict ground rules of this task. We instead adopt `exit(1);` as our fix, which inherently prevents spamming and removes the need for a once-latch entirely. However, the suggestion to add the `#567` issue tag will be incorporated.
+
+STILL PRESENT: YES -- src/devices/dev_fbctrl.c:116
+
+```json
+[
+  {
+    "file": "src/devices/dev_fbctrl.c",
+    "old": "\tuint64_t idata = 0, odata = 0;\n\n\tif (writeflag == MEM_WRITE)\n\t        idata = memory_readmax64(cpu, data, len);",
+    "new": "\tuint64_t idata = 0, odata = 0;\n\n\tif (len > 8) {\n\t\t/*  #567: a memory access wider than 8 bytes is REFUSED before conversion.  */\n\t\tfatal(\"[ fbctrl: access length > 8 is not supported ]\\n\");\n\t\texit(1);\n\t}\n\n\tif (writeflag == MEM_WRITE)\n\t        idata = memory_readmax64(cpu, data, len);",
+    "why": "Refuse length > 8 accesses immediately with exit(1) to avoid skipping the read tail or dropping upper bytes."
+  }
+]
+```
+
+The fix deliberately does not change `memory_readmax64()` itself, nor does it add a new state field to track length warnings since the emulator now safely halts on this malformed input.
+
+REVISION_FBCTRLVEC128: 1 ACCEPTED, 1 REJECTED
+FIXDRAFT_FBCTRLVEC128: YES PRESENT, 1 EDITS
+P-GWEBFIXFBCTRLVEC128-70a8
+GWEBFIXFBCTRLVEC128: 2 ATTACKS 1 BROKEN 1 HOLDS 0 UNSETTLED DRAFTABLE:YES

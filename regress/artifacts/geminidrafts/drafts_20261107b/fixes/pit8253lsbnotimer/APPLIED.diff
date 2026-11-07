@@ -1,0 +1,46 @@
+diff --git a/src/devices/dev_8253.c b/src/devices/dev_8253.c
+index 9e756933..59bb0988 100644
+--- a/src/devices/dev_8253.c
++++ b/src/devices/dev_8253.c
+@@ -172,12 +172,25 @@ DEVICE_ACCESS(8253)
+ 		if (writeflag == MEM_WRITE) {
+ 			switch (rw) {
+ 			case I8253_TIMER_LSB:
+-				d->counter[relative_addr] &= 0xff00;
+-				d->counter[relative_addr] |= (idata & 0xff);
++				if ((d->mode_byte & 0x30) == I8253_TIMER_LSB)
++					d->counter[relative_addr] = (idata & 0xff);
++				else
++					d->counter[relative_addr] = (d->counter[relative_addr] & 0xff00) | (idata & 0xff);
+ 				break;
+ 			case I8253_TIMER_MSB:
+-				d->counter[relative_addr] &= 0x00ff;
+-				d->counter[relative_addr] |= ((idata&0xff)<<8);
++				if ((d->mode_byte & 0x30) == I8253_TIMER_MSB)
++					d->counter[relative_addr] = ((idata & 0xff) << 8);
++				else
++					d->counter[relative_addr] = (d->counter[relative_addr] & 0x00ff) | ((idata & 0xff) << 8);
++				break;
++			default:fatal("[ 8253: huh? writing to counter"
++				    " %i but neither from msb nor lsb? ]\n",
++				    (int)relative_addr);
++				break;	/*  #223: (Codex/Fable) don't exit() the host  */
++			}
++
++			if (rw == I8253_TIMER_LSB || rw == I8253_TIMER_MSB) {
++				/* #442: Setup timer for all write formats */
+ 				if (d->counter[relative_addr] != 0)
+ 					d->hz[relative_addr] = (int) (
+ 					    I8253_TIMER_FREQ / (float)
+@@ -200,11 +213,6 @@ DEVICE_ACCESS(8253)
+ 				case 2:	fatal("TODO: 8253 tone generation?\n");
+ 					break;
+ 				}
+-				break;
+-			default:fatal("[ 8253: huh? writing to counter"
+-				    " %i but neither from msb nor lsb? ]\n",
+-				    (int)relative_addr);
+-				break;	/*  #223: (Codex/Fable) don't exit() the host  */
+ 			}
+ 		} else if (d->latched[relative_addr]) {
+ 			/*  #439: Reading a counter that the latch

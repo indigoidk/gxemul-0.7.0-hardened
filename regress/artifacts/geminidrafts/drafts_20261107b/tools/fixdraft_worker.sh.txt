@@ -1,0 +1,43 @@
+#!/bin/bash
+#  fixdraft_worker.sh ID N LISTFILE -- one of N parallel Gemini-web senders drafting FIXES for the oldest unfixed rows (row ids in
+#  LISTFILE, oldest first; worker ID takes every N-th from position ID).  Same claim / send / bank pattern as oldbatch_worker.sh;
+#  needs today's control; 10 s between sends; stops on STOP_PROXY, STOP_FIXWORKERS, unusual-traffic text, or three consecutive
+#  failures.  Log: fixdraft_workers.log.  Everything is a PROPOSAL: compile-checked and reviewed before anything lands.
+set -u
+ID=$1; N=$2; LIST=$3
+K=/c/DocumentNoSnc/CC/GXEMUL/_scratchpad/gweb/jobs_20261106_kits; G=/c/DocumentNoSnc/CC/GXEMUL/_scratchpad/gweb
+MODEL="gemini-4-argon@think=2"; DAY=$(date +%F)
+LAB="gemini-4-argon@think=2 High (local web2api proxy, package entry point; oldest-row FIX DRAFT, proposed for Fable, $DAY)"
+LOG=$K/fixdraft_workers.log; fails=0; i=0
+say(){ echo "$(date '+%F %T') [f$ID${TAGW:-}] $*" >> "$LOG"; }
+read cday cts < <(cat "$G/.prelim5_control_ok" 2>/dev/null || echo "none 0")
+[ "$cday" = "$DAY" ] || { say "no control passed today ($cday) -- not sending"; exit 4; }
+say "start"
+for rid in $(cat "$LIST"); do
+    i=$((i+1)); [ $(( (i-1) % N )) -eq "$ID" ] || continue
+    [ -f "$G/STOP_PROXY" ] && { say "STOP_PROXY"; break; }
+    [ -f "$K/STOP_FIXWORKERS" ] && { say "STOP_FIXWORKERS"; break; }
+    d=$K/fix_$rid; TAG=$(echo "GWEBFIX$rid" | tr 'a-z' 'A-Z' | tr -cd 'A-Z0-9_' | cut -c1-25)
+    if grep -qhE 'FIXDRAFT_' "$d/reply.txt" 2>/dev/null || grep -q 'in flight' "$d/gemini_web.exit" 2>/dev/null; then continue; fi
+    (cd "$K" && python mk_fixpacket.py "$rid" >/dev/null 2>&1) || { say "BUILD-FAIL $rid"; continue; }
+    (cd "$G" && python mk_gweb_job.py "$d" "$d/packet_body.md" "$TAG" --title="fix_$rid" >/dev/null 2>&1) || { say "JOB-REFUSED $rid"; continue; }
+    for try in 1 2; do
+        echo "exit 2 in flight (fixdraft worker $ID, $(date '+%H:%M:%S'))" > "$d/gemini_web.exit"
+        sout=$(python "$G/send_proxy.py" "$d" "$MODEL" 2>&1); rc=$?
+        if grep -qiE 'unusual traffic|captcha|not a robot|automated queries' "$d/reply.txt" 2>/dev/null; then
+            echo "exit 1 unusual-traffic" > "$d/gemini_web.exit"; say "UNUSUAL-TRAFFIC at $rid -- touching STOP_FIXWORKERS"; touch "$K/STOP_FIXWORKERS"; exit 1
+        fi
+        #  05:0x 11-07: accept only a reply carrying the verdict token -- a short Gemini error text ("I encountered an error",
+        #  59-69 bytes) passed this check and was logged OK (the fix-review worker lost four reviews that way)
+        if [ "$rc" = 0 ] && echo "$sout" | grep -q "server_model=gemini-4-argon" && grep -qE 'FIXDRAFT_|STILL PRESENT:' "$d/reply.txt" 2>/dev/null; then break; fi
+        [ "$rc" = 0 ] && rc=9
+        echo "exit 1 send-fail rc=$rc" > "$d/gemini_web.exit"; mv -f "$d/reply.txt" "$d/reply.failed_$(date +%H%M%S).txt" 2>/dev/null
+        say "$rid FAILED rc=$rc :: $(echo "$sout" | tail -1 | cut -c1-100)"; sleep 30
+    done
+    if [ "$rc" != 0 ]; then fails=$((fails+1)); [ "$fails" -ge 3 ] && { say "three consecutive failures -- stopping"; break; }; continue; fi
+    fails=0
+    (cd "$G" && python bank_gweb.py "$d" "$d/reply.txt" --model="$LAB" --transport=web2api-proxy >/dev/null 2>&1)
+    say "$rid OK $(echo "$sout" | grep -oE 'bytes=[0-9]+') :: $(grep -hE 'STILL PRESENT|FIXDRAFT_' "$d/reply.txt" | tr '\n' ' ' | cut -c1-150)"
+    sleep 10
+done
+say "WORKER_DONE"

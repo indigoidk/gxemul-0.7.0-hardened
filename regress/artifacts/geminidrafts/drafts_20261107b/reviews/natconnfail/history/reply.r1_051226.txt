@@ -1,0 +1,22 @@
+FIXREVIEW_NATCONNFAIL: DEFECT, 3 FINDINGS
+
+1. Does the diff remove the defect the issue describes, at every site the issue names? Name any site it misses.
+No. The diff only patches around line 596. It entirely misses the second site named in the issue description: `src/net/net_ip.c:1520-1552`.
+Finding 1: `src/net/net_ip.c:1520-1552`, UNSETTLED, missing lines `1520-1552` to verify what was missed at the second site.
+
+2. CONTROL FLOW: does any added return, goto, break or early exit skip code the function would otherwise run -- above all its COMMON TAIL? Quote the tail line it skips.
+Yes, the early `return;` at line 603 skips the function's common tail, although it does manually write an RST result (`net_ip_tcp_connectionreply(net, nic, con_id, 0, NULL, 0, 1);`) before returning.
+Finding 2: `src/net/net_ip.c:603`, QUESTION, skips tail line `771| 	net_ip_tcp_connectionreply(net, nic, con_id, 0, NULL, 0, 0);`.
+
+3. RETURN VALUE: does any path now return something different? Say what the shown code implies the value means.
+No. The signature for `net_ip_tcp` implies it returns `void` (deduced from the isolated `return;` statement). No path returns a different value.
+
+4. What ELSE does the diff change -- state left set or cleared, a value the guest can now see, a message on a path that did not print one -- beyond removing the defect?
+Because the socket is explicitly set to non-blocking (line 586), `connect()` will almost always return `-1` and set `errno = EINPROGRESS`. The diff's `if (res < 0)` blindly intercepts this normal asynchronous pending state and immediately aborts the connection. This breaks all legitimate asynchronous connections.
+Finding 3: `src/net/net_ip.c:599`, DEFECT, fix: `if (res < 0 && errno != EINPROGRESS) {`
+
+5. House idioms:
+The code complies with house idioms. The comment correctly carries the `/* #NNN: ... */` tag, lines stay within 79 columns, and no latching diagnostics were added.
+
+P-GWEBREVNATCONNFAIL-7eff
+GWEBREVNATCONNFAIL: 5 ATTACKS 2 BROKEN 2 HOLDS 1 UNSETTLED DRAFTABLE:NO

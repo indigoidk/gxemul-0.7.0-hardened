@@ -1,0 +1,14 @@
+FIXREVIEW_X11CURSORCLIP: DEFECT, 3 FINDINGS
+
+1. No, the diff does not remove the defect at every site. It entirely misses `src/devices/dev_fb.c:913-914` and `src/devices/dev_turbochannel.c:250-251` which were named in the issue. Additionally, within the edited `x11_redraw_cursor`, it misses the `XPutImage` call at `src/console/x11.c:310-311` which still uses the unclamped `cursor_xsize` and `cursor_ysize`, meaning Xlib will still read past the end of the `xtmp` image buffer.
+2. Yes. The early return `if (cxsize <= 0 || cysize <= 0) return;` at `src/console/x11.c:253` skips the common tail that updates the old cursor state for the next frame. It skips: `fbwin->OLD_cursor_on = fbwin->cursor_on;` (line 315) and the subsequent state assignments.
+3. No path returns a different value; both edited functions return `void`.
+4. In `dev_fb_setcursor`, the diff introduces a state corruption: if `cursor_xsize` is larger than `d->visible_xsize`, the new clamping logic at `src/devices/dev_fb.c:249-250` sets `cursor_x` to a negative number. Because the lower-bound check (`cursor_x < 0`) happened *before* this clamp (lines 245-246), the negative coordinate is written to the guest-visible window state.
+5. No house idiom or style violations found. All lines are within 79 columns and no new diagnostics were added.
+
+src/console/x11.c:310, DEFECT, `cxsize, cysize);`
+src/console/x11.c:253, DEFECT, `goto skip_draw;`
+src/devices/dev_fb.c:250, DEFECT, `cursor_x = d->visible_xsize > cursor_xsize ? d->visible_xsize - cursor_xsize : 0;`
+
+P-GWEBREVX11CURSORCLIP-996a
+GWEBREVX11CURSORCLIP: 5 ATTACKS 3 BROKEN 2 HOLDS 0 UNSETTLED DRAFTABLE:NO

@@ -1,0 +1,217 @@
+#!/usr/bin/env python3
+"""build_bank2.py -- the SECOND records-only bank of the 2026-11-07 Gemini-web work on the oldest open issues, run AFTER #587
+lands (the main loop commits nothing before).  Owner: "keep utilizing gemini web on the oldest set ... land everything".
+
+Banks under regress/artifacts/geminidrafts/drafts_20261107b/ -- a NEW directory, so every citation into the first bank
+(drafts_20261107/, 8d9df658) keeps pointing at what it said:
+  fixes/<row>/    the CURRENT packet, reply and (BUILD_OK) APPLIED.diff of every drafted row; history/ = every earlier reply
+  reviews/<row>/  the second-lens review packet and reply (and the first-round reply where a revision followed)
+  records/        HELD6_RECORDS.md, CLOSED8_RECORDS.md, OLDEST3_RECORDS.md and the Gemini replies they checked
+  plan/           FIXPLAN.md, FIXREVIEWS.md, fixcheck_results.tsv, commentonly.tsv, the grouping packet and reply
+  tools/          every script of the pipeline, as .txt (section R: a banked .py/.sh under regress/ is read as a detector)
+  SUMMARY.md, PROVENANCE.md (every source with its md5)
+and corrects IN PLACE, with the project's dated bracketed form: the first bank's "74 compile" (its SUMMARY.md and the
+CHANGELOG block of 8d9df658) -- 4 of the 74 were NO_EDITS and 3 COMMENT_ONLY on code defects, 67 real.  Writes a CHANGELOG
+records block and a commit spec that adds the new directory as ONE add_dirs entry (WinError 206 at 455 argv paths).
+Nothing is adjudicated or applied.  Reads HEAD read-only; writes only under _scratchpad/wgemdrafts/staged2/."""
+import glob
+import hashlib
+import io
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+
+W = "C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/wgemdrafts/"
+K = "C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/gweb/jobs_20261106_kits/"
+REPO = "C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC"
+B = "regress/artifacts/geminidrafts/drafts_20261107b/"
+B1 = "regress/artifacts/geminidrafts/drafts_20261107/"
+DATE = "2026-11-07"
+os.environ["GIT_OPTIONAL_LOCKS"] = "0"
+
+
+def git(*a):
+    return subprocess.run(["git", "-C", REPO] + list(a), capture_output=True).stdout
+
+
+head = git("rev-parse", "--short=8", "HEAD").decode().strip()
+if git("diff", "--cached", "--name-only").strip() and "--dry" not in sys.argv:
+    sys.exit("REFUSED: the real index has staged paths (a commit is in flight)")
+#  the #587 landing must be IN HEAD's history (HEAD itself may be its hash follow-up, whose subject need not name #587)
+if "--allow-pre587" not in sys.argv and not git("log", "-30", "--format=%h", "--grep=^#587 ghostround").strip():
+    sys.exit("REFUSED: no '#587 ghostround' commit in HEAD %s's last 30 -- this bank runs after ghostround lands" % head)
+st = W + "staged2/"
+if os.path.isdir(st):
+    shutil.rmtree(st)
+copies = []
+
+
+def bank(src, dst):
+    if dst.endswith((".py", ".sh")):
+        dst += ".txt"
+    if os.path.exists(src) and os.path.getsize(src) > 0:
+        copies.append((src, B + dst))
+
+
+res = {}
+for l in io.open(K + "fixcheck_results.tsv", encoding="utf-8"):
+    p = l.rstrip("\n").split("\t")
+    if len(p) >= 2:
+        res[p[0]] = p[1]
+nf = 0
+for d in sorted(glob.glob(K + "fix_*/")):
+    r = os.path.basename(d.rstrip("/\\"))[4:]
+    if not os.path.exists(d + "reply.txt"):
+        continue
+    nf += 1
+    bank(d + "packet_body.md", "fixes/%s/packet.md" % r)
+    bank(d + "reply.txt", "fixes/%s/reply.txt" % r)
+    if res.get(r) == "BUILD_OK":
+        bank(d + "APPLIED.diff", "fixes/%s/APPLIED.diff" % r)
+    for h in sorted(glob.glob(d + "reply.*.txt")):
+        bank(h, "fixes/%s/history/%s" % (r, os.path.basename(h)))
+nr = 0
+for d in sorted(glob.glob(K + "rev_*/")):
+    r = os.path.basename(d.rstrip("/\\"))[4:]
+    if not os.path.exists(d + "reply.txt"):
+        continue
+    nr += 1
+    bank(d + "packet_body.md", "reviews/%s/packet.md" % r)
+    bank(d + "reply.txt", "reviews/%s/reply.txt" % r)
+    for h in sorted(glob.glob(d + "reply.r1_*.txt")):
+        bank(h, "reviews/%s/history/%s" % (r, os.path.basename(h)))
+for f in ("HELD6_RECORDS.md", "CLOSED8_RECORDS.md", "OLDEST3_RECORDS.md"):
+    bank(K + f, "records/" + f)
+for d in sorted(glob.glob(K + "oldrec*/")) + sorted(glob.glob(K + "hrec_*/")):
+    n = os.path.basename(d.rstrip("/\\"))
+    bank(d + "gemini_web.packet.md", "records/%s/packet.md" % n)
+    bank(d + "reply.txt", "records/%s/reply.txt" % n)
+for f in ("FIXPLAN.md", "FIXREVIEWS.md", "fixcheck_results.tsv", "commentonly.tsv", "fixcand.txt"):
+    bank(K + f, "plan/" + f)
+bank(K + "grouping/packet_body.md", "plan/grouping/packet.md")
+bank(K + "CLOSEDRAFTS.md", "plan/CLOSEDRAFTS.md")
+bank(K + "NEXTSTEPS.md", "plan/NEXTSTEPS.md")
+for d in sorted(glob.glob(K + "nextstep_*/")):
+    n = os.path.basename(d.rstrip("/\\"))
+    bank(d + "gemini_web.packet.md", "plan/nextsteps/%s/packet.md" % n)
+    bank(d + "reply.txt", "plan/nextsteps/%s/reply.txt" % n)
+for d in sorted(glob.glob(K + "closedraft_*/")):
+    n = os.path.basename(d.rstrip("/\\"))
+    bank(d + "gemini_web.packet.md", "plan/closures/%s/packet.md" % n)
+    bank(d + "reply.txt", "plan/closures/%s/reply.txt" % n)
+bank(K + "grouping/reply.txt", "plan/grouping/reply.txt")
+for f in ("mk_fixpacket.py", "mk_fixpacket_located.py", "mk_fixretry.py", "mk_fixdefs.py", "mk_fixreview.py", "mk_fixrevise.py",
+          "scan_commentonly.py", "agg_fixreviews.py", "mk_next4.py", "mk_harnessrec.py", "mk_closedraft.py", "mk_closedraft2.py", "mk_reviewdefs.py", "fixcheck_all.sh", "fixdraft_worker.sh",
+          "fixdraft_worker.retry.sh", "fixreview_worker.sh", "run_oldrec6.sh"):
+    bank(K + f, "tools/" + f)
+for f in ("fixdraft_workers.log", "fixreview_workers.log", "fixcheck_all.log"):
+    bank(K + f, "plan/logs/" + f)
+
+#  the counts the records state, DERIVED here (never typed)
+from collections import Counter
+cnt = Counter(res.values())
+co = Counter(l.split("\t")[1] for l in io.open(K + "commentonly.tsv", encoding="utf-8") if "\t" in l)
+rv = Counter()
+for d in glob.glob(K + "rev_*/"):
+    r = os.path.basename(d.rstrip("/\\"))[4:]
+    if res.get(r) != "BUILD_OK" or not os.path.exists(d + "reply.txt"):
+        continue
+    m = re.findall(r"^FIXREVIEW_%s:\s*(SOUND|DEFECT|UNSETTLED)" % re.escape(r.upper()), io.open(d + "reply.txt", encoding="utf-8", errors="replace").read(), re.M)
+    rv[m[-1] if m else "NO-ANSWER"] += 1
+summary = "\n".join([
+    "# Gemini-web work on the oldest open issues -- the second bank, %s (PROPOSALS: none adjudicated, none applied)" % DATE, "",
+    "HEAD when banked: `%s`.  The first bank is `%s` (8d9df658); this one adds what came after it, in a new directory so" % (head, B1),
+    "the first bank's citations keep pointing at what it said.  Every count below is derived by `tools/build_bank2.py.txt`'s",
+    "source (`_scratchpad/wgemdrafts/build_bank2.py`) from the files banked here.", "",
+    "## Fix drafts -- `fixes/`, `plan/fixcheck_results.tsv`", "",
+    "%d rows drafted (oldest first; the FIX-NOW rows that cite a source line, plus 20 that name a file whose line was LOCATED by a" % nf,
+    "specific identifier -- `tools/mk_fixpacket_located.py.txt`).  Compile check: %s." % ", ".join("%s %d" % kv for kv in sorted(cnt.items())),
+    "**Every BUILD_OK draft changes code** (`plan/commentonly.tsv`: %s; the COMMENT_ONLY rows are RECORD rows whose defect is a" % dict(co),
+    "comment).  The check now scores an empty edit list NO_EDITS -- the first bank's \"74 compile\" counted 4 such drafts and 3",
+    "comment-only drafts on code defects (corrected in place there).", "",
+    "## Reviews -- `reviews/`, `plan/FIXREVIEWS.md`", "",
+    "Every compiling draft has a second-lens review of its CURRENT version (the row, the diff, every edited function in full):",
+    "%s.  ONE revision round, capped: the DEFECT drafts were revised once with the review's findings (the drafter accepting or" % dict(rv),
+    "rejecting each); a DEFECT on a revised draft is NOT revised again -- it is a pointer for the adjudication.  Same model drafted",
+    "and reviewed (badge `s`).", "",
+    "## Records checks -- `records/`", "",
+    "Every HELD row that carries a commit (34 at 8d9df658) has had a records check of its round block or commit message; every",
+    "claimed contradiction was settled against the round's own artifacts (`records/HELD6_RECORDS.md`, `CLOSED8_RECORDS.md`,",
+    "`OLDEST3_RECORDS.md`).  Gemini's packet-fed claims were mostly compressed sentences or two instruments read as one.", "",
+    "## Closures and next steps -- `plan/CLOSEDRAFTS.md`, `plan/NEXTSTEPS.md`", "",
+    "For the 80 oldest open rows the triage proposed closing (DOCUMENT-AND-CLOSE / DROP / CLOSE-OVERTAKEN): a closure record, or a",
+    "DISAGREE where the row still names work owed (CLOSE-OVERTAKEN drafts name the discriminating control as OWED, never done).  For",
+    "the rows it disagreed on: ONE next step each (fix round, measurement, reading, record, owner decision), drafted where the row's",
+    "own text settles a reading or a record.  Where the two passes disagree, a row is NOT closed on either pass's word.", "",
+    "## The plan -- `plan/FIXPLAN.md`", "",
+    "The rows that need a decision before any round (peer-held files, held-back rows, APPLY_FAIL, UNSETTLED with a named gap),",
+    "Gemini's candidate shared-round groups under the round-scope rule, and two same-function CONFLICTS.", ""])
+os.makedirs(st + B, exist_ok=True)
+io.open(st + B + "SUMMARY.md", "w", encoding="utf-8", newline="\n").write(summary)
+for a, b in copies:
+    os.makedirs(os.path.dirname(st + b), exist_ok=True)
+    shutil.copyfile(a, st + b)
+src_self = W + "build_bank2.py"
+os.makedirs(st + B + "tools/", exist_ok=True)
+shutil.copyfile(src_self, st + B + "tools/build_bank2.py.txt")
+copies.append((src_self, B + "tools/build_bank2.py.txt"))
+prov = ["# PROVENANCE -- %s" % B, "", "Banked %s by `_scratchpad/wgemdrafts/build_bank2.py` at HEAD `%s`.  Source -> banked, md5:" % (DATE, head), ""]
+for a, b in copies:
+    prov.append("* `%s` <- `%s` `%s`" % (b[len(B):], a.replace("C:/DocumentNoSnc/CC/GXEMUL/", ""), hashlib.md5(open(a, "rb").read()).hexdigest()[:12]))
+io.open(st + B + "PROVENANCE.md", "w", encoding="utf-8", newline="\n").write("\n".join(prov) + "\n")
+
+#  the in-place corrections -- each old string must occur exactly once at HEAD
+NOTE = (" [%s, records: 4 of these 74 applied NO edit (an empty edit list, scored BUILD_OK on an unchanged HEAD) and 3 change only"
+        " a comment where the defect is in code -- 67 are real fixes; the check now scores NO_EDITS, and `%sSUMMARY.md` carries the"
+        " current counts]" % (DATE, B))
+cl = git("show", "HEAD:CHANGELOG.md").decode("utf-8")
+s1 = git("show", "HEAD:%sSUMMARY.md" % B1).decode("utf-8")
+fixes = [("CHANGELOG.md", cl, "101 fix drafts (74 compile), the attachment budget measured -- all PROPOSALS",
+          "101 fix drafts (74 compile%s), the attachment budget measured -- all PROPOSALS" % NOTE),
+         (B1 + "SUMMARY.md", s1, "APPLY_FAIL 1, BUILD_OK 74, SKIP 26 (`fixes/fixcheck_results.tsv`).",
+          "APPLY_FAIL 1, BUILD_OK 74, SKIP 26 (`fixes/fixcheck_results.tsv`).%s" % NOTE)]
+out = {}
+for path, text, old, new in fixes:
+    n = text.count(old)
+    if n != 1:
+        sys.exit("REFUSED: %s: the text to correct occurs %d times" % (path, n))
+    out[path] = text.replace(old, new)
+block = "\n".join([
+    "# Records, %s: the Gemini-web work on the oldest open issues, second bank -- %d fix drafts (%d compile, every one a real" % (
+        DATE, nf, cnt.get("BUILD_OK", 0)),
+    "change), every compiling draft reviewed, one capped revision round, the held rounds' records checks, closure and next-step drafts -- all PROPOSALS; the first",
+    "bank's \"74 compile\" corrected in place", "",
+    "Banked in a new directory so the first bank's citations stand (`%sSUMMARY.md`, `%sPROVENANCE.md`).  None of it is" % (B, B),
+    "adjudicated or applied; each fix still owes the flagship's ruling and its round's full process.  The fix pipeline gained two",
+    "vacuity guards (an empty edit list is NO_EDITS; `scan_commentonly.py` reports a draft whose code tokens do not change) after",
+    "the first bank counted 4 empty and 3 comment-only drafts among its 74 -- corrected in place in that bank's SUMMARY.md and in",
+    "its CHANGELOG header.  No code, detector, gate, ledger row or score changes.", "", ""])
+out["CHANGELOG.md"] = block + out["CHANGELOG.md"]
+for path, text in out.items():
+    os.makedirs(os.path.dirname(st + path) or st, exist_ok=True)
+    io.open(st + path, "w", encoding="utf-8", newline="\n").write(text)
+msg = "\n".join([
+    "records: the second bank of the Gemini work on the oldest open issues -- %d fix drafts (%d compile, all real), reviews, one revision round; the first bank's \"74 compile\" corrected" % (
+        nf, cnt.get("BUILD_OK", 0)), "",
+    "Banked under %s (a new directory; the first bank is unchanged but for one dated" % B,
+    "correction): every drafted row's current packet, reply and compiled diff with its earlier replies, the second-lens review",
+    "of every compiling draft, the records checks of the held rounds, the closure and next-step drafts, the plan (decisions owed,",
+    "candidate groups, conflicts) and",
+    "the pipeline's scripts as .txt.  None is adjudicated or applied.  The first bank's \"74 compile\" counted 4 empty and 3",
+    "comment-only drafts: 67 were real fixes, corrected in place in its SUMMARY.md and CHANGELOG header.  No code, detector, gate,",
+    "ledger row or score changes.", "",
+    "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>", ""])
+io.open(W + "commit_bank2.msg", "w", encoding="utf-8", newline="\n").write(msg)
+spec = {"repo": REPO, "expect_head": head, "message": W + "commit_bank2.msg",
+        "neutral": ["regress/gate_arm.sh", "regress/gate_sh_rounding.sh", "regress/gate_offline.sh", "regress/gdrom_default_probe.py",
+                    "tools/pipeline/ledger.json"],
+        "add_dirs": [B],
+        "files": {p: {"from": "file", "path": st + p} for p in out},
+        "wt_after": {p: "staged" for p in out}}
+io.open(W + "commit_bank2.spec.json", "w", encoding="utf-8", newline="\n").write(json.dumps(spec, indent=1))
+print("staged %d banked files + %d corrected; fixes %d (%s); reviews of BUILD_OK %s; HEAD %s" % (
+    len(copies) + 2, len(out), nf, dict(cnt), dict(rv), head))
+print("BUILD_BANK2_OK -- the new directory must be COPIED into the working tree before commit_unit2 (add_dirs reads the tree)")

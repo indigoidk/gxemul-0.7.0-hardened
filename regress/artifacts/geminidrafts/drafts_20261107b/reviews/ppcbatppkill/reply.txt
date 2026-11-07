@@ -1,0 +1,10 @@
+FIXREVIEW_PPCBATPPKILL: SOUND, 0 FINDINGS
+
+1. The diff successfully removes the defect described in the issue at the named site. It replaces the `fatal()` and `exit(1)` calls at lines 273-276 with `match = 1; goto do_exception;`, preventing the emulator from crashing on a protection violation during a BAT hit. No sites are missed.
+2. The added `goto do_exception;` correctly skips the page table translation block (`ppc_vtp32`, lines 280-289). This is the intended behavior, as a BAT protection fault must take precedence and should not fall back to regular VTP translation. It jumps directly to the common tail (line 292), ensuring no guest updates or exception dispatches are erroneously skipped.
+3. The path now returns `0` instead of abruptly terminating the emulator process via `exit(1)`. Returning `0` implies that virtual-to-physical translation failed and that an exception was dispatched to the guest (or silently absorbed if `FLAG_NOEXCEPTIONS` was set).
+4. Beyond removing the defect, the change actively modifies guest-visible CPU state: jumping to `do_exception` with `match = 1` sets `SPR_DSISR` to `DSISR_PROTECT` (along with `DSISR_STORE` if it was a write) and `SPR_DAR` to the faulting address, then invokes the guest exception vector (`ppc_exception`). It also routes the event through the standard `[ memory_ppc: exception! ... ]` logging path instead of the hardcoded fatal message.
+5. No house idioms are violated. The diff introduces no new `fatal()` or diagnostic messages that require latching, does not add any new comments (so the `/* #NNN: ... */` requirement is inapplicable), and perfectly preserves the 79-column limit.
+
+P-GWEBREVPPCBATPPKILL-fc3c
+GWEBREVPPCBATPPKILL: 5 ATTACKS 0 BROKEN 5 HOLDS 0 UNSETTLED DRAFTABLE:YES

@@ -1,0 +1,204 @@
+#!/usr/bin/env python3
+"""mk_fixreview.py [--list] [ROWID ...] -- 04:4x 11-07: Gemini-web SECOND-LENS REVIEW packets for the compiled fix drafts
+(fixcheck_results.tsv BUILD_OK), oldest first (fixcand.txt order).  Owner: "keep utilizing gemini web on the oldest set of the
+issues that we need to resolve".
+
+Each packet carries the row (title + state_note head), the draft's APPLIED.diff (the exact text that compiled in the scratch
+clone), and -- the carrier's SKETCH RULE: a proposed edit is a sketch until it is read against the enclosing function's real
+control flow -- EVERY EDITED FUNCTION IN FULL from the post-edit file, reconstructed in memory from HEAD + APPLIED.diff (a hunk
+whose context does not match HEAD refuses the row).  A function longer than LONG lines is shown as its header, a window around
+the edits, and its LAST 30 lines (the common tail).  It asks for FINDINGS with file:line and the smallest fix -- no rewrites, no
+tests, no reproduction steps.  Writes rev_<row>/packet_body.md.  The repo is read with `git show HEAD:` and never written."""
+import io
+import json
+import os
+import re
+import subprocess
+import sys
+
+H = "C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/gweb/jobs_20261106_kits/"
+REPO = "C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC"
+FANGS = re.compile(r"(grep the fork|check the premises against the source|read the source|open the file)", re.I)
+LONG, CAP = 260, 55000
+head = subprocess.run(["git", "-C", REPO, "rev-parse", "--short=8", "HEAD"], capture_output=True, text=True).stdout.strip()
+d = json.loads(subprocess.run(["git", "-C", REPO, "show", "HEAD:tools/pipeline/ledger.json"], capture_output=True).stdout.decode("utf-8"))
+by = {r.get("id"): r for r in (d["rows"] if isinstance(d, dict) and "rows" in d else d)}
+order = [l.strip() for l in io.open(H + "fixcand.txt", encoding="utf-8") if l.strip()]
+ok = set()
+for l in io.open(H + "fixcheck_results.tsv", encoding="utf-8"):
+    p = l.rstrip("\n").split("\t")
+    if len(p) >= 2 and p[1] == "BUILD_OK":
+        ok.add(p[0])
+cands = [r for r in order if r in ok] + sorted(ok - set(order))
+
+
+def defang(s):
+    return FANGS.sub(lambda m: m.group(1).replace(" ", "-"), s or "")
+
+
+def clip(s, n):
+    s = defang((s or "").strip())
+    return s if len(s) <= n else s[:n] + " [... %d more characters not shown]" % (len(s) - n)
+
+
+def parse_udiff(t):
+    files, cur = {}, None
+    for l in t.split("\n"):
+        if l.startswith("diff --git "):
+            #  05:0x: reset per file -- without this the NEXT file's `--- a/...` header was read as a deletion line of the
+            #  previous file's last hunk, so every multi-file draft failed context and was refused (seven rows)
+            cur = None
+        elif l.startswith("+++ b/"):
+            cur = l[6:]
+            files[cur] = []
+        elif l.startswith("@@") and cur:
+            m = re.match(r"@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", l)
+            files[cur].append([int(m.group(1)), int(m.group(2) or 1), []])
+        elif cur and files[cur] and l[:1] in (" ", "-", "+"):
+            files[cur][-1][2].append(l)
+    return files
+
+
+def apply(old, hunks):
+    new, pos, edited = [], 0, []
+    for ostart, olen, lines in hunks:
+        start = ostart - 1 if olen else ostart
+        new += old[pos:start]
+        pos = start
+        for l in lines:
+            k, body = l[0], l[1:]
+            if k in " -":
+                if pos >= len(old) or old[pos] != body:
+                    raise ValueError("context mismatch at old line %d" % (pos + 1))
+                if k == " ":
+                    new.append(body)
+                else:
+                    edited.append(len(new))          # a deletion point, as an index into new
+                pos += 1
+            else:
+                edited.append(len(new))
+                new.append(body)
+    new += old[pos:]
+    return new, edited
+
+
+def func_span(lines, i):
+    """0-based [a, b] of the function holding line i: the nearest column-0 '{' above (its header = up to 4 non-blank
+    column-0 lines before it), the first column-0 '}' at or below i."""
+    o = i
+    while o >= 0 and not re.match(r"^\{\s*$", lines[o]):
+        o -= 1
+    c = i
+    while c < len(lines) and not lines[c].startswith("}"):
+        c += 1
+    if o < 0 or c >= len(lines):
+        return max(0, i - 60), min(len(lines) - 1, i + 60)
+    a = o
+    for _ in range(4):
+        if a - 1 >= 0 and lines[a - 1].strip() and not lines[a - 1].rstrip().endswith((";", "*/", "}")) \
+                and not lines[a - 1].startswith((" ", "\t", "#")):
+            a -= 1
+        else:
+            break
+    return a, c
+
+
+def show(f, lines, a, b, marks, win):
+    out, rng = [], []
+    if b - a + 1 <= LONG:
+        rng = [(a, b)]
+    else:
+        lo, hi = max(a, min(marks) - win[0]), min(b, max(marks) + win[1])
+        rng = [(a, min(a + 4, b))] + [(lo, hi)] + [(max(hi + 1, b - 29), b)]
+    last = None
+    for x, y in rng:
+        if last is not None and x > last + 1:
+            out.append("     | [... lines %d-%d not shown ...]" % (last + 2, x))
+        for k in range(max(x, (last + 1) if last is not None else x), y + 1):
+            out.append("%5d|%s %s" % (k + 1, "+" if k in marks else " ", lines[k]))
+        last = y
+    return "### `%s` -- post-edit lines %d-%d (`+` marks a line the diff added or the point of a deletion)\n\n```c\n%s\n```\n" % (
+        f, a + 1, b + 1, "\n".join(out))
+
+
+def build(rid, win=(110, 60)):
+    dd = H + "fix_%s/" % rid
+    diff = io.open(dd + "APPLIED.diff", encoding="latin-1").read()
+    excerpts = []
+    #  the compile clone's `git diff` also carries BUILD-REGENERATED files (src/devices/.index -- an est_divergence path); a
+    #  review covers the fix's own .c/.h edits only, and the diff shown is cut down to those files
+    keep = [blk for blk in re.split(r"(?m)^(?=diff --git )", diff) if re.match(r"diff --git a/\S+\.[ch] ", blk)
+            and not re.match(r"diff --git a/src/cpus/tmp_\w+\.c ", blk)]      # tmp_*_head.c: regenerated by generate_head.c
+    diff = "".join(keep)
+    if not keep:
+        raise ValueError("no .c/.h file in APPLIED.diff")
+    for f, hunks in parse_udiff(diff).items():
+        old = subprocess.run(["git", "-C", REPO, "show", "HEAD:" + f], capture_output=True).stdout.decode("latin-1").split("\n")
+        new, edited = apply(old, hunks)
+        spans = []
+        for e in sorted(set(edited)):
+            a, b = func_span(new, min(e, len(new) - 1))
+            if spans and a <= spans[-1][1]:
+                spans[-1] = (spans[-1][0], max(spans[-1][1], b), spans[-1][2] + [e])
+            else:
+                spans.append((a, b, [e]))
+        for a, b, ms in spans:
+            excerpts.append(show(f, new, a, b, set(ms), win))
+    r = by.get(rid, {})
+    rep = io.open(dd + "reply.txt", encoding="utf-8", errors="replace").read()
+    sp = re.search(r"STILL PRESENT:[^\n]*", rep)
+    body = "\n".join([
+        "# GXemul hardened fork -- REVIEW ONE PROPOSED FIX for a filed issue, `%s` (a defensive code-quality task)" % rid, "",
+        "PROJECT FRAMING -- a defensive software-robustness project: GXemul is a computer-architecture emulator, and this fork removes",
+        "crash-on-malformed-input and wrong-behaviour defects from its device and CPU models.  Below: one filed issue (from the",
+        "project's ledger), a PROPOSED fix drafted earlier (it compiles at HEAD %s with no new warnings), and EVERY FUNCTION THE FIX" % head,
+        "EDITS, shown as it reads AFTER the fix.  You cannot read files; work from this text.  This is a REVIEW: report findings, do",
+        "not rewrite the fix, and do not write tests, probes or reproduction steps.  Do not simply approve it.", "",
+        "## The issue (ledger row `%s`, state `%s`)" % (rid, r.get("state")), "",
+        "**title:** " + clip(r.get("title") or "", 500), "",
+        "**state_note (head):** " + clip(r.get("state_note") or r.get("note") or "", 2500), "",
+        "**The drafter's own reading:** " + clip(sp.group(0) if sp else "(none)", 300), "",
+        "## The proposed fix (unified diff against HEAD)", "", "```diff", defang(diff.strip()), "```", "",
+        "## Every edited function, after the fix", "", "\n".join(excerpts),
+        "## Questions -- answer each; verdict line FIRST", "",
+        "Line 1: `FIXREVIEW_%s: <SOUND|DEFECT|UNSETTLED>, <n> FINDINGS`." % rid.upper(), "",
+        "1. Does the diff remove the defect the issue describes, at every site the issue names?  Name any site it misses.",
+        "2. CONTROL FLOW: does any added `return`, `goto`, `break` or early exit skip code the function would otherwise run -- above",
+        "   all its COMMON TAIL (for example, code after a switch that writes a read's result to the guest, then `return 1;`)?",
+        "   Quote the tail line it skips.  An edit that skips the tail hands the guest an unwritten result.",
+        "3. RETURN VALUE: does any path now return something different?  Say what the shown code implies the value means.",
+        "4. What ELSE does the diff change -- state left set or cleared, a value the guest can now see, a message on a path that",
+        "   did not print one -- beyond removing the defect?",
+        "5. House idioms (low severity): a diagnostic a guest can trigger repeatedly should print ONCE per device instance (a latch",
+        "   field) with `(once)` in the message; a new comment carries a `/* #NNN: ... */` tag; lines stay within 79 columns.",
+        "",
+        "Each finding: `file:line` in the POST-EDIT numbering shown above, severity DEFECT / QUESTION / STYLE, and the smallest fix",
+        "in ONE line.  When the excerpt does not show what a question needs, say UNSETTLED and name what is missing.", "",
+        "End with one line: `FIXREVIEW_%s: <SOUND|DEFECT|UNSETTLED>, <n> FINDINGS`." % rid.upper(), ""])
+    return body
+
+
+if __name__ == "__main__":
+    if sys.argv[1:] == ["--list"]:
+        print(len(cands), "BUILD_OK drafts, oldest first")
+        print(" ".join(cands))
+        sys.exit(0)
+    todo = sys.argv[1:] or cands
+    made = []
+    for rid in todo:
+        try:
+            b = build(rid)
+            if len(b.encode()) > CAP:
+                b = build(rid, (60, 30))
+            if len(b.encode()) > CAP:
+                print("SKIP", rid, "packet", len(b.encode()), "bytes > cap")
+                continue
+        except (ValueError, OSError, KeyError) as e:
+            print("SKIP", rid, type(e).__name__, str(e)[:120])
+            continue
+        os.makedirs(H + "rev_" + rid, exist_ok=True)
+        io.open(H + "rev_%s/packet_body.md" % rid, "w", encoding="utf-8", newline="\n").write(b)
+        made.append(rid)
+        print(rid, len(b.encode()), "bytes")
+    io.open(H + "fixreview_list.txt", "w", encoding="utf-8", newline="\n").write("\n".join(made) + "\n")
+    print("MADE", len(made), "of", len(todo))

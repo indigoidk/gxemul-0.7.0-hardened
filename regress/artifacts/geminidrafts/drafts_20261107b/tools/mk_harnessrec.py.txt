@@ -1,0 +1,80 @@
+#!/usr/bin/env python3
+"""mk_harnessrec.py ROW... -- 05:2x 11-07: Gemini-web RECORDS checks for the seven HELD harness rows that carry commits but no
+`#NNN` round block (constblind, mrwstore2, optrow, smdatefmt, nulheredoc, cxlaunchquotation, dashokclass -- HELD6_RECORDS.md's
+NOT-covered list).  The record of such a row is its COMMIT MESSAGE(S) (git show --format=%B), plus any CHANGELOG block whose header
+names the row (to the next header of any level), plus the ledger row itself (title, state_note head, hold_question).  Records
+only: contradictions, uncited measured claims, overclaims -- no reproduction, test design or code review.  Defanged as the other
+packet makers.  Writes hrec_<row>/packet_body.md."""
+import io
+import json
+import os
+import re
+import subprocess
+import sys
+
+H = "C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/gweb/jobs_20261106_kits/"
+REPO = "C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC"
+FANGS = re.compile(r"(grep the fork|check the premises against the source|read the source|open the file)", re.I)
+CAP = 55000
+
+
+def g(*a):
+    return subprocess.run(["git", "-C", REPO] + list(a), capture_output=True).stdout.decode("utf-8", "replace")
+
+
+def defang(s):
+    return FANGS.sub(lambda m: m.group(1).replace(" ", "-"), s or "")
+
+
+head = g("rev-parse", "--short=8", "HEAD").strip()
+led = json.loads(g("show", "HEAD:tools/pipeline/ledger.json"))
+by = {r["id"]: r for r in (led["rows"] if isinstance(led, dict) and "rows" in led else led)}
+CL = g("show", "HEAD:CHANGELOG.md").split("\n")
+for rid in sys.argv[1:]:
+    r = by[rid]
+    commits = r.get("commits") or ""
+    shas = re.findall(r"[0-9a-f]{7,40}", commits if isinstance(commits, str) else " ".join(commits))
+    msgs = []
+    for s in shas:
+        subj = g("log", "-1", "--format=%h %ad", "--date=short", s).strip()
+        msgs.append("### commit `%s`\n\n```text\n%s\n```\n" % (subj, defang(g("show", "-s", "--format=%B", s).strip())))
+    blocks = []
+    for i, l in enumerate(CL):
+        if re.match(r"^#{1,3} ", l) and re.search(r"\b%s\b" % re.escape(rid), l):
+            j = i + 1
+            while j < len(CL) and not re.match(r"^#{1,2} ", CL[j]):
+                j += 1
+            blocks.append("### CHANGELOG.md lines %d-%d (HEAD %s)\n\n```text\n%s\n```\n" % (
+                i + 1, j, head, "\n".join("%5d| %s" % (k + 1, defang(CL[k])) for k in range(i, j))))
+    body = None
+    for keep in (len(blocks), 1, 0):
+        b = "\n".join([
+            "# GXemul hardened fork -- RECORDS CHECK of one held harness row, `%s` (a defensive project's bookkeeping)" % rid, "",
+            "PROJECT FRAMING -- a defensive software-robustness project: GXemul is a computer-architecture emulator; this fork keeps a",
+            "ledger of every filed issue, and a HARNESS row is about the project's own test tooling.  The row below is HELD with its",
+            "fix committed; its record is the commit message(s) and any CHANGELOG block shown.  A flagship review is still owed.  You",
+            "cannot read files, so judge the record AS WRITTEN.  Do not simply ratify it.  A bracketed dated note is this project's",
+            "in-place correction form (it quotes what it corrects); it is not by itself a contradiction.", "",
+            "## The ledger row `%s` (state `%s`)" % (rid, r.get("state")), "",
+            "**title:** " + defang((r.get("title") or "")[:600]), "",
+            "**state_note (head):** " + defang((r.get("state_note") or "")[:1800]), "",
+            "**hold_question:** " + defang((r.get("hold_question") or "(none)")[:800]), "",
+            "## The record -- commit message(s)", "", "\n".join(msgs),
+            ("## The record -- CHANGELOG block(s)\n\n" + "\n".join(blocks[:keep])) if keep else "",
+            "## Questions -- verdict line first", "",
+            "1. Does the record contradict itself -- two numbers for one quantity, a total its parts do not sum to, a claim one",
+            "   paragraph makes and another undoes, or the ledger row saying something the commit message does not?  Quote both.",
+            "2. Which claims are stated as MEASURED but cite no artifact (a log, a file under regress/artifacts/)?",
+            "3. Which sentences overclaim -- 'every', 'all', 'never', 'exactly' -- where the record's own evidence covers less?",
+            "4. What would a reviewer checking this record against its artifacts most likely find wrong?",
+            "When you count items the record enumerates, list them by name before giving the count.", "",
+            "End with one line: `HARNESSREC_%s: <c> CONTRADICTIONS, <u> UNCITED, <o> OVERCLAIMS`." % rid.upper(), ""])
+        if len(b.encode()) <= CAP:
+            body = b
+            break
+    if body is None:
+        print("SKIP", rid, "over cap even without CHANGELOG blocks")
+        continue
+    os.makedirs(H + "hrec_" + rid, exist_ok=True)
+    io.open(H + "hrec_%s/packet_body.md" % rid, "w", encoding="utf-8", newline="\n").write(body)
+    print(rid, len(body.encode()), "bytes,", len(shas), "commits,", len(blocks), "CHANGELOG blocks")

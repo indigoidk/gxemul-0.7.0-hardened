@@ -1,0 +1,40 @@
+1. ACCEPT: "The diff does NOT successfully add option 53." – `HEAD:1124-1127` unconditionally overwrites the data placed at offset 282.
+2. REJECT: "overwritten by the subnet mask option at `src/net/net_ip.c:1130-1133` which writes to the exact same offsets." – The subnet mask option writes to offsets 282-287 at `HEAD:1124-1129`, not 1130-1133 (which handles the router option).
+3. ACCEPT: "No added `return`, `goto`, `break`, or early exit skips any code." – The previous draft only added linear assignments.
+4. ACCEPT: "No return values are changed." – The draft does not modify return paths.
+5. ACCEPT: "The diff changes nothing else beyond the failed defect removal." – No unrelated logic was modified.
+6. ACCEPT: "The comment tag `#001:` follows the required house idiom." – Correct per the text constraints.
+7. ACCEPT: "src/net/net_ip.c:1113, DEFECT, shift Option 53 to append at 306, move the 255 end marker to 309, and increase reply_len to 310." – `HEAD:1074` defines `reply_len = 307` and `HEAD:1139` writes the end marker at 306; shifting to accommodate 3 bytes of Option 53 requires exactly these offsets.
+
+STILL PRESENT: YES -- `HEAD:1109-1110` still writes to giaddr, and `HEAD:1074`/`HEAD:1139` lack Option 53.
+
+```json
+[
+  {
+    "file": "src/net/net_ip.c",
+    "old": "        reply_len = 307;\n        lp = net_allocate_ethernet_packet_link(net, nic, reply_len);",
+    "new": "        reply_len = 310; /* #001: increase for option 53 */\n        lp = net_allocate_ethernet_packet_link(net, nic, reply_len);",
+    "why": "Increase allocated size by 3 bytes for Option 53."
+  },
+  {
+    "file": "src/net/net_ip.c",
+    "old": "\t/*  Server's IPv4 address:  (giaddr)  */\n\tmemcpy(lp->data + 66, &net->gateway_ipv4_addr[0], 4);",
+    "new": "\t/*  Server's IPv4 address:  (siaddr)  */\n\tmemcpy(lp->data + 62, &net->gateway_ipv4_addr[0], 4);",
+    "why": "Set the server address in siaddr (62) instead of giaddr (66)."
+  },
+  {
+    "file": "src/net/net_ip.c",
+    "old": "\tlp->data[306] = 255; /* end */",
+    "new": "\t/* #001: Add option 53 (DHCP Message Type = ACK) */\n\tlp->data[306] = 53;\n\tlp->data[307] = 1;\n\tlp->data[308] = 5;\n\tlp->data[309] = 255; /* end */",
+    "why": "Append Option 53 and move the end marker to offset 309."
+  }
+]
+```
+
+This fix deliberately does not alter other DHCP options, the UDP checksum structural setup (it seamlessly consumes the updated `reply_len`), or the debug printing output format, avoiding unintentional state corruption or protocol violations.
+
+REVISION_NATDHCPREPLY: 6 ACCEPTED, 1 REJECTED
+FIXDRAFT_NATDHCPREPLY: YES PRESENT, 3 EDITS
+
+P-GWEBFIXNATDHCPREPLY-9d12
+GWEBFIXNATDHCPREPLY: 7 ATTACKS 1 BROKEN 6 HOLDS 0 UNSETTLED DRAFTABLE:YES

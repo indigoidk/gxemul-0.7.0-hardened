@@ -1,0 +1,12 @@
+FIXREVIEW_PCKBCAUXECHO: UNSETTLED, 1 FINDINGS
+
+1. Yes, the diff removes the defect. By intercepting `STATE_WAITING_FOR_AUX` and `STATE_WAITING_FOR_AUX_OUT` during a data write, it explicitly routes the byte to port 1 (the aux port) via `dev_pckbc_command(d, 1)` instead of allowing it to fall through to `dev_pckbc_command(d, port_nr)` (which echoes it to port 0, the keyboard).
+2. CONTROL FLOW: No. The added `break;` correctly exits the inner `switch (d->state[port_nr])` block, allowing execution to naturally proceed to the common tail (starting at line 1194 with `if (writeflag == MEM_READ) memory_writemax64(...)` and line 1197 `pckbc_reassert_interrupts(d);`). It does not skip any required code.
+3. RETURN VALUE: No. The patched code still completes the function and hits `return 1;` at line 1199, indicating a successfully handled memory access. 
+4. What ELSE does the diff change: It explicitly resets the device state via `d->state[port_nr] = STATE_NORMAL;` (line 1014). The old code in the `default` case omitted this state reset, meaning a write in those states would have previously left the device permanently stuck waiting for aux data. 
+5. House idioms: No style or idiom violations. The diff is concise and introduces no unformatted comments or excessively long lines.
+
+FINDING 1: `src/devices/dev_pckbc.c:1013` - UNSETTLED - We cannot verify from this diff alone if `dev_pckbc_command(d, 1)` natively handles both `WAITING_FOR_AUX` (0xD4, a command *to* the mouse) and `WAITING_FOR_AUX_OUT` (0xD3, an injection directly into the host's receive buffer). We need to see the implementation of `dev_pckbc_command` to ensure 0xD3 does not erroneously get parsed as a mouse command.
+
+P-GWEBREVPCKBCAUXECHO-c6fc
+GWEBREVPCKBCAUXECHO: 5 ATTACKS 0 BROKEN 4 HOLDS 1 UNSETTLED DRAFTABLE:NO

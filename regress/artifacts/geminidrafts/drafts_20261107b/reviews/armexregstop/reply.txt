@@ -1,0 +1,26 @@
+FIXREVIEW_ARMEXREGSTOP: SOUND, 0 FINDINGS
+
+1. Does the diff remove the defect the issue describes, at every site the issue names? Name any site it misses.
+Yes, the diff successfully removes the defect at every site named. It removes the `goto bad;` checks for `ARM_PC` in the `ldrex` block (previously lines 4198-4201) and for `ARM_PC` or repeated registers in the `strex` block (previously lines 4213-4217).
+
+2. CONTROL FLOW: does any added `return`, `goto`, `break` or early exit skip code the function would otherwise run -- above all its COMMON TAIL?
+No control flow jump was added; the diff only removes existing `goto bad;` paths. By removing those early exits, control flow now falls through to the existing `break;` statements (at post-edit lines 4201 and 4211). These `break` statements properly exit the `switch (main_opcode)` and proceed to the common tail (line 5034, `okay:` and `#include "cpu_dyntrans.c"`). 
+
+3. RETURN VALUE: does any path now return something different? Say what the shown code implies the value means.
+No. The signature `X(to_be_translated)` and the bare `return;` on line 4091 imply this function returns `void`. The modified paths now succeed in instruction translation (populating `ic->f` and `ic->arg`) instead of aborting translation, but no return values are changed.
+
+4. What ELSE does the diff change -- state left set or cleared, a value the guest can now see, a message on a path that did not print one -- beyond removing the defect?
+The diff removes the `fatal("ldrex with pc register: TODO\n");` and `fatal("strex with bad register: TODO\n");` diagnostic messages that previously printed when the CPU was not doing translation readahead. Additionally, by continuing the translation instead of branching to `bad`, it alters internal state by fully populating `ic->f = cond_instr(ldrex)` and `ic->f = cond_instr(strex)` with their respective arguments, ensuring the guest CPU will now attempt to execute the instruction instead of faulting at decode.
+
+5. House idioms (low severity):
+The new comments cleanly use the required tag format (`/* #armexregstop: UNPREDICTABLE operands must not halt the CPU. */`) and remain well within 79 columns. 
+
+**Claims testing:**
+* Claim: "LDREX naming PC, or STREX naming PC or a repeated register, reaches goto bad at decode" — HOLDS (the removed lines explicitly show this logic).
+* Claim: "before the condition is tested" — HOLDS (`goto bad` was invoked during decode in `to_be_translated`, before `cond_instr()` was assigned).
+* Claim: "and stops the CPU" — HOLDS (`goto bad` and the preceding `fatal()` abort the translation, halting emulation).
+* Claim: "the operands are UNPREDICTABLE" — UNSETTLED (cannot be verified without external ARM Architecture Reference Manual).
+* Claim: "which the ARM ARM says must not halt the processor" — UNSETTLED (cannot consult the ARM manual to confirm the specification).
+
+P-GWEBREVARMEXREGSTOP-aecb
+GWEBREVARMEXREGSTOP: 5 ATTACKS 0 BROKEN 3 HOLDS 2 UNSETTLED DRAFTABLE:YES

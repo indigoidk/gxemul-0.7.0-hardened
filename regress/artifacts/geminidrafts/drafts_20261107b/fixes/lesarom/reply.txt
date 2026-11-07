@@ -1,0 +1,32 @@
+1. **Finding 1:** ACCEPT. The issue specifically notes the ESAR checksum bug at lines 1103-1113, which are missing from the provided excerpt, so the diff correctly missed it and it cannot be addressed here.
+2. **Finding 2:** ACCEPT. The control flow correctly uses the existing fall-through to `goto do_return;` at line 990.
+3. **Finding 3:** ACCEPT. The return value correctly updates to 13 cycles instead of 1 for the 0x180000-0x1bffff range.
+4. **Finding 4:** ACCEPT. Routing the alias into this block exposes the `fatal()` on line 981 to guest writes, which violates the hardened fork's goal to eliminate crash-on-malformed-input defects.
+5. **Finding 5:** REJECT. The suggested `debugmsg` includes a trailing `\n`, which contradicts the existing `debugmsg` idioms shown at lines 1047-1054. It must be replaced with a proper call without a newline.
+
+STILL PRESENT: YES -- src/devices/dev_le.c:973 (alias defect), UNSETTLED -- src/devices/dev_le.c:1103-1113 (ESAR checksum).
+
+```json
+[
+  {
+    "file": "src/devices/dev_le.c",
+    "old": "\t/*  Read from station's ROM (ethernet address):  */\n\tif (relative_addr >= 0xc0000 && relative_addr <= 0xfffff) {\n\t\tuint32_t a;\n\t\tint j = (relative_addr & 0xff) / 4;",
+    "new": "\t/*  Read from station's ROM (ethernet address):  */\n\tif ((relative_addr >= 0xc0000 && relative_addr <= 0xfffff) ||\n\t    (relative_addr >= 0x180000 && relative_addr <= 0x1bffff)) {\n\t\tuint32_t a;\n\t\tint j = (relative_addr & 0xff) / 4;",
+    "why": "Decode the station-address ROM at its 0x180000 alias as well"
+  },
+  {
+    "file": "src/devices/dev_le.c",
+    "old": "\t\t} else {\n\t\t\tfatal(\"[ le: WRITE to ethernet addr (%08lx):\",\n\t\t\t    (long)relative_addr);\n\t\t\tfor (i=0; i<len; i++)\n\t\t\t\tfatal(\" %02x\", data[i]);\n\t\t\tfatal(\" ]\\n\");\n\t\t}",
+    "new": "\t\t} else {\n\t\t\tdebugmsg(d->subsys, \"access\", VERBOSITY_WARNING,\n\t\t\t    \"write to ethernet addr 0x%06x\",\n\t\t\t    (int)relative_addr);\n\t\t}",
+    "why": "Remove crash-on-malformed-input on ROM write by using a warning debugmsg instead of fatal()"
+  }
+]
+```
+
+The fix deliberately does not change the ESAR checksum generation because the ROM fill sequence (lines 1103-1113) is missing from the provided context and thus cannot be safely evaluated or modified.
+
+REVISION_LESAROM: 4 ACCEPTED, 1 REJECTED
+FIXDRAFT_LESAROM: YES PRESENT, 2 EDITS
+
+P-GWEBFIXLESAROM-b301
+GWEBFIXLESAROM: 5 ATTACKS 1 BROKEN 4 HOLDS 0 UNSETTLED DRAFTABLE:YES

@@ -1,0 +1,30 @@
+STILL PRESENT: YES -- lines 155 and 183
+
+```json
+[
+  {
+    "file": "src/devices/dev_ram.c",
+    "old": "\td->name = strdup((name == NULL) ? \"ram\" : name);\n",
+    "new": "\tCHECK_ALLOCATION(d->name = strdup((name == NULL) ? \"ram\" : name));\n",
+    "why": "Add a NULL check around the strdup allocation using the existing CHECK_ALLOCATION macro."
+  },
+  {
+    "file": "src/devices/dev_ram.c",
+    "old": "\t\t{\n\t\t\tsize_t mirrorNameAllocLen = strlen(d->name) + 15;\n\t\t\tchar *mirrorName = (char*) malloc(mirrorNameAllocLen);\n\t\t\tsnprintf(mirrorName, mirrorNameAllocLen, \"%s [mirror]\", d->name);\n\t\t\td->name = mirrorName;\n\t\t}\n",
+    "new": "\t\t{\n\t\t\tsize_t mirrorNameAllocLen = strlen(d->name) + 15;\n\t\t\tchar *mirrorName;\n\t\t\tCHECK_ALLOCATION(mirrorName = (char*) malloc(mirrorNameAllocLen));\n\t\t\tsnprintf(mirrorName, mirrorNameAllocLen, \"%s [mirror]\", d->name);\n\t\t\td->name = mirrorName;\n\t\t}\n",
+    "why": "Separate the pointer declaration from the assignment in order to safely wrap the malloc call in CHECK_ALLOCATION without creating a syntax error in the macro expansion."
+  }
+]
+```
+
+**What the fix deliberately does NOT change:**
+1. It does not free the previously allocated `d->name` (from `strdup`) before assigning the new `mirrorName` to `d->name` at line 186. Since this is device initialization (run once per device), any memory leaks of small names are left alone, matching existing emulator initialization idioms.
+2. It does not introduce custom error messages; it strictly relies on the existing `CHECK_ALLOCATION` macro, guaranteeing it produces the exact same failure side-effects and log formats as other memory allocation checks (e.g., lines 152 and 215).
+
+**Unsettled from the code shown:**
+Whether the `CHECK_ALLOCATION` macro expands to a block or an expression, which dictates why separating `char *mirrorName = ...` into a declaration and an assignment is strictly necessary. (Assumed necessary to prevent syntax errors in case the macro wraps an `if` block).
+
+FIXDRAFT_RAMALLOCNULL: YES PRESENT, 2 EDITS
+
+P-GWEBFIXRAMALLOCNULL-138a
+GWEBFIXRAMALLOCNULL: 3 ATTACKS 0 BROKEN 3 HOLDS 0 UNSETTLED DRAFTABLE:YES

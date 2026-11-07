@@ -1,0 +1,13 @@
+FIXREVIEW_LESAROM: DEFECT, 2 FINDINGS
+
+1. Does the diff remove the defect at every site? UNSETTLED. It successfully fixes the alias decoding at `0x180000` (line 974), but it entirely omits the ESAR checksum fix. The issue explicitly names lines 1103-1113 for the ROM fill where the checksum logic should reside, but these lines are missing from the proposed diff and the provided source text, making the completeness of the fix unsettled.
+2. CONTROL FLOW: No added `return`, `goto`, or `break` skips the common tail. The diff merely modifies an `if` condition and replaces a `fatal()` call with `debugmsg()`. The existing `goto do_return;` on the write path continues to safely route execution to the common tail at line 1056.
+3. RETURN VALUE: Yes. Reads to the `0x180000` alias previously fell through to the `default:` block and returned `1`; they now match the ROM read block and return `13`. Writes to the ROM previously aborted the emulator; they now complete and return `13`. The code implies this return value means the number of CPU cycles consumed by the device access (`/* 13 cycles */`).
+4. What ELSE does the diff change? It removes a crash-on-malformed-input vulnerability. By replacing `fatal()` with `debugmsg()` on guest writes to the ROM, it allows the emulator to survive illegal guest behavior instead of aborting.
+5. House idioms: The newly added `debugmsg` for writes to the ethernet address lacks the required latching to prevent log spam, as a guest could trigger it repeatedly.
+
+src/devices/dev_le.c:1103: UNSETTLED - The excerpt lacks lines 1103-1113 to verify if the ESAR checksum fill defect was addressed.
+src/devices/dev_le.c:982: STYLE - Guest-triggerable diagnostic lacks a latch. Fix: `if (!d->rom_warn) { d->rom_warn = 1; debugmsg(... "(once) ..."); }`
+
+P-GWEBREVLESAROM-2da4
+GWEBREVLESAROM: 5 ATTACKS 1 BROKEN 3 HOLDS 1 UNSETTLED DRAFTABLE:NO

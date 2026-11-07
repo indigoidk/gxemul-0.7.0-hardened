@@ -1,0 +1,64 @@
+#!/usr/bin/env python3
+"""mk_reviewdefs.py -- 07:3x 11-07: re-send the fix REVIEWS that came back UNSETTLED with what they said they could not see.  For
+each BUILD_OK row whose current review is UNSETTLED: the review packet as built (mk_fixreview.py), the previous review's reply,
+and the HEAD definitions of every identifier that reply names (mk_fixdefs.find_def: #define, struct/union/enum, a column-0
+function definition, a .h prototype).  A REVIEW with more context -- it changes no draft, so it is not a revision and the
+one-revision cap does not apply.  The previous reply is kept as reply.r1_<stamp>.txt.  Writes reviewdefs_list.txt."""
+import io
+import os
+import re
+import shutil
+import sys
+import time
+
+H = "C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/gweb/jobs_20261106_kits/"
+src = io.open(H + "mk_fixdefs.py", encoding="utf-8").read()
+ns = {"__name__": "defs"}
+exec(src.split("rows = [l.strip()")[0], ns)                 # REPO, STOP, git_show, find_def
+find_def, STOP = ns["find_def"], ns["STOP"]
+res = {l.split("\t")[0]: l.split("\t")[1] for l in io.open(H + "fixcheck_results.tsv", encoding="utf-8") if "\t" in l}
+rows = []
+for d in sorted(os.listdir(H)):
+    if not d.startswith("rev_"):
+        continue
+    r = d[4:]
+    p = H + d + "/reply.txt"
+    if res.get(r) != "BUILD_OK" or not os.path.exists(p):
+        continue
+    t = io.open(p, encoding="utf-8", errors="replace").read()
+    m = re.findall(r"^FIXREVIEW_%s:\s*(SOUND|DEFECT|UNSETTLED)" % re.escape(r.upper()), t, re.M)
+    if m and m[-1] == "UNSETTLED":
+        rows.append((r, t))
+done = []
+for r, t in rows:
+    names = []
+    for span in re.findall(r"`([^`\n]{1,80})`", t):
+        names += re.findall(r"[A-Za-z_][A-Za-z0-9_]{2,}", span)
+    names += re.findall(r"\b[A-Z][A-Z0-9]*_[A-Z0-9_]{2,}\b", t)
+    seen, defs = set(), []
+    for n in names:
+        if n in STOP or n in seen or n.startswith(("FIXREVIEW_", "GWEB", "P-GWEB")):
+            continue
+        seen.add(n)
+        defs += find_def(n)
+        if len(defs) >= 10:
+            break
+    d = H + "rev_%s/" % r
+    base = io.open(d + "packet_body.md", encoding="utf-8").read()
+    expl = "\n".join(l for l in t.split("\n") if l.strip() and not l.startswith(("P-GWEB", "GWEB")))[-2500:]
+    add = "\n".join([
+        "", "## YOUR PREVIOUS REVIEW OF THIS DRAFT SAID UNSETTLED -- here is what it said, and the definitions it named", "",
+        "```text", expl, "```", "",
+        ("\n".join(defs) if defs else "(no definition of a name it used was found in HEAD's src/ -- the name may not exist in HEAD)"),
+        "Review the draft again with these in view.  If it still cannot be settled, say UNSETTLED and name the exact function or",
+        "definition still missing.", ""])
+    stamp = time.strftime("%H%M%S")
+    for s_ in ("reply.txt", "packet_body.md", "gemini_web.packet.md", "gemini_web.out"):
+        if os.path.exists(d + s_):
+            shutil.move(d + s_, d + s_.replace(".", ".r1_%s." % stamp, 1))
+    io.open(d + "packet_body.md", "w", encoding="utf-8", newline="\n").write(base + add)
+    io.open(d + "gemini_web.exit", "w", encoding="utf-8").write("exit 0 review-with-definitions queued\n")
+    done.append(r)
+    print(r, len((base + add).encode()), "bytes", len(defs), "defs")
+io.open(H + "reviewdefs_list.txt", "w", encoding="utf-8", newline="\n").write("\n".join(done) + "\n")
+print("PREPARED", len(done))

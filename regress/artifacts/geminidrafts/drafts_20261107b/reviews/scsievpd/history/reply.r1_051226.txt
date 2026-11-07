@@ -1,0 +1,14 @@
+FIXREVIEW_SCSIEVPD: DEFECT, 2 FINDINGS
+
+1. **Defect removed:** Yes, the diff successfully intercepts EVPD requests (where `cmd[1] != 0x00`) and prevents the device from falling through to return standard INQUIRY data. It addresses the site named in the issue.
+2. **CONTROL FLOW:** Yes, the added `return 0;` at line 370 skips the common tail of the function. Specifically, it skips line 1390 `debug(" ]\n");` and the standard successful exit line 1392 `return 1;`.
+3. **RETURN VALUE:** Yes, the EVPD path now returns `0` instead of the original `1`. In this function, returning `1` implies the SCSI command was successfully processed by the emulator's device model (even if the SCSI status returned to the guest is a Check Condition error), whereas returning `0` implies a fatal emulator-level framework or dispatch failure (e.g., `cmd == NULL` or missing buffers).
+4. **What ELSE changes:** The diff actively sets `xferp->status[0] = 0x02` (Check Condition) and invokes `diskimage__return_default_status_and_message(xferp, d)` to populate sense data before its early exit.
+5. **House idioms:** The `debugmsg` block at line 364 (which the fix expands upon) logs a warning guest software can trigger repeatedly. It violates the house idiom by not employing a static latch or containing `(once)` in the message.
+
+**Findings:**
+- `src/disk/diskimage_scsicmd.c:370` DEFECT. The code improperly aborts emulator dispatch rather than concluding the SCSI command. Fix in one line: `break;`
+- `src/disk/diskimage_scsicmd.c:364` STYLE. A guest can spam this warning. Fix in one line: Add a static latch and `(once)` to the log string.
+
+P-GWEBREVSCSIEVPD-4dc6
+GWEBREVSCSIEVPD: 5 ATTACKS 3 BROKEN 2 HOLDS 0 UNSETTLED DRAFTABLE:NO

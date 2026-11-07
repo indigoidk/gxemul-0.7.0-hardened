@@ -1,0 +1,25 @@
+This is a defensive review of the provided CHANGELOG block #450.
+
+### 1. Contradictions
+*   **The Census False-Positive Contradiction:** `CHANGELOG.md:29647` claims the v1 static census measured exactly "14 casts, 0 uncast" in the file, and the kill table at `CHANGELOG.md:29654` relies on this `14/0` clean state. However, `CHANGELOG.md:29704-29705` claims that a comment quoting the uncast idiom was "v1's known loud cost" that caused false-positives until closed by the v2 stripper. If the v1 census suffered a false-positive on a comment containing the uncast idiom, its uncast count on the clean tree would be greater than 0, directly contradicting the `14/0` measurement claimed in `CHANGELOG.md:29647` and `CHANGELOG.md:29654`. 
+*   **The Shift Target Type Contradiction:** `CHANGELOG.md:29672-29673` asserts that the 64-bit `parent` parameter is `uint64_t`, "not a promoted `uint32_t`." Yet `CHANGELOG.md:29615` states that at the three 64-bit-assembly sites, the wrapped-negative `int` "converts to `uint64_t`". If the target is `uint64_t`, the C standard dictates that a signed 32-bit `int` will sign-extend to a 64-bit integer, meaning it *is* promoted prior to or during the conversion.
+
+### 2. Uncited Measurements
+*   `CHANGELOG.md:29620`: Claims "MEASURED on a freshly rebuilt instrumented tree: 2 shift lines on each reaching subtype" but cites no build log, test artifact, or output file to back the numbers.
+*   `CHANGELOG.md:29653-29656`: Presents a highly specific "KILL TABLE, measured" mapping mutant states to census/sweep counts without citing the script output or CI run that generated this table.
+*   `CHANGELOG.md:29688-29689`: Claims "gate 9's two new rows green post-commit" and "census + kill table measured pre-commit" without citing a single commit hash, CI pipeline ID, or execution log.
+*   `CHANGELOG.md:29703-29704`: Claims "MEASURED: all four seat escapes... die to C1" without providing a log of the v2 probe rejecting them.
+*   `CHANGELOG.md:29712-29713`: Claims the token was "verified present on all five subtypes under the gate's exact env" without citing the artifact capturing this environment output.
+
+### 3. Overclaims
+*   `CHANGELOG.md:29647`: Claims "every `buf[3] << 24` in the file carries a width-matched cast". This is factually overclaimed by the block's own admission in `CHANGELOG.md:29704`, which notes the file contains at least one comment quoting the uncast idiom. Therefore, not *every* instance in the file carries a cast.
+*   `CHANGELOG.md:29695`: Claims the `& 0x7fffffff` mutant "passes every sanitizer". The text only provides evidence of sweeps under ASan (`CHANGELOG.md:29621`) and UBSan (implied by the shift lines). Claiming it passes MSan, TSan, etc., exceeds the provided evidence.
+*   `CHANGELOG.md:29671`: Claims "corruption forces the low word ≥ 2^31, so a corrupted value can never alias zero". This statement treats the promoted 32-bit value as an unsigned type. Because the uncast shift promotes to signed `int` (`CHANGELOG.md:29610`), the value `0x80000000` evaluates to `-2147483648`, which is strictly less than zero, not `>= 2^31`. While it indeed doesn't alias zero, the mathematical justification is technically overclaimed/flawed for a signed type.
+
+### 4. Reviewer Issues & State Preservation
+*   **State Preservation & Step Correctness:** The applied fix (adding width-matched casts like `(uint32_t)` before the shift) is mathematically correct for averting C99 6.5.7p4 undefined behavior. By forcing the shift to occur on an unsigned integer, the sign bit is no longer a trap representation. This leaves alone every state the running code can save because, as `CHANGELOG.md:29627-29628` correctly argues, the cast is strictly value-neutral for all `buf[3] < 0x80` cases where UB was not firing.
+*   **Undefined Test Conditions:** A reviewer checking the second pass would immediately notice `CHANGELOG.md:29704` claims the mutants "die to C1". "C1" is an undefined acronym in this block (likely a test condition or a typo for `v2`). This is UNSETTLED; a reviewer must read `regress/arcbios_shift_probe.py` or `CHANGELOG.md` to define C1.
+*   **Script Behavior:** `CHANGELOG.md:29661` accurately points out a structural flaw in `build_one` (it runs `git archive "$src"`, thus silently testing the committed code rather than the working tree). A reviewer would need to verify whether the bespoke `build_asan_dirty.sh` (`CHANGELOG.md:29663`) actually circumvents this properly. This is UNSETTLED; a reviewer must read `build_asan_dirty.sh` to confirm the mitigation. 
+
+P-GWEBOLDREC450-972f
+GWEBOLDREC450: 8 ATTACKS 3 BROKEN 2 HOLDS 2 UNSETTLED DRAFTABLE:NO

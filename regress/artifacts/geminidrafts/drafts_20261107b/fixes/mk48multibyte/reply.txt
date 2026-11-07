@@ -1,0 +1,26 @@
+STILL PRESENT: YES -- src/devices/dev_mk48txx.c:84-85 and 120-121
+
+```json
+[
+  {
+    "file": "src/devices/dev_mk48txx.c",
+    "old": "\tif (writeflag == MEM_READ)\n\t\todata = d->reg[relative_addr];",
+    "new": "\t/* #mk48multibyte: read wide accesses fully from NVRAM */\n\tif (writeflag == MEM_READ)\n\t\todata = memory_readmax64(cpu, &d->reg[relative_addr], len);",
+    "why": "Read multiple bytes from the NVRAM backing array into the returned scalar, respecting guest endianness."
+  },
+  {
+    "file": "src/devices/dev_mk48txx.c",
+    "old": "\t\tif (writeflag == MEM_WRITE)\n\t\t\td->reg[relative_addr] = idata;",
+    "new": "\t\tif (writeflag == MEM_WRITE)\n\t\t\tmemory_writemax64(cpu, &d->reg[relative_addr], len, idata);",
+    "why": "Write all bytes of the multi-byte scalar into the NVRAM array instead of truncating to the lowest byte."
+  }
+]
+```
+
+The fix deliberately leaves alone the `MK48T08_CLKOFF + MK48TXX_ICSR` switch case for control register writes. A multi-byte write to the 8-bit ICSR register will still only truncate and write a single byte, preserving current emulator state behavior for control registers, which is acceptable since the issue strictly targets NVRAM RAM accesses (187Bug multi-byte checksums). 
+
+It is UNSETTLED from the code shown whether the guest CPU could issue a 4-byte or 8-byte wide access starting exactly at `MK48TXX_LEN - 1`, which might cause `memory_readmax64` to overrun `d->reg`; this depends on whether the GXemul core memory access loop breaks unaligned accesses or clamps `len` at device boundaries before dispatching to `DEVICE_ACCESS(mk48txx)`.
+
+FIXDRAFT_MK48MULTIBYTE: YES PRESENT, 2 EDITS
+P-GWEBFIXMK48MULTIBYTE-3799
+GWEBFIXMK48MULTIBYTE: 0 ATTACKS 0 BROKEN 0 HOLDS 0 UNSETTLED DRAFTABLE:YES

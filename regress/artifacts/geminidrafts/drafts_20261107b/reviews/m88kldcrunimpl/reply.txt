@@ -1,0 +1,13 @@
+FIXREVIEW_M88KLDCRUNIMPL: DEFECT, 2 FINDINGS
+
+1. The diff removes the defect described in the issue at the specified site. The original `cpu->running = false;` at the `default` switch arm is successfully removed at AFTER:503-513, preventing the CPU-STOP condition.
+2. CONTROL FLOW: The added `break;` at AFTER:513 does not skip code; rather, it *stops* skipping code. By replacing the previous `return;`, the flow now reaches the common tail at AFTER:516 (`*r32ptr = retval;`), which writes the result back to the guest.
+3. RETURN VALUE: Yes. Because the function now reaches AFTER:516 via the `default` path, it modifies the out-parameter `*r32ptr = retval;` (where `retval` is loaded from `cpu->cd.m88k.cr[cr]` at AFTER:436). The shown code implies this value means the emulator will now return whatever dormant/uninitialized value is in the unimplemented control register array instead of halting the CPU.
+4. What ELSE does the diff change: Beyond removing the crash, it introduces a global `static bool warned = false;` state at AFTER:504 to suppress repeated warnings. Because it is a global static local variable, if a guest has multiple CPUs, the warning will only print once for the entire emulator run, not per CPU/device instance.
+5. House idioms: The diff fails the house idioms. A diagnostic triggered repeatedly must print ONCE per device instance using a latch field, but AFTER:504 uses a global `static bool`. Additionally, the message at AFTER:507 is missing the required `(once)` text. 
+
+src/cpus/cpu_m88k.c:504, STYLE, replace `static bool warned = false;` with a per-instance latch field like `if (!cpu->warned_ldcr_unimpl) {`.
+src/cpus/cpu_m88k.c:507, STYLE, append `(once)` to the message string: `"ldcr: UNIMPLEMENTED cr = 0x%02x (%s) (once)\n"`.
+
+P-GWEBREVM88KLDCRUNIMPL-44bf
+GWEBREVM88KLDCRUNIMPL: 5 ATTACKS 2 BROKEN 3 HOLDS 0 UNSETTLED DRAFTABLE:NO

@@ -1,0 +1,25 @@
+1. ACCEPT - The issue description names `src/net/net_ip.c:1520-1552`, which is missing from the provided code block, making it unsettled whether a fix is required there.
+2. REJECT - The early return perfectly mirrors existing error handling paths (such as `rst` at lines 611-613) which intentionally clean up, send an immediate reply, and return to skip the normal ACK common tail at line 763.
+3. ACCEPT - The socket is explicitly set to non-blocking at line 586, making `connect()` returning `< 0` with `errno == EINPROGRESS` expected behavior; this state must be ignored to avoid breaking asynchronous connections.
+
+STILL PRESENT: YES -- src/net/net_ip.c:597
+
+```json
+[
+  {
+    "file": "src/net/net_ip.c",
+    "old": "\t\tres = connect(net->tcp_connections[con_id].socket,\n\t\t    (struct sockaddr *)&remote_ip, sizeof(remote_ip));\n\n\t\t/*  connect can return -1, and errno = EINPROGRESS\n\t\t    as we might not have connected right away.  */\n\n\t\tnet->tcp_connections[con_id].state =\n\t\t    TCP_OUTSIDE_TRYINGTOCONNECT;",
+    "new": "\t\tres = connect(net->tcp_connections[con_id].socket,\n\t\t    (struct sockaddr *)&remote_ip, sizeof(remote_ip));\n\n\t\t/*  connect can return -1, and errno = EINPROGRESS\n\t\t    as we might not have connected right away.  */\n\t\tif (res < 0 && errno != EINPROGRESS) {\n\t\t\t/* #NNN: reject connection immediately if connect fails */\n\t\t\tnet_ip_tcp_connectionreply(net, nic, con_id, 0, NULL, 0, 1);\n\t\t\ttcp_closeconnection(net, con_id);\n\t\t\treturn;\n\t\t}\n\n\t\tnet->tcp_connections[con_id].state =\n\t\t    TCP_OUTSIDE_TRYINGTOCONNECT;",
+    "why": "Abort the connection attempt only if connect() fails with an error other than EINPROGRESS."
+  }
+]
+```
+
+What the fix deliberately does not change:
+It does not address the second site at `src/net/net_ip.c:1520-1552` because those lines are not provided in this text packet, leaving that part of the issue unsettled.
+
+REVISION_NATCONNFAIL: 2 ACCEPTED, 1 REJECTED
+FIXDRAFT_NATCONNFAIL: YES PRESENT, 1 EDITS
+
+P-GWEBFIXNATCONNFAIL-2e59
+GWEBFIXNATCONNFAIL: 3 ATTACKS 1 BROKEN 1 HOLDS 1 UNSETTLED DRAFTABLE:NO

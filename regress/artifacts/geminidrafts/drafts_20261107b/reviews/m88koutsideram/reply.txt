@@ -1,0 +1,15 @@
+FIXREVIEW_M88KOUTSIDERAM: DEFECT, 4 FINDINGS
+
+1. The diff does not remove the defect at every site named in the issue. It successfully patches `src/cpus/memory_rw.c`, but it completely misses the secondary site listed: `src/core/memory.c:598-656`.
+2. CONTROL FLOW: Yes, the added unconditional `return MEMORY_ACCESS_FAILED;` at `src/cpus/memory_rw.c:715` forces an early exit for all architectures that reach this block. This skips the memory initialization `memset(data, 0, len);` at line 720 and the common tail `goto do_return_ok;` at line 749, which hands the guest an unwritten `data` buffer for reads on non-M88K/non-MIPS systems.
+3. RETURN VALUE: Yes, by unconditionally returning `MEMORY_ACCESS_FAILED` at line 715, the path that used to conditionally fall through to `goto do_return_ok` now returns failure instead of `MEMORY_ACCESS_OK`. 
+4. What ELSE does the diff change: It ignores the return value of `memory_warn_about_unimplemented_addr` (which previously gated whether the access should fail). This forcefully alters the guest-visible state for non-M88K architectures by dropping the zero-filled read fallback. 
+5. House idioms: The new comment added at `src/cpus/memory_rw.c:699` is heavily indented and totals 116 columns (assuming 8-space tabs), far exceeding the 79-column house limit.
+
+src/core/memory.c:598, DEFECT, Apply the corresponding out-of-bounds RAM fix to src/core/memory.c.
+src/cpus/memory_rw.c:696, DEFECT, Restore the `if` condition around `memory_warn_about_unimplemented_addr()` so its return value is not ignored.
+src/cpus/memory_rw.c:715, DEFECT, Move the `return MEMORY_ACCESS_FAILED;` inside the `#ifdef MEM_M88K` block so other architectures can fall through to the zero-read fallback.
+src/cpus/memory_rw.c:699, STYLE, Wrap the comment to fit within the 79-column limit.
+
+P-GWEBREVM88KOUTSIDERAM-0e65
+GWEBREVM88KOUTSIDERAM: 5 ATTACKS 5 BROKEN 0 HOLDS 0 UNSETTLED DRAFTABLE:NO

@@ -1,0 +1,15 @@
+FIXREVIEW_PIT8253FLOOD: DEFECT, 4 FINDINGS
+
+1. The diff targets all the sites the issue names (modifying the emissions and deleting the dead code), but it fails to correctly "remove" the defect because it misinterprets "LATCH" as the timer's functional `d->latched` state rather than introducing a diagnostic latch field to bound the warnings.
+2. CONTROL FLOW: No added `return`, `goto`, `break`, or early exit skips any code. The common tail `if (writeflag == MEM_READ) memory_writemax64(cpu, data, len, odata); return 1;` (lines 360-363) is always reached exactly as it was before.
+3. RETURN VALUE: No path returns anything different. The function still always returns `1`, implying the device access was successfully handled by the emulator.
+4. What ELSE does the diff change: By hijacking the `d->latched` array (which represents the emulator's functional 8253 counter latch state), the diff ties the display of host warnings directly to guest behavior. If the guest latches a counter, warnings are silenced; when unlatched, warnings flood again.
+5. House idioms: The diff violates multiple idioms. It fails to add the required `(once)` text to the modified `fatal` messages, it fails to use a dedicated diagnostic latch field, and the new comments at lines 198 and 200 exceed 79 columns.
+
+src/devices/dev_8253.c:204 DEFECT The check reuses the emulator's functional state and misses `(once)` in the string. Fix: `default: if (!d->warn_write[relative_addr]++) { fatal("[ 8253: huh? writing to counter %i but neither from msb nor lsb? (once) ]\n", (int)relative_addr); }`
+src/devices/dev_8253.c:272 DEFECT The check reuses the emulator's functional state and misses `(once)` in the string. Fix: `default: if (!d->warn_read[relative_addr]++) { fatal("[ 8253: huh? reading from counter %i but neither from msb nor lsb? (once) ]\n", (int)relative_addr); }`
+src/devices/dev_8253.c:346 DEFECT The check reuses the emulator's functional state and misses `(once)` in the string. Fix: `if (!d->warn_bcd[d->counter_select]++) { fatal("[ 8253: BCD not yet implemented (once) ]\n"); }`
+src/devices/dev_8253.c:200 STYLE The newly added comment line exceeds 79 columns. Fix: break the comment into multiple lines.
+
+P-GWEBREVPIT8253FLOOD-1ce3
+GWEBREVPIT8253FLOOD: 5 ATTACKS 3 BROKEN 2 HOLDS 0 UNSETTLED DRAFTABLE:NO

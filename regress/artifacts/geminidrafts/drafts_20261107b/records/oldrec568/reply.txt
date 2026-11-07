@@ -1,0 +1,23 @@
+This is a defensive review of the provided CHANGELOG block.
+
+**Step Correctness and State Preservation**
+*   **Step Correctness:** The block claims that for the 26 population-2 registers, reads are served `d->reg[]`'s word (0) and writes are dropped (`CHANGELOG:2660-2661`), and it introduces a new `uint64_t warned_unimpl` latch using bitwise shifts to track warnings (`CHANGELOG:2662-2664`). We cannot verify if `relative_addr >> 2` correctly maps to the 36 bits without overlap or out-of-bounds errors, nor if the guest genuinely cannot overwrite the 0 words. Correctness is **UNSETTLED** (requires `src/devices/dev_vme.c` to settle).
+*   **State Preservation:** The patch adds a new state latch (`warned_unimpl`) that mutates upon access. The running code must be able to save and restore its state across snapshots. The block omits any mention of adding this latch to the device's serialization template (e.g., machine dump/restore routines). Whether the state is correctly preserved is **UNSETTLED** (requires `src/devices/dev_vme.c` to settle).
+
+**1. Contradictions**
+*   `CHANGELOG:2671` enumerates the probe as explicitly having "38 rows", and `CHANGELOG:2683-2684` states that for Gate 14, `vme_default rows run` is pinned at 38 and the results are "pinned at 38/38/0". However, `CHANGELOG:2735` claims the Gate 14 block "FAIL 27 of 45", `CHANGELOG:2736` claims it "PASS 45 on HEAD + fix568b", and `CHANGELOG:2741` claims it "PASSES 45". The row numbers contradict each other (38 vs 45) for the same Gate 14 run.
+
+**2. Uncited Measurements**
+*   `CHANGELOG:2763-2764` claims that Opus 5.5 "MEASURED" tables 1, 1b, 2, 2b, 2c, 2d, the object comparison, and the clean clone (8 items), but it cites no artifact directory or log file for this agent's seat, unlike the directories explicitly cited for pass 1 (`pass1_20261020/`), pass 2 (`pass2_20261020/`), adjudication (`f2_20261021/`), and the repair-diff pass (`r1_20261021/`).
+
+**3. Overclaims**
+*   **"every":** `CHANGELOG:2642` claims "every other unmatched offset FAULTS to the guest", but `CHANGELOG:2726` admits that `default:` is "serving 0xffd..0xfff, which no row touches". The evidence covers less than "every" offset because a memory range is explicitly left untouched and unproven by the test rows.
+*   **"every":** `CHANGELOG:2705` claims "24 legs -- every one red except the two predicted equivalents", but `CHANGELOG:2707-2708` shows that one measurement resulted in "5/34 CONTROL=FAIL" (a prerequisite failure, not a test failure) and "M_CAPNARROW fails to compile". Since a build failure and a control failure are not standard "red" execution outcomes, claiming "every one red" overstates the evidence.
+
+**4. Reviewer Findings**
+*   A reviewer checking the artifacts would most likely find the row count discrepancy in the Gate 14 logs to be wrong. The script explicitly lists 38 rows (`CHANGELOG:2671`), but the test harness logged 45 rows executed (`CHANGELOG:2735-2741`), implying rows ran multiple times unexpectedly or the test script differs from the version claimed. They would also flag the missing serialization for the newly added `warned_unimpl` state variable.
+
+RECBLOCK_568: 1 CONTRADICTIONS, 1 UNCITED, 2 OVERCLAIMS
+
+P-GWEBOLDREC568-6676
+GWEBOLDREC568: 6 ATTACKS 4 BROKEN 0 HOLDS 2 UNSETTLED DRAFTABLE:NO

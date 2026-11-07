@@ -1,0 +1,86 @@
+diff --git a/src/console/x11.c b/src/console/x11.c
+index 698173c7..7d0d61f2 100644
+--- a/src/console/x11.c
++++ b/src/console/x11.c
+@@ -243,17 +243,28 @@ void x11_redraw_cursor(struct machine *m, int i)
+ 	if (!fbwin->cursor_on)
+ 		return;
+ 
+-	XImage *xtmp;
+-	CHECK_ALLOCATION(xtmp = XSubImage(fbwin->fb_ximage,
+-	    fbwin->cursor_x/fbwin->scaledown,
+-	    fbwin->cursor_y/fbwin->scaledown,
+-	    fbwin->cursor_xsize/fbwin->scaledown + 1,
+-	    fbwin->cursor_ysize/fbwin->scaledown + 1));
++	int cxsize = fbwin->cursor_xsize/fbwin->scaledown + 1;
++	int cysize = fbwin->cursor_ysize/fbwin->scaledown + 1;
++	if (fbwin->cursor_x/fbwin->scaledown + cxsize > fbwin->fb_ximage->width)
++		cxsize = fbwin->fb_ximage->width - fbwin->cursor_x/fbwin->scaledown;
++	if (fbwin->cursor_y/fbwin->scaledown + cysize > fbwin->fb_ximage->height)
++		cysize = fbwin->fb_ximage->height - fbwin->cursor_y/fbwin->scaledown;
++
++	XImage *xtmp = NULL;
++	if (cxsize > 0 && cysize > 0) {
++		CHECK_ALLOCATION(xtmp = XSubImage(fbwin->fb_ximage,
++		    fbwin->cursor_x/fbwin->scaledown,
++		    fbwin->cursor_y/fbwin->scaledown,
++		    cxsize, cysize));
++	}
+ 
++	if (xtmp != NULL) {
+ 	for (int y = 0; y < fbwin->cursor_ysize; y += fbwin->scaledown) {
+ 		for (int x = 0; x < fbwin->cursor_xsize; x += fbwin->scaledown) {
+ 			int px = x/fbwin->scaledown;
+ 			int py = y/fbwin->scaledown;
++			if (px >= cxsize || py >= cysize)
++				continue;
+ 			int p = 0, n = 0, c = 0;
+ 			unsigned long oldcol;
+ 
+@@ -291,16 +302,17 @@ void x11_redraw_cursor(struct machine *m, int i)
+ 		}
+ 	}
+ 
+-	XPutImage(fbwin->x11_display,
+-	    fbwin->x11_fb_window,
+-	    fbwin->x11_fb_gc,
+-	    xtmp, 0, 0,
+-	    fbwin->cursor_x/fbwin->scaledown,
+-	    fbwin->cursor_y/fbwin->scaledown,
+-	    fbwin->cursor_xsize/fbwin->scaledown,
+-	    fbwin->cursor_ysize/fbwin->scaledown);
+-
+-	XDestroyImage(xtmp);
++		XPutImage(fbwin->x11_display,
++		    fbwin->x11_fb_window,
++		    fbwin->x11_fb_gc,
++		    xtmp, 0, 0,
++		    fbwin->cursor_x/fbwin->scaledown,
++		    fbwin->cursor_y/fbwin->scaledown,
++		    cxsize,
++		    cysize);
++
++		XDestroyImage(xtmp);
++	}
+ 
+ 	fbwin->OLD_cursor_on = fbwin->cursor_on;
+ 	fbwin->OLD_cursor_x = fbwin->cursor_x;
+diff --git a/src/devices/dev_fb.c b/src/devices/dev_fb.c
+index 75bb8d81..8c8871ba 100644
+--- a/src/devices/dev_fb.c
++++ b/src/devices/dev_fb.c
+@@ -246,10 +246,10 @@ void dev_fb_setcursor(struct vfb_data *d, int cursor_x, int cursor_y, int on,
+ 		cursor_x = 0;
+ 	if (cursor_y < 0)
+ 		cursor_y = 0;
+-	if (cursor_x + cursor_xsize >= d->xsize)
+-		cursor_x = d->xsize - cursor_xsize;
+-	if (cursor_y + cursor_ysize >= d->ysize)
+-		cursor_y = d->ysize - cursor_ysize;
++	if (cursor_x + cursor_xsize >= d->visible_xsize)
++		cursor_x = d->visible_xsize > cursor_xsize ? d->visible_xsize - cursor_xsize : 0;
++	if (cursor_y + cursor_ysize >= d->visible_ysize)
++		cursor_y = d->visible_ysize > cursor_ysize ? d->visible_ysize - cursor_ysize : 0;
+ 
+ #ifdef WITH_X11
+ 	if (d->fb_window != NULL) {

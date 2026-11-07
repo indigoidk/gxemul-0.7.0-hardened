@@ -1,0 +1,22 @@
+ACCEPT: The unsigned comparison `addr < a2 + len` becomes `addr < 0` when `len = -a2` makes the sum 0, which is always false, printing nothing.
+ACCEPT: Returning `a3` unconditionally when fewer bytes were actually processed perpetuates the WRONG-RESULT defect described in the issue.
+
+STILL PRESENT: YES -- `for (addr = a2; addr < a2 + a3; addr ++)` and `cpu->cd.alpha.r[ALPHA_V0] = a3;`
+
+```json
+[
+  {
+    "file": "src/cpus/cpu_alpha_palcode.c",
+    "old": "\tcase PROM_R_PUTS:\n\t\t/*  a1 = channel, a2 = ptr to buf, a3 = len  */\n\t\tfor (addr = a2; addr < a2 + a3; addr ++) {\n\t\t\tunsigned char ch;\n\t\t\tcpu->memory_rw(cpu, cpu->mem, addr, &ch, sizeof(ch),\n\t\t\t    MEM_READ, CACHE_DATA | NO_EXCEPTIONS);\n\t\t\tconsole_putchar(cpu->machine->main_console_handle, ch);\n\t\t}\n\t\tcpu->cd.alpha.r[ALPHA_V0] = a3;\n\t\tbreak;",
+    "new": "\tcase PROM_R_PUTS:\n\t\t/*  a1 = channel, a2 = ptr to buf, a3 = len  */\n\t\tlen = a3;\n\t\tif (len > 65536)\n\t\t\tlen = 65536; /* #palputslen: length cap */\n\t\tif (a2 + len < a2)\n\t\t\tlen = -a2;\n\t\tcpu->cd.alpha.r[ALPHA_V0] = len;\n\t\tfor (addr = a2; len > 0; len--, addr++) {\n\t\t\tunsigned char ch;\n\t\t\tcpu->memory_rw(cpu, cpu->mem, addr, &ch, sizeof(ch),\n\t\t\t    MEM_READ, CACHE_DATA | NO_EXCEPTIONS);\n\t\t\tconsole_putchar(cpu->machine->main_console_handle, ch);\n\t\t}\n\t\tbreak;",
+    "why": "Caps iteration length to 65536 bytes, fixes loop condition on wrapped sums, and returns the actual number of bytes written."
+  }
+]
+```
+
+The fix deliberately does not alter other PROM call operations (such as `GETENV`) or other CPU registers, limiting scope solely to the `PROM_R_PUTS` bounds check and return value.
+
+REVISION_PALPUTSLEN: 2 ACCEPTED, 0 REJECTED
+FIXDRAFT_PALPUTSLEN: YES PRESENT, 1 EDITS
+P-GWEBFIXPALPUTSLEN-b9e7
+GWEBFIXPALPUTSLEN: 2 ATTACKS 0 BROKEN 2 HOLDS 0 UNSETTLED DRAFTABLE:YES

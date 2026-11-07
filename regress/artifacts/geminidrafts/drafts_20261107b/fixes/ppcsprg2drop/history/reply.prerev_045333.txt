@@ -1,0 +1,30 @@
+I will review the claims from the issue and draft the requested fix.
+
+**Defensive Review of Claims**
+- Claim: SPRG2 writes are discarded on 32-bit CPUs (a FreeBSD hack). **HOLDS** - `src/cpus/cpu_ppc_instr.c:2825-2829` explicitly ignores the write if `cpu->cd.ppc.bits == 32`.
+- Claim: the MTSPR decode (cpu_ppc_instr.c:4701-4719) routes SPRG2 to X(mtspr_sprg2) with no privilege test. **UNSETTLED** - Lines 4701-4719 are not included in the provided code snippet.
+- Claim: X(mtspr) carries `TODO: Check permission` (:2807-2808). **BROKEN** - The comment `/*  TODO: Check permission  */` in `X(mtspr)` is at line 2821, not 2807-2808.
+- Claim: the architecture makes a user-mode SPRG2 write a privileged-instruction program interrupt. **UNSETTLED** - The file `_scratchpad/ppc_oea_book3_v201.txt` is not provided.
+- Claim: Our site at de8c7547: src/cpus/cpu_ppc_instr.c:2811-2818. **BROKEN** - The `X(mtspr_sprg2)` function is located at lines 2824-2832 in the provided snippet.
+
+**Drafting the Fix**
+STILL PRESENT: YES -- src/cpus/cpu_ppc_instr.c:2825
+
+```json
+[
+  {
+    "file": "src/cpus/cpu_ppc_instr.c",
+    "old": "X(mtspr_sprg2) {\n\tif (cpu->cd.ppc.bits == 32) {\n\t\t// Ignore for now. FreeBSD/powerpc seems to write 0xffffffe0\n\t\t// here, and read it back. If it is non-zero, it assumes a 64-bit\n\t\t// cpu.\n\t} else {\n\t\treg(ic->arg[1]) = reg(ic->arg[0]);\n\t}\n}",
+    "new": "X(mtspr_sprg2) {\n\t/* #ppcsprg2drop: FreeBSD hack removed */\n\treg(ic->arg[1]) = reg(ic->arg[0]);\n}",
+    "why": "Removes the FreeBSD hack that incorrectly discarded SPRG2 writes on 32-bit CPUs."
+  }
+]
+```
+
+**What the fix does NOT change and unsettled items:**
+The fix removes the 32-bit condition and allows `SPRG2` writes to occur as they would in 64-bit mode. However, it does NOT add any privilege checks because no privilege check function, interrupt generation macro, or MSR bit-testing utility is visible in the provided snippet. Adding a proper privilege test is UNSETTLED because the required exception-handling machinery is outside the provided text.
+
+FIXDRAFT_PPCSPRG2DROP: YES PRESENT, 1 EDITS
+
+P-GWEBFIXPPCSPRG2DROP-0586
+GWEBFIXPPCSPRG2DROP: 5 ATTACKS 2 BROKEN 1 HOLDS 2 UNSETTLED DRAFTABLE:NO

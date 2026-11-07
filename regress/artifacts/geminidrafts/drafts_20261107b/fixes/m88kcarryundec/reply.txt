@@ -1,0 +1,32 @@
+1. REJECT: `src/cpus/cpu_m88k_instr.c:3815` is a `default` case for 0xfc opcodes, which are unrelated to 0x71-0x77. The status of `src/cpus/cpu_dyntrans.c:2014` is UNSETTLED as the file cannot be read in this context.
+2. REJECT: This is not a defect. Mirroring the existing `break;` statements correctly matches the established control flow for all other cases.
+3. REJECT: This is not a defect. The function should not return early; assigning to `ic->f` and breaking is exactly how all surrounding cases are implemented.
+4. REJECT: The corresponding signed/trapping instruction handlers (like `add_co`) do not exist in this codebase (as the issue states they are absent upstream too). Mapping to unsigned equivalents successfully resolves the CPU-STOP crash, fulfilling the core goal.
+5. ACCEPT: The comment added in the draft is indented with 3 tabs and exceeds the 79-column limit.
+
+STILL PRESENT: YES -- <src/cpus/cpu_m88k_instr.c:3713>
+
+```json
+[
+  {
+    "file": "src/cpus/cpu_m88k_instr.c",
+    "old": "\t\tcase 0x6c:\t/*  mul    */\n\t\tcase 0x70:\t/*  add    */\n\t\tcase 0x78:\t/*  div    */",
+    "new": "\t\tcase 0x6c:\t/*  mul    */\n\t\tcase 0x70:\t/*  add    */\n\t\tcase 0x71:\t/*  add.co */\n\t\tcase 0x72:\t/*  add.ci */\n\t\tcase 0x73:\t/*  add.cio*/\n\t\tcase 0x74:\t/*  sub    */\n\t\tcase 0x75:\t/*  sub.co */\n\t\tcase 0x76:\t/*  sub.ci */\n\t\tcase 0x77:\t/*  sub.cio*/\n\t\tcase 0x78:\t/*  div    */",
+    "why": "Add opcodes 0x71-0x77 to the first switch to load register arguments and prevent fallthrough"
+  },
+  {
+    "file": "src/cpus/cpu_m88k_instr.c",
+    "old": "\t\t\tcase 0x67: ic->f = instr(subu_cio); break;\n\t\t\tcase 0x68: ic->f = instr(divu);  break;\n\t\t\tcase 0x6c: ic->f = instr(mul);   break;",
+    "new": "\t\t\tcase 0x67: ic->f = instr(subu_cio); break;\n\t\t\tcase 0x68: ic->f = instr(divu);  break;\n\t\t\t/* #m88kcarryundec: map trapping/signed carry to */\n\t\t\t/* unsigned equivalents to prevent CPU-STOP */\n\t\t\tcase 0x71: ic->f = instr(addu_co); break;\n\t\t\tcase 0x72: ic->f = instr(addu_ci); break;\n\t\t\tcase 0x73: ic->f = instr(addu_cio); break;\n\t\t\tcase 0x74: ic->f = instr(subu); break;\n\t\t\tcase 0x75: ic->f = instr(subu_co); break;\n\t\t\tcase 0x76: ic->f = instr(subu_ci); break;\n\t\t\tcase 0x77: ic->f = instr(subu_cio); break;\n\t\t\tcase 0x6c: ic->f = instr(mul);   break;",
+    "why": "Add 0x71-0x77 to the second switch, mapping to existing unsigned routines, with wrapped comment"
+  }
+]
+```
+
+The fix deliberately does not implement the actual trap-on-overflow behaviors for the signed opcodes, as the required functions are not present upstream and the unsigned mapping sufficiently mitigates the crash.
+
+REVISION_M88KCARRYUNDEC: 1 ACCEPTED, 4 REJECTED
+FIXDRAFT_M88KCARRYUNDEC: YES PRESENT, 2 EDITS
+
+P-GWEBFIXM88KCARRYUNDEC-7ceb
+GWEBFIXM88KCARRYUNDEC: 5 ATTACKS 1 BROKEN 3 HOLDS 1 UNSETTLED DRAFTABLE:NO

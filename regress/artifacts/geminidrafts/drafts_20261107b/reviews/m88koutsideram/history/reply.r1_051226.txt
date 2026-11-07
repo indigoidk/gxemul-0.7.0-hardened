@@ -1,0 +1,24 @@
+FIXREVIEW_M88KOUTSIDERAM: DEFECT, 3 FINDINGS
+
+1. **Does the diff remove the defect at every site the issue names?**
+   No. The issue explicitly names two sites: `src/cpus/memory_rw.c:663-713` and `src/core/memory.c:598-656`. The proposed diff only modifies `src/cpus/memory_rw.c` and completely misses the required fix in `src/core/memory.c`.
+
+2. **CONTROL FLOW:**
+   Yes, the added `return MEMORY_ACCESS_FAILED;` at `src/cpus/memory_rw.c:701` acts as an early exit. It skips the block that hands the guest an unwritten read result: `memset(data, 0, len);` and its corresponding `goto do_return_ok;`. It therefore skips the function's common tail at line 808-809: `do_return_ok: return MEMORY_ACCESS_OK;`.
+
+3. **RETURN VALUE:**
+   Yes, on the non-MIPS out-of-bounds RAM path, the function now returns `MEMORY_ACCESS_FAILED` instead of `MEMORY_ACCESS_OK`. Based on the context of the function (e.g., device access failure at line 643), returning this value implies the memory transaction was invalid, aborted, and cannot be fulfilled. 
+
+4. **What ELSE does the diff change?**
+   By returning early without manually raising the architecture-specific exception, the fix actually fails to generate the required 88K bus error state. Unlike the memory-mapped device failure path (which explicitly sets `CMMU_PFSR`, `CMMU_PFAR`, and calls `m88k_exception(...)` before returning `MEMORY_ACCESS_FAILED` at lines 614-644), this new early return silently drops the access. It leaves the guest without the bus error (or the CMMU fault registers) that the SVR4 memory sizing relies on.
+
+5. **House idioms:**
+   The new comment introduced in the diff at line 700 uses an invalid tag `/* #1: ... */`. House idioms dictate this should carry a `/* #NNN: ... */` tag corresponding to the issue, such as `/* #m88koutsideram: ... */`.
+
+**Findings:**
+`src/core/memory.c:UNSETTLED`, DEFECT, Apply the out-of-bounds memory fix to this missing file.
+`src/cpus/memory_rw.c:701`, DEFECT, Explicitly call `m88k_exception` and set the CMMU fault registers before returning `MEMORY_ACCESS_FAILED`.
+`src/cpus/memory_rw.c:700`, STYLE, Change `/* #1: non-MIPS memory sizing expects a bus error */` to use the correct issue identifier tag.
+
+P-GWEBREVM88KOUTSIDERAM-6c5b
+GWEBREVM88KOUTSIDERAM: 5 ATTACKS 3 BROKEN 2 HOLDS 0 UNSETTLED DRAFTABLE:NO

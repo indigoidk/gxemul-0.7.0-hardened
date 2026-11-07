@@ -1,0 +1,15 @@
+FIXREVIEW_BOOTBLOCKZEROADDR: DEFECT, 3 FINDINGS
+
+1. **Defect removal:** Yes, the diff replaces the `exit(1)` at `src/disk/bootblock.c:258` described by the issue.
+2. **CONTROL FLOW:** Yes, the added `return 0;` at line 259 skips the function's common tail, specifically `free(bootblock_buf);` at line 558. 
+3. **RETURN VALUE:** The path now returns `0` instead of halting the host. Based on other failure paths (lines 181, 287, 544), returning `0` implies a failure to load the bootblock.
+4. **ELSE changed:** Because the host no longer exits, the guest can now survive the failure and potentially trigger the `fatal()` messages at lines 251 and 255 repeatedly.
+5. **House idioms:** The `fatal()` messages now require a latch and `(once)` because they can be triggered repeatedly by the guest. Also, the new comment at line 258 uses the issue name instead of a numeric `#NNN:` tag.
+
+**Findings:**
+`src/disk/bootblock.c:259`: QUESTION: The early return skips the common tail `free(bootblock_buf);` (line 558). Fix: Check if `bootblock_buf` is initialized before line 148; if safe, use `goto ret_ok;`, otherwise UNSETTLED (requires checking lines 77-147).
+`src/disk/bootblock.c:255`: STYLE: Diagnostic can now be triggered repeatedly without exiting. Fix: Gate behind a device instance latch and add `(once)` to the message string.
+`src/disk/bootblock.c:258`: STYLE: The comment uses `/* #bootblockzeroaddr: ... */` instead of the house idiom. Fix: Change to `/* #NNN: do not exit host */`.
+
+P-GWEBREVBOOTBLOCKZEROADDR-120e
+GWEBREVBOOTBLOCKZEROADDR: 5 ATTACKS 2 BROKEN 2 HOLDS 1 UNSETTLED DRAFTABLE:NO

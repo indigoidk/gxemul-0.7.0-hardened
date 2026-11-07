@@ -1,0 +1,34 @@
+```json
+[
+  {
+    "file": "src/devices/dev_osiop.c",
+    "old": "\tint\t\t\tasserted;\n\t\n\tint\t\t\tscripts_running;",
+    "new": "\tint\t\t\tasserted;\n\tint\t\t\twarned_default;\t/*  #NNN: once per device  */\n\t\n\tint\t\t\tscripts_running;",
+    "why": "Add once-per-device latch to the state structure for default accesses."
+  },
+  {
+    "file": "src/devices/dev_osiop.c",
+    "old": "\tuint64_t idata = 0, odata = 0;\n\tuint8_t oldreg = 0;",
+    "new": "\tuint64_t idata = 0, odata = 0;\n\tuint32_t oldreg = 0;",
+    "why": "Widen oldreg to 32 bits to allow preserving full DNAD/ADDER words on decline."
+  },
+  {
+    "file": "src/devices/dev_osiop.c",
+    "old": "\t\t\tuint32_t *p = (uint32_t*) &d->reg[origofs];\n\n\t\t\tif (writeflag == MEM_WRITE)",
+    "new": "\t\t\tuint32_t *p = (uint32_t*) &d->reg[origofs];\n\n\t\t\t/*  #NNN: default may decline this backed access.  */\n\t\t\toldreg = *p;\n\t\t\tif (writeflag == MEM_WRITE)",
+    "why": "Cache the previous state of the 32-bit register before unconditionally writing to it."
+  },
+  {
+    "file": "src/devices/dev_osiop.c",
+    "old": "\tdefault:\n\t\tif (writeflag == MEM_READ) {\n\t\t\tfatal(\"[ osiop: read from 0x%02lx ]\\n\",\n\t\t\t    (long)relative_addr);\n\t\t} else {\n\t\t\tfatal(\"[ osiop: write to  0x%02lx: 0x%02x ]\\n\",\n\t\t\t    (long)relative_addr, (int)idata);\n\t\t}\n\n\t\texit(1);\n\t}",
+    "new": "\tdefault:\n\t\t/*  #NNN: decline, undoing the generic register store.  */\n\t\tif (!d->warned_default) {\n\t\t\tfatal(\"[ osiop: unimplemented %s at 0x%02lx\"\n\t\t\t    \" (len %i); declined (once) ]\\n\",\n\t\t\t    writeflag == MEM_WRITE ? \"write\" : \"read\",\n\t\t\t    (long)relative_addr, (int)len);\n\t\t\td->warned_default = 1;\n\t\t}\n\t\tif (writeflag == MEM_WRITE) {\n\t\t\tif (non1lenOk)\n\t\t\t\t*(uint32_t*)&d->reg[origofs] = oldreg;\n\t\t\telse if (len != sizeof(uint32_t))\n\t\t\t\td->reg[relative_addr] = oldreg;\n\t\t} else {\n\t\t\tmemory_writemax64(cpu, data, len, 0);\n\t\t}\n\t\treturn 1;\n\t}",
+    "why": "Decline unimplemented accesses without exiting, rolling back any earlier generic stores."
+  }
+]
+```
+
+Points of the design not followed:
+*   I explicitly rejected the "Smallest escaping edit" that suggested replacing `*(uint32_t*)&d->reg[origofs] = oldreg;` with `= idata;`. As the second-lens review correctly flagged (marked FALSE/BROKEN), substituting `idata` over `oldreg` overwrites the state with the incoming unhandled write instead of reverting it, fundamentally violating the chosen "decline" disposition. I retained `oldreg` to cleanly execute the rollback.
+
+P-GWEBFIXOSIOP-f4b3
+GWEBFIXOSIOP: 1 ATTACKS 1 BROKEN 0 HOLDS 0 UNSETTLED DRAFTABLE:YES

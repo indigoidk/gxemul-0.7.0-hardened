@@ -1,0 +1,79 @@
+#!/usr/bin/env python3
+"""mk_closedraft.py -- 06:5x 11-07: Gemini-web CLOSURE drafts for the oldest open rows whose latest adjudication draft proposed
+closing them (DOCUMENT-AND-CLOSE, DROP, CLOSE-OVERTAKEN), state open/held, no commits.  Six rows per packet, oldest first.
+Per row Gemini returns: whether it agrees with the proposed closure (and why), the closure RECORD text in the project's honest
+form, and the ONE fact that would make closing wrong -- the thing to check before anyone closes it.  CLOSE-OVERTAKEN rows are
+told the project's three conditions (a discriminating control measured at HEAD, the carrying rows named, the control preserved
+at a durable path), so the draft names the control rather than asserting the closure.  Proposals only.  Writes
+closedraft_<k>/packet_body.md and closedraft_list.txt."""
+import io
+import json
+import os
+import re
+import subprocess
+
+H = "C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/gweb/jobs_20261106_kits/"
+REPO = "C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC"
+FANGS = re.compile(r"(grep the fork|check the premises against the source|read the source|open the file)", re.I)
+N = 6
+head = subprocess.run(["git", "-C", REPO, "rev-parse", "--short=8", "HEAD"], capture_output=True, text=True).stdout.strip()
+d = json.loads(subprocess.run(["git", "-C", REPO, "show", "HEAD:tools/pipeline/ledger.json"], capture_output=True).stdout.decode("utf-8"))
+rows = d["rows"] if isinstance(d, dict) and "rows" in d else d
+by = {r.get("id"): r for r in rows}
+order = {}
+for r in rows:
+    ds = re.findall(r"20\d\d-\d\d-\d\d", json.dumps(r, ensure_ascii=False))
+    order[r.get("id")] = (min(ds) if ds else "9999", r.get("id"))
+t = io.open(H + "OLDBATCH_DRAFTS.md", encoding="utf-8").read()
+last = {}
+for m in re.finditer(r"^\* ROW ([A-Za-z0-9_]+): ([A-Z][A-Z-]+[A-Z])\s*(?:--)?\s*(.*)$", t, re.M):
+    last[m.group(1)] = (m.group(2), m.group(3).strip())
+WANT = ("DOCUMENT-AND-CLOSE", "DROP", "CLOSE-OVERTAKEN")
+cand = [r for r, (disp, _) in last.items() if disp in WANT and r in by and not by[r].get("commits")
+        and by[r].get("state") in ("open", "held") and not r.startswith(("lca", "alpha", "vr41", "arc"))]
+cand.sort(key=lambda r: order.get(r, ("9999", r)))
+
+
+def clip(s, n):
+    s = FANGS.sub(lambda m: m.group(1).replace(" ", "-"), (s or "").strip())
+    return s if len(s) <= n else s[:n] + " [... %d more characters not shown]" % (len(s) - n)
+
+
+made = []
+for k in range(0, len(cand), N):
+    chunk = cand[k:k + N]
+    tag = "%02d" % (k // N + 1)
+    parts = []
+    for rid in chunk:
+        r = by[rid]
+        disp, why = last[rid]
+        parts.append("\n".join([
+            "### ROW `%s` -- state `%s`, severity `%s`; PROPOSED: **%s**" % (rid, r.get("state"), r.get("severity") or r.get("sev") or "-", disp),
+            "", "**title:** " + clip(r.get("title") or "", 400), "",
+            "**state_note (head):** " + clip(r.get("state_note") or "", 1400), "",
+            "**hold_question:** " + (clip(r.get("hold_question"), 500) or "(none)"), "",
+            "**the triage pass's reason:** " + clip(why, 300), ""]))
+    body = "\n".join([
+        "# GXemul hardened fork -- DRAFT THE CLOSURE RECORDS for %d filed issues proposed for closing (a defensive project's bookkeeping)" % len(chunk), "",
+        "PROJECT FRAMING -- a defensive software-robustness project: GXemul is a computer-architecture emulator, and this fork keeps a",
+        "ledger of every filed issue.  An earlier triage pass proposed closing each row below.  Closing must be HONEST: a row closed",
+        "as documented says what was assessed and not changed; a dropped row says why it is not a defect worth a round; a row closed",
+        "as OVERTAKEN (someone else's fix removed the defect) is only closable on three conditions -- (1) a discriminating control,",
+        "measured at HEAD: neutralise the overtaking fix and this row's own symptom comes back; (2) the rows that now carry the",
+        "coverage named; (3) that control preserved at a durable path.  You cannot read files; work from the text.  Ledger at HEAD %s." % head,
+        "", "## The rows", "", "\n".join(parts),
+        "## For EACH row return (a numbered block per row, its id first)", "",
+        "1. `AGREE` or `DISAGREE` with the proposed closure, and why in one line -- DISAGREE when the row's own text describes a live,",
+        "   reachable defect, or names work still owed.",
+        "2. If AGREE: the closure RECORD text, two to four lines, in that honest form (for OVERTAKEN: the control that would",
+        "   discriminate and the rows that would carry it, stated as OWED, never as done).",
+        "3. The ONE fact that would make closing wrong -- what someone must check before closing it.",
+        "Do not invent commits, measurements or file contents the text does not give.", "",
+        "End with one line: `CLOSEDRAFT_%s: <a> AGREE, <d> DISAGREE`." % tag, ""])
+    jd = H + "closedraft_%s/" % tag
+    os.makedirs(jd, exist_ok=True)
+    io.open(jd + "packet_body.md", "w", encoding="utf-8", newline="\n").write(body)
+    made.append(tag)
+    print(tag, len(chunk), "rows", len(body.encode()), "bytes:", " ".join(chunk))
+io.open(H + "closedraft_list.txt", "w", encoding="utf-8", newline="\n").write("\n".join(made) + "\n")
+print("PREPARED", len(made), "packets for", len(cand), "rows")

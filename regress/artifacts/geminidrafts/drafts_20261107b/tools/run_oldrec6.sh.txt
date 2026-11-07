@@ -1,0 +1,21 @@
+#!/bin/bash
+#  run_oldrec6.sh -- 04:3x 11-07: Gemini-web RECORDS checks of the six HELD rounds that already carry their fix and had none
+#  (#424 b1w, #473 wdcrearmzero, #477 wdccdbmidxfer, #526 xscaleinten, #527 ppcrlwimiwidth, #528 mapledmaaddr), oldest first.
+#  Packets from mk_next4.py with SNAP=CHANGELOG_8d9df658.md (HEAD).  One sender (send_one_argon.sh takes the prelim5 lock).
+#  Stops on STOP_PROXY, a send failure, or Google's unusual-traffic text.  Proposals only -- every claim is checked before use.
+set -u
+K=/c/DocumentNoSnc/CC/GXEMUL/_scratchpad/gweb/jobs_20261106_kits; GW=/c/DocumentNoSnc/CC/GXEMUL/_scratchpad/gweb
+cd "$K" || exit 1
+for n in 424 473 477 526 527 528; do
+    [ -f "$GW/STOP_PROXY" ] && { echo "STOP_PROXY -- stopping before $n"; break; }
+    d=oldrec$n
+    if [ ! -f "$d/gemini_web.packet.md" ]; then
+        python "$GW/mk_gweb_job.py" "$K/$d" "$K/gem_rec$n.md" "GWEBOLDREC$n" --title="$d" > /dev/null || { echo "mk_gweb_job failed for $n"; break; }
+    fi
+    bash "$GW/send_one_argon.sh" "$K/$d" RECORDS; rc=$?
+    v=$(cat "$d/gemini_web.verdict" 2>/dev/null | head -1)
+    echo "$(date '+%T') $d rc=$rc bytes=$(wc -c < "$d/reply.txt" 2>/dev/null || echo 0) :: $v"
+    if grep -qiE 'unusual traffic|automated queries|not a robot' "$d/reply.txt" 2>/dev/null; then echo "UNUSUAL-TRAFFIC text in $d -- stopping"; break; fi
+    [ $rc -ne 0 ] && [ $rc -ne 1 ] && { echo "send rc=$rc -- stopping"; break; }
+done
+echo "OLDREC6_DONE $(date '+%F %T')"

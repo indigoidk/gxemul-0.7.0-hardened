@@ -1,0 +1,29 @@
+STILL PRESENT: YES -- `d->init_state = 1;` ignores bits 0 and 1 of `idata` (ICW1).
+
+```json
+[
+  {
+    "file": "src/devices/dev_8259.c",
+    "old": "\t\t\t\td->init_state = 1;\n\t\t\t\tbreak;",
+    "new": "\t\t\t\t/* Encode SNGL (bit 1) and IC4 (bit 0) into init_state */\n\t\t\t\td->init_state = 1 | ((idata & 3) << 8);\n\t\t\t\tbreak;",
+    "why": "Save ICW1's SNGL and IC4 bits so the subsequent init bytes can check them without adding new struct fields."
+  },
+  {
+    "file": "src/devices/dev_8259.c",
+    "old": "\t\t\tif (d->init_state == 1) {\n\t\t\t\td->irq_base = idata & 0xf8;\n\t\t\t\t/*  This happens on non-x86 machines:\n\t\t\t\t    if (idata & 7)\n\t\t\t\t\tfatal(\"[ 8259: WARNING! Lowest\"\n\t\t\t\t\t    \" bits in Init Cmd 1 are\"\n\t\t\t\t\t    \" non-zero! ]\\n\");  */\n\t\t\t\td->init_state = 2;\n\t\t\t} else if (d->init_state == 2) {",
+    "new": "\t\t\tif ((d->init_state & 0xff) == 1) {\n\t\t\t\td->irq_base = idata & 0xf8;\n\t\t\t\t/*  This happens on non-x86 machines:\n\t\t\t\t    if (idata & 7)\n\t\t\t\t\tfatal(\"[ 8259: WARNING! Lowest\"\n\t\t\t\t\t    \" bits in Init Cmd 1 are\"\n\t\t\t\t\t    \" non-zero! ]\\n\");  */\n\t\t\t\tif (d->init_state & 0x200)\n\t\t\t\t\td->init_state = (d->init_state & 0x100) ? 3 : 0;\n\t\t\t\telse\n\t\t\t\t\td->init_state = (d->init_state & 0xff00) | 2;\n\t\t\t} else if ((d->init_state & 0xff) == 2) {",
+    "why": "Skip ICW3 if SNGL (bit 1 of ICW1, now 0x200 in init_state) is set, proceeding to ICW4 or finishing."
+  },
+  {
+    "file": "src/devices/dev_8259.c",
+    "old": "\t\t\t} else if (d->init_state == 2) {\n\t\t\t\t/*  Slave attachment. TODO  */\n\t\t\t\td->init_state = 3;\n\t\t\t} else if (d->init_state == 3) {",
+    "new": "\t\t\t} else if ((d->init_state & 0xff) == 2) {\n\t\t\t\t/*  Slave attachment. TODO  */\n\t\t\t\td->init_state = (d->init_state & 0x100) ? 3 : 0;\n\t\t\t} else if ((d->init_state & 0xff) == 3) {",
+    "why": "Skip ICW4 if IC4 (bit 0 of ICW1, now 0x100 in init_state) is not set."
+  }
+]
+```
+
+The fix deliberately does NOT change the underlying data structures, encoding the flags from ICW1 directly into the higher bits of `init_state` so the guest's expected sequence is correctly followed without expanding the size or members of `struct pic8259_data`. I could not settle the exact target platforms GXemul is run on, but x86 conventions for SNGL and IC4 have been safely approximated.
+
+P-GWEBFIXI8259ICW4-bae9
+GWEBFIXI8259ICW4: 0 ATTACKS 0 BROKEN 0 HOLDS 0 UNSETTLED DRAFTABLE:YES

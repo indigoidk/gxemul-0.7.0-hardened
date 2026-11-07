@@ -25,7 +25,7 @@ For the oldest rows proposed FIX-NOW that carry no commit and cite a source line
 earlier fix draft excluded): one packet per row with HEAD's code at each cited line (and, from the second version of the
 packet, the data structures it names), asking whether the defect is still present and for the minimal fix as exact edits.
 101 answered.  Each "still present" draft was applied to a scratch clone at HEAD and built (`fixcheck_all.sh`):
-APPLY_FAIL 1, BUILD_OK 74, SKIP 26 (`fixes/fixcheck_results.tsv`).  BUILD_OK means applied once per edit and compiled with no new error -- NOT reviewed, NOT
+APPLY_FAIL 1, BUILD_OK 74, SKIP 26 (`fixes/fixcheck_results.tsv`). [2026-11-07, records: 4 of these 74 applied NO edit (an empty edit list, scored BUILD_OK on an unchanged HEAD) and 3 change only a comment where the defect is in code -- 67 are real fixes; the check now scores NO_EDITS, and `regress/artifacts/geminidrafts/drafts_20261107b/SUMMARY.md` carries the current counts]  BUILD_OK means applied once per edit and compiled with no new error -- NOT reviewed, NOT
 witnessed, NOT measured; each still needs the round's full process.
 
 ## 3. The attachment budget -- `attachments/`

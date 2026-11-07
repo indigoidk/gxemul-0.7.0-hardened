@@ -1,0 +1,25 @@
+1. **Review Findings Evaluation:**
+* `src/core/memory.c:UNSETTLED`: UNSETTLED. The necessity of applying the out-of-bounds memory fix to `src/core/memory.c` cannot be evaluated because `src/core/memory.c` is not provided in this packet. 
+* `src/cpus/memory_rw.c:701`: ACCEPT. The previous diff fails to raise the required bus error. Lines 614-642 show the necessary M88K idiom (setting `CMMU_PFSR` and `CMMU_PFAR`, then calling `m88k_exception`) which must be explicitly replicated on this path before returning `MEMORY_ACCESS_FAILED`.
+* `src/cpus/memory_rw.c:700`: REJECT. The review claims the diff introduced the tag `/* #1: ... */`, but the provided previous draft text clearly used `/* #T38: ... */`. The premise of this style critique is factually broken.
+
+2. STILL PRESENT: YES -- `src/cpus/memory_rw.c:695-698` (the previous draft's unconditional `return MEMORY_ACCESS_FAILED;` drops the access without raising the required M88K exception).
+
+3. 
+```json
+[
+  {
+    "file": "src/cpus/memory_rw.c",
+    "old": "\t\t\tif (paddr >= mem->physical_max && !no_exceptions)\n\t\t\t\tif (memory_warn_about_unimplemented_addr\n\t\t\t\t    (cpu, mem, writeflag, paddr, len))\n\t\t\t\t\treturn MEMORY_ACCESS_FAILED;",
+    "new": "\t\t\tif (paddr >= mem->physical_max && !no_exceptions) {\n\t\t\t\tmemory_warn_about_unimplemented_addr\n\t\t\t\t    (cpu, mem, writeflag, paddr, len);\n#ifdef MEM_M88K\n\t\t\t\t/* #m88koutsideram: 88K access beyond RAM must raise a bus error for SVR4 sizing */\n\t\t\t\t{\n\t\t\t\t\tstruct m8820x_cmmu *cmmu =\n\t\t\t\t\t    cpu->cd.m88k.cmmu[cache ==\n\t\t\t\t\t    CACHE_INSTRUCTION ? 0 : 1];\n\t\t\t\t\tif (cmmu != NULL) {\n\t\t\t\t\t\tcmmu->reg[CMMU_PFSR] =\n\t\t\t\t\t\t    CMMU_PFSR_BERROR << 16;\n\t\t\t\t\t\tcmmu->reg[CMMU_PFAR] =\n\t\t\t\t\t\t    (uint32_t) paddr;\n\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t\tm88k_exception(cpu, cache == CACHE_INSTRUCTION\n\t\t\t\t    ? M88K_EXCEPTION_INSTRUCTION_ACCESS\n\t\t\t\t    : M88K_EXCEPTION_DATA_ACCESS, 0);\n#endif\n\t\t\t\treturn MEMORY_ACCESS_FAILED;\n\t\t\t}",
+    "why": "Raise the M88K bus error exception and set CMMU fault registers before failing the out-of-bounds memory access, fixing SVR4 memory sizing."
+  }
+]
+```
+
+4. The fix deliberately does not change the out-of-bounds memory handling for MIPS or other architectures, ensuring their unwritten read results (zeros) or existing exceptions remain untouched, and it leaves `NO_EXCEPTIONS` callers structurally intact so memory probing/dumping utilities won't artificially trigger exceptions.
+
+REVISION_M88KOUTSIDERAM: 1 ACCEPTED, 1 REJECTED
+FIXDRAFT_M88KOUTSIDERAM: YES PRESENT, 1 EDITS
+P-GWEBFIXM88KOUTSIDERAM-6c98
+GWEBFIXM88KOUTSIDERAM: 3 ATTACKS 1 BROKEN 1 HOLDS 1 UNSETTLED DRAFTABLE:NO

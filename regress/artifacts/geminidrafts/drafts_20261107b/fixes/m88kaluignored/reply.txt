@@ -1,0 +1,33 @@
+ACCEPT: finding 1 correctly identifies that the side-effect retention logic for register `r0` matches against the raw `(iword >> 8) & 0xff` value (line 3734), which will fail for `divu`, `mul`, and `div` if bits 9:8 are non-zero.
+ACCEPT: finding 2 correctly calculates that the inline comment combined with the ternary operator pushes the line beyond the 79-column limit.
+STILL PRESENT: YES -- src/cpus/cpu_m88k_instr.c:3660
+
+```json
+[
+  {
+    "file": "src/cpus/cpu_m88k_instr.c",
+    "old": "\t\t\t}\n\t\t} else switch ((iword >> 8) & 0xff) {\n\t\tcase 0x40:\t/*  and    */",
+    "new": "\t\t\t}\n\t\t\t/* #m88kaluignored: mask bits 9:8 for div/mul/cmp */\n\t\t} else switch ((((iword >> 8) & 0xe8) == 0x68) ?\n\t\t    ((iword >> 8) & 0xfc) : ((iword >> 8) & 0xff)) {\n\t\tcase 0x40:\t/*  and    */",
+    "why": "Mask undecoded bits 9:8 for divu, mul, div, cmp so they route to their correct cases without exceeding 79 columns."
+  },
+  {
+    "file": "src/cpus/cpu_m88k_instr.c",
+    "old": "\t\t\tic->arg[2] = (size_t) &cpu->cd.m88k.r[s2];\n\n\t\t\tswitch ((iword >> 8) & 0xff) {\n\t\t\tcase 0x40: ic->f = instr(and);   break;",
+    "new": "\t\t\tic->arg[2] = (size_t) &cpu->cd.m88k.r[s2];\n\n\t\t\t/* #m88kaluignored: apply identical filter */\n\t\t\tswitch ((((iword >> 8) & 0xe8) == 0x68) ?\n\t\t\t    ((iword >> 8) & 0xfc) : ((iword >> 8) & 0xff)) {\n\t\t\tcase 0x40: ic->f = instr(and);   break;",
+    "why": "Apply the identical filter to the secondary switch to ensure it also binds the correct execution handler."
+  },
+  {
+    "file": "src/cpus/cpu_m88k_instr.c",
+    "old": "\t\t\t\tif (opc != 0x61 /* addu.co */ && opc != 0x63 /* addu.cio */ &&\n\t\t\t\t    opc != 0x65 /* subu.co */ && opc != 0x67 /* subu.cio */ &&\n\t\t\t\t    opc != 0x71 /*  add.co */ && opc != 0x73 /*  add.cio */ &&\n\t\t\t\t    opc != 0x75 /*  sub.co */ && opc != 0x77 /*  sub.cio */ &&\n\t\t\t\t    opc != 0x68 /*  divu   */ && opc != 0x69 /* divu.d   */ &&\n\t\t\t\t    opc != 0x6c /*  mul    */ && opc != 0x6d /* mulu.d   */ &&\n\t\t\t\t    opc != 0x6e /*  muls   */ && opc != 0x78 /*  div     */)\n\t\t\t\t\tic->f = instr(nop);",
+    "new": "\t\t\t\t/* #m88kaluignored: mask bits 9:8 to retain side effects */\n\t\t\t\topc = ((opc & 0xe8) == 0x68) ? (opc & 0xfc) : opc;\n\t\t\t\tif (opc != 0x61 /* addu.co */ && opc != 0x63 /* addu.cio */ &&\n\t\t\t\t    opc != 0x65 /* subu.co */ && opc != 0x67 /* subu.cio */ &&\n\t\t\t\t    opc != 0x71 /*  add.co */ && opc != 0x73 /*  add.cio */ &&\n\t\t\t\t    opc != 0x75 /*  sub.co */ && opc != 0x77 /*  sub.cio */ &&\n\t\t\t\t    opc != 0x68 /*  divu   */ && opc != 0x69 /* divu.d   */ &&\n\t\t\t\t    opc != 0x6c /*  mul    */ && opc != 0x6d /* mulu.d   */ &&\n\t\t\t\t    opc != 0x6e /*  muls   */ && opc != 0x78 /*  div     */)\n\t\t\t\t\tic->f = instr(nop);",
+    "why": "Filter opc for side-effect retention logic so instructions with ignored bits 9:8 aren't erroneously overwritten with nop."
+  }
+]
+```
+
+The fix deliberately does not alter other instruction encodings or remove the defect tracking for other unresolved m88k unimplemented handlers.
+REVISION_M88KALUIGNORED: 2 ACCEPTED, 0 REJECTED
+FIXDRAFT_M88KALUIGNORED: YES PRESENT, 3 EDITS
+
+P-GWEBFIXM88KALUIGNORED-0ac9
+GWEBFIXM88KALUIGNORED: 2 ATTACKS 0 BROKEN 2 HOLDS 0 UNSETTLED DRAFTABLE:YES

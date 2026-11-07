@@ -1,0 +1,24 @@
+STILL PRESENT: YES -- `if (d->init_state == 1) {` at 233
+
+```json
+[
+  {
+    "file": "src/devices/dev_8259.c",
+    "old": "\t\t\t\t/*  This happens on non-x86 systems:\n\t\t\t\t    if (!(idata & 0x01))\n\t\t\t\t\tfatal(\"[ 8259: WARNING: Bit 0 NOT set!\"\n\t\t\t\t\t    \"!! ]\\n\");  */\n\t\t\t\td->init_state = 1;\n\t\t\t\tbreak;",
+    "new": "\t\t\t\t/*  This happens on non-x86 systems:\n\t\t\t\t    if (!(idata & 0x01))\n\t\t\t\t\tfatal(\"[ 8259: WARNING: Bit 0 NOT set!\"\n\t\t\t\t\t    \"!! ]\\n\");  */\n\t\t\t\td->init_state = 1 | ((idata & 3) << 8);\n\t\t\t\tbreak;",
+    "why": "Save ICW1's SNGL (bit 1) and IC4 (bit 0) into upper bits of init_state"
+  },
+  {
+    "file": "src/devices/dev_8259.c",
+    "old": "\t\tif (d->init_state > 0) {\n\t\t\tif (d->init_state == 1) {\n\t\t\t\td->irq_base = idata & 0xf8;\n\t\t\t\t/*  This happens on non-x86 machines:\n\t\t\t\t    if (idata & 7)\n\t\t\t\t\tfatal(\"[ 8259: WARNING! Lowest\"\n\t\t\t\t\t    \" bits in Init Cmd 1 are\"\n\t\t\t\t\t    \" non-zero! ]\\n\");  */\n\t\t\t\td->init_state = 2;\n\t\t\t} else if (d->init_state == 2) {\n\t\t\t\t/*  Slave attachment. TODO  */\n\t\t\t\td->init_state = 3;\n\t\t\t} else if (d->init_state == 3) {",
+    "new": "\t\tif (d->init_state > 0) {\n\t\t\tint state = d->init_state & 0xff;\n\t\t\tif (state == 1) {\n\t\t\t\td->irq_base = idata & 0xf8;\n\t\t\t\t/*  This happens on non-x86 machines:\n\t\t\t\t    if (idata & 7)\n\t\t\t\t\tfatal(\"[ 8259: WARNING! Lowest\"\n\t\t\t\t\t    \" bits in Init Cmd 1 are\"\n\t\t\t\t\t    \" non-zero! ]\\n\");  */\n\t\t\t\tif (d->init_state & 0x200)\n\t\t\t\t\td->init_state = (d->init_state & 0x100) ? 3 : 0;\n\t\t\t\telse\n\t\t\t\t\td->init_state = (d->init_state & 0xff00) | 2;\n\t\t\t} else if (state == 2) {\n\t\t\t\t/*  Slave attachment. TODO  */\n\t\t\t\td->init_state = (d->init_state & 0x100) ? 3 : 0;\n\t\t\t} else if (state == 3) {",
+    "why": "Extract state, skip ICW3 if SNGL is set, and skip ICW4 if IC4 is clear, finishing init."
+  }
+]
+```
+
+The fix does not add struct fields, keeping the save-file layout identical.
+It assumes `init_state` is a 32-bit integer wide enough to hold bit 9.
+
+P-GWEBFIXI8259ICW4-9144
+GWEBFIXI8259ICW4: 1 ATTACKS 1 BROKEN 0 HOLDS 0 UNSETTLED DRAFTABLE:YES

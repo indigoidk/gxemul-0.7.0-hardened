@@ -1,0 +1,33 @@
+1. STILL PRESENT: YES -- `src/promemul/of.c:1098`
+
+2. ```json
+[
+  {
+    "file": "src/promemul/of.c",
+    "old": "\tif (of_data == NULL) {\n\t\tfatal(\"of_emul(): no of_data struct?\\n\");\n\t\texit(1);\n\t}",
+    "new": "\tif (of_data == NULL) {\n\t\t/* #3399: guest-reachable diagnostic must not exit */\n\t\tstatic int warned = 0;\n\t\tif (!warned) {\n\t\t\tfatal(\"of_emul(): no of_data struct? (once)\\n\");\n\t\t\twarned = 1;\n\t\t}\n\t\treturn 0;\n\t}",
+    "why": "Replaces the unbounded fatal() and exit(1) with a latched, one-time announcement as requested by the house idiom."
+  }
+]
+```
+
+3. What the fix deliberately does not change & Claim Refutations:
+The fix deliberately does not change the callers (`src/cpus/cpu_arm_instr.c:988-996` and `src/cpus/cpu_ppc_instr.c:3969-3977`) or the unprovided decoder switches. 
+
+**Defensive Review (Addressing `## WHAT TO RETURN` instructions):**
+The prompt instructs to "PREFER the single site both callers share" and to "Say what `of_emul()`'s return value means to each caller as the code shows it, and keep each caller's behaviour after the call correct." 
+As the code shows, `of_emul()`'s return value means **NOTHING** to the callers; it is completely ignored (`of_emul(cpu);` as a void expression at lines 991 and 3971). Because of this, inserting an early return inside `of_emul()` unconditionally triggers the callers' tails. On machines without OpenFirmware, executing the callers' tails arbitrarily jumps to the link register (`cpu->pc = cpu->cd.arm.r[ARM_LR];` and `cpu->pc = cpu->cd.ppc.spr[SPR_LR];`), corrupting the PC instead of falling through to the architectural SWI/sc fault. This breaks guest state, proving the instruction to 'keep each caller's behaviour correct' via the shared guard is logically impossible. A safe fix requires gating at the decoders (as correctly noted in ARGON SCOPING), making this localized strategy UNDRAFTABLE.
+
+**Testing the Commit Message Claims:**
+*   **CLAIM 1:** "the OpenFirmware emulation entry calls fatal() + exit(1) when machine->md.of_data is NULL" -> **HOLDS** (`src/promemul/of.c:1098-1101`).
+*   **CLAIM 2:** "which is true on every machine except macppc with PROM emulation on" -> **UNSETTLED** (requires `machine_macppc.c`).
+*   **CLAIM 3:** "the ARM and PowerPC decoders route their OpenFirmware magic instruction to it with no machine or privilege check" -> **HOLDS** (no checks exist in `X(openfirmware)` at `src/cpus/cpu_arm_instr.c:988-991` or `src/cpus/cpu_ppc_instr.c:3969-3971`).
+*   **CLAIM 4:** "of.c:1078 (the only writer, of_emul_init, called only from machine_macppc.c:99)" -> **UNSETTLED** (`machine_macppc.c` is not provided).
+*   **CLAIM 5:** "ARM decode cpu_arm_instr.c:5034-5036 -> X(openfirmware) :988-991" -> **UNSETTLED** (lines 5034-5036 are not provided).
+*   **CLAIM 6:** "PowerPC decode cpu_ppc_instr.c:4400-4402 -> X(openfirmware) :3956-3958" -> **BROKEN** (`X(openfirmware)` is defined at `src/cpus/cpu_ppc_instr.c:3969`, not 3956).
+*   **CLAIM 7:** "whose callers' tails then jump to the link register as if the call had returned" -> **HOLDS** (`src/cpus/cpu_arm_instr.c:992` and `src/cpus/cpu_ppc_instr.c:3973` perform these exact jumps).
+*   **CLAIM 8:** "Both decoders reach the defect through ONE function" -> **HOLDS** (both wrappers call `of_emul()`).
+*   **CLAIM 9:** "of.c:549, :577, :1120 and :1201 are UNREACHABLE" -> **UNSETTLED** (requires the full codebase to definitively prove the arch-switch defaults cannot be hit).
+
+P-GWEBFIXOFEMULNODATA-3399
+GWEBFIXOFEMULNODATA: 9 ATTACKS 1 BROKEN 4 HOLDS 4 UNSETTLED DRAFTABLE:NO

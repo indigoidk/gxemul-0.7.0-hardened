@@ -1,0 +1,23 @@
+1. ACCEPT `src/disk/diskimage_scsicmd.c:370` DEFECT: The emulator successfully processes the SCSI command and returns `1` via the common exit path (line 1388), and uses `break;` in other commands like `TEST_UNIT_READY` (line 357) after setting the error status.
+2. REJECT `src/disk/diskimage_scsicmd.c:364` STYLE: The provided code does not use a static latch or `(once)` idiom anywhere, such as in the nearly identical `TEST_UNIT_READY` warning (lines 351-354).
+
+STILL PRESENT: YES -- 363
+
+```json
+[
+  {
+    "file": "src/disk/diskimage_scsicmd.c",
+    "old": "\t\tif (xferp->cmd[1] != 0x00) {\n\t\t\tdebugmsg(SUBSYS_DISK, \"scsi\", VERBOSITY_WARNING,\n\t\t\t    \"WARNING: INQUIRY with cmd[1]=0x%02x not yet \"\n\t\t\t    \"implemented\", (int)xferp->cmd[1]);\n\t\t}",
+    "new": "\t\tif (xferp->cmd[1] != 0x00) {\n\t\t\tdebugmsg(SUBSYS_DISK, \"scsi\", VERBOSITY_WARNING,\n\t\t\t    \"WARNING: INQUIRY with cmd[1]=0x%02x not yet \"\n\t\t\t    \"implemented\", (int)xferp->cmd[1]);\n\t\t\t/* #T77: Decline EVPD with Check Condition instead of standard data */\n\t\t\tdiskimage__return_default_status_and_message(xferp, d);\n\t\t\txferp->status[0] = 0x02;\n\t\t\tbreak;\n\t\t}",
+    "why": "Decline non-zero cmd[1] requests (like EVPD) with Check Condition to prevent returning standard INQUIRY data when VPD pages are requested."
+  }
+]
+```
+
+The fix deliberately does not implement the actual EVPD responses, nor does it address the lack of error handling in other commands or missing static latches on debug messages, focusing only on preventing incorrect standard INQUIRY data from being returned.
+
+REVISION_SCSIEVPD: 1 ACCEPTED, 1 REJECTED
+FIXDRAFT_SCSIEVPD: YES PRESENT, 1 EDITS
+
+P-GWEBFIXSCSIEVPD-1407
+GWEBFIXSCSIEVPD: 5 ATTACKS 1 BROKEN 4 HOLDS 0 UNSETTLED DRAFTABLE:YES

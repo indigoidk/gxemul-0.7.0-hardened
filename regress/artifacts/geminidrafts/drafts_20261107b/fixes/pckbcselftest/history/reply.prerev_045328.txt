@@ -1,0 +1,26 @@
+STILL PRESENT: YES -- src/devices/dev_pckbc.c:1056-1061
+
+```json
+[
+  {
+    "file": "src/devices/dev_pckbc.c",
+    "old": "\t\t\tcase 0xa9:\t/*  test auxiliary port  */\n\t\t\t\tdebug(\"[ pckbc: CONTROL 0xa9, TODO ]\\n\");\n\t\t\t\tbreak;\n\t\t\tcase 0xaa:\t/*  keyboard self-test  */\n\t\t\t\tpckbc_add_code(d, 0x55, port_nr);\n\t\t\t\tbreak;",
+    "new": "\t\t\tcase 0xa9:\t/*  test auxiliary port  */\n\t\t\t\t/* #T54: flush aux queue, return success 0x00 */\n\t\t\t\td->head[1] = d->tail[1] = 0;\n\t\t\t\tpckbc_add_code(d, 0x00, port_nr);\n\t\t\t\tbreak;\n\t\t\tcase 0xaa:\t/*  keyboard self-test  */\n\t\t\t\t/* #T54: flush all output queues */\n\t\t\t\td->head[0] = d->tail[0] = 0;\n\t\t\t\td->head[1] = d->tail[1] = 0;\n\t\t\t\tpckbc_add_code(d, 0x55, port_nr);\n\t\t\t\tbreak;",
+    "why": "0xA9 now flushes the auxiliary port output queue and queues a 0x00 success reply; 0xAA now flushes all output queues before queueing its 0x55 success reply."
+  }
+]
+```
+
+**What the fix deliberately does NOT change, and unsettled items:**
+* The fix does not touch keyboard `0xFF` handling (reset/self-test). This part of the issue is UNSETTLED because the data port handling (`case 0:`) or the keyboard specific command handler (`dev_pckbc_command`) is not included in the provided code text.
+* The fix assumes port 1 is the auxiliary (mouse) queue and port 0 is the primary (keyboard) queue, based on standard PC KBC mapping and the usage of `d->head[2]`.
+
+**Review of claims:**
+* CLAIM: "0xA9 queues no reply" -- HOLDS. In `src/devices/dev_pckbc.c:1056-1058`, it only calls `debug` and breaks without calling `pckbc_add_code`.
+* CLAIM: "self-test/reset do not flush the output queues" -- HOLDS. In `src/devices/dev_pckbc.c:1059-1061`, it calls `pckbc_add_code(d, 0x55, port_nr)` but does not touch `d->head` or `d->tail`.
+* CLAIM: "keyboard 0xFF" has WRONG-RESULT -- UNSETTLED. Missing data port handling logic in `src/devices/dev_pckbc.c`.
+
+FIXDRAFT_PCKBCSELFTEST: YES PRESENT, 1 EDITS
+
+P-GWEBFIXPCKBCSELFTEST-cb71
+GWEBFIXPCKBCSELFTEST: 3 ATTACKS 0 BROKEN 2 HOLDS 1 UNSETTLED DRAFTABLE:YES

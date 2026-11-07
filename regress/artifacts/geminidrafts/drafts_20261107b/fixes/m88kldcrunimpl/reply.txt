@@ -1,0 +1,26 @@
+1. Finding 1: ACCEPT, the draft removes `cpu->running = false;` at 506 and `return;` at 507.
+2. Finding 2: ACCEPT, adding `break;` falls through to `*r32ptr = retval;` at 510.
+3. Finding 3: ACCEPT, line 434 shows the signature is `void m88k_ldcr(...)`.
+4. Finding 4: ACCEPT, `retval` is assigned at 436 and passed through to 510, while `debugmsg_cpu` is called in the `default` case at 503.
+5. Finding 5: ACCEPT, replacing the unconditional `debugmsg_cpu` with a static boolean latch prevents log spam. The packet shows `false`/`true` are valid boolean literals (lines 472, 480).
+
+STILL PRESENT: YES -- 506: `cpu->running = false;`
+
+```json
+[
+  {
+    "file": "src/cpus/cpu_m88k.c",
+    "old": "\tdefault:debugmsg_cpu(cpu, SUBSYS_CPU, \"m88k\", VERBOSITY_ERROR,\n\t\t    \"ldcr: UNIMPLEMENTED cr = 0x%02x (%s)\\n\",\n\t\t    cr, m88k_cr_name(cpu, cr));\n\t\tcpu->running = false;\n\t\treturn;",
+    "new": "\tdefault: {\n\t\t\tstatic bool warned = false;\n\t\t\tif (!warned) {\n\t\t\t\tdebugmsg_cpu(cpu, SUBSYS_CPU, \"m88k\", VERBOSITY_ERROR,\n\t\t\t\t    \"ldcr: UNIMPLEMENTED cr = 0x%02x (%s)\\n\",\n\t\t\t\t    cr, m88k_cr_name(cpu, cr));\n\t\t\t\twarned = true;\n\t\t\t}\n\t\t}\n\t\t/* #m88kldcrunimpl: ignore unimplemented register reads to avoid crashing */\n\t\tbreak;",
+    "why": "Prevent emulator termination on unimplemented control register loads and throttle warnings to prevent log spam."
+  }
+]
+```
+
+The fix deliberately does not change the other case arms or the initial `retval` lookup from the CPU state, preserving existing semantics for recognized registers and internal state error checks.
+
+REVISION_M88KLDCRUNIMPL: 5 ACCEPTED, 0 REJECTED
+FIXDRAFT_M88KLDCRUNIMPL: YES PRESENT, 1 EDITS
+
+P-GWEBFIXM88KLDCRUNIMPL-319c
+GWEBFIXM88KLDCRUNIMPL: 5 ATTACKS 0 BROKEN 5 HOLDS 0 UNSETTLED DRAFTABLE:NO

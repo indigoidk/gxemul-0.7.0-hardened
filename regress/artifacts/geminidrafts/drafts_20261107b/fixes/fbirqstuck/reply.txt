@@ -1,0 +1,31 @@
+1. ACCEPT - The issue states `footbridge_interrupt_deassert` (called by `INTERRUPT_DEASSERT`) checks `d->irq_asserted`, so clearing it beforehand will cause the deassertion to be skipped.
+2. ACCEPT - No control flow altering keywords were added.
+3. ACCEPT - The return values remain identical.
+4. ACCEPT - The clearing of `d->irq_asserted` before `INTERRUPT_DEASSERT` inadvertently suppressed the logic.
+5. ACCEPT - The edits respect the existing idioms.
+
+STILL PRESENT: YES -- `src/devices/dev_footbridge.c:603` and `src/devices/dev_footbridge.c:620` (as modified by the previous draft, the condition to assert/deassert lacks proper state tracking ordering)
+
+```json
+[
+  {
+    "file": "src/devices/dev_footbridge.c",
+    "old": "\t\t\td->irq_enable |= idata;\n\t\t\tif (d->irq_status & d->irq_enable)\n\t\t\t\tINTERRUPT_ASSERT(d->irq);\n\t\t\telse\n\t\t\t\tINTERRUPT_DEASSERT(d->irq);",
+    "new": "\t\t\td->irq_enable |= idata;\n\t\t\tif (d->irq_status & d->irq_enable) {\n\t\t\t\td->irq_asserted = 1;\n\t\t\t\tINTERRUPT_ASSERT(d->irq);\n\t\t\t} else {\n\t\t\t\tINTERRUPT_DEASSERT(d->irq);\n\t\t\t\td->irq_asserted = 0;\n\t\t\t}",
+    "why": "Track the asserted state, ensuring d->irq_asserted is cleared only after INTERRUPT_DEASSERT uses it."
+  },
+  {
+    "file": "src/devices/dev_footbridge.c",
+    "old": "\t\t\td->irq_enable &= ~idata;\n\t\t\tif (d->irq_status & d->irq_enable)\n\t\t\t\tINTERRUPT_ASSERT(d->irq);\n\t\t\telse\n\t\t\t\tINTERRUPT_DEASSERT(d->irq);",
+    "new": "\t\t\td->irq_enable &= ~idata;\n\t\t\tif (d->irq_status & d->irq_enable) {\n\t\t\t\td->irq_asserted = 1;\n\t\t\t\tINTERRUPT_ASSERT(d->irq);\n\t\t\t} else {\n\t\t\t\tINTERRUPT_DEASSERT(d->irq);\n\t\t\t\td->irq_asserted = 0;\n\t\t\t}",
+    "why": "Track the asserted state, ensuring d->irq_asserted is cleared only after INTERRUPT_DEASSERT uses it."
+  }
+]
+```
+
+The fix deliberately does not change the other registers or their unimplemented/warn-only behaviors, nor does it alter `FIQ_ENABLE_SET` or `FIQ_ENABLE_CLEAR` which may also require similar tracking but are outside the scope of the reported `fbirqstuck` issue.
+
+REVISION_FBIRQSTUCK: 5 ACCEPTED, 0 REJECTED
+FIXDRAFT_FBIRQSTUCK: YES PRESENT, 2 EDITS
+P-GWEBFIXFBIRQSTUCK-6e4a
+GWEBFIXFBIRQSTUCK: 5 ATTACKS 0 BROKEN 5 HOLDS 0 UNSETTLED DRAFTABLE:YES

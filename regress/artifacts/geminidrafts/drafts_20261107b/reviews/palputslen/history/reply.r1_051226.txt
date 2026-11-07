@@ -1,0 +1,29 @@
+FIXREVIEW_PALPUTSLEN: DEFECT, 2 FINDINGS
+
+1. Does the diff remove the defect the issue describes, at every site the issue names?
+No. The diff attempts to handle wrapped sums by setting `len = -a2`, but `a2 + len` then evaluates to `0`. The loop condition `addr < a2 + len` becomes `addr < 0`, which is always false for unsigned integers, so the loop still executes zero times and prints nothing. It also fails to fix the "WRONG-RESULT" because it still unconditionally returns `a3` on line 123, even when the output is capped or wrapped.
+
+2. CONTROL FLOW: does any added `return`, `goto`, `break` or early exit skip code the function would otherwise run?
+No. The diff only introduces variable assignments and conditional checks; it adds no jumps or early exits.
+
+3. RETURN VALUE: does any path now return something different?
+No. The function still places the original uncapped `a3` value into `ALPHA_V0` on line 123.
+
+4. What ELSE does the diff change -- state left set or cleared, a value the guest can now see, a message on a path that did not print one -- beyond removing the defect?
+It limits the actual memory reads and `console_putchar` calls to 65536 per invocation, reducing potential I/O hangs, but silently truncates the output since the guest still receives the full original length as the return value.
+
+5. House idioms (low severity):
+The new comment `/* #palputslen: length cap */` adheres to the required `/* #NNN: ... */` tagging idiom, and all modified lines stay well within the 79-column limit.
+
+`src/cpus/cpu_alpha_palcode.c:117`
+Severity: DEFECT
+Description: When `len = -a2`, `a2 + len` overflows to `0`, making `addr < 0` false, so it still prints nothing on wrap.
+Smallest fix: `for (addr = a2; len > 0; len--, addr++) {`
+
+`src/cpus/cpu_alpha_palcode.c:123`
+Severity: DEFECT
+Description: The function continues to return the original guest-supplied `a3` length even if the operation was capped or wrapped, perpetuating the WRONG-RESULT.
+Smallest fix: `cpu->cd.alpha.r[ALPHA_V0] = original_len_to_return;` (requires saving the executed `len` before the loop).
+
+P-GWEBREVPALPUTSLEN-bd43
+GWEBREVPALPUTSLEN: 4 ATTACKS 0 BROKEN 4 HOLDS 0 UNSETTLED DRAFTABLE:NO

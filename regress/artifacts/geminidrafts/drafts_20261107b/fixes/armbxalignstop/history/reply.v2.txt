@@ -1,0 +1,29 @@
+STILL PRESENT: YES -- 367
+
+```json
+[
+  {
+    "file": "src/cpus/cpu_arm_instr.c",
+    "old": "\tif (cpu->pc & 2 && ((cpu->pc & 1) == 0)) {\n\t\tfatal(\"[ ARM pc misaligned? 0x%08x ]\\n\", (int)cpu->pc);\n\t\tcpu->running = 0;\n\t\tcpu->n_translated_instrs --;\n\t\tcpu->cd.arm.next_ic = &nothing_call;\n\t\treturn;\n\t}\n\n\t/*  Find the new physical page and update the translation pointers:  */",
+    "new": "\tif (cpu->pc & 2 && ((cpu->pc & 1) == 0)) {\n\t\t/* #001: ARM ARM forbids a halt on misaligned pc */\n\t\tfatal(\"[ ARM pc misaligned? 0x%08x ]\\n\", (int)cpu->pc);\n\t}\n\n\t/*  Find the new physical page and update the translation pointers:  */",
+    "why": "Remove CPU halt on UNPREDICTABLE misaligned BX target"
+  },
+  {
+    "file": "src/cpus/cpu_arm_instr.c",
+    "old": "\tif (cpu->pc & 2 && ((cpu->pc & 1) == 0)) {\n\t\tfatal(\"[ ARM pc misaligned? 0x%08x ]\\n\", (int)cpu->pc);\n\t\tcpu->running = 0;\n\t\tcpu->n_translated_instrs --;\n\t\tcpu->cd.arm.next_ic = &nothing_call;\n\t\treturn;\n\t}\n\n\tcpu_functioncall_trace_return(cpu);",
+    "new": "\tif (cpu->pc & 2 && ((cpu->pc & 1) == 0)) {\n\t\t/* #002: ARM ARM forbids a halt on misaligned pc */\n\t\tfatal(\"[ ARM pc misaligned? 0x%08x ]\\n\", (int)cpu->pc);\n\t}\n\n\tcpu_functioncall_trace_return(cpu);",
+    "why": "Remove CPU halt on UNPREDICTABLE misaligned BX_trace target"
+  }
+]
+```
+
+**What the fix deliberately does NOT change:**
+- It does not remove or alter the warning message printed to the console via `fatal` (which in GXemul typically only logs and does not forcefully exit the emulator process). 
+- It does not force-align `cpu->pc` to a 4-byte boundary, preserving the UNPREDICTABLE misaligned state as it flows into translation lookups. 
+- It leaves alone the identical redundant check inside `X(blx_imm)`, as that branch is structurally unreachable (the switch to THUMB mode guarantees `cpu->pc & 1` is true).
+
+**UNSETTLED:**
+- The issue explicitly cites `X(blx_reg)` containing the same defect, but the provided snippet cuts off at line 485 before the function body completes. The state of `X(blx_reg)` must be resolved in `src/cpus/cpu_arm_instr.c` to fully close the issue.
+
+P-GWEBFIXARMBXALIGNSTOP-b917
+GWEBFIXARMBXALIGNSTOP: 1 ATTACKS 0 BROKEN 0 HOLDS 1 UNSETTLED DRAFTABLE:YES

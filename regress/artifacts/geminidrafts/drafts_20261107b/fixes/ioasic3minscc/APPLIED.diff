@@ -1,0 +1,121 @@
+diff --git a/src/devices/dev_dec_ioasic.c b/src/devices/dev_dec_ioasic.c
+index 6b2ed1f3..51684a02 100644
+--- a/src/devices/dev_dec_ioasic.c
++++ b/src/devices/dev_dec_ioasic.c
+@@ -177,85 +177,57 @@ DEVICE_ACCESS(dec_ioasic)
+ 		debug("[ dec_ioasic: %s CSR, data=0x%08" PRIx64 " ]\n",
+ 			writeflag == MEM_WRITE ? "write to" : "read from",
+ 			(uint64_t)(writeflag == MEM_WRITE ? idata : odata));
+-#if 0
++		/* #NNN: uncomment and port to explicit fields */
+ 		if (writeflag == MEM_WRITE) {
+-			csr = d->reg[(IOASIC_CSR - IOASIC_SLOT_1_START) / 0x10];
++			uint32_t csr_val = d->csr;
+ 
+-			d->reg[(IOASIC_INTR - IOASIC_SLOT_1_START) / 0x10] &=
+-			    ~IOASIC_INTR_T2_PAGE_END;
++			d->intr &= ~IOASIC_INTR_T2_PAGE_END;
+ 
+-			if (csr & IOASIC_CSR_DMAEN_T2) {
+-				/*  Transmit data:  */
+-				curptr = (d->reg[(IOASIC_SCC_T2_DMAPTR -
+-				    IOASIC_SLOT_1_START) / 0x10] >> 3)
+-				    | ((d->reg[(IOASIC_SCC_T2_DMAPTR -
+-				    IOASIC_SLOT_1_START) / 0x10] & 0x1f) << 29);
+-				dma_len = 0x1000 - (curptr & 0xffc);
++			if (csr_val & IOASIC_CSR_DMAEN_T2) {
++				uint64_t curptr = (d->isdn_x_dmaptr >> 3)
++				    | ((d->isdn_x_dmaptr & 0x1f) << 29);
++				int dma_len = 0x1000 - (curptr & 0xffc);
+ 
+-				if ((curptr & 0xfff) == 0)
+-					break;
++				if ((curptr & 0xfff) != 0) {
++					if (d->dma_func[3] != NULL) {
++						d->dma_func[3](cpu,
++						    d->dma_func_extra[3], curptr,
++						    dma_len, 1);
++					}
+ 
+-				if (d->dma_func[3] != NULL) {
+-					d->dma_func[3](cpu,
+-					    d->dma_func_extra[3], curptr,
+-					    dma_len, 1);
+-				} else
+-					fatal("[ dec_ioasic: DMA tx: data @ "
+-					    "%08x, len %i bytes, but no "
+-					    "handler? ]\n", (int)curptr,
+-					    dma_len);
+-
+-				/*  and signal the end of page:  */
+-				d->reg[(IOASIC_INTR - IOASIC_SLOT_1_START) /
+-				    0x10] |= IOASIC_INTR_T2_PAGE_END;
+-
+-				d->reg[(IOASIC_CSR - IOASIC_SLOT_1_START) /
+-				    0x10] &= ~IOASIC_CSR_DMAEN_T2;
+-				curptr |= 0xfff;
+-				curptr ++;
+-
+-				d->reg[(IOASIC_SCC_T2_DMAPTR -
+-				    IOASIC_SLOT_1_START) / 0x10] = ((curptr <<
+-				    3) & ~0x1f) | ((curptr >> 29) & 0x1f);
++					d->intr |= IOASIC_INTR_T2_PAGE_END;
++					d->csr &= ~IOASIC_CSR_DMAEN_T2;
++					curptr |= 0xfff;
++					curptr ++;
++
++					d->isdn_x_dmaptr = ((curptr << 3) & ~0x1f)
++					    | ((curptr >> 29) & 0x1f);
++				}
+ 			}
+ 
+-			if (csr & IOASIC_CSR_DMAEN_R2) {
+-				/*  Receive data:  */
+-				curptr = (d->reg[(IOASIC_SCC_R2_DMAPTR -
+-				    IOASIC_SLOT_1_START) / 0x10] >> 3)
+-				    | ((d->reg[(IOASIC_SCC_R2_DMAPTR -
+-				    IOASIC_SLOT_1_START) / 0x10] & 0x1f) << 29);
+-				dma_len = 0x1000 - (curptr & 0xffc);
++			if (csr_val & IOASIC_CSR_DMAEN_R2) {
++				uint64_t curptr = (d->isdn_r_dmaptr >> 3)
++				    | ((d->isdn_r_dmaptr & 0x1f) << 29);
++				int dma_len = 0x1000 - (curptr & 0xffc);
++				int dma_res = 0;
+ 
+-				dma_res = 0;
+ 				if (d->dma_func[3] != NULL) {
+ 					dma_res = d->dma_func[3](cpu,
+ 					    d->dma_func_extra[3], curptr,
+ 					    dma_len, 0);
+-				} else
+-					fatal("[ dec_ioasic: DMA tx: data @ "
+-					    "%08x, len %i bytes, but no "
+-					    "handler? ]\n", (int)curptr,
+-					    dma_len);
++				}
+ 
+-				/*  and signal the end of page:  */
+ 				if (dma_res > 0) {
+ 					if ((curptr & 0x800) != ((curptr +
+ 					    dma_res) & 0x800))
+-						d->reg[(IOASIC_INTR -
+-						    IOASIC_SLOT_1_START) / 0x10]
+-						    |= IOASIC_INTR_R2_HALF_PAGE;
++						d->intr |= IOASIC_INTR_R2_HALF_PAGE;
+ 					curptr += dma_res;
+-/*					d->reg[(IOASIC_CSR - IOASIC_SLOT_1_START
+-					   ) / 0x10] &= ~IOASIC_CSR_DMAEN_R2; */
+-					d->reg[(IOASIC_SCC_R2_DMAPTR -
+-					    IOASIC_SLOT_1_START) / 0x10] =
+-					    ((curptr << 3) & ~0x1f) | ((curptr
+-					    >> 29) & 0x1f);
++					d->isdn_r_dmaptr = ((curptr << 3) & ~0x1f)
++					    | ((curptr >> 29) & 0x1f);
+ 				}
+ 			}
++			dec_ioasic_reassert(d);
+ 		}
+-#endif
+ 		break;
+ 
+ 	case IOASIC_INTR:

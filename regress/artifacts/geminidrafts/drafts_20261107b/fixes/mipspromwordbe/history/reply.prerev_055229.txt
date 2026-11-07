@@ -1,0 +1,29 @@
+STILL PRESENT: YES -- 303| 		store_32bit_word(cpu, 0xffffffff9fc00000ULL, 0x00c0de0d);
+
+```json
+[
+  {
+    "file": "src/cpus/cpu_mips.c",
+    "old": "\t\t *  Note: Specifically big-endian machines should override\n\t\t *  this, since the default MIPS CPU is little-endian!\n\t\t */\n\t\tstore_32bit_word(cpu, 0xffffffff9fc00000ULL, 0x00c0de0d);",
+    "new": "\t\t *  Note: The instruction translator detects the byte-swapped\n\t\t *  word for big-endian machines that do not override this.\n\t\t */\n\t\tstore_32bit_word(cpu, 0xffffffff9fc00000ULL, 0x00c0de0d);",
+    "why": "Update the comment to reflect that big-endian machines no longer need to manually override the little-endian PROM word"
+  },
+  {
+    "file": "src/cpus/cpu_mips_instr.c",
+    "old": "\tif (cpu->byte_order == EMUL_LITTLE_ENDIAN)\n\t\tiword = LE32_TO_HOST(iword);\n\telse\n\t\tiword = BE32_TO_HOST(iword);",
+    "new": "\tif (cpu->byte_order == EMUL_LITTLE_ENDIAN)\n\t\tiword = LE32_TO_HOST(iword);\n\telse {\n\t\tiword = BE32_TO_HOST(iword);\n\t\t/*  Fix for big-endian machines keeping the little-endian PROM word:  */\n\t\tif (iword == 0x0ddec000 && addr == 0xffffffff9fc00000ULL)\n\t\t\tiword = 0x00c0de0d;\n\t}",
+    "why": "Intercept the byte-swapped PROM word (decoded as JAL) on big-endian machines and correct it back to the BREAK instruction"
+  }
+]
+```
+
+What the fix deliberately does NOT change:
+- It deliberately does not move the `store_32bit_word` call to a later machine initialization phase (as proposed by the triage pass), because machine configuration files are outside the provided scope. Instead, it safely and dynamically intercepts the byte-swapped instruction during fetch without altering machine initialization sequences.
+- It leaves alone the initial PROM word storage and endianness initialization order in `mips_cpu_new`, ensuring memory state remains consistent with the original design.
+
+Unsettled:
+- Whether `baremips` or other big-endian machines explicitly overwrite this memory region later in ways that would require further endianness adjustments.
+
+FIXDRAFT_MIPSPROMWORDBE: YES PRESENT, 2 EDITS
+P-GWEBFIXMIPSPROMWORDBE-6ca4
+GWEBFIXMIPSPROMWORDBE: 0 ATTACKS 0 BROKEN 0 HOLDS 0 UNSETTLED DRAFTABLE:YES

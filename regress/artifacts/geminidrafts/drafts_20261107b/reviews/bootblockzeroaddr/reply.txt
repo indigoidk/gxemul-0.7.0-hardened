@@ -1,0 +1,24 @@
+FIXREVIEW_BOOTBLOCKZEROADDR: DEFECT, 2 FINDINGS
+
+1. Does the diff remove the defect the issue describes, at every site the issue names? Name any site it misses.
+Yes, the diff successfully removes the defect by replacing `exit(1);` with `return 0;` at the specified site `src/disk/bootblock.c:245-258`.
+
+2. CONTROL FLOW: does any added `return`, `goto`, `break` or early exit skip code the function would otherwise run -- above all its COMMON TAIL (for example, code after a switch that writes a read's result to the guest, then `return 1;`)? Quote the tail line it skips. An edit that skips the tail hands the guest an unwritten result.
+Yes. The added `return 0;` skips the function's common cleanup tail block `ret_ok:`, specifically skipping the tail line `free(bootblock_buf);` (line 558). It also skips the fallback Apple partition table check (line 540).
+
+3. RETURN VALUE: does any path now return something different? Say what the shown code implies the value means.
+Yes, the path previously terminated the host process abruptly with `exit(1)` and never returned. It now returns `0`. Based on other early exits in the function (e.g., line 181 "could not load disklabel", line 287 "Couldn't read the disk image"), returning `0` implies a failure to load the bootblock.
+
+4. What ELSE does the diff change -- state left set or cleared, a value the guest can now see, a message on a path that did not print one -- beyond removing the defect?
+Beyond removing the crash defect, the diff allows the host emulator process to stay alive and continue executing. As a result, the guest will now observe a failed boot attempt rather than an abrupt termination of the virtual machine. `bootblock_loadaddr` is modified to `0` prior to returning, but this was also true before the fix.
+
+5. House idioms (low severity): a diagnostic a guest can trigger repeatedly should print ONCE per device instance (a latch field) with `(once)` in the message; a new comment carries a `/* #NNN: ... */` tag; lines stay within 79 columns.
+The new comment correctly uses the `/* #NNN: ... */` format (line 258) and lines remain within 79 columns. However, it is unsettled whether a guest can repeatedly trigger the `load_bootblock` routine post-startup to spam the log with the `fatal()` message without a `(once)` tag.
+
+### Findings
+
+* `src/disk/bootblock.c:259` DEFECT: The early return skips the common cleanup tail, specifically bypassing `free(bootblock_buf);`. Fix: replace `return 0;` with `goto ret_ok;`.
+* `src/disk/bootblock.c:255` UNSETTLED: Whether the guest can repeatedly trigger `load_bootblock` to spam the `fatal()` diagnostic message. Missing: caller of `load_bootblock` to confirm if it's guest-triggerable post-boot. Fix: add `(once)` to the format string.
+
+P-GWEBREVBOOTBLOCKZEROADDR-e98b
+GWEBREVBOOTBLOCKZEROADDR: 2 ATTACKS 1 BROKEN 0 HOLDS 1 UNSETTLED DRAFTABLE:NO

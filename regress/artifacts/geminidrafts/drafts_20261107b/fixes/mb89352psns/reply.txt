@@ -1,0 +1,17 @@
+STILL PRESENT: YES -- `d->reg[regnr] = idata;` at line 564 stores to PSNS, and BUS_REL is not processed there.
+
+```json
+[
+  {
+    "file": "src/devices/dev_mb89352.c",
+    "old": "\tcase PSNS:\n\t\tif (writeflag == MEM_WRITE) {\n\t\t\td->reg[regnr] = idata;\n\t\t\tdebugmsg_cpu(cpu, d->subsys, \"\",\n\t\t\t    VERBOSITY_WARNING,\n\t\t    \t    \"unimplemented write to PSNS/SDGC: 0x%x\",\n\t\t\t    (int) idata);\n\t\t}",
+    "new": "\tcase PSNS:\n\t\tif (writeflag == MEM_WRITE) {\n\t\t\tif (idata == SCMD_BUS_REL) {\n\t\t\t\td->reg[PSNS] = 0;\n\t\t\t} else {\n\t\t\t\tdebugmsg_cpu(cpu, d->subsys, \"\",\n\t\t\t\t    VERBOSITY_WARNING,\n\t\t\t    \t    \"unimplemented write to PSNS/SDGC: 0x%x\",\n\t\t\t\t    (int) idata);\n\t\t\t}\n\t\t}",
+    "why": "Prevent PSNS writes from being stored, and allow SDGC BUS_REL to clear PSNS."
+  }
+]
+```
+
+This fix removes the erroneous write to the read-only `PSNS` register (`d->reg[regnr] = idata;`) and properly extends the `case PSNS:` arm (which handles writes to `SDGC` at the same offset) to clear `PSNS` when the guest writes `BUS_REL`. This avoids adding a duplicate `case SCMD_BUS_REL:` to the inner `SCMD` switch where `0x00` is already handled, fully addressing both parts of the WRONG-RESULT report.
+
+P-GWEBFIXMB89352PSNS-4e6f
+GWEBFIXMB89352PSNS: 1 ATTACKS 0 BROKEN 1 HOLDS 0 UNSETTLED DRAFTABLE:YES

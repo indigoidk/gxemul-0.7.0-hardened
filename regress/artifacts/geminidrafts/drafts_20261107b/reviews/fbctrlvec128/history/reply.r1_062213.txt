@@ -1,0 +1,13 @@
+FIXREVIEW_FBCTRLVEC128: DEFECT, 2 FINDINGS
+
+1. Yes, the diff removes the defect. By checking `len > 8` at lines 116-119, it catches out-of-bounds lengths before `memory_readmax64()` processes them and before the `switch` branches to the DATA or PORT arms.
+2. Yes, the added `return 1;` at line 118 skips the function's common tail. It skips: `if (writeflag == MEM_READ) memory_writemax64(cpu, data, len, odata);` (lines 189-190). On a read access with length > 8, this hands the guest an unwritten `data` buffer.
+3. No, the path returns `1`, which matches the existing return value at the end of the function (line 192). This implies the access was successfully handled and no bus error or exception should be raised to the guest.
+4. Beyond removing the defect, the diff introduces a new console diagnostic on a path that previously printed nothing (a path that used to silently accept and truncate the access now prints a `fatal` message).
+5. The new code violates house idioms: the diagnostic lacks a latch (e.g., `d->warned_len`) to prevent spamming the host console, misses the `(once)` marker in the format string, and is missing the `/* #567: ... */` comment tag.
+
+- `src/devices/dev_fbctrl.c:118` DEFECT. Early return skips the common tail on read accesses. Fix: replace `return 1;` with `exit(1);` (similar to line 186) or handle the read properly.
+- `src/devices/dev_fbctrl.c:117` STYLE. Diagnostic lacks a once-latch and issue tag. Fix: wrap in `if (!d->warned_len) { ... }` and add `(once)` to the string.
+
+P-GWEBREVFBCTRLVEC128-31d1
+GWEBREVFBCTRLVEC128: 5 ATTACKS 2 BROKEN 3 HOLDS 0 UNSETTLED DRAFTABLE:NO

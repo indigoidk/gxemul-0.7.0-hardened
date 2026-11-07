@@ -1,0 +1,13 @@
+FIXREVIEW_PPCISISRR1: DEFECT, 2 FINDINGS
+
+1. **Defect removal**: Yes, the diff sets the reason bits (via `DSISR_PROTECT` and `DSISR_NOTFOUND`) in `memory_ppc.c` and merges them into SRR1 in `cpu_ppc.c` for `PPC_EXCEPTION_ISI`. (Whether the DSISR constants physically map into `~0x87c0ffff` correctly is UNSETTLED; requires the header defining them).
+2. **Control Flow**: No added returns, gotos, breaks, or early exits skip any code.
+3. **Return Value**: No paths return anything different.
+4. **State changed**: By reading `cpu->cd.ppc.spr[SPR_SRR1]` in `cpu_ppc.c:328`, the fix introduces a state leak. If *any* other site in the codebase triggers `PPC_EXCEPTION_ISI` without manually seeding `SPR_SRR1` first, whatever stale data the guest left in those SRR1 bits will be preserved and exposed back to the guest.
+5. **House idioms**: The new comment in `memory_ppc.c:322` exceeds 79 columns. 
+
+* `src/cpus/cpu_ppc.c:328`, DEFECT, reads potentially uninitialized/stale guest state; fix: pass the reason code as an argument to `ppc_exception` instead of side-channeling it through the guest's SPR_SRR1 register.
+* `src/cpus/memory_ppc.c:322`, STYLE, comment exceeds 79 columns; fix: break into two lines.
+
+P-GWEBREVPPCISISRR1-8a1e
+GWEBREVPPCISISRR1: 5 ATTACKS 1 BROKEN 3 HOLDS 1 UNSETTLED DRAFTABLE:NO

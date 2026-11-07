@@ -1,0 +1,29 @@
+1. Finding 1: ACCEPT, `instr(reserved)` unconditionally raises RI and misses the CU0 check; we must fall back to the interpreter using `goto bad;` as seen at lines 4922 and 4928.
+2. Finding 2: ACCEPT, the draft left the `break;` control flow unchanged instead of correctly routing to the `goto bad;` fallback.
+3. Finding 3: ACCEPT, the draft did not change the return path to use the `goto bad;` fallback.
+4. Finding 4: REJECT, using a local `static int warned = 0;` latch is the established house idiom in this file (lines 4879, 4906, 4986, 5785); a per-instance field does not match the packet's idiom.
+5. Finding 5: REJECT, existing warning messages in the file (lines 4883, 4910) do not include `(once)` and use a local static latch.
+6. `src/cpus/cpu_mips_instr.c:4943`: ACCEPT, we must assign `goto bad;` instead of `instr(reserved)` to allow the interpreter to perform the CU0 check.
+7. `src/cpus/cpu_mips_instr.c:4932`: REJECT, `static int warned = 0;` is the established local latch idiom (lines 4879, 4906).
+8. `src/cpus/cpu_mips_instr.c:4934`: REJECT, existing warning messages in the file (lines 4883, 4910) do not include the `(once)` text.
+
+STILL PRESENT: YES -- src/cpus/cpu_mips_instr.c:4937 ic->f = instr(reserved);
+
+```json
+[
+  {
+    "file": "src/cpus/cpu_mips_instr.c",
+    "old": "\t\t\tdefault:if (!cpu->translation_readahead)\n\t\t\t\t\tfatal(\"UNIMPLEMENTED cop0 (func \"\n\t\t\t\t\t    \"0x%02x)\\n\", iword & 0xff);\n\t\t\t\t/*  #236: A reserved/unimplemented COP0 function\n\t\t\t\t    is a Reserved Instruction on real MIPS, not a\n\t\t\t\t    reason to halt the host; raise RI instead of\n\t\t\t\t    \"goto bad\" (cpu->running = 0).  */\n\t\t\t\tic->f = instr(reserved);\n\t\t\t\tbreak;",
+    "new": "\t\t\tdefault:\n\t\t\t\t{\n\t\t\t\t\tstatic int warned = 0;\n\t\t\t\t\tif (!warned && !cpu->translation_readahead) {\n\t\t\t\t\t\tfatal(\"UNIMPLEMENTED cop0 (func \"\n\t\t\t\t\t\t    \"0x%02x)\\n\", iword & 0xff);\n\t\t\t\t\t\twarned = 1;\n\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t\tgoto bad;",
+    "why": "Latches the fatal() warning using the house idiom and uses goto bad to fall back to the interpreter which performs the CU0 check."
+  }
+]
+```
+
+The fix deliberately does not change the warning message format to include `(once)`, nor does it replace the local `static int` latch with a per-instance field, as doing so would violate the established idioms used throughout the file.
+
+REVISION_MIPSCOP0CPU: 4 ACCEPTED, 4 REJECTED
+FIXDRAFT_MIPSCOP0CPU: YES PRESENT, 1 EDITS
+
+P-GWEBFIXMIPSCOP0CPU-586d
+GWEBFIXMIPSCOP0CPU: 8 ATTACKS 4 BROKEN 4 HOLDS 0 UNSETTLED DRAFTABLE:YES

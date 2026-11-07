@@ -1,0 +1,33 @@
+STILL PRESENT: YES -- src/cpus/cpu_ppc_instr.c:2822
+
+**Claim:** A software DEC write (`mtspr`) that flips bit 0 from 0 to 1 does not signal the decrementer exception.
+*Attack 1 (Missing logic):* Does `mtspr` at line 2822 implicitly trigger a hardware exception callback?
+*Refutation:* No. `mtspr` performs a direct C assignment to the register lvalue (`reg(ic->arg[1]) = ...`). SPRs are internal CPU state variables (`cpu->cd.ppc.spr`), not memory-mapped regions with MMIO hooks. The exception logic is genuinely missing. (HOLD)
+
+**Claim:** The proposed fix safely updates the state without regressions.
+*Attack 2 (Side-effects):* Does reading `reg(ic->arg[1])` before assignment cause read side-effects?
+*Refutation:* No. `reg()` accesses local CPU struct state directly, as seen in `X(mfspr)` at line 2793. (HOLD)
+
+*Attack 3 (Symbol visibility):* Can `SPR_DEC` be used in `cpu_ppc_instr.c`?
+*Refutation:* Cannot be definitively settled from this text. `SPR_DEC` is used in `cpu_dyntrans.c:450`, suggesting it is in a shared CPU header, but the includes are not shown. (UNSETTLED - requires `cpu_ppc.h` or similar).
+
+*Attack 4 (Lvalue reference):* Is `&reg(ic->arg[1])` valid C?
+*Refutation:* The assignment `reg(ic->arg[1]) = ...` proves `reg()` expands to an lvalue. However, whether taking its address throws type-punned pointer warnings depends on the macro's exact definition. (UNSETTLED - requires the macro definition of `reg()`).
+
+```json
+[
+  {
+    "file": "src/cpus/cpu_ppc_instr.c",
+    "old": "X(mtspr) {\n\t/*  TODO: Check permission  */\n\treg(ic->arg[1]) = reg(ic->arg[0]);\n}",
+    "new": "X(mtspr) {\n\t/*  TODO: Check permission  */\n\tuint32_t old = reg(ic->arg[1]);\n\treg(ic->arg[1]) = reg(ic->arg[0]);\n\n\t/* #575: Signal decrementer exception if MSB flips 0 -> 1 */\n\tif (&reg(ic->arg[1]) == &cpu->cd.ppc.spr[SPR_DEC]) {\n\t\tif ((old >> 31) == 0 && (cpu->cd.ppc.spr[SPR_DEC] >> 31) == 1\n\t\t    && !(cpu->cd.ppc.cpu_type.flags & PPC_NO_DEC))\n\t\t\tcpu->cd.ppc.dec_intr_pending = 1;\n\t}\n}",
+    "why": "Intercept mtspr to SPR_DEC and assert dec_intr_pending when the sign bit flips, mirroring the dyntrans hardware decrement logic."
+  }
+]
+```
+
+*   **Deliberately does NOT change:** The behaviour of writes to any SPR other than the decrementer (`SPR_DEC`), nor the hardware instruction-counting decrementer logic in `cpu_dyntrans.c`. It preserves the exact decrementer conditions (`PPC_NO_DEC` flag check and bit 31 transition) already used elsewhere.
+*   **Unsettled from code shown:** Whether `SPR_DEC` is in scope in `cpu_ppc_instr.c` (likely via a shared header) and the exact expansion of the `reg()` macro regarding pointer-aliasing warnings.
+
+FIXDRAFT_PPCDECWRITE: YES PRESENT, 1 EDITS
+P-GWEBFIXPPCDECWRITE-ffe4
+GWEBFIXPPCDECWRITE: 4 ATTACKS 0 BROKEN 2 HOLDS 2 UNSETTLED DRAFTABLE:YES

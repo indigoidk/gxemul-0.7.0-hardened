@@ -1,0 +1,14 @@
+FIXREVIEW_M88KEXCSFU1: DEFECT, 3 FINDINGS
+
+1. The diff removes the emulator halt but fails to address the missing architected state (FPU exception registers and scoreboard) required for faithful delivery, which the issue notes the fork never writes. By delivering the exception anyway, it exposes the guest OS to unwritten or stale state.
+2. CONTROL FLOW: No added `return`, `goto`, `break`, or early exit skips code. Setting `implemented = true` bypasses the fallback block and correctly routes flow to the common tail at `src/cpus/cpu_m88k.c:816` (`/* Stuff common for all exceptions: */`).
+3. RETURN VALUE: No path returns a different value; the `m88k_exception` function returns `void`.
+4. What ELSE does the diff change: Beyond delivering an incomplete exception, it renders the existing block comment at `src/cpus/cpu_m88k.c:797-799` incorrect, as SFU1_PRECISE and SFU1_IMPRECISE no longer land at the fallback halt "by design". 
+5. House idioms: Because the guest CPU no longer halts on these exceptions, the `VERBOSITY_ERROR` diagnostics for SFU1_PRECISE and SFU1_IMPRECISE can now be triggered repeatedly by the guest, violating the idiom requiring a `(once)` latch for spammable messages.
+
+`src/cpus/cpu_m88k.c:759` - DEFECT: Delivers exception without the required FPU/scoreboard state; fix: write the required exception registers before delivery, or revert.
+`src/cpus/cpu_m88k.c:797` - DEFECT: Comment is rendered stale; fix: remove the claim that SFU1 exceptions land here by design.
+`src/cpus/cpu_m88k.c:758` - STYLE: Diagnostic can now be repeatedly spammed by the guest; fix: add a static latch and `(once)` to the message string.
+
+P-GWEBREVM88KEXCSFU1-81bc
+GWEBREVM88KEXCSFU1: 5 ATTACKS 3 BROKEN 2 HOLDS 0 UNSETTLED DRAFTABLE:NO

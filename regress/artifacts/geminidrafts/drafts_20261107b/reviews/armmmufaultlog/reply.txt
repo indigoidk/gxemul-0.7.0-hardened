@@ -1,0 +1,10 @@
+FIXREVIEW_ARMMMUFAULTLOG: SOUND, 0 FINDINGS
+
+1. The diff removes the defect at the specified site (`src/cpus/memory_arm.c:261-266`). Trying to refute this: do any page faults bypass `exception_return:` and leak a `fatal()` elsewhere? No, all fault paths (e.g., `AFTER:159`, `AFTER:164`, `AFTER:174`, `AFTER:237`, `AFTER:250`) jump directly to `exception_return:`, where the diff entirely removes the two `fatal()` calls (`AFTER:261`). It misses no sites.
+2. CONTROL FLOW: Trying to find a skipped tail. The patch only deletes lines (`AFTER:261`); it adds no `return`, `goto`, `break`, or early exit. The function's common tail (`AFTER:262`-`AFTER:270`) remains unconditionally executed for all fault paths just as it was before.
+3. RETURN VALUE: Trying to find a mutated return value. The deleted lines only contained `fatal()` calls reading variables (`vaddr`, `domain`, `dav`, `ap`, `access`, `user`, `d`, `d2`). They did not modify any state or influence the final `return 0;` at `AFTER:270`.
+4. What ELSE: Trying to find unintended state changes. The removal of the `if (!quiet_mode)` block (`AFTER:261`) clears no state, sets no state, and exposes no new values to the guest. It purely removes a host-side side effect.
+5. House idioms: Trying to find a violation. While the issue could theoretically be mitigated by adding a `(once)` latch to the print, page faults are normal architectural events that shouldn't pollute the host log at all. Entirely removing the print (`AFTER:261`) correctly resolves the hygiene issue without violating formatting or comment rules.
+
+P-GWEBREVARMMMUFAULTLOG-9043
+GWEBREVARMMMUFAULTLOG: 5 ATTACKS 0 BROKEN 5 HOLDS 0 UNSETTLED DRAFTABLE:YES

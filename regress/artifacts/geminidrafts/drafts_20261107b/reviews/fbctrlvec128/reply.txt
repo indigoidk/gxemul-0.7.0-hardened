@@ -1,0 +1,16 @@
+FIXREVIEW_FBCTRLVEC128: DEFECT, 2 FINDINGS
+
+1. The diff intercepts `len > 8` accesses before truncation at `src/devices/dev_fbctrl.c:123`, but it does not correctly remove the defect without introducing a new one. By using `exit(1)` at `src/devices/dev_fbctrl.c:119`, it introduces a "crash-on-malformed-input" defect, which explicitly violates the project's hardening goals (`PROJECT FRAMING:2`).
+2. CONTROL FLOW: The added `exit(1)` at `src/devices/dev_fbctrl.c:119` is an early exit that halts the entire emulator process. It skips the common tail that would otherwise acknowledge a read or write:
+   `if (writeflag == MEM_READ)` (`src/devices/dev_fbctrl.c:190`)
+   `memory_writemax64(cpu, data, len, odata);` (`src/devices/dev_fbctrl.c:191`)
+   `return 1;` (`src/devices/dev_fbctrl.c:193`)
+3. RETURN VALUE: The new path does not return a value at all; it exits the host program. The existing code (`src/devices/dev_fbctrl.c:193`) implies that a return value of `1` means the memory access was successfully consumed or handled by the device.
+4. The diff allows the guest architecture to intentionally and trivially terminate the host emulator (a denial of service) by issuing any read or write with `len > 8` to the device's memory region, leaving the emulator completely dead instead of merely ignoring the bad instruction or returning 0. 
+5. House idioms: The new diagnostic at `src/devices/dev_fbctrl.c:118` prints unconditionally every time a wide access occurs, allowing a guest to spam the console. It lacks a state latch (like `d->warned_port` at `src/devices/dev_fbctrl.c:138`) and omits the mandatory `(once)` string in the message text. It is UNSETTLED whether `struct fbctrl_data` has a field to store this latch, as its definition is not provided.
+
+src/devices/dev_fbctrl.c:119 DEFECT return 1;
+src/devices/dev_fbctrl.c:118 STYLE if (!d->warned_len) { fatal("[ fbctrl: access length > 8 is not supported (once) ]\n"); d->warned_len = 1; }
+
+P-GWEBREVFBCTRLVEC128-6492
+GWEBREVFBCTRLVEC128: 5 ATTACKS 3 BROKEN 1 HOLDS 1 UNSETTLED DRAFTABLE:NO

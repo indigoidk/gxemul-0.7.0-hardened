@@ -1,0 +1,142 @@
+#!/usr/bin/env python3
+"""mk_fixrevise.py [ROWID ...] -- 05:0x 11-07: ONE revision round (capped -- never a second) for the compiled fix drafts whose
+Gemini second-lens review came back DEFECT (rev_<row>/reply.txt).  Each packet: the row, the struct definitions the v2 fix
+packet carries, EVERY FUNCTION THE PREVIOUS DRAFT EDITED in full AS IT READS AT HEAD (pre-edit -- the new edits must apply to
+HEAD), the previous edit list, and the review's findings.  It asks the drafter to JUDGE each finding (accept / reject, one line
+each -- a review can be wrong) and return a corrected edit list in the v2 form, so fixcheck_all.sh and scan_commentonly.py run
+unchanged.  Previous packet and reply kept with a time stamp.  Writes fix_<row>/packet_body.md and fixrevise_list.txt."""
+import io
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+
+sys.argv, ARGS = ["mk_fixreview.py", "--list"], sys.argv[1:]
+exec(io.open("C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/gweb/jobs_20261106_kits/mk_fixreview.py",
+             encoding="utf-8").read().split('if __name__ == "__main__":')[0])      # H, REPO, by, cands, parse_udiff, func_span, clip
+CAP = 55000
+
+
+def review_verdict(rid):
+    p = H + "rev_%s/reply.txt" % rid
+    t = io.open(p, encoding="utf-8", errors="replace").read() if os.path.exists(p) else ""
+    m = re.findall(r"^FIXREVIEW_%s:\s*(SOUND|DEFECT|UNSETTLED)" % re.escape(rid.upper()), t, re.M)
+    return (m[-1] if m else None), t
+
+
+def head_functions(diff, win):
+    keep = [b for b in re.split(r"(?m)^(?=diff --git )", diff) if re.match(r"diff --git a/\S+\.[ch] ", b)
+            and not re.match(r"diff --git a/src/cpus/tmp_\w+\.c ", b)]
+    out = []
+    for f, hunks in parse_udiff("".join(keep)).items():
+        old = subprocess.run(["git", "-C", REPO, "show", "HEAD:" + f], capture_output=True).stdout.decode("latin-1").split("\n")
+        marks = set()
+        for ostart, olen, lines in hunks:
+            pos = ostart - 1 if olen else ostart
+            for l in lines:
+                if l[0] == "-":
+                    marks.add(pos)
+                if l[0] in " -":
+                    pos += 1
+                else:
+                    marks.add(min(pos, len(old) - 1))
+        spans = []
+        for e in sorted(marks):
+            a, b = func_span(old, e)
+            if spans and a <= spans[-1][1]:
+                spans[-1] = (spans[-1][0], max(spans[-1][1], b), spans[-1][2] | {e})
+            else:
+                spans.append((a, b, {e}))
+        for a, b, ms in spans:
+            if b - a + 1 > LONG:
+                lo, hi = max(a, min(ms) - win[0]), min(b, max(ms) + win[1])
+                rng = [(a, min(a + 4, b)), (lo, hi), (max(hi + 1, b - 29), b)]
+            else:
+                rng = [(a, b)]
+            body, last = [], None
+            for x, y in rng:
+                if last is not None and x > last + 1:
+                    body.append("     | [... lines %d-%d not shown ...]" % (last + 2, x))
+                for k in range(max(x, (last + 1) if last is not None else x), y + 1):
+                    body.append("%5d|%s %s" % (k + 1, "*" if k in ms else " ", old[k]))
+                last = y
+            out.append("### `%s` -- AT HEAD, lines %d-%d (`*` marks a line your previous draft changed)\n\n```c\n%s\n```\n" % (
+                f, a + 1, b + 1, "\n".join(body)))
+    return out
+
+
+def structs_of(rid):
+    """the v2 packet's struct section (mk_fixpacket.py), regenerated fresh"""
+    subprocess.run(["python", H + "mk_fixpacket.py", rid], capture_output=True)
+    t = io.open(H + "fix_%s/packet_body.md" % rid, encoding="utf-8").read()
+    m = re.search(r"## The data structures those files define.*?(?=\nRULES FOR THE EDITS)", t, re.S)
+    return m.group(0) if m else ""
+
+
+rows = ARGS or [r for r in cands if review_verdict(r)[0] == "DEFECT"]
+done = []
+for rid in rows:
+    v, rev = review_verdict(rid)
+    if v != "DEFECT":
+        print("skip", rid, v)
+        continue
+    d = H + "fix_%s/" % rid
+    prev = io.open(d + "reply.txt", encoding="utf-8", errors="replace").read()
+    blk = re.findall(r"```json\s*\n(.*?)```", prev, re.S)
+    diff = io.open(d + "APPLIED.diff", encoding="latin-1").read()
+    review = "\n".join(l for l in rev.split("\n") if l.strip() and not l.startswith(("P-GWEB", "GWEB")))
+    r = by.get(rid, {})
+    #  back up FIRST: structs_of() regenerates packet_body.md, and the worker's mk_gweb_job.py will overwrite the as-sent
+    #  gemini_web.packet.md -- both copies of the packet that produced the previous reply must survive the revision
+    stamp = time.strftime("%H%M%S")
+    for src_, dst_ in (("packet_body.md", "packet_body.prerev_%s.md"), ("gemini_web.packet.md", "gemini_web.packet.prerev_%s.md"),
+                       ("reply.txt", "reply.prerev_%s.txt"), ("APPLIED.diff", "APPLIED.prerev_%s.diff")):
+        if os.path.exists(d + src_):
+            shutil.copyfile(d + src_, d + dst_ % stamp)
+    for win in ((110, 60), (60, 30), (35, 20)):
+        fns = head_functions(diff, win)
+        st = structs_of(rid)
+        body = "\n".join([
+            "# GXemul hardened fork -- REVISE ONE FIX DRAFT after a review, `%s` (a defensive code-quality task)" % rid, "",
+            "PROJECT FRAMING -- a defensive software-robustness project: GXemul is a computer-architecture emulator, and this fork",
+            "removes crash-on-malformed-input and wrong-behaviour defects from its device and CPU models.  You drafted a fix for the",
+            "issue below; it compiles at HEAD %s.  A separate review then reported problems with it.  You cannot read files; work" % head,
+            "from this text.  This is a DRAFTING task: FIX ONLY, as exact edits -- no tests, probes or reproduction steps.", "",
+            "## The issue (ledger row `%s`, state `%s`)" % (rid, r.get("state")), "",
+            "**title:** " + clip(r.get("title") or "", 500), "",
+            "**state_note (head):** " + clip(r.get("state_note") or "", 2500), "",
+            "## Every function your previous draft changed, as it reads AT HEAD (your new edits apply to THIS text)", "",
+            "\n".join(fns), st, "",
+            "## Your previous draft's edits", "", "```json", (blk[0].strip() if blk else "(none)"), "```", "",
+            "## The review of that draft (it can be WRONG -- judge each point against the code above)", "",
+            "```text", defang(review)[-6000:], "```", "",
+            "## WHAT TO RETURN", "",
+            "1. For EACH review finding, one line: `ACCEPT` or `REJECT`, and why, citing the code shown.  A suggestion that uses a",
+            "   function, macro or field that appears nowhere in this packet does not exist in HEAD: reject it or replace it with an",
+            "   idiom the packet shows.",
+            "2. One line: `STILL PRESENT: YES|NO|UNSETTLED -- <the line of code that shows it>`.",
+            "3. If YES: EXACTLY ONE fenced ```json block -- the COMPLETE corrected edit list (not a delta), applying to the HEAD text",
+            '   above: [{"file": "src/...", "old": "<exact HEAD text, occurring EXACTLY ONCE in that file>", "new": "<replacement>",',
+            '   "why": "<one line>"}].  JSON escapes (\\t, \\n); tabs stay tabs; lines within 79 columns; a new comment carries',
+            "   `/* #NNN: ... */`.  Never an empty list and never comment-only edits for a defect in behaviour.  If every finding is",
+            "   rejected, return the previous edits unchanged.",
+            "4. After the block: what the fix deliberately does not change.", "",
+            "End with two lines: `REVISION_%s: <a> ACCEPTED, <r> REJECTED` and `FIXDRAFT_%s: <YES|NO|UNSETTLED> PRESENT, <n> EDITS`." % (
+                rid.upper(), rid.upper()), ""])
+        if len(body.encode()) <= CAP:
+            break
+    if len(body.encode()) > CAP:
+        shutil.copyfile(d + "packet_body.prerev_%s.md" % stamp, d + "packet_body.md")      # put the original back
+        print("SKIP", rid, len(body.encode()), "bytes > cap")
+        continue
+    io.open(d + "packet_body.md", "w", encoding="utf-8", newline="\n").write(body)
+    os.remove(d + "reply.txt")
+    if os.path.exists(d + "gemini_web.out"):
+        os.replace(d + "gemini_web.out", d + "gemini_web.prerev_%s.out" % stamp)
+    io.open(d + "gemini_web.exit", "w", encoding="utf-8").write("exit 0 revision queued\n")
+    done.append(rid)
+    print(rid, len(body.encode()), "bytes", len(fns), "functions")
+io.open(H + "fixrevise_list.txt", "w", encoding="utf-8", newline="\n").write("\n".join(done) + "\n")
+print("PREPARED", len(done))

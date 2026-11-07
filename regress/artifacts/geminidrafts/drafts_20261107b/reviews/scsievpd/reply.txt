@@ -1,0 +1,13 @@
+FIXREVIEW_SCSIEVPD: SOUND, 1 FINDINGS
+
+1. **Does the diff remove the defect:** Yes, the diff successfully addresses the defect at the specified site (`src/disk/diskimage_scsicmd.c:363-367`) by declining EVPD queries. It misses no other sites for this specific INQUIRY defect.
+2. **CONTROL FLOW:** The added `break;` at `<src/disk/diskimage_scsicmd.c>:370` skips lines 373-1382, which normally allocate the buffer and populate standard INQUIRY data. It successfully breaks out of the `switch` statement and does NOT skip the function's common tail (lines 1390-1392), allowing the function to reach `return 1;`.
+3. **RETURN VALUE:** The function's C return value does not change on this path (it still reaches `return 1;`, indicating the emulator handled the command). The guest-visible return data changes: `xferp->status[0]` is now explicitly set to `0x02` (Check Condition). 
+4. **What ELSE does the diff change:** Because the code now breaks early, `scsi_transfer_allocbuf` is never called for EVPD requests, meaning `xferp->data_in` and `xferp->data_in_len` are left unallocated/unmodified instead of receiving standard INQUIRY padding.
+5. **House idioms:** The diff correctly uses the `/* #T77: ... */` issue tag format. However, the pre-existing warning on lines 364-366 does not implement a latch, allowing the guest to spam the emulator's console.
+
+`src/disk/diskimage_scsicmd.c:364`: STYLE, missing once-latch for guest-triggerable warning. Fix: `if (!d->warned_evpd) { d->warned_evpd = 1; debugmsg(... "(once)..."); }`
+
+FIXREVIEW_SCSIEVPD: SOUND, 1 FINDINGS
+P-GWEBREVSCSIEVPD-c296
+GWEBREVSCSIEVPD: 5 ATTACKS 0 BROKEN 5 HOLDS 0 UNSETTLED DRAFTABLE:YES

@@ -1,0 +1,53 @@
+#!/bin/bash
+#  fixcheck_all.sh -- compile-check every Gemini fix draft (fix_<row>/reply.txt saying STILL PRESENT: YES with one ```json block)
+#  in ONE WSL scratch clone at HEAD, outside the project: base build once, then per draft: apply (apply_edits.py -- every old
+#  string exactly once), incremental `make -j4`, record rc / warnings in the edited files / diffstat, revert.  Rows already in
+#  fixcheck_results.tsv are skipped, so re-running checks only new drafts.  Compile only: no probe, gate or guest run.
+#  Run as: MSYS_NO_PATHCONV=1 wsl -d Gentoo -- bash /mnt/c/DocumentNoSnc/CC/GXEMUL/_scratchpad/gweb/jobs_20261106_kits/fixcheck_all.sh
+set -u
+K=/mnt/c/DocumentNoSnc/CC/GXEMUL/_scratchpad/gweb/jobs_20261106_kits
+C=/tmp/gxfixall_20261107
+RES=$K/fixcheck_results.tsv; LOG=$K/fixcheck_all.log
+exec >> "$LOG" 2>&1
+echo "== fixcheck_all start $(date '+%F %T')"
+if [ ! -x "$C/gxemul" ] || [ "$(git -C "$C" rev-parse HEAD 2>/dev/null)" != "$(git -C /mnt/c/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC rev-parse HEAD)" ]; then
+    rm -rf "$C"; git clone -q --depth 1 file:///mnt/c/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC "$C" || { echo CLONE_FAIL; exit 2; }
+    (cd "$C" && ./configure > configure.log 2>&1 && make -j4 > make_base.log 2>&1) || { echo BASE_BUILD_FAIL; exit 3; }
+    echo "base built at $(git -C "$C" rev-parse --short=8 HEAD), warnings $(grep -c 'warning:' "$C/make_base.log")"
+fi
+#  06:0x 11-07: ONE compile check at a time -- two runs in the same scratch clone would apply and revert each other's edits
+LOCKD=/tmp/gxfixall.lock
+until mkdir "$LOCKD" 2>/dev/null; do echo "fixcheck_all: waiting for $(cat $LOCKD/pid 2>/dev/null)"; sleep 15; done
+echo $$ > "$LOCKD/pid"; trap 'rm -rf "$LOCKD"' EXIT
+touch "$RES"
+for d in "$K"/fix_*/; do
+    row=$(basename "$d"); row=${row#fix_}
+    [ -f "$d/reply.txt" ] || continue
+    grep -q "^$row	" "$RES" && continue
+    grep -qE 'STILL PRESENT: *YES' "$d/reply.txt" || { printf '%s\tSKIP\tnot STILL PRESENT: YES\n' "$row" >> "$RES"; continue; }
+    cd "$C" || exit 4
+    git checkout -q -- . 2>/dev/null
+    ap=$(python3 "$K/ppc64_complete/apply_edits.py" "$C" "$d/reply.txt" 2>&1); arc=$?
+    if [ "$arc" != 0 ]; then
+        printf '%s\tAPPLY_FAIL\t%s\n' "$row" "$(echo "$ap" | grep -E '^FAIL' | head -2 | tr '\n' ' ' | tr '\t' ' ' | cut -c1-200)" >> "$RES"
+        git checkout -q -- .; continue
+    fi
+    #  04:5x 11-07: only the draft's SOURCE edits count -- a build regenerates src/*/.index (an est_divergence path), and a
+    #  draft whose edit list is EMPTY ("0 EDITS") applied nothing: it was scored BUILD_OK on an unchanged HEAD, four such rows
+    #  went into the 8d9df658 bank's "74 compile".  Now NO_EDITS, and no build.
+    files=$(git diff --name-only -- '*.c' '*.h' | tr '\n' ' ')
+    stat=$(git diff --shortstat -- '*.c' '*.h' | sed 's/^ *//')
+    if [ -z "$files" ]; then
+        printf '%s\tNO_EDITS\tthe draft applied no .c/.h change (an empty edit list)\n' "$row" >> "$RES"
+        git checkout -q -- .; continue
+    fi
+    make -j4 > make_one.log 2>&1; mrc=$?
+    w=0; for f in $files; do b=$(basename "$f" .c); w=$((w + $(grep -E 'warning:' make_one.log | grep -c "$b"))); done
+    e=$(grep -c 'error:' make_one.log)
+    git diff -- '*.c' '*.h' > "$d/APPLIED.diff"
+    printf '%s\t%s\tmake rc=%s errors=%s warnings_in_edited=%s\t%s\t%s\n' "$row" "$([ "$mrc" = 0 ] && echo BUILD_OK || echo BUILD_FAIL)" "$mrc" "$e" "$w" "$stat" "$files" >> "$RES"
+    [ "$mrc" = 0 ] || grep -E 'error:' make_one.log | head -3 | sed "s/^/  $row: /"
+    git checkout -q -- .
+done
+make -j4 > make_restore.log 2>&1
+echo "== fixcheck_all done $(date '+%F %T'): $(grep -c BUILD_OK "$RES") BUILD_OK, $(grep -c BUILD_FAIL "$RES") BUILD_FAIL, $(grep -c APPLY_FAIL "$RES") APPLY_FAIL, $(grep -c NO_EDITS "$RES") NO_EDITS, $(grep -c SKIP "$RES") SKIP"

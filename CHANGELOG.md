@@ -1,3 +1,13 @@
+# Records, 2026-11-07: the Gemini-web work on the oldest open issues, second bank -- 159 fix drafts (111 compile, every one a real
+change), every compiling draft reviewed, one capped revision round, the held rounds' records checks, closure and next-step drafts -- all PROPOSALS; the first
+bank's "74 compile" corrected in place
+
+Banked in a new directory so the first bank's citations stand (`regress/artifacts/geminidrafts/drafts_20261107b/SUMMARY.md`, `regress/artifacts/geminidrafts/drafts_20261107b/PROVENANCE.md`).  None of it is
+adjudicated or applied; each fix still owes the flagship's ruling and its round's full process.  The fix pipeline gained two
+vacuity guards (an empty edit list is NO_EDITS; `scan_commentonly.py` reports a draft whose code tokens do not change) after
+the first bank counted 4 empty and 3 comment-only drafts among its 74 -- corrected in place in that bank's SUMMARY.md and in
+its CHANGELOG header.  No code, detector, gate, ledger row or score changes.
+
 # `#587` Records (follow-up, 2026-11-07): `ghostround` names its landing commit `0a984b34`; the committed-tree proofs
 
 `git ls-tree 0a984b34`, md5s hashed in Python from the committed bytes: `tools/pipeline/check_ghost_rounds.py` blob `13fc3da4d4bc`, md5 `f20d249eeb21`; `tools/precommit_check.sh` blob `318a215d0f5e`, md5 `b678efd6e315`; `tools/README.md` blob `74ad43ac0750`, md5 `5cfaaa506027`.  The working copy against each: check_ghost_rounds.py the same; precommit_check.sh the same; README.md the same.
@@ -92,7 +102,7 @@ and a round block written at H2 with a backticked number (`` ## `#NNN` ``) is no
 subsection of the block above it.  A ledger that is not JSON is a traceback, a hard FAIL at the hook, not a VOID; a failed
 `git show` in `--at` mode (either read) is VOID with no leg of its own; the short-blame legs (c8j, c8k) drive the one short map real git writes -- the EMPTY map of a SHA-256 repository -- so a length guard narrowed to the empty map (len(bl) == 0, an if-bl return before the test, or a bound relaxed by one line) passes all 69 controls (measured, PASS4_RULING.md) and would date a NONEMPTY short map by its headers; no production git writes such a map (the porcelain parser's two skip branches are uniform per repository or never fire on git's own output), so it is disclosed as clause-(e) coverage debt, not legged; every other cell is in the docstring's contract with its leg or its disclosure.
 
-# Records, 2026-11-07: the Gemini-web drafts for the oldest open issues banked -- 1045 adjudication drafts, 101 fix drafts (74 compile), the attachment budget measured -- all PROPOSALS
+# Records, 2026-11-07: the Gemini-web drafts for the oldest open issues banked -- 1045 adjudication drafts, 101 fix drafts (74 compile [2026-11-07, records: 4 of these 74 applied NO edit (an empty edit list, scored BUILD_OK on an unchanged HEAD) and 3 change only a comment where the defect is in code -- 67 are real fixes; the check now scores NO_EDITS, and `regress/artifacts/geminidrafts/drafts_20261107b/SUMMARY.md` carries the current counts]), the attachment budget measured -- all PROPOSALS
 
 Banked so they live in git rather than only in `_scratchpad/` (`regress/artifacts/geminidrafts/drafts_20261107/SUMMARY.md`, `regress/artifacts/geminidrafts/drafts_20261107/PROVENANCE.md`).  None of it is adjudicated
 or applied: the adjudication drafts propose a disposition for every open or held row, oldest first, with the main loop's

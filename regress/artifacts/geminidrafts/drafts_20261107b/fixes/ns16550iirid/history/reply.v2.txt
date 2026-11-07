@@ -1,0 +1,19 @@
+STILL PRESENT: YES -- 83| d->reg[com_iir] &= ~IIR_RXRDY;
+
+```json
+[
+  {
+    "file": "src/devices/dev_ns16550.c",
+    "old": "\td->reg[com_iir] &= ~IIR_RXRDY;\n\tif (console_charavail(d->console_handle))\n\t\td->reg[com_iir] |= IIR_RXRDY;\n\n\t/*\n\t *  If interrupts are enabled, and interrupts are pending, then\n\t *  cause a CPU interrupt.\n\t */\n\n\tif (((d->reg[com_ier] & IER_ETXRDY) && (d->reg[com_iir] & IIR_TXRDY)) ||\n\t    ((d->reg[com_ier] & IER_ERXRDY) && (d->reg[com_iir] & IIR_RXRDY))) {\n\t\td->reg[com_iir] &= ~IIR_NOPEND;\n\t\tif (d->reg[com_mcr] & MCR_IENABLE) {\n\t\t\tINTERRUPT_ASSERT(d->irq);\n\t\t\td->int_asserted = 1;\n\t\t}\n\t} else {\n\t\td->reg[com_iir] |= IIR_NOPEND;\n\t\tif (d->int_asserted)\n\t\t\tINTERRUPT_DEASSERT(d->irq);\n\t\td->int_asserted = 0;\n\t}",
+    "new": "\td->reg[com_iir] = IIR_NOPEND;\n\n\t/* RX interrupt has priority over TX */\n\tif ((d->reg[com_ier] & IER_ERXRDY) && console_charavail(d->console_handle)) {\n\t\td->reg[com_iir] = IIR_RXRDY;\n\t} else if (d->reg[com_ier] & IER_ETXRDY) {\n\t\td->reg[com_iir] = IIR_TXRDY;\n\t}\n\n\t/*\n\t *  If interrupts are enabled, and interrupts are pending, then\n\t *  cause a CPU interrupt.\n\t */\n\n\tif (!(d->reg[com_iir] & IIR_NOPEND)) {\n\t\tif (d->reg[com_mcr] & MCR_IENABLE) {\n\t\t\tINTERRUPT_ASSERT(d->irq);\n\t\t\td->int_asserted = 1;\n\t\t}\n\t} else {\n\t\tif (d->int_asserted)\n\t\t\tINTERRUPT_DEASSERT(d->irq);\n\t\td->int_asserted = 0;\n\t}",
+    "why": "Assign IIR explicitly based on priority to prevent ORing RXRDY and TXRDY bits into 0x6 (line-status ID)."
+  }
+]
+```
+
+This fix deliberately does NOT change `DEVICE_ACCESS` or how the IIR register is cleared on read, as the lines managing the IIR read (212-213) are omitted from the visible packet. The claim that "every IIR read clears THRE" is UNSETTLED because the code defining the read side effects is not provided and cannot be patched here.
+
+FIXDRAFT_NS16550IIRID: YES PRESENT, 1 EDITS
+
+P-GWEBFIXNS16550IIRID-8cd2
+GWEBFIXNS16550IIRID: 0 ATTACKS 0 BROKEN 0 HOLDS 0 UNSETTLED DRAFTABLE:YES

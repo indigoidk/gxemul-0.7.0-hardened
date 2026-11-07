@@ -1,0 +1,15 @@
+FIXREVIEW_OFEMULNODATA: DEFECT, 3 FINDINGS.
+
+1. **Defect removal and missed sites**: The diff does NOT implement the fix at the correct sites. It modifies `src/promemul/of.c`, which the Argon Scoping explicitly forbade ("NOT an early return inside of_emul"). It entirely misses the decoder sites named in the issue: `cpu_arm_instr.c` and `cpu_ppc_instr.c`.
+2. **CONTROL FLOW**: The added `return 0;` at `of.c:1105` causes an early exit from `of_emul()`. As the issue notes, this early return causes the callers' tails to jump to the link register as if the call had returned normally, instead of generating an architectural SWI/sc fault in the guest. 
+3. **RETURN VALUE**: The path now returns `0` instead of terminating the process via `exit(1)`. Based on the common tail `return 1;` (line 1210), returning `0` implies an unhandled or failed emulation, but the caller expects to handle the fault, not a return code.
+4. **ELSE changed**: It adds a warning diagnostic that prints `of_emul(): no of_data struct? (once)\n`. 
+5. **House idioms**: The diagnostic uses a global `static int warned = 0;` (line 1100). The house idiom requires the latch to be a field per device instance, not a global static variable.
+
+**Findings:**
+`of.c:1105` DEFECT: The fix is implemented as an early return in `of_emul` instead of at the decoder sites `cpu_arm_instr.c` and `cpu_ppc_instr.c`, violating the Argon scoping design.
+`of.c:1105` DEFECT: The early return causes the guest to continue execution with unwritten results instead of faulting.
+`of.c:1100` STYLE: The `warned` flag is a global static variable rather than a per-device instance latch.
+
+P-GWEBREVOFEMULNODATA-d65f
+GWEBREVOFEMULNODATA: 5 ATTACKS 5 BROKEN 0 HOLDS 0 UNSETTLED DRAFTABLE:NO

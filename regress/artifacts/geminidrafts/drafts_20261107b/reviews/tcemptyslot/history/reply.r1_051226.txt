@@ -1,0 +1,26 @@
+FIXREVIEW_TCEMPTYSLOT: DEFECT, 2 FINDINGS
+
+1. **Does the diff remove the defect the issue describes, at every site the issue names? Name any site it misses.**
+No. The issue explicitly names empty-slot reads at `0x3e0-0x4ff` as returning zero with no bus error. The proposed fix changes the upper bound to `0x400`, meaning it correctly forces a bus error for `0x400-0x4ff`. However, it misses the sub-range `0x3e0-0x3ff`, which still evaluates to `true` for `relative_addr < 0x3e0`, falls through the `if`, and returns zero without a bus error. (This appears to preserve the Sprite OS behavior noted in the comment at `src/devices/dev_turbochannel.c:137`, but it contradicts the issue's scope).
+
+2. **CONTROL FLOW: does any added `return`, `goto`, `break` or early exit skip code the function would otherwise run -- above all its COMMON TAIL?**
+Yes. For addresses `0x400-0x4ff`, the code now hits the `return 0;` at `src/devices/dev_turbochannel.c:149`. This early exit skips the common tail lines, most notably `memory_writemax64(cpu, data, len, odata);` (line 159) and `return 1;` (line 161). It also skips the debug termination at line 152. 
+
+3. **RETURN VALUE: does any path now return something different? Say what the shown code implies the value means.**
+Yes. For empty slot reads at `0x400-0x4ff`, the function now returns `0` instead of `1`. According to the comment at `src/devices/dev_turbochannel.c:147`, returning `0` implies causing a "DBE exception" (Data Bus Error), whereas returning `1` implies a successful memory access.
+
+4. **What ELSE does the diff change -- state left set or cleared, a value the guest can now see, a message on a path that did not print one -- beyond removing the defect?**
+The early return at `src/devices/dev_turbochannel.c:149` causes the code to skip `debug(") ]\n");` (line 152). This leaves the debug console state dirty with an unterminated message that was started earlier at `src/devices/dev_turbochannel.c:75`.
+
+5. **House idioms (low severity): a diagnostic a guest can trigger repeatedly should print ONCE per device instance...**
+No violations found. The diff modifies an existing line, introduces no new comments requiring tags, adds no new diagnostics, and stays well within 79 columns (`src/devices/dev_turbochannel.c:148`).
+
+---
+**Findings:**
+
+`src/devices/dev_turbochannel.c:148` QUESTION: The fix misses the `0x3e0-0x3ff` range named in the issue, leaving it without a bus error to satisfy the Sprite OS comment. Fix: UNSETTLED (needs Sprite kernel source or DEC architecture manuals to resolve the contradiction).
+
+`src/devices/dev_turbochannel.c:149` DEFECT: The early return skips line 152, leaving the debug message unterminated. Fix: Add `debug(") ]\n");` immediately before `return 0;`.
+
+P-GWEBREVTCEMPTYSLOT-4543
+GWEBREVTCEMPTYSLOT: 5 ATTACKS 1 BROKEN 3 HOLDS 1 UNSETTLED DRAFTABLE:NO

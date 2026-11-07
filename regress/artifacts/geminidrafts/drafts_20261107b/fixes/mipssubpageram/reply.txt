@@ -1,0 +1,25 @@
+1. ACCEPT: The issue mentions fixing the PROM-area fallthrough is portable; `src/cpus/memory_rw.c:684-686` shows this block.
+2. ACCEPT: Adding `goto do_return_ok;` inside the `if` jumps to `src/cpus/memory_rw.c:803`, skipping the fallthrough cache/translation map, but doing nothing with `data` on `MEM_READ`.
+3. ACCEPT: `MEMORY_ACCESS_OK` is returned (`src/cpus/memory_rw.c:804`), but `data` was unmodified.
+4. ACCEPT: Bypassing the buffer population directly leaves `data` holding whatever the caller had, which is uninitialized guest view.
+5. ACCEPT: The suggested fix matches the idiom immediately following it in the `else if` block at `src/cpus/memory_rw.c:689-691`.
+
+STILL PRESENT: YES -- `src/cpus/memory_rw.c:686`
+
+```json
+[
+  {
+    "file": "src/cpus/memory_rw.c",
+    "old": "\t\tif ((paddr & 0xffffc00000ULL) == 0x1fc00000) {\n\t\t\t/*  Ok, this is PROM stuff  */\n\t\t} else if ((paddr & 0xfffff00000ULL) == 0x1ff00000) {",
+    "new": "\t\tif ((paddr & 0xffffc00000ULL) == 0x1fc00000) {\n\t\t\t/*  Ok, this is PROM stuff  */\n\t\t\tif (writeflag == MEM_READ)\n\t\t\t\tmemset(data, 0, len);\n\t\t\tgoto do_return_ok;\n\t\t} else if ((paddr & 0xfffff00000ULL) == 0x1ff00000) {",
+    "why": "Prevent the fallthrough to uncached RAM mapping that bypasses sub-page devices, and initialize the buffer on read to avoid returning garbage."
+  }
+]
+```
+The fix deliberately leaves the R4000 TODO alone and does not change the other Sprite `else if` case, focusing solely on the PROM area fallthrough defect as requested.
+
+REVISION_MIPSSUBPAGERAM: 5 ACCEPTED, 0 REJECTED
+FIXDRAFT_MIPSSUBPAGERAM: YES PRESENT, 1 EDITS
+
+P-GWEBFIXMIPSSUBPAGERAM-9352
+GWEBFIXMIPSSUBPAGERAM: 5 ATTACKS 0 BROKEN 5 HOLDS 0 UNSETTLED DRAFTABLE:YES

@@ -1,0 +1,14 @@
+FIXREVIEW_MBOUTCAPACITY: DEFECT, 3 FINDINGS
+
+1. The diff prevents the NULL dereference by adding `p == NULL`, but it completely fails to prevent writing past a 16-byte block because it still bounds on `len` (which the issue states is `data_out_len` that was resized without reallocating). It also entirely misses the other sites named in the issue: `dev_mb89352.c:476-495` and `diskimage_scsicmd`.
+2. CONTROL FLOW: No newly added `return`, `goto`, or `break`. An existing early exit condition is expanded, skipping `p[d->transfer_bufpos ++] = idata;` and the common tail phase/register updates.
+3. RETURN VALUE: The function is `void`; no return value changes occur. 
+4. ELSE: The diff only updates the error string to include "or null?". 
+5. HOUSE IDIOMS: The error at line 240 can be triggered repeatedly by the guest writing to the DREG, which violates the idiom to print ONCE per device instance.
+
+`src/devices/dev_mb89352.c:239` DEFECT: Bounding on `len` still allows out-of-bounds writes because `data_out_len` is resized without reallocation. Fix: UNSETTLED (needs the actual allocation size from diskimage_scsicmd or lines 476-495).
+`src/devices/dev_mb89352.c:476` DEFECT: The issue explicitly names lines 476-495 and diskimage_scsicmd, which this diff completely misses. Fix: UNSETTLED.
+`src/devices/dev_mb89352.c:240` STYLE: The diagnostic can be triggered repeatedly by the guest and lacks a latch and `(once)` in the message. Fix: Add latch field check and include `(once)`.
+
+P-GWEBREVMBOUTCAPACITY-9164
+GWEBREVMBOUTCAPACITY: 5 ATTACKS 2 BROKEN 2 HOLDS 1 UNSETTLED DRAFTABLE:NO

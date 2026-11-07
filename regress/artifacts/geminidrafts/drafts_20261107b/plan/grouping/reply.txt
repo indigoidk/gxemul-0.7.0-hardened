@@ -1,0 +1,44 @@
+To satisfy the defensive reading task, I will test the claims made in the project's commit message / planning document based strictly on the text provided. Because I cannot read the underlying source files to verify the architectural claims or the code state, these claims cannot be definitively settled.
+
+**Claim Tests (Defensive Review):**
+1. **Claim:** The project rule states "A round takes ONE site". (`TEXT:10`)
+   *Refutation attempt:* The text claims this is the project rule, but this cannot be verified without seeing the project's actual governance or CONTRIBUTING file. 
+   *Verdict:* UNSETTLED. (Requires `CONTRIBUTING.md` or equivalent project guidelines).
+2. **Claim:** Draft `b120` reports an unknown SCSI command as success. (`TEXT:15`)
+   *Refutation attempt:* The provided snippet `xferp->data_in[4] = 0x2c - 4;` does not inherently prove a success status is returned to the guest, and we cannot verify if it leaves other SCSI state alone without the file.
+   *Verdict:* UNSETTLED. (Requires `disk/diskimage_scsicmd.c`).
+3. **Claim:** Draft `pit8253lsbnotimer` asserts BOTH arms keep the other byte stale and the LSB arm installs no timer. (`TEXT:16`)
+   *Refutation attempt:* Without seeing `DEVICE_ACCESS(8253)`, we cannot prove that the hardware timer instantiation is actually missing or that the bytes are not updated elsewhere in a sub-function.
+   *Verdict:* UNSETTLED. (Requires `devices/dev_8253.c`).
+
+## 1. CANDIDATE GROUPS
+*   **Group 1:** `ppccrnandundec`, `ppcdcbiundec`, `ppc4xxcacheundec`, `ppcmtmsrlbit`
+    *Shared:* `cpus/cpu_ppc_instr.c` - undecoded instruction reaching CPU-STOP.
+    *Splitting fact:* `ppcmtmsrlbit` fails on a specific modifier bit of an otherwise decoded instruction, whereas the others are entirely missing opcodes.
+*   **Group 2:** `armclrexundec`, `armexregstop`, `armldrexbhdspin`
+    *Shared:* `cpus/cpu_arm_instr.c` - undecoded instruction reaching CPU-STOP.
+    *Splitting fact:* `armldrexbhdspin` decodes to a specific `X(invalid)` handler rather than falling through to a default `goto bad`.
+*   **Group 3:** `m88kcarryundec`, `m88kzeroword`, `m88kaluignored`
+    *Shared:* `cpus/cpu_m88k_instr.c` - undecoded instruction reaching `goto bad`.
+    *Splitting fact:* `m88kzeroword` represents the CPU executing zero-padding (0x00000000), not a standard functional opcode.
+*   **Group 4:** `mipsdsbranch`, `mipsllzero`, `mipsmuldivrd`
+    *Shared:* `cpus/cpu_mips_instr.c` - decoded instruction with unsupported operand variants reaching `goto bad`.
+    *Splitting fact:* `mipsdsbranch` relies on pipeline state (delay slots) rather than isolated operand values.
+*   **Group 5:** `scsimodeselhdr`, `scsimodesensepc`
+    *Shared:* `disk/diskimage_scsicmd.c` - guest-triggerable log flood (unlatched `fatal()`).
+    *Splitting fact:* MODE SELECT triggers a multi-line hex dump, whereas MODE SENSE triggers a single-line string per command.
+*   **Group 6:** `armdacr2kill`, `armdesc3kill`
+    *Shared:* `cpus/memory_arm.c` - guest-triggerable `fatal()` + `exit(1)` on MMU translation.
+    *Splitting fact:* They rely on different translation detectors (domain access control vs. L1 descriptor types).
+
+## 2. DUPLICATES
+None.
+
+## 3. CONFLICTS
+*   `pit8253lsbnotimer` and `pit8253flood`: Both heavily edit the same `DEVICE_ACCESS(8253)` function in `devices/dev_8253.c`. 
+*   `mipscountrate` and `mipscountread`: Both edit `DYNTRANS_RUN_INSTR_DEF` in `cpus/cpu_dyntrans.c`.
+
+GROUPING: 6 GROUPS covering 17 DRAFTS, 0 DUPLICATE PAIRS, 2 CONFLICTS.
+
+P-GWEBGROUPING-abb8
+GWEBGROUPING: 3 ATTACKS 0 BROKEN 0 HOLDS 3 UNSETTLED DRAFTABLE:NO

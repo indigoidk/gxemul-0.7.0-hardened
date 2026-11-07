@@ -1,0 +1,47 @@
+1. ACCEPT/REJECT for each finding:
+* Finding 1: REJECT. The presence of `dev_fb.c:913-914` and `dev_turbochannel.c:250-251` is UNSETTLED because those lines are not provided in the HEAD text; however, the `XPutImage` claim is ACCEPTED as `src/console/x11.c:300-301` clearly still uses the unclamped sizes.
+* Finding 2: ACCEPT. Returning early at the new snippet skips the state assignments at `src/console/x11.c:305-309`.
+* Finding 3: ACCEPT. `x11_redraw_cursor` returns `void` at `src/console/x11.c:224`.
+* Finding 4: ACCEPT. The original check at `src/devices/dev_fb.c:245-246` happens before the clamp, so a large `cursor_xsize` will result in a negative `cursor_x` being passed down.
+* Finding 5: ACCEPT. Lines are within 79 columns.
+
+2. STILL PRESENT: YES -- `src/console/x11.c:300`
+
+3.
+```json
+[
+  {
+    "file": "src/console/x11.c",
+    "old": "\tXImage *xtmp;\n\tCHECK_ALLOCATION(xtmp = XSubImage(fbwin->fb_ximage,\n\t    fbwin->cursor_x/fbwin->scaledown,\n\t    fbwin->cursor_y/fbwin->scaledown,\n\t    fbwin->cursor_xsize/fbwin->scaledown + 1,\n\t    fbwin->cursor_ysize/fbwin->scaledown + 1));",
+    "new": "\tint cxsize = fbwin->cursor_xsize/fbwin->scaledown + 1;\n\tint cysize = fbwin->cursor_ysize/fbwin->scaledown + 1;\n\tif (fbwin->cursor_x/fbwin->scaledown + cxsize > fbwin->fb_ximage->width)\n\t\tcxsize = fbwin->fb_ximage->width - fbwin->cursor_x/fbwin->scaledown;\n\tif (fbwin->cursor_y/fbwin->scaledown + cysize > fbwin->fb_ximage->height)\n\t\tcysize = fbwin->fb_ximage->height - fbwin->cursor_y/fbwin->scaledown;\n\n\tXImage *xtmp = NULL;\n\tif (cxsize > 0 && cysize > 0) {\n\t\tCHECK_ALLOCATION(xtmp = XSubImage(fbwin->fb_ximage,\n\t\t    fbwin->cursor_x/fbwin->scaledown,\n\t\t    fbwin->cursor_y/fbwin->scaledown,\n\t\t    cxsize, cysize));\n\t}",
+    "why": "Clip XSubImage dimensions to the image bounds and prevent early return from skipping state updates (#233)"
+  },
+  {
+    "file": "src/console/x11.c",
+    "old": "\tfor (int y = 0; y < fbwin->cursor_ysize; y += fbwin->scaledown) {\n\t\tfor (int x = 0; x < fbwin->cursor_xsize; x += fbwin->scaledown) {\n\t\t\tint px = x/fbwin->scaledown;\n\t\t\tint py = y/fbwin->scaledown;\n\t\t\tint p = 0, n = 0, c = 0;",
+    "new": "\tif (xtmp != NULL) {\n\tfor (int y = 0; y < fbwin->cursor_ysize; y += fbwin->scaledown) {\n\t\tfor (int x = 0; x < fbwin->cursor_xsize; x += fbwin->scaledown) {\n\t\t\tint px = x/fbwin->scaledown;\n\t\t\tint py = y/fbwin->scaledown;\n\t\t\tif (px >= cxsize || py >= cysize)\n\t\t\t\tcontinue;\n\t\t\tint p = 0, n = 0, c = 0;",
+    "why": "Prevent out-of-bounds pixel access in the clipped XSubImage and handle null xtmp (#233)"
+  },
+  {
+    "file": "src/console/x11.c",
+    "old": "\tXPutImage(fbwin->x11_display,\n\t    fbwin->x11_fb_window,\n\t    fbwin->x11_fb_gc,\n\t    xtmp, 0, 0,\n\t    fbwin->cursor_x/fbwin->scaledown,\n\t    fbwin->cursor_y/fbwin->scaledown,\n\t    fbwin->cursor_xsize/fbwin->scaledown,\n\t    fbwin->cursor_ysize/fbwin->scaledown);\n\n\tXDestroyImage(xtmp);",
+    "new": "\t\tXPutImage(fbwin->x11_display,\n\t\t    fbwin->x11_fb_window,\n\t\t    fbwin->x11_fb_gc,\n\t\t    xtmp, 0, 0,\n\t\t    fbwin->cursor_x/fbwin->scaledown,\n\t\t    fbwin->cursor_y/fbwin->scaledown,\n\t\t    cxsize,\n\t\t    cysize);\n\n\t\tXDestroyImage(xtmp);\n\t}",
+    "why": "Use clamped dimensions for XPutImage and close the if block (#233)"
+  },
+  {
+    "file": "src/devices/dev_fb.c",
+    "old": "\tif (cursor_x + cursor_xsize >= d->xsize)\n\t\tcursor_x = d->xsize - cursor_xsize;\n\tif (cursor_y + cursor_ysize >= d->ysize)\n\t\tcursor_y = d->ysize - cursor_ysize;",
+    "new": "\tif (cursor_x + cursor_xsize >= d->visible_xsize)\n\t\tcursor_x = d->visible_xsize > cursor_xsize ? d->visible_xsize - cursor_xsize : 0;\n\tif (cursor_y + cursor_ysize >= d->visible_ysize)\n\t\tcursor_y = d->visible_ysize > cursor_ysize ? d->visible_ysize - cursor_ysize : 0;",
+    "why": "Clamp cursor coordinates against visible size safely without introducing negative values (#233)"
+  }
+]
+```
+
+4. What the fix deliberately does not change:
+It deliberately does not change `fbwin->OLD_cursor_xsize` and other stored original sizes to clamped versions, allowing the full logical size of the cursor to be restored or remembered between frames. It also leaves `dev_fb.c:913-914` unmodified as they are not visible in the provided code context.
+
+REVISION_X11CURSORCLIP: 4 ACCEPTED, 1 REJECTED
+FIXDRAFT_X11CURSORCLIP: YES PRESENT, 4 EDITS
+
+P-GWEBFIXX11CURSORCLIP-583a
+GWEBFIXX11CURSORCLIP: 5 ATTACKS 4 BROKEN 0 HOLDS 1 UNSETTLED DRAFTABLE:YES
