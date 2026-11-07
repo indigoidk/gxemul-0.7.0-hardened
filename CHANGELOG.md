@@ -1,3 +1,13 @@
+# Records, 2026-11-07: two qualifiers from the closed rounds' records checks -- `#584`'s "126" counts call sites, `#581`'s owed in-situ run was discharged
+
+Both in place, as dated bracketed notes beside the text they qualify (neither sentence was false): `#584`'s "127 exact-text
+edits ... 126 call sites replaced, 2 rejected" closes once "126" is read as call sites (four edits covered two copies each, three
+repeated those -- `regress/artifacts/fmtattr/stage_20261105/WHY.txt`); `#581`'s review-stage "stays owed at landing" was
+discharged by the landing's in-situ run (`regress/artifacts/mvme187memcoob/landing_20261105/INSITU_memc.out`, 223 checks, 0 FAIL).
+A third candidate from the same pass -- `#585`'s "every one of the block's 30 checks" -- was checked and is TRUE (the block
+carries 30 check calls, `regress/artifacts/fbsdrampair/landing_20261105/DRYRUN_fbs.out`), so nothing is changed there.  No code,
+detector, gate, ledger row or score changes.
+
 # Records, 2026-11-07: the Gemini-web work on the oldest open issues, second bank -- 159 fix drafts (111 compile, every one a real
 change), every compiling draft reviewed, one capped revision round, the held rounds' records checks, closure and next-step drafts -- all PROPOSALS; the first
 bank's "74 compile" corrected in place
@@ -332,7 +342,7 @@ fixed in HEAD and in the peer session's working copy, two lines only; the round 
 
 **The fix** (47 files, 124 hunks, +236 -217 lines: `regress/artifacts/fmtattr/landing_20261105/COMPOSITE.diff`).  Built outside the repo from HEAD
 `79df4277`: Gemini 4 Argon drafted 127 exact-text edits in eight packets (`regress/artifacts/fmtattr/drafts_20261105/`); 126 call sites replaced, 2
-rejected (`regress/artifacts/fmtattr/stage_20261105/SUMMARY.txt`, `regress/artifacts/fmtattr/stage_20261105/REJECTS.txt`, `regress/artifacts/fmtattr/stage_20261105/WHY.txt`); x11.c's comma removed and cpu_mips.c's ASID cast by hand (`fix_hand.py`);
+rejected (`regress/artifacts/fmtattr/stage_20261105/SUMMARY.txt`, `regress/artifacts/fmtattr/stage_20261105/REJECTS.txt`, `regress/artifacts/fmtattr/stage_20261105/WHY.txt`) [2026-11-07, records: the three numbers close -- "126" counts CALL SITES, not edits: four edits covered two copies each and three more repeated those, so 118 + 4 + 3 + 2 = 127 drafted and 122 distinct edits applied (`regress/artifacts/fmtattr/stage_20261105/WHY.txt`, the `(x2, GCC warned in every copy)` and `duplicate of an edit already applied` lines)]; x11.c's comma removed and cpu_mips.c's ASID cast by hand (`fix_hand.py`);
 the 19 empty-line calls given `"%s", ""` and an unreachable `default: mnem = "?"` in the three disassembler switches the overflow
 warnings named (`fix_hand2.py`); `GX_PRINTF(f, a)` -- the attribute under `__GNUC__`, empty elsewhere -- on the four
 declarations (`fix_misc_h.py`); pass 2's seven repairs (`fix_hand3.py`) and pass 2b's one (`fix_hand4.py`).  The rules: `PRIx64`
@@ -705,7 +715,7 @@ REGRESS-WITH-FINDINGS): the breach is closed, measured.  Its four record items w
 identity proof and staged diffs -- by the landing kit (`landing_20261105/`); B and C, two sentences of the probe's CONTRACT
 (family (2)'s set-latch clause and family (6)'s exclusions), and D, a word in repair 6's note (a synthetic replay called
 measured), by repair 6's implementer, text only (`regress/artifacts/mvme187memcoob/r7_20261105/TEXTONLY_PROOF_reg2.txt`; the edit:
-`r7_20261105/mvme187_memc_probe.py.reg2.diff`).  A reading of the three fixes accepted all three (`regress/artifacts/mvme187memcoob/recreg2_20261105/DISPOSITION.md`, GPT-6 Astra: 3 accepted, 0 to fix): B true as qualified, C's fifteen own-shape exclusions exactly the right set, D true; the round's review and records close here, and the in-situ 223-check gate run stays owed at landing.
+`r7_20261105/mvme187_memc_probe.py.reg2.diff`).  A reading of the three fixes accepted all three (`regress/artifacts/mvme187memcoob/recreg2_20261105/DISPOSITION.md`, GPT-6 Astra: 3 accepted, 0 to fix): B true as qualified, C's fifteen own-shape exclusions exactly the right set, D true; the round's review and records close here, and the in-situ 223-check gate run stays owed at landing [2026-11-07, records: discharged at the landing -- 223 checks, 0 FAIL (`regress/artifacts/mvme187memcoob/landing_20261105/INSITU_memc.out`), recorded in this block's landing paragraph].
 
 **Seats.**  Every answer is recorded on the row, one entry each, read whole before it was written; the non-firings and seat failures are recorded by name, each with its own reason.  Research (pass 1 and the design): agy 27, codex 6, deepseek 6, fable5 5, glm 7, grok 7, kimi 2, minimax 2, opus5 4 entries -- the 11-03 next-5 panels (`_scratchpad/panel_20261103_103051_next5_mvme187memcoob/` and five siblings), Gemini web on each stage and on the adjudications and drafts, the witness share-findings panel, the Claude Code Cloud design rulings and the measuring seat.  Review (passes 2 to 5, their rulings, the records readings and repair 6's pass 2): agy 10, codex 10, deepseek 1, fable5 20, glm 7, grok 5, kimi 1, minimax 1, opus5 6 entries, of them agy 8, codex 10, fable5 19, glm 6, grok 3, opus5 6 answers; the implementer runs (repairs 5 and 6, table 5's preparation, records 6 to 8) are recorded as such and not as reviews; Grok 4.7 (a 402 billing wall), GLM 5.3 after pass 4 and Gemini after pass 5 (the Ollama limit, the web route) are seat failures on the later passes; deepseek, minimax and kimi were not fired on the review stage.  Regress: the two local Mythos 5.1 readings.  Pass-2 and later answers are banked in the round's artifacts dir or cited in their panel dirs.
 
