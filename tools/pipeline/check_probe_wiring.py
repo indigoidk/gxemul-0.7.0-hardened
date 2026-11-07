@@ -4102,7 +4102,9 @@ EXEMPT = {
     #  Re-dated 2026-10-22 -> 2026-11-06 on 2026-10-23 by owner ruling, in its own commit (the 04f3e7c0 shape): it came
     #  due with the Alpha gate home still owed and refused every commit, #569's landing first.  A re-date is not a
     #  discharge; the gate that owes it is unchanged below.
-    "alpha_tbi_probe.py":          ("2026-11-06",
+    #  Re-dated 2026-11-06 -> 2026-11-20 on 2026-11-06 by owner ruling, in its own commit: it came due with its gate
+    #  home still owed by the Alpha/LCA session and would have refused every commit from 2026-11-07.  Not a discharge.
+    "alpha_tbi_probe.py":          ("2026-11-20",
                                     "no gate runs an Alpha guest session (gate 9 only "
                                     "constructs them); gate_crossfamily.sh "
                                     "is the named home and giving it one is a harness "
@@ -4115,7 +4117,9 @@ EXEMPT = {
     #  commit" -- the 04f3e7c0 shape), applied to its siblings (#518/#520/#530): the four Alpha exemptions are ONE decision
     #  and this one came due 2026-10-23 with the Alpha gate home still owed, refusing every commit (#570's landing first).  A re-date
     #  is not a discharge; the gate that owes it is unchanged below.
-    "lca_badval_probe.py":         ("2026-11-06",
+    #  Re-dated 2026-11-06 -> 2026-11-20 on 2026-11-06 by owner ruling, in its own commit: it came due with its gate
+    #  home still owed by the Alpha/LCA session and would have refused every commit from 2026-11-07.  Not a discharge.
+    "lca_badval_probe.py":         ("2026-11-20",
                                     "no gate runs an Alpha guest session (gate 9 only "
                                     "constructs them); gate_crossfamily.sh "
                                     "is the named home, filed to wiringcliff with #520"),
@@ -4129,7 +4133,9 @@ EXEMPT = {
     #  commit" -- the 04f3e7c0 shape), applied to its siblings (#518/#520/#530): the four Alpha exemptions are ONE decision
     #  and this one would come due 2026-10-26 with the Alpha gate home still owed, refusing every commit (#570's landing first).  A re-date
     #  is not a discharge; the gate that owes it is unchanged below.
-    "lca_widewrite_probe.py":      ("2026-11-06",
+    #  Re-dated 2026-11-06 -> 2026-11-20 on 2026-11-06 by owner ruling, in its own commit: it came due with its gate
+    #  home still owed by the Alpha/LCA session and would have refused every commit from 2026-11-07.  Not a discharge.
+    "lca_widewrite_probe.py":      ("2026-11-20",
                                     "no gate runs an Alpha guest session (gate 9 only "
                                     "constructs them); gate_crossfamily.sh "
                                     "is the named home, filed to wiringcliff with #518/#520/#530"),
@@ -4139,7 +4145,9 @@ EXEMPT = {
     #  commit" -- the 04f3e7c0 shape), applied to its siblings (#518/#520/#530): the four Alpha exemptions are ONE decision
     #  and this one would come due 2026-10-27 with the Alpha gate home still owed, refusing every commit (#570's landing first).  A re-date
     #  is not a discharge; the gate that owes it is unchanged below.
-    "lca_isalane_probe.py":        ("2026-11-06",
+    #  Re-dated 2026-11-06 -> 2026-11-20 on 2026-11-06 by owner ruling, in its own commit: it came due with its gate
+    #  home still owed by the Alpha/LCA session and would have refused every commit from 2026-11-07.  Not a discharge.
+    "lca_isalane_probe.py":        ("2026-11-20",
                                     "no gate runs an Alpha guest session (gate 9 only "
                                     "constructs them); gate_crossfamily.sh "
                                     "is the named home, filed to wiringcliff with #518/#520"),
