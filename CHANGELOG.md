@@ -1,3 +1,13 @@
+# Records, 2026-11-07: the nine oldest held rounds' CHANGELOG blocks, records-checked -- 12 wrong records corrected in place and 20 citations and wordings qualified, by Fable 5.1's ruling
+
+By the owner's directions of 2026-11-06 ("Utilize Google Gemini Web for the oldest five open items"; "land everything"), two seats records-checked the CHANGELOG blocks of the nine oldest held landed rounds -- `#569`-`#574` and `#576`-`#578` -- agy (Gemini 4 Argon, file-reading: every number against the artifact cited for it) and Gemini web (packet-fed: each block inlined).  The main loop checked every seat claim against git or the cited artifact before writing it down, quoting each check, and rejected most of them, among them two agy fabrications -- a `TOTAL` line quoted from a scores file that has none, and a block sentence misquoted (`regress/artifacts/heldrecords/records_20261106/OLDEST3_RECORDS.md`).  Fable 5.1 then ruled on the result, verifying each item in the repository: ten proposed edits accepted, four amended, none rejected, LAND-RECORDS (`regress/artifacts/heldrecords/records_20261106/RULING.md`).  This commit applies the ruling's texts exactly, by old string, each checked to occur once at `90b2b628` (`regress/artifacts/heldrecords/records_20261106/APPLY.txt`).
+
+**Corrected in place** (`[corrected 2026-11-07, records: said ...]`, the form these blocks already use for their 20 2026-11-02 corrections, occurrences counted in HEAD's CHANGELOG.md): `#570` five -- the probe's line count; the revision-2b receipts cited for the shipped 2c, kept under `superseded_9046d774/` with a same-named intermediate under `superseded_fe8cc784/`; `check_probe_wiring.py`'s line count; the object count; and the debugger gloss its own round had already corrected in product code; `#572` one, the clone provenance's ninth differing path; `#574` two, the clearance's three edited sources and the pass-2 answer count; `#576` one, the plan's M_h prediction; `#577` one, Astra's liveness time, whose three files are banked at `regress/artifacts/shblreset/liveness_20261102/astra_hotmail.txt` and beside it; `#578` two, the shipped probe's three docstring edits in two hunks and its one driver edit.
+
+**Qualified:** 8 one-phrase wordings ("every answering seat", a manual line, a named manual file, the F2 ruling's provisional state, a stale revision label) and the 13 line citations four blocks wrote in pre-fix numbering, in 12 phrases, each now naming its tree as `X^` or `X` with the shift measured from the landing commit's own diff.  `#577`'s `OUTSTANDING_BUGS.md` citations, which a seat had called pre-fix, the ruling measured byte-identical across that landing; they are left alone.
+
+**Not done here, and still owed:** each round's own regress review -- the nine rows stay `held` with their hold questions unchanged; and the ruling's one-line rule for round blocks (a line number into a file the round edits names its tree), which it places in `.claude/commands/round.md` and the carrier's lifecycle step 7, both the owner's files.  No code, detector, gate, ledger row or score changes.
+
 # Records, 2026-11-06: three measurements and two Fable 5.1 rulings banked under `regress/artifacts/` -- `holdphase` ruled SAME-PHASE and recorded, `untokenedanswers`' discriminator ruled, the code-scanning final recorded on `fmtattr`, `fmtmissarg` and `codeqlscope`; `liveholdsphase` and `fmtmissargwitness` filed
 
 Three read-only measurements made 2026-11-06 by Opus 5.5 agents of the main loop (scratch only; no gate, build, probe, panel
@@ -976,7 +986,7 @@ liveness rows ok, the FCNVDS control ok (the sibling writes FPUL by design, so t
 fixed clone: `witness_fixed.out` RESULT=6/6.
 
 **The fix.**  Delete the one line; a five-line `#576` comment stands where it was.  Nothing else in the handler, its sibling
-`X(fcnvds_drm_fpul)` or the decoder (:5061-5068) changes.  Option set: DELETE -- there is no value to ACCEPT or storage to BACK (the
+`X(fcnvds_drm_fpul)` or the decoder (`:5061-5068` at `7ccd4e42^`; `:5065-5072` at `7ccd4e42`) changes.  Option set: DELETE -- there is no value to ACCEPT or storage to BACK (the
 architecture defines no FPUL write), nothing to DECLINE or FAULT (the instruction is legal), and a guarded cast would keep the defect
 (pass 1, Fable Q4; Grok Q4).  Diff: `src/cpus/cpu_sh_instr.c` +5 -1 (`killtable_20261102/product.diff`, the final wording; the scratch
 clones that were measured carried the pre-adjudication wording "the FTRC store, mis-copied" -- comment-only, and the build does not see
@@ -1017,7 +1027,7 @@ Floor: (a) 40/52; (b) 40/52; (c): measured at `killtable_20261102/M_c.raw`, carr
 directions (M_g, M_gm) and zero-operand (M_z), all red; (e) the contract above; (f) not applicable.  Provenance of the predictions:
 `PRETABLE.out` was written before the base leg BY THE AUTHOR'S ACCOUNT; its own mtime no longer proves the order because the M_g
 correction was written into it in place at 17:29 (future rounds: write corrections to a sibling file).  The EVIDENCED pre-leg record is
-`IMPLEMENTATION_PLAN_20261102_1715.md` (mtime 17:15:08), which predicts the base, fixed, M_b, M_c, M_h, M_i and M_z scores as measured,
+`IMPLEMENTATION_PLAN_20261102_1715.md` (mtime 17:15:08), which predicts the base, fixed, M_b, M_c, M_i and M_z scores as measured [corrected 2026-11-07, records: listed M_h too -- the plan's M_h line (`killtable_20261102/IMPLEMENTATION_PLAN_20261102_1715.md:70`) predicts one red row, `fpul 0.1` (0xa0000000), and M_h measured 40/52 with every FPUL row red: six values in both rounding modes, twelve rows (`killtable_20261102/M_h.raw`); `PRETABLE.out:30` carries the 40/52],
 predicts M_f conditionally ("green unless the NODN row exists") and M_g only for the all-DR2 shape it describes, and is silent on M_d and
 the mirror; the M_g prediction for the DR0 instrument exists only in `PRETABLE.out`, inverted (it named the DR0 row as the red one; the
 five DR2 rows are), and M_gm was built after the table to measure the mirror the DR0 row exists for.  `PRETABLE.out`'s CHANNEL line
@@ -1039,7 +1049,7 @@ DN-clear via NODN at zero cost (Fable; glm had asked for a row, Grok for a discl
 the measured cost); Astra's three: the record wording, an explicit contract, the validation completed before shipping.  Pass 2
 (`pass2_20261102/`, the diff, the handler after the edit, the detector diff, PRETABLE and the table inlined): Argon SHIP; glm-5.3 SHIP
 WITH CHANGES (2); Grok 4.7 SHIP WITH CHANGES (3); Fable 5.1 SHIP WITH CHANGES (3); Astra SEAT WALLED (the hotmail login's weekly limit,
-"try again at Nov 8th").  Every seat: the code is right; the changes were to artifacts and records -- the preserved mutator (above), the
+"try again at Nov 8th").  Every answering seat: the code is right; the changes were to artifacts and records -- the preserved mutator (above), the
 destination-axis overclaim and the undisclosed state axes (now in the contract), the `ftrcS-nan` relabel, the gate prose, the PRETABLE
 timing sentence, "the one FINITE input", "apparently copied", the indefinite "by reading", the PR-reserved class never filed, the M_b/HEAD
 md5 equality, `M_e` not built.  The adjudication pass (`f2_20261102/`): Fable 5.1 adjudicating, F2 VERDICT: RATIFY WITH CHANGES (5) --
@@ -1077,7 +1087,7 @@ from FTRC" (`#297` GUARDED the FTRC casts behind a range ladder; they remain at 
 for +0: the store spuriously overwrites FPUL, corrupting inputs such as -1.5); two filings -- `shfpprreserved` (LOW: the manual's pseudocode calls `undefined_operation()` at SEVEN sites,
 `grep -n undefined_operation _scratchpad/sh4_programming.txt` -- FCNVDS :10770 and FCNVSD :10883 at PR=0, FIPR :11251, FMAC :11429, FRCHG
 :12234, FSCHG :12270 and FTRV :12852 at PR=1 -- and never defines it; the manuals call the combination "undefined", not an exception; the
-model performs the operation; `#316`'s FSRRA (`cpu_sh_instr.c:3279-3295`) is the fork's one precedent for a reserved precision
+model performs the operation; `#316`'s FSRRA (`cpu_sh_instr.c:3279-3295` at `7ccd4e42^`; `:3283-3299` at `7ccd4e42`) is the fork's one precedent for a reserved precision
 combination; a POLICY is owed, not a wrong-result fix) and `shnanquiet` (LOW: SH NaN RESULTS use the shared encoder's all-ones pattern,
 which SH-4 classes as signaling where hardware emits the quiet 0x7fbfffff / 0x7ff7ffff...; the MIPS model canonicalises, `#255`; the SH
 tree does not).  Ledger: `shfcnvsdfpul` set `held` (the Opus-seat question; the Fable-only regress review precedes closing), witness
@@ -1113,7 +1123,7 @@ Ledger (the `commits` field and the state note's date), this block, the `regress
 `:12302-12304`, 5.6.1 (2) `:12376` -- and "Exception code H'020 is set in EXPEVT" (`:12383-12384`; 5.7.2.a `:13164-13166` repeats it as
 H'0000 0020), not the power-on code H'000; and the two TLB multiple-hit exceptions are reset-category in their own right (Table 5.2
 `:12006`, `:12010`) with their own code H'140 (`:12461` instruction side, `:12499` data side), which the block overwrote too -- so the
-`#457` guest-distinguishability comment at `:985-989` ("a multiple hit can be told from a power-on (0x000) or a manual reset (0x020)")
+`#457` guest-distinguishability comment at `:985-989` (at `bb672a16^`; `:994-998` at `bb672a16`) ("a multiple hit can be told from a power-on (0x000) or a manual reset (0x020)")
 was false under BL.  Guest-visible consequence: a kernel's reset handler dispatching on EXPEVT read 0x000 for a manual reset and for a
 multiple hit alike.  Upstream residue (the TODO is the 0.7.0 import's).  WRONG-RESULT, MED; no host failure path (`fatal()` only prints,
 `debugmsg.c:384-391`).  Two carriers in the bug file: the id entry `OUTSTANDING_BUGS.md:24063` and the prose row `:8238`.
@@ -1129,16 +1139,16 @@ H'020 and H'140 -- with the liveness control (`bl trapa pc` 0xa0000000, the rese
 EXPEVT_RESET_MANUAL;`, and the TODO comment becomes a twelve-line `#577` comment carrying the manual citations above, the reason the
 multiple-hit code is exempt, why a user break never reaches the block (the UBC suppresses it under BL, `:41448-41452`, and
 `EXPEVT_BREAK` has no raiser in this tree -- `sh4_exception.h:73` is its only occurrence), and why an interrupt cannot latch a code here
-(`cpu_dyntrans.c:247` delivers none while BL is set; the intevt path at `:945-947` never stores EXPEVT for an interrupt).  Nothing else
+(`cpu_dyntrans.c:247` delivers none while BL is set; the intevt path at `:945-947` (at `bb672a16^`; `:954-956` at `bb672a16`) never stores EXPEVT for an interrupt).  Nothing else
 in `sh_exception()` changes: the `fatal()` stays (its flood is `floodclass`, not this round's), the common tail and the shared reset arm
-(`:1015-1021`) are untouched.  Option set: IMPLEMENT the manual's rule -- the arm already existed and only its constant was wrong; there
+(`:1015-1021` at `bb672a16^`; `:1024-1030` at `bb672a16`) are untouched.  Option set: IMPLEMENT the manual's rule -- the arm already existed and only its constant was wrong; there
 is nothing to DECLINE or FAULT (the exception is legal and the manual says exactly what happens), and DELETE would leave the guest's own
 code in EXPEVT where the architecture mandates H'020.  Diff: `src/cpus/cpu_sh.c` +14 -5 (`killtable_20261102/product.diff`, the
 shipping text; `witness_20261102/product.diff` and its `apply_fix577.py` carry the pre-pass-1 wording of the SAME code -- comment-only,
 and both builds share the binary md5 `b7b0d0b5f5ae` at 17:47 and 18:11), byte-identical in `GXEMUL-SEC` and `est/`.  Every caller of
 `sh_exception()` at HEAD was enumerated at pass 2 (Fable; `git grep`): no caller passes H'000 or H'020 as an exception, so the exempt set
 is exactly {H'140} and every value the fix stores has an arm in the switch -- the fix opens no path to the `default: ... exit(1)` at
-`:1083-1085`.
+`:1083-1085` (at `bb672a16^`; `:1092-1094` at `bb672a16`).
 
 **The detector.**  `regress/sh_tlbmulti_probe.py`: `session()` gains `program=`/`steps=` (a short guest program run under a preset `sr`),
 and four rows are appended -- `tlbm bl trapa` (sr 0x500000f0, `trapa #1`, want 0x00000020), `tlbm bl mhit` (the multiple hit under BL,
@@ -1234,7 +1244,7 @@ earlier contents), D1 (disclose AND file) and D2, refining P1/P3/P8/P10/P16 the 
 that the misaligned-store row would catch the ADDR_ERR_ST variant but not `M_resinst`; glm SEAT DOWN -- cause found 20:0x the same evening:
 `panel_ollama.py` sent urllib's default User-Agent, which the daemon forwards and Cloudflare bans (403/1010); fixed in the harness
 commit that followed, every cloud seat answering a liveness token afterwards, so the three glm failures in this round were a harness
-defect, not an account state; Astra, walled through all three passes, answered a liveness test at 20:4x on the hotmail login and its
+defect, not an account state; Astra, walled through all three passes, answered a liveness test at 20:1x [corrected 2026-11-07, records: said `at 20:4x` -- the time the liveness prompt and its token `ASTRA_SEAT_ALIVE_20261102_2040` were STAMPED with; the hotmail answer file is 20:10:17 by mtime (`liveness_20261102/astra_hotmail.txt`, banked from `_scratchpad/w578/liveness/`), the pass-2 answer `pass2_20261102/codex/codex_shblresetp2.txt` 20:21:53 and the F2 answer `f2_20261102/codex/codex_shblresetf2.txt` 20:37:23, as this block's roster sentence (`answered at 20:2x after its reset`) and hold sentence (`20:2x-20:3x`) already say] on the hotmail login and its
 pass 2 and F2 confirmation were fired then.  **The owner ruled (17:4x) that
 this commit HOLDS until Astra answers**; Astra answered pass 2 and F2 at 20:2x-20:3x and the owner lifted the hold at 22:3x ("Land #577
 now").  **Late seats, fired after the owner's evening rosters** (20:5x: the four Ollama cloud seats and Opus; 21:3x: agy): pass 1 -- GLM 5.3
@@ -1257,9 +1267,9 @@ PASS 1 stays OWED (walled at 17:5x; the brief is re-fired after the 01:10 reset 
 **Not changed (assessed, intentionally left).**  The unlatched `fatal()` in the BL block floods on every exception under BL (`floodclass`).
 The manual-reset state also re-initialises the on-chip modules and VBR/SR (`:12302-12304`, `:12383`); the model performs none of that
 module initialisation (`shresetinit`, `OUTSTANDING_BUGS.md:23283`), and this round changes only the code it stores.  SPC and SSR are still
-written at `:941-942` where 5.7.2.a (`:13165-13166`) calls them undefined on this path: undefined permits any value.  H-UDI reset stays the
+written at `:941-942` (at `bb672a16^`; `:950-951` at `bb672a16`) where 5.7.2.a (`:13165-13166`) calls them undefined on this path: undefined permits any value.  H-UDI reset stays the
 table's H'000 row with no raiser.  SLEEP under BL never wakes in this tree (`cpu_sh_instr.c:260-263` and `cpu_dyntrans.c:247` refuse under
-BL) where the manual accepts an interrupt in sleep with BL set (`:13170-13171`): filed, not fixed here.  The `#457` comment at `:985-989`
+BL) where the manual accepts an interrupt in sleep with BL set (`:13170-13171`): filed, not fixed here.  The `#457` comment at `:985-989` (at `bb672a16^`; `:994-998` at `bb672a16`)
 becomes unconditionally true with this fix.  Two optional product-comment rewordings from pass 2 (Fable: "never stores EXPEVT for an
 interrupt"; a clause that H'000 and H'020 have no raiser today, so a later RESET-pin or H-UDI raiser would need its own exemption) were
 not applied after pass 2; the no-raiser fact is this sentence.
@@ -1275,7 +1285,7 @@ carry H'140, left as written.
 with BL set is never woken by an interrupt in this tree, `cpu_sh_instr.c:260-263` requiring BL clear and `cpu_dyntrans.c:247` delivering
 none under BL, while the manual accepts an interrupt in sleep with BL=1, `:13170-13171`; pass 1 F10, Fable) and `shblundriven` (LOW,
 coverage debt: the measured total escape `M_resinst`, with the member list from pass 2 and the cheapest row -- a misaligned longword store
-`mov.l r2,@r1` 0x2122 with r1 odd under BL, want H'020, the mirror of `tlbm bl ldmis` -- recorded; held for the F2 ruling on D1).  Ledger:
+`mov.l r2,@r1` 0x2122 with r1 odd under BL, want H'020, the mirror of `tlbm bl ldmis` -- recorded; held for the completion of the F2 ruling on D1, provisional on 3 of 5 seats).  Ledger:
 `shblreset` set `held` (for Astra's walled pass 1), witness `probe:regress/artifacts/shblreset/witness_20261102/sh_blreset_witness.py`, the four
 detector rows named, seat entries per pass naming their dirs (`regress/artifacts/shblreset/pass1_20261102/`, `pass2_20261102/`,
 `f2_20261102/`); the two rows opened.  The gate file is staged from a HEAD-based copy carrying this round's hunk only
@@ -1372,9 +1382,9 @@ measured, is `CHECK_ALLOCATION` at `dev_jazz.c:712` formatting `__LINE__` -- 712
 `#577`'s `cpu_sh.c` has no such site after its edit; the settling check is `objdump -d` or `cmp -l` on `dev_jazz_init`); (c) measured, `/bin/true` as the medium; (d) the fix depends on no predicate of its own (a pure deletion), so the (d)
 forms are the deleted behaviour re-introduced under the enclosing function's own tests -- {offset} x {direction}, all six cells rowed and
 each single-cell form red -- plus the single-input families above; (e) the contract; (f) not applicable (no address decode changed).
-The instrument table 3 ran is preserved as `jazz_vector_probe.ASRUN.py` (md5 7b3e17e7d3f0); the shipped probe differs from it by one
-docstring passage (the contract's "at the values the rows drive" wording, Opus F2 change 1; `ASRUN_NOTE3.txt`) and by nothing else -- the
-two ASTs are identical with the module docstring dropped.  Two driver edits preceded table 3 and are recorded in the same note: the
+The instrument table 3 ran is preserved as `jazz_vector_probe.ASRUN.py` (md5 7b3e17e7d3f0); the shipped probe differs from it by three
+docstring edits in two passages (`ASRUN_NOTE3.txt`'s POST-TABLE EDITs 1-3: the contract's "at the values the rows drive" wording, Opus F2 change 1; the mechanism clause and the contract's disclosures, GLM 5.3 / kimi / minimax; the OpenBSD access shapes, Grok change 1) [corrected 2026-11-07, records: said `by one docstring passage`, copied from `ASRUN_NOTE3.txt:10-11` before EDITs 2 and 3 were appended -- `diff -u` of the as-run copy against the shipped file has two hunks, `@@ -8,9 +8,10 @@` and `@@ -63,16 +64,27 @@`, both inside the module docstring] and by nothing else -- the
+two ASTs are identical with the module docstring dropped.  Two edits preceded table 3, one to the driver and one docstring-only [corrected 2026-11-07, records: said `Two driver edits` -- `ASRUN_NOTE3.txt:2-5`], and are recorded in the same note: the
 `quit` command had set the failure flag on every run (dryrun26/), and two docstring literals were reworded for section U.
 
 **The panel** (owner roster 2026-11-02 20:5x: Grok 4.7 xhigh, the four Ollama cloud seats glm-5.3 / deepseek-v4-pro / minimax-m3 /
@@ -1466,7 +1476,7 @@ the committed `regress/gate_arm.sh` carries the #574 block and its `rows run` pi
 `regress/gate_hygiene.sh` EXPECT_PTY_PROBES=80 with `i8259_eoi_probe.py` grandfathered, `tools/pipeline/check_probe_wiring.py` the MANIFEST
 key.  Landing numstat (4275 files): 56 0 regress/gate_arm.sh; 3 2 regress/gate_hygiene.sh; 1128 0 regress/i8259_eoi_probe.py; 78 29 src/devices/dev_8259.c; 18 1 src/devices/dev_gt.c; 2 0 src/include/devices.h; 9 0 tools/pipeline/check_probe_wiring.py; 1 1 tools/precommit_check.sh.  PROPAGATED after the landing: the three product files copied into `est/` (source tree, part 2
 N/A), `build/`, `build-asan/` and `/tmp/gxsec-build`, each build tree rebuilt at once; `regress/artifacts/i8259eoiirr/landing_clearance/CLEARANCE.out`
-records the OUTPUT of both clearance parts (cmp clean against GXEMUL-SEC for every copy; each binary newer than both edited sources).
+records the OUTPUT of both clearance parts (cmp clean against GXEMUL-SEC for every copy; each binary newer than all three edited sources [corrected 2026-11-07, records: said `both` -- `landing_clearance/CLEARANCE.out:12`]).
 The ledger row's `commits` field names `c1c74b2b`; its state stays `held` (the Fable question and the roster question -- `hold_question`).  The
 PASS-2 RECEIPT line is appended to `regress/pass2_ledger.tsv` (precommit section F).  Argon's web-route answers for every pass of this
 round are still QUEUED behind the single sender and are OWED to a later records commit (the late-dissent rule).
@@ -1537,7 +1547,7 @@ both-columns device values relabelled CONTRACT rows, so a mutant that reds a pol
 instrument failure).  Records corrections from F2b, in place: `irq_base` is not write-only globally (`dev_footbridge.c` reads
 it; only `dev_8259.c`/`dev_gt.c` never read it); GLM's pass-2 position on the retire guard was a REQUEST for a banded
 mixed-source row, not "no row exists" (the band-row construction is filed as `pit8253retireguard`); the pass-2 verdict split
-was one seat against three (five answers), not "1-4"; the returned-line warrant is Grok's re-fetch of Linux's ICW2 bases (0
+was one seat against three (six answers [corrected 2026-11-07, records: said `five answers`, GLM B's count at F2b (`pass2_20261025/f2b_20261025/F2B_RULINGS.md:62`) -- `pass2_20261025/PASS2_RULINGS.md:3`]), not "1-4"; the returned-line warrant is Grok's re-fetch of Linux's ICW2 bases (0
 and 8) and `MALTA_INT_BASE` 0 on F2b, which the inlined quotes did not carry.  The repair's own pass (F2c, scoped to the
 instrument diff): Astra (adjudicating) VERDICT: RATIFY WITH CHANGES -- the named repairs are valid, but three uncovered predicate cases prevent instrument closure; provisional until the roster completes.  Grok VERDICT: RATIFY WITH CHANGES -- the six new kill rows kill the mutants they name; the helper recompute's false branch is still unobserved, so this pass does not close.  GLM VERDICT: RATIFY WITH CHANGES -- all thirteen new rows are valid by construction and none is vacuous, the nine relabels are sound, and the table of record is read right; but one half-predicate of the fix's ow // VERDICT: RATIFY WITH CHANGES -- one clause-(d) cell of the fix's recompute predicate (the `~d->ier` mask term) is observed by no row in the 101-row table and covered by no filing; row it (one session), add t  DeepSeek VERDICT: NOT RATIFY -- three escaped mutants remain, so zero floor breaches is not met. // VERDICT: RATIFY -- zero floor breaches in the v2e instrument diff; one F2b disposition (A6) is partially wrong and was already corrected in the shipped v2f..  F2c found the SAME CLASS again -- the recompute's other partition cells (nothing remaining; only a
 masked request remaining), the EOI predicate weakened to "any line in service", the GT cascade conjunct -- each measured as a
@@ -1586,7 +1596,7 @@ equality (`rows run` 123 -- SCORE_CLAIMS_MANIFEST 41 -> 42); `check_probe_wiring
 **Records and filings.**  `OUTSTANDING_BUGS.md` 2026-10-25: `i8259eoiirr` FIXED (state `held` for the Fable question and the roster
 question); `i8259isrnever` NARROWED to the PReP/footbridge vector reads (the poll and the GT read now set ISR); `8259cmdhalt` gains the
 reachability this round READ (0x21-0x27 are non-specific EOIs the model treats as specific, 0xa0-0xa7 and 0x6c reach `cpu->running = 0`);
-new rows `pit8253pendingptr` (the dead decrement), `pit8253count0` (a zero count maps to a timer that does not fire within any run (clamped to 1e-8 Hz), MEASURED) [corrected 2026-11-02, records: said "a timer that never fires"], `i8259ocw2
+new rows `pit8253pendingptr` (the dead decrement), `pit8253count0` (a zero count maps to a timer that does not fire within any run (clamped to 1e-8 Hz), MEASURED: `pass1_20261025/rate_explore_20261025/RUN_IDENTITY.txt:8`) [corrected 2026-11-02, records: said "a timer that never fires"], `i8259ocw2
 nonspec`, `algorisaintclear` (dev_algor.c's status reads clear PIC request bits), `i8259ltim`, `i8259priority`, `i8259cascline` (the
 two-slave-request CPU-line row owed to D_fold), `i8259aeoi` (ICW4 AEOI is unsupported while the acknowledge always sets ISR; pass 2,
 Astra), `i8259icwreset` (ICW1 resets neither ISR nor `current_command`; pass 2, Astra and GLM), `i8259ocw3revert` (the one-shot
@@ -1603,7 +1613,7 @@ here, not filed.  Witness term: `probe:regress/i8259_eoi_probe.py` with ORDER ev
 `regress/artifacts/lecsrmask/pass1_20261025/final_055141/` froze (LF, no CR byte); the committed `src/devices/dev_le.c` blob md5 is
 `55d47bdae4109bd1ef48d94421909bbc`, the file the fix legs were built from (`final_055141/dev_le.c.fix.txt`); the committed `regress/gate_arm.sh` carries the #573 block
 and its `rows run` pin, `tools/precommit_check.sh` SCORE_CLAIMS_MANIFEST=41, `regress/gate_hygiene.sh` EXPECT_PTY_PROBES=79 with
-`le_csrmask_probe.py` grandfathered, `tools/pipeline/check_probe_wiring.py` the two MANIFEST keys.  Landing numstat (310 files):
+`le_csrmask_probe.py` grandfathered, `tools/pipeline/check_probe_wiring.py` the two MANIFEST keys.  Landing numstat (310 files; the six code and harness entries):
 60 0 regress/gate_arm.sh; 3 2 regress/gate_hygiene.sh; 547 0 regress/le_csrmask_probe.py; 29 9 src/devices/dev_le.c; 12 0 tools/pipeline/check_probe_wiring.py; 1 1 tools/precommit_check.sh.  The ledger row's `commits` field names `9ac43a17`; its state stays `held` (the Fable question, the roster question, the
 clause-(d) decision -- `hold_question`).  The PASS-2 RECEIPT line is appended to `regress/pass2_ledger.tsv` (precommit section F).
 
@@ -1709,7 +1719,7 @@ sentence, F39, F40 -- `#567`'s "land with filed debt" filed non-floor cells, so 
 decision for this round, now the row's hold question), GLM A RATIFY WITH CHANGES (WRONG: F10 -- a mask whose VALUE varies with
 bit 3 passes every CSR3 row, so the CATCHES bullet was narrowed and that family disclosed OUTSIDE; F25 -- the TM1986 line
 1572-1582 cited, Appendix B attributed), GLM B, DeepSeek A (WRONG: F28, the colloquial sense of "promptless"; not adopted) and
-DeepSeek B RATIFY WITH CHANGES.  Every seat ratified L4 -- the reinstatement BUILT inside the landed structure -- as clause (b)'s
+DeepSeek B RATIFY WITH CHANGES.  Every answering seat ratified L4 -- the reinstatement BUILT inside the landed structure -- as clause (b)'s
 leg (DeepSeek's pass-2 objection to reading the pre-fix build as (b) was right and the main loop conceded it), and `held` as the
 landing state.  The probe's docstring and one code comment were corrected on pass 2 and F2b (eight record changes; the code
 AST-identical to the pass-2 revision 6259ce54), the fix clone rebuilt from the comment-corrected patch, and all six legs
@@ -1721,7 +1731,7 @@ pass-1 F2 pair still owed (the sender slept at 8.3% of the meter until 12:32:15 
 **Records and filings.**  `OUTSTANDING_BUGS.md` 2026-10-25: `lecsrmask` NARROWED (the CSR3 half fixed; the CSR1/CSR2 half
 withdrawn and filed; the ledger row lands `held` for the Fable question and the owner's roster question and closes NARROWED when
 they are discharged -- a round may not close while a stage awaits a seat); filed `lecsr12readback`, `lestopgate`, `lecsr3stopclear` (CSR3 cleared by STOP per both manuals, and the
-LACK of a preservation guarantee for CSR1/CSR2 across STOP -- the Am7990 manual itself says they "must be reloaded" (TM1986 1513)
+LACK of a preservation guarantee for CSR1/CSR2 across STOP -- the Am7990 manual itself says they "must be reloaded" (TM1986 1515-1516)
 and are "normally not affected ... recommended to reload" (2853-2857), while the Am79C90 datasheet's Table B-1 characterises the
 Am7990 as NOT preserving them (3411 right column; 3686-3687): the sources differ and all three readings are recorded; the model
 leaves CSR1-3 untouched by a STOP write -- CSR3 never cleared, CSR1/CSR2 trivially kept -- and `#573` adds no STOP behaviour), `lediagfmt` (`uint64_t` values passed
@@ -1770,7 +1780,7 @@ every session and 490/490 hand-encoded words against the emulator's disassembler
   control-register arm, `wdc_altstatus`, ATAPI, the `#484` ring cap, the drain, sector-count 0 = 256, every IDENTIFY word.
   Option set: member 7 IMPLEMENT (the path was compiled out; member 4 ACCEPT presumes a computed value, and the
   compiled-out value keyed off the wrong bit and overflowed); the `WDCE_ABRT` decline idiom the file already has
-  (`:947-954`, `:1155`) was available and not chosen -- the measured defect is the wrong sector, and refusing LBA while word
+  (`:947-954`, `:1155` at `0901b388^`; one line lower at `0901b388`) was available and not chosen -- the measured defect is the wrong sector, and refusing LBA while word
   49 is 0 would leave a guest that ignores word 49 with no disk; member 1 DELETE (remove the dead text, keep CHS) was named
   as the honest minimal alternative and not chosen (`pass1_20261024/ADJ_PACKET.md` A5, both adjudicators).
 * `regress/wdc_lba_probe.py` (new; 840 lines, 35,862 bytes, md5 `96e5fbc5817ab26e19edd4f5335a184f`; the FROZEN witness revision is
@@ -1806,7 +1816,7 @@ every session and 490/490 hand-encoded words against the emulator's disassembler
   the five LBA rows; a +1 shift reds four" described the 19-row instrument and is replaced here, not repeated.)
 * `regress/gate_sh_rounding.sh` (gate 10) -- a `#572` block beside the `wdc_altdigin_probe.py` block: the probe in `GATE`
   mode on `$PMAX` into `$LOGDIR`; the result line present, `CONTROL=OK`, the denominator pinned by EQUALITY to the literal
-  33, the numerator equal to it, the sentinel once.  Run END TO END before landing, as committed (HEAD's script + this hunk, an LF copy md5 3f932e0f) with `PMAX` overridden to the fix clone (provenance measured, `pass2_20261024/CLONE_PROVENANCE.txt`: 496 of 505 tracked src files identical to HEAD plus this `dev_wdc.c`; the PowerPC decoder at its pre-#571 revision and the pmax layout's six declared divergence paths, none on the wdc path; the build trees were not used for the run and were propagated with the fix only before the landing, `CLEARANCE.out`): the block's five checks OK -- result parses, CONTROL=OK, 33 rows run, 33 correct, sentinel once (`pass2_20261024/GATE10_RUN.txt`, 2026-10-24 23:24 -> 2026-10-25 00:57; `gate10_wdc_lba.log`).  The gate's own verdict that run was FAIL 1 of 405 -- `gdrom_default rows run got=62 want=60`, the working tree's `gdrom_default_probe.py` carrying the peer session's uncommitted two extra rows against HEAD's pin; not this round's file.  The first attempt died in 2 s on a CRLF copy that `git apply` had written OUTSIDE the repo under the SYSTEM `core.autocrlf=true`; every committed gate script is LF (0 CR bytes), and the landing script now pins the conversion off and refuses a staged copy whose CR count differs from HEAD's.
+  33, the numerator equal to it, the sentinel once.  Run END TO END before landing, as committed (HEAD's script + this hunk, an LF copy md5 3f932e0f) with `PMAX` overridden to the fix clone (provenance measured, `pass2_20261024/CLONE_PROVENANCE.txt`: 496 of 505 tracked src files identical to HEAD plus this `dev_wdc.c`; the PowerPC decoder at its pre-#571 revision, the pmax layout's six declared divergence paths and the generated `src/machines/.index` [corrected 2026-11-07, records: the ninth differing path was unnamed -- `CLONE_PROVENANCE.txt:2`, `:23-24`], none on the wdc path; the build trees were not used for the run and were propagated with the fix only before the landing, `CLEARANCE.out`): the block's five checks OK -- result parses, CONTROL=OK, 33 rows run, 33 correct, sentinel once (`pass2_20261024/GATE10_RUN.txt`, 2026-10-24 23:24 -> 2026-10-25 00:57; `gate10_wdc_lba.log`).  The gate's own verdict that run was FAIL 1 of 405 -- `gdrom_default rows run got=62 want=60`, the working tree's `gdrom_default_probe.py` carrying the peer session's uncommitted two extra rows against HEAD's pin; not this round's file.  The first attempt died in 2 s on a CRLF copy that `git apply` had written OUTSIDE the repo under the SYSTEM `core.autocrlf=true`; every committed gate script is LF (0 CR bytes), and the landing script now pins the conversion off and refuses a staged copy whose CR count differs from HEAD's.
 * `regress/diff_wdc_identify.c` -- `row_no_lba_claim()` re-authored IN THE SAME CHANGE, as its own comment demanded: the
   assertion (both bytes of word 49 == 0), the row's name and its "ok" string (gate 2's pin) are unchanged; the comment no
   longer says the LBA arms are `#if 0` or that `d->lba` never reaches an offset, and the FAIL text says LBA is implemented by
@@ -1855,8 +1865,8 @@ of head shifts that miss the file.  Two sentences elsewhere become false and are
 abort on every LBA-mode driver" -- true only after this round, since before it `d->lba` was 1 on every 0xa0 select as well;
 no recorded score is re-interpreted.  The research adjudication (`research_20261022/adj_20261022/ADJ_RULINGS.md` B) called a
 source reading "the measurement"; it was a reading, and this round's witness is the measurement -- the dated artifact is not
-rewritten.  `dev_wdc.c:1081-1082` (`#485`) and `regress/gate_offline.sh`'s self-consistency comment say no ATA document is
-in the tree while `:640` (`#525`) cites `_scratchpad/ata2_x3t10_948d.txt` (on disk since 2026-09-10, outside the git tree):
+rewritten.  `dev_wdc.c:1081-1082` at `0901b388^` (`#485`; `:1080-1081` at `0901b388`) and `regress/gate_offline.sh`'s self-consistency comment say no ATA document is
+in the tree while `:640` at `0901b388^` (`#525`; `:639` at `0901b388`) cites `_scratchpad/ata2_x3t10_948d.txt` (on disk since 2026-09-10, outside the git tree):
 not this round's edit, noted for the next round that touches them.
 
 **Filed** (ledger rows): `wdclbaadvertise` (MED -- advertise LBA in word 49; gate: a word-49-honouring guest on a
@@ -1941,7 +1951,7 @@ detector's own pre-fix run (`table1_20261024/prefix_BASE.out`, 17 of 39 red, bel
   guard (`:4367-4371` in the committed file) and stop -- the disposition every other update form in the arm already takes.  `ldu` with RA = RT
   (an invalid form; Book I allows boundedly undefined results) is DISCLOSED, not checked -- the handler loads RT and then,
   when the access succeeds, writes RA = RT with EA, as the sibling update loads do; `stdu` with RA = RS is VALID and stores the old RS before the
-  update.  32-bit CPUs: opcodes 58 and 62 are illegal on 32-bit implementations (PEM :6253); before and after this fix a
+  update.  32-bit CPUs: opcodes 58 and 62 are illegal on 32-bit implementations (`ppc_pem_32and64_2005.txt:6253`); before and after this fix a
   32-bit CPU decodes them through the same arm (one source builds both decoders); the MODE32 table holds real doubleword
   handlers (`tmp_ppc_loadstore.c:1923+`), so no host exit either way; after the fix the legal forms select those
   handlers and reserved XO / RA = 0 updates stop there too; no width test this round (filed, below).  The shared
@@ -2123,8 +2133,8 @@ half is witnessed on mvme187); and the LUNA case already wrote PFSR -- what it l
   (the field OpenBSD extracts with `(pfsr >> 16) & 7`) and `reg[CMMU_PFAR] = (uint32_t) orig_paddr` -- the PHYSICAL
   address saved at the top of the scan, before `paddr` was made device-relative.  The sibling CMMU is not written; a cpu
   without a CMMU gets no write and still takes the exception; the `res <= 0 && !no_exceptions` guard, the `debug()` line,
-  the vector expression and `return MEMORY_ACCESS_FAILED` are untouched (NO_EXCEPTIONS callers -- the debugger -- never
-  reach the writes).  PFAR is written unmasked, upstream's form; whether MC88200 silicon forces its low two bits is
+  the vector expression and `return MEMORY_ACCESS_FAILED` are untouched (NO_EXCEPTIONS callers -- e.g. the debugger's dump -- never
+  reach the writes [corrected 2026-11-07, records: said `-- the debugger --`; the debugger's STEP pre-read is unsuppressed, which the pre-commit repair below records for `memory_rw.c`'s own comment]).  PFAR is written unmasked, upstream's form; whether MC88200 silicon forces its low two bits is
   UNKNOWN (no MC88200 manual on disk) and the detector's accesses are all word-aligned.
 * `src/cpus/cpu_m88k.c` -- `#include "thirdparty/m8820x.h"` after the existing `m8820x_pte.h` include: the arm is compiled
   inside this translation unit through `tmp_m88k_tail.c`, and `CMMU_PFSR`, `CMMU_PFAR` and `CMMU_PFSR_BERROR` exist only
@@ -2144,17 +2154,17 @@ half is witnessed on mvme187); and the LUNA case already wrote PFSR -- what it l
   Rewrapped so the line count is unchanged (a `FAILURE()` macro embeds `__LINE__`); the object `dev_m8820x.o` is
   byte-identical before and after (`table1_20261023/objmd5_work_before.txt` / `_after.txt`) -- the "comment-only" claim
   is a measurement.
-* `regress/m88k_buserr_probe.py` (new; 836 lines) -- the detector, revision 2 of the witness probe (the witness file
+* `regress/m88k_buserr_probe.py` (new; 848 lines [corrected 2026-11-07, records: said `836 lines`, the measured rev 2's count -- `repair1_20261024/rev2c_equivalence.txt:3-5`]) -- the detector, revision 2 of the witness probe (the witness file
   itself is kept byte-identical under `witness_20261023/`, md5 `d59798b0`).  TWO IDENTITIES: the MEASURED instrument is
   rev 2, md5 `d57c12ab` (frozen before any table as `table1_20261023/m88k_buserr_probe.rev2.frozen.py.txt`; every
   score, the gate receipt and the MANIFEST's measured line name it); the SHIPPED file is DOCUMENTATION revision 2c, md5
   `a49f417d37484071143de7e13637f4a4` -- a docstring-only re-freeze made after pass 2 (the executable `REVISION = 2` and
   every line outside the module docstring byte-identical: with the docstring stripped both files are 28,722 bytes and
-  `cmp` clean, the AST's 209 statements identical; `repair1_20261024/rev2b.docstring.diff`, `rev2b_equivalence.txt`),
+  `cmp` clean, the AST's 209 statements identical; `repair1_20261024/rev2c.docstring.diff`, `rev2c_equivalence.txt` [corrected 2026-11-07, records: said `rev2b.docstring.diff`, `rev2b_equivalence.txt` -- revision 2b's receipts (md5 `9046d774`), kept under `repair1_20261024/superseded_9046d774/`; the `fe8cc784` intermediate's same-named receipts are under `superseded_fe8cc784/`]),
   rerun on the fixed and the HEAD binaries and compared ROW BY ROW with `fixed.out` / `prefix_HEAD.out` (31/31 and 21/31,
-  all 33 row/INFO lines and the CONTROL / SYMPTOM / sentinel lines identical; `repair1_20261024/rev2b_rowcompare.txt`).
+  all 33 row/INFO lines and the CONTROL / SYMPTOM / sentinel lines identical; `repair1_20261024/rev2c_rowcompare.txt` [corrected 2026-11-07, records: said `rev2b_rowcompare.txt`]).
   The docstring grew by 12 lines, so a citation into the probe's CODE must name its revision (`REVISION = 2` is at rev-2
-  `:238` and rev-2b `:250`).  The intermediate revisions (`fe8cc784`, `9046d774` = 2b; each matched row by row) are kept in
+  `:238` and rev-2b and the shipped rev-2c `:250`).  The intermediate revisions (`fe8cc784`, `9046d774` = 2b; each matched row by row) are kept in
   `repair1_20261024/superseded_fe8cc784/` and `superseded_9046d774/`.  The historical receipts stay measurements of rev 2's bytes; the
   documentation-only equivalence is what carries them to the shipped file.  31 rows, cold-debugger sessions piped on
   unmodified `-E mvme88k -e mvme187` and `-E luna88k -e luna-88k` (a 4-byte dummy image by default; the rig image
@@ -2174,7 +2184,7 @@ half is witnessed on mvme187); and the LUNA case already wrote PFSR -- what it l
   handler stores a HANDLED marker while the fall-through would store FELL, then jumps into the refusing window for an
   instruction-fetch refusal with `cmmu[0] == NULL`; the session must survive both and HANDLED/FELL must read set/clear --
   the NULL check's data AND instruction cells in one session.  That second fault arrives while PSR.SFRZ is still set
-  from the first, so `m88k_exception` delivers it as ERROR, vector 10 (`cpu_m88k.c:811-819`); no `rte` clears it --
+  from the first, so `m88k_exception` delivers it as ERROR, vector 10 (pre-fix `cpu_m88k.c:811-819`, `:815-823` from c8fcb5ff [qualified 2026-11-07, records]); no `rte` clears it --
   an `rte` would resume at SNIP, the FELL store -- and the arm and its NULL test run before the exception either way).
   Scoring: `M88K_BUSERR_RESULT=<ok>/31`, `_CONTROL=OK|FAIL`, `_SYMPTOM=PRESENT n/10 | ABSENT | MIXED` over the ten
   symptom rows, `_RED=<names>`, sentinel `M88K_BUSERR_PROBE_DONE`, non-zero exit on any red.  The CONTRACT names what
@@ -2197,7 +2207,7 @@ half is witnessed on mvme187); and the LUNA case already wrote PFSR -- what it l
   LITERAL equality; `CONTROL=OK` and `SYMPTOM=ABSENT` once each; every one of the 31 row identities held in the gate and
   counted exactly once as an `ok` line (`#568`'s anchored `count "$LOG" "^$v  .*ok$"` form -- the names carry spaces);
   no `check_min`.
-* `tools/pipeline/check_probe_wiring.py` (+11) -- `CLASS_DETECTOR` for `m88k_buserr_probe.py` (gate 14, pinned at 31) and
+* `tools/pipeline/check_probe_wiring.py` (+15 [corrected 2026-11-07, records: said `+11`, `table1_20261023/BUILD_REPORT.md:33`'s pre-repair count; `git diff --numstat c8fcb5ff^ c8fcb5ff` = 15]) -- `CLASS_DETECTOR` for `m88k_buserr_probe.py` (gate 14, pinned at 31) and
   `CLASS_WITNESS` for `artifacts/m88kbuserrregs/witness_20261023/m88k_buserr_probe.py` (the directory's only `.py`; the
   builder's helpers are `*.py.txt`).
 
@@ -2288,7 +2298,7 @@ is this round's own `ifetch` channel; `dev_luna88k.c:613-614` is a non-debugger 
 / `dev_luna88k.c:953,964`); `memory_rw.c`'s CMMU-less sentence narrowed to what is scored (above).  Every product edit
 kept its file's line count (`FAILURE()` embeds `__LINE__` at `dev_m8820x.c:537`; the hunks are equal-range, lines were
 widened rather than words dropped -- `memory_rw.c`'s comment reaches 97 columns against the file's 107); every one of
-the 224 objects and the binary re-measured BYTE-IDENTICAL (`dev_m8820x.o`, `cpu_m88k.o`, `dev_luna88k.o`, `gxemul` --
+the 223 objects and the binary [corrected 2026-11-07, records: said `224 objects` -- `objmd5_before.txt` holds 224 entries, 223 objects plus `gxemul`] re-measured BYTE-IDENTICAL (`dev_m8820x.o`, `cpu_m88k.o`, `dev_luna88k.o`, `gxemul` --
 `repair1_20261024/objmd5_before.txt` / `_after.txt`); est/ mirrored; the three build trees re-propagated with their
 binaries unchanged (`931e69fa`, `9d0e0680`, `8d882c05`) and the two-part clearance re-run (`CLEARANCE_repair1.out`), so
 the gate receipts were run on the binary the shipped sources produce.  The builder also carried the gate comment's two
