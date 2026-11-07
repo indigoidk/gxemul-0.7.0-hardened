@@ -239,6 +239,45 @@ else
 ' "$out" | grep -E 'BUGFILE_SYNC_FAIL|^  MISSING' | sed 's/^/          /'
 fi
 
+#  ---- P2 --------------------------------------------------------------------------
+#  A ROUND CAN SHIP WITHOUT RECORDING ITSELF ON ITS ROWS (#587, ledger row `ghostround`).
+#
+#  Measured 2026-08-29: `#479` shipped on 2026-08-27 and its CHANGELOG block named three rows;
+#  two days later all three were still `in work` with nothing on them about the ship, and a
+#  nine-seat panel was fired to redo shipped work.  H cannot see it -- it reads ENTRIES and
+#  skips stages that never started -- and P asks only whether an open row is findable.
+#
+#  HARD by owner ruling 2026-11-06.  A ROUND block's header-named rows, and every row it names
+#  that is still `in work`, must be closed or dropped, or name the round (`#NNN`) in their
+#  record.  It reads the INDEX, i.e. what is being committed, so a peer's uncommitted edits
+#  cannot block an unrelated commit, and it is VOID -- a hard FAIL below -- if the index or the
+#  blame cannot be read.  It is forward-only from the checker's CUTOFF (2026-11-05), so a block
+#  already in the file cannot fail UNLESS its header line is edited: that re-dates the block to
+#  the editing commit, which then owes the write-back its rows lack (measured: `#557`'s header
+#  blames e1871fa5 unmodified and the all-zero sha after a one-space edit).  (This said "no
+#  block already in the file can fail".)  The five GX* names are cleared, as section Q2 does,
+#  so an exported override cannot swap the files it reads, and only the PASS token is a pass:
+#  rc 0 with no token, FAIL, VOID (a read failed or came back short) and a crash are each a
+#  hard FAIL counted in `fail` (legs c9a-c9e).  GIT_INDEX_FILE is NOT cleared: `git commit -a`
+#  and a partial commit hand the hook a temporary index, and that index is what is being
+#  committed (leg c9d).  The checker's docstring carries the whole contract, cell by cell.
+#  The census, the replay over 141 landing commits and the controls:
+#  regress/artifacts/ghostround/census_20261106/ and regress/artifacts/ghostround/wired_20261106/.
+say ""; say "P2. a round block's subject and in-work rows record the round"
+GHOSTCHK=$_HERE/pipeline/check_ghost_rounds.py
+if [ ! -f "$GHOSTCHK" ]; then
+	warn "check_ghost_rounds.py MISSING -- ghost rounds NOT verified"
+elif out=$(env -u GXLEDGER -u GXCHANGELOG -u GXSEC -u GXGHOST_CUTOFF -u GXGHOST_TODAY python "$GHOSTCHK" 2>&1) && printf '%s' "$out" | grep -q '^GHOST_ROUNDS_PASS'; then
+	good "$(printf '%s' "$out" | grep -E 'GHOST_ROUNDS_PASS' | tr '\n' ' ')"
+elif printf '%s' "$out" | grep -q 'GHOST_ROUNDS_FAIL'; then
+	bad "A ROUND BLOCK'S ROWS DO NOT RECORD THE ROUND:"
+	printf '%s\n' "$out" | grep -E 'GHOST_ROUNDS_FAIL|^  GHOST' | sed 's/^/          /'
+	say "          fix: close the row, or name the round (#NNN) in its state_note or an entry"
+else
+	bad "check_ghost_rounds.py reached no verdict (VOID or a fault) -- NOT a pass:"
+	printf '%s\n' "$out" | tail -4 | sed 's/^/          /'
+fi
+
 #  ---- Q ---------------------------------------------------------------------------
 #  THE MATRIX IS A GENERATED FILE AND NOTHING CHECKED THAT IT WAS REGENERATED.
 #

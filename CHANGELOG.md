@@ -1,3 +1,91 @@
+# `#587` (2026-11-07) -- `ghostround`: a round block's header-named rows and its `in work` rows must record the round; precommit section P2, HARD by owner ruling
+
+**The defect.**  `#479` shipped on 2026-08-27 (`2343036`) and its round block named three rows; two days later all three were
+still `in work` with nothing on them about the ship, and a nine-seat panel was fired to redo the shipped work (ledger
+`ghostround`, filed 2026-08-29).  No gate could see it: section H reads ledger entries and skips stages that never started,
+and section P asks only whether an open row is findable.  The census (`regress/artifacts/ghostround/census_20261106/`, banked
+by the 2026-11-06 records commit) replayed every landing commit since the ledger entered git -- 141 of them -- and found the
+class larger than its incident: 11 rows in 7 rounds (`#479`, `#484`, `#496`, `#505`, `#526`, `#527`, `#528`) shipped with no
+write-back in their landing commit, each found later by hand, after 1 to 36 days (`census_20261106/replay_class.tsv`).
+
+**The rule, measured rather than assumed** (`census_20261106/DECISION.md`, `replay.out`, `replay_class.out`).  The row filed
+"an entry dated on or after the round"; at `d9efd339`, before the write-back, each `#479` row carried nine research entries dated
+the ship day, so that wording passes its own motivating case -- it catches 2 of the 11 documented ghosts and fails 84 of the 141
+landings.  The shipped rule: every row a ROUND block names in its HEADER, and every row it names that is still `in work`, is
+`closed` or `dropped`, or its record names the round (`#NNN` or `Round NNN`).  On the replay it catches 11 of 11 and fails 20 of
+141 landings (13 with a real gap, 7 on references or filings only) -- 2 of the 32 since October, both references.  A sha in
+`commits` alone does not count: `#526`-`#528` carried only theirs, still `in work`, for 36 days.
+
+**Owner ruling, 2026-11-06:** wire it into `tools/precommit_check.sh` as a HARD section, that rule, cutoff 2026-11-05.
+
+**The change.**
+* `tools/pipeline/check_ghost_rounds.py` (new): the census prototype (`census_20261106/check_ghost_rounds.py`), the same parser
+  and rule, with four differences -- it reads what is being COMMITTED (CHANGELOG.md and the ledger from the index, dates from
+  `git blame --contents`), so a peer's uncommitted edits in a shared working tree cannot fail an unrelated commit; a failed
+  `git show` or blame is VOID, never the working copies or the header dates; its paths are the installed ones; its docstring
+  cites the banked artifacts.  On the measured commits it prints what the prototype printed: 72 of 72 comparisons
+  identical (`wired_20261106/EQUIV.out`, `run_equiv.sh`).
+* `tools/precommit_check.sh`: section P2, after P.  It clears the five GX* names first, as section Q2 does; only the
+  `GHOST_ROUNDS_PASS` token is `ok` (rc 0 without it is not); `GHOST_ROUNDS_FAIL` is a hard FAIL naming each row; any other
+  outcome (VOID, a crash) is a hard FAIL saying that no verdict was reached.  A missing checker takes
+  the `warn` form that 15 of the 20 other missing-checker branches take at 8d9df658
+  (15 `warn`, 5 `bad`); the warnnotfail kit converts the class.
+* `tools/README.md`: one line for the new checker.
+* `tools/pipeline/check_probe_wiring.py`: the census prototype's MANIFEST description (written by the 2026-11-06 records
+  commit) called the wiring question the owner's, on the row, and gave the rule as "closed or name the round"; it now
+  names the installed copy and this ruling, and the rule with `dropped`.  That commit's dated records stay as written.
+
+**The pass-2 review** (GPT-6 Astra, agy on Gemini 4 Argon, Grok 4.7; ruled by Fable 5.1, HOLD, 57 accepted and 8 rejected:
+`PASS2_RULING.md`) found, before this landed: a fail-open read -- a failed `git show :<path>` read the working copies behind a `note:` the hook
+did not print, and a failed blame trusted the header dates -- now VOID; an unguarded environment -- the GX* overrides reached
+the checker through the hook -- now cleared; a PASS by exit status alone, now by token; and five one-line mutants of predicates
+the rule depends on, traced past the controls BY READING (`PASS2_RULING.md` §A3 -- a reading the mutant table then corrected):
+M3 (12/161 against 13/184) and M6 (162/263 against 184/268) were already red on the census count legs c5; M1, M2 and M5 passed
+every earlier leg and the GREEN/RED runs.  Each now has a leg that fails under it (below).  Three records were false and are
+corrected: the missing-checker form was said to be the file's form for every other checker, the comment said no block
+already in the file can fail, and three sites said "closed or name the round" without `dropped`.
+
+**The repair's pass 2** (GPT-6 Astra, Grok 4.7; ruled by Fable 5.1, HOLD, 24 accepted, 5 amended, 1 rejected:
+`REPAIR_RULING.md`) found one CLASS for the second pass running -- a degraded read, dating or verdict silently taking a weaker
+source: `--at`'s blame site had no leg (clause (b) at a fixed site); a blame that exits 0 short of the file left the undated
+headers to their own text; no row saw the hook handed a VOID verdict or a temporary index; and the hook's `fail` count was
+pinned by its branch alone.  The class closes in one diff: `complete()` makes a short blame VOID in index and `--at` mode (a
+repository whose object format is not SHA-1 is VOID -- the parser reads 40-hex shas); the checker's docstring names every
+cell and the leg that pins it, or the disclosure that stands in for one (THE CONTRACT); five legs, `c4d`, `c8j`, `c8k`, `c9d` and `c9e`, and a leg-9 harness that counts
+`fail` under `set -u` as the hook does; six mutants, each killed by its leg: `M9` by `c4d` (1 of 69 checks BAD); `M10` by `c8j`, `c8k` (4 of 69 checks BAD); `M11` by `c9d` (2 of 69 checks BAD); `M12` by `c9e` (1 of 69 checks BAD); `M13` by `c9a`, `c9b`, `c9d` (3 of 69 checks BAD); `M14` by `c8i` (1 of 69 checks BAD).  The closure's own pass (GPT-6 Astra, Grok 4.7; ruled by Fable 5.1,
+CLOSE_RULING.md) found the enumeration one axis short: the index guard tests its two reads separately and the ruling's table
+had rowed "show fails" as one cell, so a one-sided working-copy fallback -- the ledger alone, or CHANGELOG alone -- passed all
+63 checks (measured) and in its cell read a verdict from the working copy -- a PASS for the ledger alone, a FAIL for CHANGELOG alone (CLOSE_RULING.md item 4; that ruling's own headline said PASS of both, and is false of the second) -- while printing read: the index; two legs, c8l and c8m
+(one git rm --cached each), and two mutants, M15 by c8l (2 of 69), M16 by c8m (2 of 69), close the product, and the --at disclosure names both reads.  The pass on that repair (GPT-6 Astra, Grok 4.7; ruled by Fable 5.1, LAND: PASS4_RULING.md) found no floor breach: this block's account of the fallback's verdict was false (corrected above) and one clause-(e) sample is disclosed below.  The
+mutant driver now removes a stale
+copy first and counts an edit whose text is not found as NOT BUILT (`MUTANTS_NEGCTL.out`, its negative control).  Four records
+were false and are corrected: this block said the five mutants passed every control; the bug file said "five uncaught"; the
+ledger witness and the commit message, as reviewed, counted the pre-repair checker among the one-line mutants.
+
+**The controls** (`regress/artifacts/ghostround/wired_20261106/`, `RECEIPT.md` first).  The full precommit in a scratch clone, with this
+unit staged on HEAD and the clone-only stand-ins the receipt lists, if any: P2 green with this block naming the closed `ghostround`
+(`P2_GREEN.out`), and a hard FAIL naming the row once one more staged round block names an open row that does not record its
+round although it carries an entry dated the block's own day, so the date rule would have passed it (`P2_RED.out`; the block is
+`SYNTHETIC_BLOCK.md`).  The census's 35 controls re-run on the installed copy, with the index-mode legs, the three reviews' legs
+and section P2's own block cut from the hook: 69 of 69 (`CHECKER_CONTROLS.out`, `run_checker_controls.sh`, which exits nonzero
+on a BAD leg).  Every single-edit mutant the three reviews traced (15 of them: M12, M15 and M16 insert lines, every
+other changes one) and the code before the first repair are each killed by their leg: 16 of 16 (`MUTANTS.out`, `run_mutants.sh`).  The
+header re-dating: `HEADER_REDATE.out`.
+
+**Records.**  `ghostround` closes with witness `harness:regress/artifacts/ghostround/wired_20261106/`; the owner's wiring question leaves
+`hold_question`, which carries Fable's REGRESS question instead (the regress stage is held for the flagship, the `#584` form);
+`fable_queue.md` regenerated and `matrix.html` re-rendered from the staged ledger; `OUTSTANDING_BUGS.md` gains this round's
+section.  The landing commit is named in the hash follow-up.
+
+**Not checked, so a green P2 is not over-read:** an `open` or `held` row named only in a block's body (a filing and a reference
+look the same there); an incidental mention of the round counts as a write-back; a round with no block of its own (`#436`,
+`#439`, `#441`, `#443`, `#466`, `#470`, `#471`, `#487`, `#493` are known); RECORDS blocks; and a round block with no number of its
+own (16 at `2632277f`) falls back to the date rule.  An edit to an ARCHIVED block's header line re-dates it to the editing
+commit, which then owes the write-back its rows lack -- an old block can become enforced, never exempt (`HEADER_REDATE.out`);
+and a round block written at H2 with a backticked number (`` ## `#NNN` ``) is not parsed as a block -- it reads as a
+subsection of the block above it.  A ledger that is not JSON is a traceback, a hard FAIL at the hook, not a VOID; a failed
+`git show` in `--at` mode (either read) is VOID with no leg of its own; the short-blame legs (c8j, c8k) drive the one short map real git writes -- the EMPTY map of a SHA-256 repository -- so a length guard narrowed to the empty map (len(bl) == 0, an if-bl return before the test, or a bound relaxed by one line) passes all 69 controls (measured, PASS4_RULING.md) and would date a NONEMPTY short map by its headers; no production git writes such a map (the porcelain parser's two skip branches are uniform per repository or never fire on git's own output), so it is disclosed as clause-(e) coverage debt, not legged; every other cell is in the docstring's contract with its leg or its disclosure.
+
 # Records, 2026-11-07: the Gemini-web drafts for the oldest open issues banked -- 1045 adjudication drafts, 101 fix drafts (74 compile), the attachment budget measured -- all PROPOSALS
 
 Banked so they live in git rather than only in `_scratchpad/` (`regress/artifacts/geminidrafts/drafts_20261107/SUMMARY.md`, `regress/artifacts/geminidrafts/drafts_20261107/PROVENANCE.md`).  None of it is adjudicated

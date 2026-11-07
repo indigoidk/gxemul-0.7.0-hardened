@@ -758,6 +758,10 @@
 > TAKEN: a `§C0` block in `BRIEF_TEMPLATE.md` requiring both commands in every brief's
 > settled premises.  FILED, not built: a checker for a CHANGELOG-named row still `in work`.
 >
+> **[`#587`, 2026-11-07: FIXED -- the checker is BUILT and wired as HARD precommit section P2 by owner ruling
+> (`tools/pipeline/check_ghost_rounds.py`): a round block's header-named and `in work` rows must be closed or dropped or
+> name the round.  See the `#587` section at the end of this file.]**
+>
 > ### OPEN -- filed 2026-08-29: a gated tool prints line numbers that are all wrong
 >
 > ✅ **`divsweeplines` RESOLVED. Ticked in place 2026-09-11: ledger `closed`, witness
@@ -26770,3 +26774,11 @@ src/devices/dev_dec5800.c:359-367 at 987cb596: The DEC 5800 CPU-mask registers a
   Two confirming reviews of the ruling were adjudicated by Fable 5.1 -- `FABLEADJ_KDC: 10 ACCEPTED 0 REJECTED VERDICT:LAND-AFTER-RECORDS`
   (`regress/artifacts/qhmutcrashscore/regress_20261106/ADJ_KDC.md`): no repair; its ten record corrections are made, the ruling's in `regress/artifacts/qhmutcrashscore/regress_20261106/RULING_ERRATA.md`.
 * **Uncommitted beside it:** nothing of this round.
+
+## 2026-11-07 -- `#587` ghostround: precommit section P2 refuses a round block whose header-named or `in work` rows do not record the round
+
+* **FIXED** -- `ghostround` (filed 2026-08-29): `tools/pipeline/check_ghost_rounds.py`, wired into `tools/precommit_check.sh` as HARD section P2 by owner ruling 2026-11-06 -- every row a ROUND block names in its header, and every row it names that is still `in work`, is closed or dropped or names the round (`#NNN`) in its record; it reads the index (what is being committed) and is VOID, a hard FAIL, when the index or the blame cannot be read or the blame dates fewer lines than the file holds; forward-only from 2026-11-05, so an old block fails only once its header line is edited.  The pass-2 review (three seats, ruled HOLD by Fable 5.1) found a fail-open read, an unguarded environment and five one-line mutants traced by reading, three of them (M1, M2, M5) caught by no earlier control; the repair's own pass 2 (two seats, ruled HOLD by Fable 5.1) found one class -- a degraded read, dating or verdict silently taking a weaker source -- closed in one diff: a blame short of the file is VOID, the contract in the checker's docstring names every cell and its leg or its disclosure, five legs and six mutants; the closure's own pass found the index guard's two reads rowed as one cell and added two legs and two mutants (c8l, c8m; M15, M16).  All repaired before landing, each with a leg or a named disclosure.  Census, replay and the prototype's controls: `regress/artifacts/ghostround/census_20261106/`; the wired section's controls: `regress/artifacts/ghostround/wired_20261106/`.
+* **Landed** in this commit; the records commit after it names it.
+* **Owed:** Fable's REGRESS review of the round as committed, held on `ghostround`'s regress stage with its question.
+* **Filed (clause (e), pass 4):** a NONEMPTY short blame map -- the short-blame legs drive only the empty map real git writes (a SHA-256 repository), so a length guard narrowed to the empty map passes all 69 controls (measured); no production git writes a nonempty short map (the porcelain parser's two skip branches are uniform per repository or never fire on git's own output), so it is disclosed, not legged (`regress/artifacts/ghostround/wired_20261106/PASS4_RULING.md`).
+* **Not checked by P2** (so a green P2 is not over-read): an `open`/`held` row named only in a block's body; an incidental mention of the round; a round with no block of its own; RECORDS blocks; a round block with no number of its own falls back to the date rule; a round block written at H2 with a backticked number.

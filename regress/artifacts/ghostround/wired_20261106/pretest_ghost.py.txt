@@ -1,0 +1,590 @@
+#!/usr/bin/env python3
+"""pretest_ghost.py -- the full tools/precommit_check.sh on the ghostround unit, in a SCRATCH CLONE, twice: GREEN (the
+unit as built) and RED (the unit plus one synthetic round block naming an open row that does not record its round).
+
+Never writes GXEMUL-SEC: the real repo is read with `git -C <repo> ...` read-only commands only (GIT_OPTIONAL_LOCKS=0)
+and its working copies by plain reads.  The clone reproduces what the real hook will see when commit_unit2.py lands
+commit_ghost.spec.json, after the two commits this unit waits for:
+
+  * `git clone --shared --no-checkout` of the local repo, checked out at the real HEAD (core.autocrlf=false, bytes
+    checked equal to HEAD's blobs);
+  * CLONE-ONLY STAND-INS, committed in the clone with --no-verify (the hook is not what is being measured there):
+      S1  the wrec1106 records unit -- the 27 staged files of _scratchpad/wrec1106/landing/ (commit_wrec.spec.json), the
+          commit that banks regress/artifacts/ghostround/census_20261106/, which this unit cites;
+      S2  the owner's re-date of wdc_altoffset_probe.py's probe-wiring exemption (EXPIRED 2026-11-05; section R refuses
+          every commit until it moves) -- moved to STANDIN_DATE inside the EXEMPT table.  The real date is the owner's;
+  * build_ghost.py --repo <clone> --out <root>/kit: the unit as it would be built on that HEAD (wired/ banked files
+    included when present);
+  * the project root around the clone as the hook sees it: every other top-level DIRECTORY of the real root as a
+    JUNCTION (_scratchpad, est, build, build-asan, ...) and every top-level FILE copied;
+  * the real working tree's other dirty tracked files overlaid UNSTAGED (minus the unit's paths, the spec's neutral
+    files and commit_unit2's auto-neutral check_probe_wiring.py -- those hold HEAD's content during the hook), and its
+    untracked files copied in (K and X walk the tree);
+  * the unit written and `git add`ed (commit_unit2 adds plainly); the staged set checked equal to the unit.
+
+Then precommit_check.sh runs as the hook runs it (no message argument, no GX* overrides): GREEN.  Then the synthetic
+block (round = this unit's + 1, naming an open row that carries an entry dated the block's day and no #NNN, so
+only the mention rule fails it) is prepended to the staged CHANGELOG, `git add`ed, and it runs again: RED.
+The two hard-FAIL sets are compared.  Section C runs separately on the message.  The checker's own controls
+(wired/run_checker_controls.sh) run on the clone-built checker against the clone.
+
+WHERE: C:/Users/User00/AppData/Local/Temp/pgh -- outside the project and SHORT (LongPathsEnabled is 0 here; the
+wrec1106 kit measured the deepest junctioned path).  Junctions removed at the end (targets checked intact).
+Writes PRETEST_GREEN.out, PRETEST_RED.out, PRETEST_C.out, PRETEST.summary (ends PRETEST_DONE), and the banked set
+under wired/ (P2_GREEN.out, P2_RED.out, SYNTHETIC_BLOCK.md, CHECKER_CONTROLS.out, pretest_ghost.py.txt).  Run with
+run_in_background and no timeout wrapper.
+"""
+import datetime
+import hashlib
+import io
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+
+REPO = "C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC"
+PROOT = "C:/DocumentNoSnc/CC/GXEMUL"
+KIT = os.path.dirname(os.path.abspath(__file__)).replace("\\", "/")
+WREC = PROOT + "/_scratchpad/wrec1106/landing"
+CROOT = "C:/Users/User00/AppData/Local/Temp/pgh"
+CLONE = CROOT + "/GXEMUL-SEC"
+BASH = "C:/Program Files/Git/bin/bash.exe"
+GENV = dict(os.environ, GIT_OPTIONAL_LOCKS="0")
+STANDIN_DATE = "2026-11-20"
+SYNTHETIC_PREFER = ("untokenedanswers", "codeqlscope")   # open rows with entries dated 2026-11-06 at the 54613aa1 base
+#  The driver banks ITSELF: read now, at start, never at the end -- the first banked run read its file at the end and
+#  banked two edits made after it had started (work/run2_driver/).
+SELF_BYTES = open(os.path.abspath(__file__), "rb").read()
+AUTO_NEUTRAL = ("tools/pipeline/check_probe_wiring.py",)
+NEUTRAL_CANDIDATES = ["regress/gate_arm.sh", "regress/gate_sh_rounding.sh", "regress/gate_offline.sh",
+                      "regress/gdrom_default_probe.py"]
+FINAL = "--final" in sys.argv         # GREEN only, on the exact landing unit (banked wired/ files included)
+SUMMARY = KIT + ("/PRETEST_FINAL.summary" if FINAL else "/PRETEST.summary")
+
+
+def log(m):
+    line = "%s %s" % (time.strftime("%H:%M:%S"), m)
+    print(line, flush=True)
+    with io.open(SUMMARY, "a", encoding="utf-8") as f:
+        f.write(line + "\n")
+
+
+def run(cmd, cwd=None, env=None, check=True, inp=None):
+    r = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, input=inp)
+    if check and r.returncode != 0:
+        log("COMMAND FAILED rc=%d: %s\n%s" % (r.returncode, " ".join(cmd)[:300], r.stderr.decode("utf-8", "replace")[-800:]))
+        cleanup_junctions()
+        sys.exit(3)
+    return r
+
+
+def g(*a, check=True):
+    return run(["git", "-c", "user.name=pretest", "-c", "user.email=pretest@scratch"] + list(a), cwd=CLONE,
+               check=check, env=GENV)
+
+
+def real(*a, check=True):
+    return run(["git", "-C", REPO] + list(a), env=GENV, check=check)
+
+
+def md5(b):
+    return hashlib.md5(b).hexdigest()
+
+
+def rd(p):
+    with open(p, "rb") as f:
+        return f.read()
+
+
+def wr(p, b):
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    with open(p, "wb") as f:
+        f.write(b)
+
+
+def is_junction(p):
+    try:
+        return os.path.isjunction(p)
+    except AttributeError:
+        return os.path.isdir(p) and os.readlink(p) is not None
+
+
+def cleanup_junctions():
+    if not os.path.isdir(CROOT):
+        return
+    for name in os.listdir(CROOT):
+        p = CROOT + "/" + name
+        if is_junction(p):
+            os.rmdir(p)                                      # removes the link only, never the target
+            if not os.path.isdir(PROOT + "/" + name):
+                log("*** TARGET MISSING after removing junction %s -- STOP AND CHECK %s/%s ***" % (p, PROOT, name))
+
+
+def snapshot_wrec():
+    """A CONSISTENT copy of the wrec1106 unit: its spec, and every staged file checked against the kit's own
+    STAGED_MD5.txt, the spec re-read after the copy.  That kit is rebuilt by its own session (measured: rebuilt at
+    12:52 while the first run of this pretest was reading it, which mixed two builds and failed this kit's queue
+    control), so a mismatch waits and retries rather than committing a mixture."""
+    for attempt in range(6):
+        raw = rd(WREC + "/commit_wrec.spec.json")
+        spec = json.loads(raw.decode("utf-8"))
+        man = {}
+        for l in rd(WREC + "/STAGED_MD5.txt").decode("utf-8").splitlines():
+            f = l.split()
+            if len(f) == 3 and re.fullmatch(r"[0-9a-f]{32}", f[1]):
+                man[f[2]] = f[1]
+        snap, why = {}, ""
+        if set(spec["files"]) != set(man):
+            why = "spec and STAGED_MD5.txt list different paths"
+        else:
+            for p, src in spec["files"].items():
+                b = rd(src["path"])
+                if md5(b) != man[p]:
+                    why = "%s does not match STAGED_MD5.txt" % p
+                    break
+                snap[p] = b
+        if not why and rd(WREC + "/commit_wrec.spec.json") != raw:
+            why = "the spec changed while copying"
+        if not why:
+            return spec, snap
+        log("wrec1106 snapshot attempt %d inconsistent (%s) -- waiting 30 s" % (attempt + 1, why))
+        time.sleep(30)
+    log("REFUSED: no consistent snapshot of the wrec1106 unit after 6 attempts")
+    sys.exit(2)
+
+
+def hard_lines(out):
+    return [l.strip() for l in out.splitlines() if l.startswith("  FAIL")]
+
+
+REBASE_S1 = "--s1-rebase" in sys.argv
+
+
+def expiring_exempt(cpw_text):
+    """[(probe, date)] of the probe-wiring EXEMPT table dated on or before TOMORROW (local): section R refuses
+    `d < today`, so these have expired or expire before a run that crosses midnight is done."""
+    t = cpw_text.index("\nEXEMPT = {")
+    tab = cpw_text[t:cpw_text.index("\n}\n", t)]
+    lim = (datetime.date.today() + datetime.timedelta(days=1)).isoformat()
+    return [(m.group(1), m.group(2)) for m in re.finditer(r'\n    "([A-Za-z0-9_.]+\.py)":\s+\("(20\d\d-\d\d-\d\d)",', tab)
+            if m.group(2) <= lim]
+
+
+def rebase_s1(base, head, snap):
+    """wrec1106's unit, built on `base`, carried onto `head` (a descendant) for the clone only.  Per file:
+    a file the unit adds is taken (refused if `head` has it with other bytes); a file `head` did not change since `base` is
+    taken whole; CHANGELOG.md gets the unit's new top block above `head`'s file; the ledger is merged ROW BY ROW (a row both
+    sides changed is a refusal; new rows: head's, then the unit's); matrix.html and fable_queue.md are re-rendered from the
+    merged ledger with head's own generators; any other file is a `git merge-file` three-way merge, refused on a conflict
+    (OUTSTANDING_BUGS.md alone with --union: both sides append dated sections at its end)."""
+    def at(rev, p):
+        r = run(["git", "-C", CLONE, "show", "%s:%s" % (rev, p)], check=False, env=GENV)
+        return r.stdout if r.returncode == 0 else None
+    out, how = {}, []
+    gen = ("tools/pipeline/matrix.html", "tools/pipeline/fable_queue.md")
+    for p, theirs in sorted(snap.items()):
+        b0, ours = at(base, p), at(head, p)
+        if b0 is None:
+            if ours is not None and ours != theirs:
+                log("REFUSED (S1 rebase): %s is new in the unit and differs at %s" % (p, head[:8])); sys.exit(3)
+            out[p] = theirs; continue
+        if ours == b0 or ours == theirs:
+            out[p] = theirs; continue
+        if p in gen:
+            continue                                   # re-rendered below
+        if p == "CHANGELOG.md":
+            if not theirs.endswith(b0):
+                log("REFUSED (S1 rebase): the unit's CHANGELOG.md is not a block on top of %s's" % base); sys.exit(3)
+            out[p] = theirs[:len(theirs) - len(b0)] + ours; how.append("CHANGELOG.md: the unit's top block above HEAD's"); continue
+        if p == "tools/pipeline/ledger.json":
+            B, O, T = (json.loads(x.decode("utf-8")) for x in (b0, ours, theirs))
+            if [k for k in B if k != "rows" and (O.get(k) != B.get(k) and T.get(k) != B.get(k) and O.get(k) != T.get(k))]:
+                log("REFUSED (S1 rebase): a top-level ledger key changed on both sides"); sys.exit(3)
+            res = {k: (T[k] if T.get(k) != B.get(k) else O[k]) for k in O if k != "rows"}
+            Bi = {r["id"]: r for r in B["rows"]}; Oi = {r["id"]: r for r in O["rows"]}; Ti = {r["id"]: r for r in T["rows"]}
+            both = [i for i in Bi if Oi.get(i) != Bi[i] and Ti.get(i) != Bi[i] and Oi.get(i) != Ti.get(i)]
+            both += [i for i in Oi if i in Ti and i not in Bi and Oi[i] != Ti[i]]
+            if both:
+                log("REFUSED (S1 rebase): ledger rows changed on both sides: %s" % both[:5]); sys.exit(3)
+            rows = [(Ti[i] if Ti.get(i) != Bi[i] else Oi[i]) for i in [r["id"] for r in B["rows"]]]
+            rows += [Oi[i] for i in [r["id"] for r in O["rows"]] if i not in Bi]
+            rows += [Ti[i] for i in [r["id"] for r in T["rows"]] if i not in Bi and i not in Oi]
+            merged = {}
+            for k in O:
+                merged[k] = rows if k == "rows" else res[k]
+            out[p] = json.dumps(merged, indent=1, ensure_ascii=False).replace("\n", "\r\n").encode("utf-8")
+            how.append("ledger.json: row-level merge (%d rows changed at HEAD, %d by the unit, none by both)"
+                       % (len([i for i in Oi if Oi[i] != Bi.get(i)]), len([i for i in Ti if Ti[i] != Bi.get(i)])))
+            continue
+        tmp = tempfile.mkdtemp(prefix="s1r_")
+        for nm, data in (("o", ours), ("b", b0), ("t", theirs)):
+            wr(tmp + "/" + nm, data)
+        #  --union only where both sides APPEND at the same place: the bug file's dated sections at its end, and
+        #  check_probe_wiring.py's MANIFEST entries at the end of its dict (each entry self-contained; the result must
+        #  compile and keep every key either side added)
+        union = p in ("OUTSTANDING_BUGS.md", "tools/pipeline/check_probe_wiring.py")
+        args = ["git", "merge-file", "-p"] + (["--union"] if union else []) + [tmp + "/o", tmp + "/b", tmp + "/t"]
+        r = run(args, check=False, env=GENV)
+        shutil.rmtree(tmp, ignore_errors=True)
+        if r.returncode != 0:
+            log("REFUSED (S1 rebase): %s does not merge cleanly (%d conflicts)" % (p, r.returncode)); sys.exit(3)
+        if p.endswith(".py"):
+            try:
+                compile(r.stdout, p, "exec")
+            except SyntaxError as ex:
+                log("REFUSED (S1 rebase): the merged %s does not compile: %s" % (p, ex)); sys.exit(3)
+            keys = lambda b: set(re.findall(rb'^    "(artifacts/[^"]+)":', b, re.M))
+            if not (keys(ours) | keys(theirs)) <= keys(r.stdout):
+                log("REFUSED (S1 rebase): the merged %s lost a MANIFEST key" % p); sys.exit(3)
+        out[p] = r.stdout; how.append("%s: three-way merge%s" % (p, " (--union, both sides append there)" if union else ""))
+    #  the generated files, from the merged ledger with head's generators (the builder's own render method)
+    led = out.get("tools/pipeline/ledger.json") or at(head, "tools/pipeline/ledger.json")
+    tmp = tempfile.mkdtemp(prefix="s1g_")
+    try:
+        for f in ("gen_dashboard.py", "gen_codex_wall.py", "stage_tokens.py"):
+            wr(tmp + "/" + f, at(head, "tools/pipeline/" + f))
+        wr(tmp + "/ledger.json", led)
+        wr(tmp + "/q.md", at(head, "tools/pipeline/fable_queue.md"))
+        env = dict(GENV, GXLEDGER=tmp + "/ledger.json", GXQUEUE=tmp + "/q.md", PYTHONDONTWRITEBYTECODE="1")
+        r1 = run([sys.executable, tmp + "/gen_dashboard.py", "--out", tmp + "/m.html"], check=False, env=env)
+        r2 = run([sys.executable, tmp + "/gen_codex_wall.py"], check=False, env=env)
+        r3 = run([sys.executable, tmp + "/gen_codex_wall.py", "--check"], check=False, env=env)
+        if r1.returncode or r2.returncode or b"CODEX_WALL_OK" not in r3.stdout + r3.stderr:
+            log("REFUSED (S1 rebase): re-rendering the generated files failed"); sys.exit(3)
+        out["tools/pipeline/matrix.html"] = rd(tmp + "/m.html")
+        out["tools/pipeline/fable_queue.md"] = rd(tmp + "/q.md")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    how.append("matrix.html and fable_queue.md re-rendered from the merged ledger with HEAD's generators")
+    for h in how:
+        log("  S1 rebase: " + h)
+    return out
+
+
+def x_rerun(tag, out):
+    """Section X can fail in a CLONE on bare citations made AMBIGUOUS by another session's transient link from the shared
+    _scratchpad/ into the real regress/ (measured in the first banked RED run).  When that is the failure, run X once
+    more in the same clone, mirror intact, and log it -- a diagnostic beside the verdict, never a change to it."""
+    if not ("CITED_ARTIFACTS_FAIL" in out and "AMBIGUOUS" in out):
+        return
+    envx = {k: v for k, v in os.environ.items() if not k.startswith("GX")}
+    rx = subprocess.run([sys.executable, CLONE + "/tools/pipeline/check_cited_artifacts.py"], cwd=CLONE, env=envx,
+                        capture_output=True)
+    xo = (rx.stdout + rx.stderr).decode("utf-8", "replace")
+    wr(KIT + "/PRETEST_%s_X_RERUN.out" % tag, xo.encode("utf-8"))
+    log("%s: section X failed on AMBIGUOUS bare citations; re-run alone in the same clone: rc=%d %s (the wfbs link "
+        "present now: %s)" % (tag, rx.returncode, " | ".join(l.strip()[:120] for l in xo.splitlines()
+                                                                if "CITED_ARTIFACTS" in l),
+                              "yes" if os.path.exists(PROOT + "/_scratchpad/wfbs/landing/pc/r/regress") else "no"))
+
+
+def precommit(tag):
+    env = dict(os.environ)
+    for k in list(env):
+        if k.startswith("GX"):
+            env.pop(k)
+    t0 = time.time()
+    log("%s: precommit_check.sh started (as the hook: no message argument, no GX* overrides); local date %s"
+        % (tag, datetime.date.today().isoformat()))
+    r = subprocess.run([BASH, CLONE + "/tools/precommit_check.sh"], cwd=CLONE, env=env, capture_output=True)
+    out = r.stdout.decode("utf-8", "replace") + r.stderr.decode("utf-8", "replace")
+    wr(KIT + "/PRETEST_%s.out" % tag, out.encode("utf-8"))
+    verdict = [l for l in out.splitlines() if l.startswith("PRECOMMIT_")]
+    log("%s: rc=%d in %.0f s; %s" % (tag, r.returncode, time.time() - t0, verdict[-1] if verdict else "(no PRECOMMIT_ line)"))
+    for l in hard_lines(out):
+        log("  %s hard: %s" % (tag, l[:300]))
+    p2 = out.split('P2. a round block', 1)[-1].split("\nU. ", 1)[0] if "P2. a round block" in out else "(NO P2 SECTION)"
+    log("  %s section P2: %s" % (tag, " | ".join(x.strip() for x in p2.strip().splitlines()[:6])[:600]))
+    return out
+
+
+def main():
+    if os.path.exists(SUMMARY):
+        os.remove(SUMMARY)
+    head = real("rev-parse", "HEAD").stdout.decode().strip()
+    #  Each stand-in is applied only while its precondition is NOT yet in the real HEAD; once it has landed for real
+    #  the clone already carries it and the step is skipped (and says so).
+    need_s1 = real("cat-file", "-e", "HEAD:regress/artifacts/ghostround/census_20261106/DECISION.md",
+                   check=False).returncode != 0
+    cpw_head = real("show", "HEAD:tools/pipeline/check_probe_wiring.py").stdout.decode("utf-8")
+    #  S2: every probe-wiring exemption that has expired, or expires before a ~2-hour run can finish (dated on or before
+    #  TOMORROW's local date: section R refuses `d < today`), is re-dated to STANDIN_DATE in the clone only.  The real
+    #  dates are the owner's.  (Round 1 stood in exactly one, wdc_altoffset_probe.py's 2026-11-05.)
+    expiring = expiring_exempt(cpw_head)
+    need_s2 = bool(expiring)
+    wspec, wsnap = ({}, {}) if not need_s1 else snapshot_wrec()
+    rebase = False
+    if need_s1 and not head.startswith(wspec["expect_head"]):
+        anc = real("merge-base", "--is-ancestor", wspec["expect_head"], head, check=False).returncode == 0
+        if not (REBASE_S1 and anc):
+            log("REFUSED: the real HEAD is %s and wrec1106's spec expects %s -- re-run its build_kit.py first%s"
+                % (head, wspec["expect_head"], " (or pass --s1-rebase: it is an ancestor)" if anc else ""))
+            sys.exit(2)
+        rebase = True
+        log("S1 REBASED: wrec1106's unit was built on %s, an ancestor of the real HEAD %s; the clone takes it onto %s "
+            "(see rebase_s1(): every overlap is a refusal, the generated files re-rendered)" % (wspec["expect_head"], head[:8], head[:8]))
+    snapdir = KIT + "/wrec_snapshot"
+    if need_s1:
+        if os.path.isdir(snapdir):
+            shutil.rmtree(snapdir)
+        for p, b in wsnap.items():
+            wr(snapdir + "/" + p, b)
+        wr(snapdir + "/SNAPSHOT_MD5.txt", ("\n".join("%s  %s" % (md5(b), p) for p, b in sorted(wsnap.items())) + "\n").encode())
+        log("real HEAD %s; wrec1106 unit %d files (expects %s), snapshot consistent with its STAGED_MD5.txt -> wrec_snapshot/"
+            % (head[:8], len(wsnap), wspec["expect_head"]))
+    else:
+        log("real HEAD %s already carries census_20261106/ -- stand-in S1 (the wrec1106 unit) SKIPPED" % head[:8])
+    if not need_s2:
+        log("the real HEAD's EXEMPT table holds no exemption expiring before this run ends -- stand-in S2 SKIPPED")
+    else:
+        log("S2 will stand in the re-date of %d probe-wiring exemption(s) expiring before this run ends: %s"
+            % (len(expiring), ", ".join("%s (%s)" % e for e in expiring)))
+
+    # 0. a fresh root: junctions removed first (never recurse into one), then the rest
+    if os.path.isdir(CROOT):
+        cleanup_junctions()
+        left = [n for n in os.listdir(CROOT) if is_junction(CROOT + "/" + n)]
+        if left:
+            log("REFUSED: junctions still present under %s: %s" % (CROOT, left))
+            sys.exit(3)
+        run(["cmd", "/c", "rmdir", "/s", "/q", CROOT.replace("/", "\\")], check=False)
+        if os.path.isdir(CROOT):
+            shutil.rmtree(CROOT)
+    os.makedirs(CROOT)
+
+    # 1. the clone
+    t0 = time.time()
+    run(["git", "clone", "-q", "-c", "core.autocrlf=false", "-c", "core.filemode=false", "-c", "core.longpaths=true",
+         "--shared", "--no-checkout", REPO, CLONE], env=GENV)
+    g("checkout", "-q", "--detach", head)
+    if g("status", "--porcelain").stdout.decode().strip():
+        log("REFUSED: the fresh clone is not clean")
+        sys.exit(3)
+    for probe in ("tools/pipeline/ledger.json", "tools/pipeline/matrix.html", "CHANGELOG.md"):
+        if rd(CLONE + "/" + probe) != real("show", "HEAD:" + probe).stdout:
+            log("REFUSED: the clone's %s is not HEAD's bytes" % probe)
+            sys.exit(3)
+    log("clone at %s in %.0f s; bytes == HEAD blobs (ledger.json, matrix.html, CHANGELOG.md)" % (head[:8], time.time() - t0))
+
+    # 2. the clone-only stand-ins, committed with --no-verify -- only those the real HEAD does not carry yet
+    s1 = s2 = "(skipped: in the real HEAD)"
+    if need_s1:
+        files = rebase_s1(wspec["expect_head"], head, wsnap) if rebase else wsnap
+        for p, b in files.items():
+            wr(CLONE + "/" + p, b)
+        g("add", "--", *sorted(files))
+        g("commit", "-q", "--no-verify", "-m",
+          "STAND-IN (pretest clone only): the wrec1106 records unit, %s" %
+          ("REBASED from %s onto %s" % (wspec["expect_head"], head[:8]) if rebase else "as its spec stages it"))
+        s1 = g("rev-parse", "HEAD").stdout.decode().strip()
+    if need_s2:
+        cpw = rd(CLONE + "/tools/pipeline/check_probe_wiring.py").decode("utf-8")
+        t = cpw.index("\nEXEMPT = {")
+        tend = cpw.index("\n}\n", t)
+        tab = cpw[t:tend]
+        for name, d in expiring_exempt(cpw):
+            old = '"%s":' % name
+            i = tab.index("\n    " + old)
+            j = tab.index('("%s",' % d, i)
+            tab = tab[:j] + '("%s",' % STANDIN_DATE + tab[j + len('("%s",' % d):]
+        if [e for e in expiring_exempt(cpw[:t] + tab + cpw[tend:])]:
+            log("REFUSED: the S2 stand-in left an exemption expiring")
+            sys.exit(3)
+        wr(CLONE + "/tools/pipeline/check_probe_wiring.py", (cpw[:t] + tab + cpw[tend:]).encode("utf-8"))
+        g("add", "--", "tools/pipeline/check_probe_wiring.py")
+        g("commit", "-q", "--no-verify", "-m",
+          "STAND-IN (pretest clone only): probe-wiring exemptions expiring before this run ends re-dated to %s: %s"
+          % (STANDIN_DATE, ", ".join(n for n, d in expiring)))
+        s2 = g("rev-parse", "HEAD").stdout.decode().strip()
+    log("stand-ins in the clone: S1 %s, S2 %s"
+        % ("%s (wrec1106's unit%s)" % (s1[:8], ", rebased" if rebase else "") if need_s1 else "skipped (in the real HEAD)",
+           "%s (%s re-dated -> %s)" % (s2[:8], ", ".join(n for n, d in expiring), STANDIN_DATE) if need_s2
+           else "skipped (nothing expiring)"))
+
+    # 3. the unit, built on the clone's HEAD
+    kitout = CROOT + "/kit"
+    r = run([sys.executable, KIT + "/build_ghost.py", "--repo", CLONE, "--out", kitout],
+            env=dict(GENV, PYTHONDONTWRITEBYTECODE="1"), check=False)
+    bo = r.stdout.decode("utf-8", "replace") + r.stderr.decode("utf-8", "replace")
+    wr(KIT + "/PRETEST_BUILD.out", bo.encode("utf-8"))
+    if "BUILD_GHOST_OK" not in bo:
+        log("REFUSED: build_ghost.py on the clone did not finish: %s" % bo.strip()[-600:])
+        sys.exit(3)
+    for l in bo.splitlines():
+        log("  build: " + l)
+    unit = {}
+    for dp, dn, fn in os.walk(kitout):
+        for f in fn:
+            full = (dp + "/" + f).replace("\\", "/")
+            rel = full[len(kitout) + 1:]
+            if rel in ("STAGED_MD5.txt", "STAGED.diff", "commit_ghost.msg"):
+                continue
+            unit[rel] = rd(full)
+    msg = rd(kitout + "/commit_ghost.msg").decode("utf-8")
+
+    # 4. the root around the clone, as the hook sees it
+    nj, nf = [], []
+    for name in sorted(os.listdir(PROOT)):
+        if name == "GXEMUL-SEC":
+            continue
+        src = PROOT + "/" + name
+        if os.path.isdir(src):
+            run(["cmd", "/c", "mklink", "/J", (CROOT + "/" + name).replace("/", "\\"), src.replace("/", "\\")])
+            if not (is_junction(CROOT + "/" + name) and os.path.samefile(CROOT + "/" + name, src)):
+                log("REFUSED: junction %s does not mirror %s" % (name, src))
+                cleanup_junctions()
+                sys.exit(3)
+            nj.append(name)
+        else:
+            shutil.copyfile(src, CROOT + "/" + name)
+            nf.append(name)
+    log("project root mirrored: %d junctions (%s), %d files copied" % (len(nj), " ".join(nj), len(nf)))
+
+    # 5. the working tree as the hook sees it
+    st = real("status", "--porcelain", "-z", "-uno").stdout.decode("utf-8")
+    dirty = []
+    for ent in [e for e in st.split("\0") if e]:
+        path = ent[3:]
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1]
+        dirty.append(path)
+    neutral = [n for n in NEUTRAL_CANDIDATES if n in dirty]
+    skip = set(unit) | set(neutral) | set(AUTO_NEUTRAL)
+    overlay = [p for p in dirty if p not in skip and os.path.isfile(REPO + "/" + p)]
+    for p in overlay:
+        wr(CLONE + "/" + p, rd(REPO + "/" + p))
+    tracked = set(g("ls-files", "-z").stdout.decode("utf-8").split("\0"))
+    untracked = [p for p in real("ls-files", "--others", "--exclude-standard", "-z").stdout.decode("utf-8").split("\0") if p]
+    clash = [p for p in untracked if p in unit]
+    if clash:
+        log("REFUSED: the real working tree holds untracked copies of unit paths: %s" % clash[:5])
+        cleanup_junctions()
+        sys.exit(3)
+    nbytes, vanished, nowtracked = 0, [], []
+    for p in untracked:
+        if p in tracked:
+            nowtracked.append(p)          # tracked in the clone by a stand-in (wrec1106's banked files)
+            continue
+        try:
+            b = rd(REPO + "/" + p)
+        except OSError:
+            vanished.append(p)
+            continue
+        nbytes += len(b)
+        wr(CLONE + "/" + p, b)
+    log("overlaid %d dirty tracked files (unstaged; neutral %s and %s kept at HEAD); %d untracked files copied "
+        "(%d bytes; %d tracked by a stand-in skipped; %d vanished while copying)"
+        % (len(overlay), neutral, list(AUTO_NEUTRAL), len(untracked) - len(nowtracked) - len(vanished), nbytes,
+           len(nowtracked), len(vanished)))
+
+    # 6. the unit, staged
+    for p, b in unit.items():
+        wr(CLONE + "/" + p, b)
+    g("add", "--", *sorted(unit))
+    cached = sorted(g("diff", "--cached", "--name-only").stdout.decode().split())
+    if cached != sorted(unit):
+        log("REFUSED: staged set differs from the unit: extra %s missing %s"
+            % (sorted(set(cached) - set(unit)), sorted(set(unit) - set(cached))))
+        cleanup_junctions()
+        sys.exit(3)
+    log("staged %d paths == the unit" % len(cached))
+
+    # 7. GREEN
+    green = precommit("FINAL" if FINAL else "GREEN")
+    x_rerun("FINAL" if FINAL else "GREEN", green)
+    if FINAL:
+        cleanup_junctions()
+        n_w = len([p for p in unit if p.startswith("regress/artifacts/ghostround/wired_")])
+        log("FINAL mode: the unit carried %d banked wired files; GREEN only, the bank under wired/ untouched" % n_w)
+        log("PRETEST_DONE")
+        return
+
+    # 8. RED: one more staged round block, naming an open row that does not record its round.  The row is chosen so it
+    #  carries an entry dated the block's own day and no #NNN: then ONLY the mention rule fails it, and RED discriminates
+    #  the hook's rule from `--rule=date` (the pass-2 ruling's M1; the first RED's row, bugfilereverse, had one entry
+    #  dated 2026-09-17 and failed under either rule).
+    rn = int(re.search(r"^# `#(\d+)`", unit["CHANGELOG.md"].decode("utf-8"), re.M).group(1)) + 1
+    led = json.loads(unit["tools/pipeline/ledger.json"].decode("utf-8"))
+    pat = re.compile(r"(?:#|\b[Rr]ound\s+)%d(?![0-9A-Za-z])" % rn)
+    cands = []
+    for r in led["rows"]:
+        ds = [e.get("date") or "" for e in r.get("entries", []) if isinstance(e, dict)]
+        if r.get("state") == "open" and ds and max(ds) > "2026-11-05" and not pat.search(json.dumps(r, ensure_ascii=False)):
+            cands.append((0 if r["id"] in SYNTHETIC_PREFER else 1, r["id"], max(ds)))
+    if not cands:
+        log("REFUSED: no open row carries an entry dated after the cutoff and leaves #%d unnamed" % rn)
+        cleanup_junctions()
+        sys.exit(3)
+    _, srow, sdate = sorted(cands)[0]
+    syn = ("# `#%d` (%s) -- `%s`: SYNTHETIC (pretest clone only) -- a round block staged while its row records nothing "
+           "of it\n\nThe red control of precommit section P2: this block exists only in the pretest clone, staged on top "
+           "of the unit's CHANGELOG.md; the row is open, carries an entry dated %s -- this block's day, so the date rule "
+           "would pass it -- and its record does not name #%d.\n\n" % (rn, sdate, srow, sdate, rn))
+    log("RED's row: %s (open; latest entry %s; %d candidate rows)" % (srow, sdate, len(cands)))
+    wr(CLONE + "/CHANGELOG.md", syn.encode("utf-8") + unit["CHANGELOG.md"])
+    g("add", "--", "CHANGELOG.md")
+    red = precommit("RED")
+    x_rerun("RED", red)
+
+    gh, rh = set(hard_lines(green)), set(hard_lines(red))
+    log("hard lines: GREEN %d, RED %d; only in RED: %d; only in GREEN: %d"
+        % (len(gh), len(rh), len(rh - gh), len(gh - rh)))
+    for l in sorted(rh - gh):
+        log("  only in RED : " + l[:300])
+    for l in sorted(gh - rh):
+        log("  only in GREEN: " + l[:300])
+
+    # 9. section C on the message (the hook gets none; commit_unit2 passes it to git commit -F)
+    cited = sorted(set(re.findall(r"\b((?:src|regress|man)/[A-Za-z0-9_./-]+\.(?:c|h|sh|1))\b", msg)))
+    cres = ["message cites %s -- %s" % (c, "in the diff" if c in unit else "*** NOT IN THE DIFF ***") for c in cited] or \
+           ["message cites no src/regress/man path ending .c/.h/.sh/.1 (nothing to cross-check)"]
+    wr(KIT + "/PRETEST_C.out", ("\n".join(cres) + "\n").encode("utf-8"))
+    log("section C on the message: " + "; ".join(cres))
+    log("subject: " + msg.splitlines()[0])
+
+    # 10. the checker's own controls, on the clone-built checker, the clone's history for the --at legs
+    cc = subprocess.run([BASH, KIT + "/wired/run_checker_controls.sh", kitout + "/tools/pipeline/check_ghost_rounds.py",
+                         CLONE, CROOT + "/ctl", kitout + "/tools/precommit_check.sh"], capture_output=True, env=GENV)
+    cco = (cc.stdout + cc.stderr).decode("utf-8", "replace")
+    cco = "\n".join(l for l in cco.splitlines() if "LF will be replaced" not in l) + "\n"
+    log("checker controls: rc=%d %s" % (cc.returncode,
+                                        " | ".join(l for l in cco.splitlines() if l.startswith(("CONTROLS:", "BAD")))))
+
+    cleanup_junctions()
+    left = [n for n in os.listdir(CROOT) if is_junction(CROOT + "/" + n)]
+    log("junctions removed (%d left); every target intact: %s"
+        % (len(left), all(os.path.isdir(PROOT + "/" + n) for n in nj)))
+
+    # 11. the banked set
+    W = KIT + "/wired"
+    wr(W + "/P2_GREEN.out", green.encode("utf-8"))
+    wr(W + "/P2_RED.out", red.encode("utf-8"))
+    wr(W + "/SYNTHETIC_BLOCK.md", syn.encode("utf-8"))
+    wr(W + "/CHECKER_CONTROLS.out", cco.encode("utf-8"))
+    wr(W + "/pretest_ghost.py.txt", SELF_BYTES)
+    facts = {"real_head": head, "stand_in_S1_wrec1106": s1, "stand_in_S1_rebased": rebase, "stand_in_S2_redate": s2,
+             "standin_date": STANDIN_DATE, "standin_names": [n for n, d in expiring],
+             "wrec1106_snapshot": {p: md5(b) for p, b in sorted(wsnap.items())},
+             "round": "#%d" % (rn - 1), "synthetic_round": "#%d" % rn, "synthetic_row": srow, "synthetic_date": sdate,
+             "driver_md5": md5(SELF_BYTES), "controls_rc": cc.returncode,
+             "neutral": neutral, "overlay": overlay, "unit": {p: md5(b) for p, b in sorted(unit.items())},
+             "green_verdict": [l for l in green.splitlines() if l.startswith("PRECOMMIT_")][-1:],
+             "red_verdict": [l for l in red.splitlines() if l.startswith("PRECOMMIT_")][-1:],
+             "only_in_red": sorted(rh - gh), "only_in_green": sorted(gh - rh), "green_hard": sorted(gh)}
+    wr(KIT + "/PRETEST_FACTS.json", (json.dumps(facts, indent=1) + "\n").encode("utf-8"))
+    log("PRETEST_DONE")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except SystemExit:
+        raise
+    except BaseException as ex:
+        log("PRETEST CRASHED: %r" % (ex,))
+        cleanup_junctions()
+        raise

@@ -4005,8 +4005,9 @@ MANIFEST = {
                          "differing.tsv -- preserved as evidence"),
     "artifacts/ghostround/census_20261106/check_ghost_rounds.py":
         (CLASS_RESEARCH, "ghostround: the PROTOTYPE ghost-round checker (a round block's header-named and in-work rows must be "
-                         "closed or name the round; cutoff 2026-11-05), wired into no gate -- whether to wire it is the owner's "
-                         "question on the row; census.out and controls/run_controls.out beside it -- preserved as evidence"),
+                         "closed or dropped or name the round; cutoff 2026-11-05), wired into no gate itself -- the owner "
+                         "ruled 2026-11-06 and its installed copy, tools/pipeline/check_ghost_rounds.py, is HARD precommit "
+                         "section P2 (#587); census.out and controls/run_controls.out beside it -- preserved as evidence"),
     #  #586 qhmutcrashscore: gate 3's crash-scoring fix.  Its evidence, artifacts/qhmutcrashscore/wkdc_20261105/,
     #  is the killdrivercrash research as run on 2026-11-05 -- stub detectors, their drivers, the controls and one
     #  census reader -- and landing_20261105/pass2/q2/ is pass 2's Q2 measurement through the same controls.  None
