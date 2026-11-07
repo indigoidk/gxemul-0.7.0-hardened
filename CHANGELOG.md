@@ -1,3 +1,36 @@
+# Records, 2026-11-06: three measurements and two Fable 5.1 rulings banked under `regress/artifacts/` -- `holdphase` ruled SAME-PHASE and recorded, `untokenedanswers`' discriminator ruled, the code-scanning final recorded on `fmtattr`, `fmtmissarg` and `codeqlscope`; `liveholdsphase` and `fmtmissargwitness` filed
+
+Three read-only measurements made 2026-11-06 by Opus 5.5 agents of the main loop (scratch only; no gate, build, probe, panel
+or codex ran) lived only in `_scratchpad/`, which is not durable; two rulings by the Fable 5.1 seat followed the same day.  Their
+key files are copied here, small, each directory with a `PROVENANCE.md`.  Scripts and data files are byte-identical; the
+markdown records carry a banner and marked `_scratchpad/` citations; the banked `plan.tsv` carries the ruling's two wording notes.
+
+* **`holdphase`** -- `regress/artifacts/holdphase/measure_20261106/` (SAME-PHASE, which all three tools implement through
+  `stage_tokens.py:live_holds()`, leaves 104 of 141 marker-seats live and ANY-PHASE 93) and the flagship's ruling,
+  `regress/artifacts/holdphase/ruling_20261106/RULING.md`: SAME-PHASE for every phase; cross-phase discharge is a defang in
+  place, never a pointer entry under the seat's name.  The row closes documented-only on the ruling -- one of the two closures
+  it names as honest; it recommends the other, after the fix lands -- and the fix is filed as `liveholdsphase` (LOW): the phase
+  test inside `live_holds()`, with two controls.  `sgimtedepth4dead`'s two assess copies of the 7g holds are defanged in place,
+  citing review [21] and [22], as the ruling prescribes; the peer's rows the ruling names are left to the peer.
+* **`untokenedanswers`** (MED, open) -- holdphase's second finding (an untokened NOT FIRED or SEAT DOWN note from the held seat
+  discharges a hold) is this row's (a), so no new row.  The ruling (Q2) sets the discriminator -- the recorder's declaration read
+  as a token -- and the row is READY FOR A HARNESS ROUND, not built; owner item (2) stays the owner's, now its `hold_question`.
+* **`ghostround`** (open; its `hold_question` now carries the OWNER's wiring question) --
+  `regress/artifacts/ghostround/census_20261106/`: the row's own date rule catches 2 of the 11 documented ghosts; the
+  prototype's default (a round block's header-named and `in work` rows must be closed or name the round; cutoff 2026-11-05)
+  catches 11 of 11 and would have failed 2 of the 32 landings since 2026-10-01, both references; 35 controls ok.  Not wired.
+* **The code-scanning final** -- `regress/artifacts/codeqlscope/ruling_20261106/RULING.md`: `fmtmissarg`, `fmtattr` and
+  `arcmemdescnr` REAL and LOW, `disasmnullmnem` a FALSE POSITIVE (no row; graded on `codeqlscope`); `#584` RATIFIED AS SHIPPED,
+  its repair chain closed with zero breaches; recorded as the flagship's regress entries on `fmtattr` and `fmtmissarg`, which
+  discharge their holds.  The dismissal plan (`regress/artifacts/codeqlscope/plan_20261106/`, nothing dismissed) is CONFIRMED
+  16 of 16; its two wording notes are applied to the banked `plan.tsv` and still owed in the scratch generator before any
+  `dismiss.sh --apply`.  One filing under the late-dissent rule: `fmtmissargwitness` (LOW).
+
+Ledger (seven rows edited, two filed), `OUTSTANDING_BUGS.md` (one section, one bracket), `tools/pipeline/check_probe_wiring.py`
+(two MANIFEST lines, CLASS_RESEARCH, for the banked `analyze.py` and `check_ghost_rounds.py`; no gate runs either),
+`tools/pipeline/fable_queue.md` (its generated block), `matrix.html`, this block and the banked files only.  A records commit:
+no round number.
+
 # `#585` Records (follow-up, 2026-11-06): `fbsdrampair` names its landing commit `54613aa1`; the committed-tree proofs; the pass-2 receipt; the five record repairs its REGRESS adjudication ruled owed
 
 `git ls-tree 54613aa1`, md5s hashed in Python from the committed bytes: `src/devices/dev_footbridge.c` blob `77f7d960d505`, md5 `3de599da2438`; `regress/footbridge_sites_probe.py` blob `4fcc500731c3`, md5 `e0c4a48b9bf1`; `regress/gate_arm.sh` blob `bd310152b24e`, md5 `a059e4392267`; `tools/pipeline/check_probe_wiring.py` blob `d333328563d9`, md5 `4162e7452c7a`.  The working copy against each: dev_footbridge.c the same; footbridge_sites_probe.py the same; gate_arm.sh plus other rounds' uncommitted edits (1 hunk(s)), none in the footbridge block; check_probe_wiring.py plus other rounds' uncommitted MANIFEST entries (2 hunk(s)).

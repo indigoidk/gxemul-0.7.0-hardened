@@ -14426,6 +14426,8 @@ gate, one accident away from being lost, and this defect would have been invisib
 ### `holdphase` (med) -- `>=` where the carrier says LATER: six holds discharged by same-date
 ### siblings written by the batch that created the marker
 
+**[2026-11-06: CLOSED, documented-only, on Fable 5.1's ruling -- SAME-PHASE for every phase (`regress/artifacts/holdphase/ruling_20261106/RULING.md`); its structural fix is filed as `liveholdsphase`.  See the 2026-11-06 section at the end of this file.]**
+
 **The first diagnosis was wrong and the correction is the useful part.** I recorded this as the
 carrier's rule being too loose. Measured: **the rule is right as stated and my implementation
 was wrong.** The carrier says the seat must have *a **LATER** entry on the same row*; my code
@@ -26699,3 +26701,39 @@ src/devices/dev_dec5800.c:359-367 at 987cb596: The DEC 5800 CPU-mask registers a
 * **Landed** as `54613aa1` (2026-11-06); the records commit after it names it; the four trees keep the committed file (`landing_20261105/UPDATE_FBS.out`).
 * **Filed, new (LOW):** `fbsdramwrites` (the write side: 0x8FFC0000 missing from the mask whitelist, the mask's rejection announce unlatched, the offset announcing every non-zero write; member 7 IMPLEMENT named as its natural joint disposition); `fbsdramwidth` (dev_footbridge.c: byte and halfword reads of SDRAM_BA_MASK (+0x100) / SDRAM_BA_OFFSET (+0x104) are unrowed -- a width conjunct on #585's read guard (`&& len == 4`) escapes the 56-row detector) *[the landing's line cut this title mid-word, at "a width co"; restored whole by the records commit after it]*.
 * **Uncommitted beside it:** nothing of this round; the working copy and the four trees take the committed `dev_footbridge.c` (its `#NNN` tags filled) in the landing window.
+
+## 2026-11-06 -- records: three measurements and two Fable 5.1 rulings banked under `regress/artifacts/`; `holdphase` ruled SAME-PHASE; `liveholdsphase` and `fmtmissargwitness` filed
+
+* **`holdphase` (med) -- CLOSED, documented-only, on Fable 5.1's ruling** (`regress/artifacts/holdphase/ruling_20261106/RULING.md`,
+  Q1): SAME-PHASE for every phase -- a hold is the dual of the per-phase seat tally, and the phase is the only structural proxy
+  the ledger has for the question asked.  The measurement: `regress/artifacts/holdphase/measure_20261106/EVIDENCE.md`
+  (SAME-PHASE leaves 104 of 141 marker-seats live, ANY-PHASE 93).  Cross-phase discharge is a records act: a defang in place
+  that cites the discharging entry and the question, never a pointer entry under the seat's name.
+* **`liveholdsphase` (LOW, open) -- new.**  The ruling's structural fix, filed and not done: the phase test inside
+  `stage_tokens.py:live_holds()` (phase-agnostic today; its callers' grouping supplies the scope), with two controls.
+* **`sgimtedepth4dead` (high, in work)** -- its two assess copies of the 7g holds ([7] opus5, [8] fable5) defanged in place,
+  citing review [21] and [22] (2026-09-09), which answered 7g-1, as the ruling prescribes.  The peer's rows the ruling names
+  (`alphatbinegsel`, `lcabadval`) are left to the peer.
+* **`untokenedanswers` (MED, open) -- READY FOR A HARNESS ROUND, not built.**  holdphase's second finding is this row's (a),
+  so no new row; the flagship ruled the discriminator (`RULING.md` Q2): the recorder's declaration read as a token -- the
+  non-answer token or HELD on every non-answer entry, `is_answer()` token-only, a forward-only precommit section that refuses a
+  new seat-named entry with neither a token nor a declared verdict glyph, the keyword net only as a WARN audit.  Length,
+  keywords and the `d` glyph were each measured to fail.  Owner item (2) stays the owner's (the row's `hold_question`).
+* **`ghostround` (open; an OWNER question)** -- census, prototype checker and controls:
+  `regress/artifacts/ghostround/census_20261106/DECISION.md`.  The question, now the row's `hold_question`: wire
+  `check_ghost_rounds.py` (a round block's header-named and `in work` rows must be closed or name the round; cutoff 2026-11-05)
+  into `precommit_check.sh` as a soft section, a hard section, or not at all?  The row's own date rule catches 2 of the 11
+  documented ghosts; the default catches 11 of 11.
+* **The code-scanning final, Fable 5.1** (`regress/artifacts/codeqlscope/ruling_20261106/RULING.md`): `fmtmissarg`, `fmtattr` and
+  `arcmemdescnr` REAL and LOW (Astra's boundary-membership design for the ARC round confirmed; that round stays HELD);
+  `disasmnullmnem` a FALSE POSITIVE (no row; graded on `codeqlscope`); `#584` (`ccd1c502` + `2632277f`) RATIFIED AS SHIPPED, its
+  repair chain closed with zero breaches over its stated denominator.  Recorded as the regress entries of `fmtattr` and
+  `fmtmissarg`, which discharge their regress holds.
+* **`codeqlscope` (LOW, open)** -- the dismissal plan for the 196 open alerts, nothing dismissed:
+  `regress/artifacts/codeqlscope/plan_20261106/SUMMARY.md`.  The ruling CONFIRMS its 16 dismissals, 16 of 16, with two wording
+  notes, applied to the banked `plan.tsv` (alerts #126/#127 and #130).  OWED before any `dismiss.sh --apply`: the same two edits
+  in the scratch generator `_scratchpad/codescan/dismiss/tools/mkplan.py`, then the post-push re-derivation.  Switch to the
+  Advanced setup BEFORE the next push (it adds 909 C files under the ignored paths).
+* **`fmtmissargwitness` (LOW, open) -- new**, filed by the ruling under the late-dissent rule (disposition 3): the two
+  guest-reachable `fmtmissarg` sites were not offered to one seat for a single rung-3 attempt before the round was recorded on a
+  `detector:` witness.  The owner may drop it as documented-only.

@@ -3995,6 +3995,18 @@ MANIFEST = {
         (CLASS_RESEARCH, "#585 fbsdrampair: the rung-3 WITNESS as run on the committed build before any edit "
                          "(witness_20261105/witness_HEAD.out: FBSDRAM_WITNESS=SHOWN, both SDRAM reads ending the process with exit "
                          "status 1), preserved as evidence; not a gate"),
+    #  2026-11-06 records (holdphase, ghostround): two read-only measurements banked as EVIDENCE beside their outputs.
+    #  Each script is byte-identical to the scratch original that produced the files beside it (PROVENANCE.md in each
+    #  directory); neither is a detector or a witness, and no gate runs either.
+    "artifacts/holdphase/measure_20261106/analyze.py":
+        (CLASS_RESEARCH, "holdphase: the held-marker discharge census -- SAME-PHASE against ANY-PHASE over HEAD 2632277f's "
+                         "ledger, classified through HEAD's stage_tokens.py, both read from beside it as ledger_HEAD.json and "
+                         "HEAD_stage_tokens.py (git show 2632277f; PROVENANCE.md); its output analysis.out, markers.tsv and "
+                         "differing.tsv -- preserved as evidence"),
+    "artifacts/ghostround/census_20261106/check_ghost_rounds.py":
+        (CLASS_RESEARCH, "ghostround: the PROTOTYPE ghost-round checker (a round block's header-named and in-work rows must be "
+                         "closed or name the round; cutoff 2026-11-05), wired into no gate -- whether to wire it is the owner's "
+                         "question on the row; census.out and controls/run_controls.out beside it -- preserved as evidence"),
 }
 
 #  DATED, NAMED DEBT -- not a count and not a silent allowlist.  gate_offline.sh MEASURED that
