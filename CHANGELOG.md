@@ -1,3 +1,9 @@
+# `#587` Records (follow-up, 2026-11-07): `ghostround` names its landing commit `0a984b34`; the committed-tree proofs
+
+`git ls-tree 0a984b34`, md5s hashed in Python from the committed bytes: `tools/pipeline/check_ghost_rounds.py` blob `13fc3da4d4bc`, md5 `f20d249eeb21`; `tools/precommit_check.sh` blob `318a215d0f5e`, md5 `b678efd6e315`; `tools/README.md` blob `74ad43ac0750`, md5 `5cfaaa506027`.  The working copy against each: check_ghost_rounds.py the same; precommit_check.sh the same; README.md the same.
+
+The `commits` field of `ghostround` names `0a984b34`, and its state_note names the landing commit; the round's section in OUTSTANDING_BUGS.md names it; `matrix.html` re-rendered.
+
 # `#587` (2026-11-07) -- `ghostround`: a round block's header-named rows and its `in work` rows must record the round; precommit section P2, HARD by owner ruling
 
 **The defect.**  `#479` shipped on 2026-08-27 (`2343036`) and its round block named three rows; two days later all three were
