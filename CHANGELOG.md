@@ -1,3 +1,9 @@
+# `#586` Records (follow-up, 2026-11-07): `qhmutcrashscore` names its landing commit `d2a6f233`; the committed-tree proofs; the pass-2 receipt
+
+`git ls-tree d2a6f233`, md5s hashed from the committed bytes: `regress/selftest_mutation.sh` blob `d353556fdb61`, md5 `abf7b2c7c34d`; `tools/pipeline/check_probe_wiring.py` blob `4042856eb49b`, md5 `0975ad6bd4ee`; the 80 committed files under `regress/artifacts/qhmutcrashscore/`, their md5s hashed in path order, `57fad10e7370`.  The working copy against each: selftest_mutation.sh the same; check_probe_wiring.py differs in 2 hunk(s) (other sessions' uncommitted edits).  `qhmutcrashscore`'s `commits` field and `killdrivercrash`'s (the class's live member shipped in it; the row stays held for the owner's decision, on the Mythos route) name `d2a6f233`.  The `regress/pass2_ledger.tsv` receipt line for `d2a6f233`, the Landed line in OUTSTANDING_BUGS.md's `#586` section and `matrix.html` re-rendered complete this records commit.
+
+**One note on the in-situ run (`regress/artifacts/qhmutcrashscore/landing_20261105/INSITU_G3.out`), recorded because the kit asked for the machine alone.**  The landing window paused the session's Gemini-web senders first; the stop-wait timed out with three of the four stopped, so one network-bound send overlapped the run's first ~90 seconds.  Leg H took 704 s and leg S 709 s, consistent with each other, and the summary is PASS with `build/`'s inputs unchanged.
+
 # `#586` (2026-11-07) -- `qhmutcrashscore`: gate 3 no longer scores a mutant run that never printed its verdict as a detection; such a run prints NOLOG and its check reds
 
 **The defect.**  `regress/selftest_mutation.sh` (gate 3) proves that gate 2's float_emul differential can fail: it builds

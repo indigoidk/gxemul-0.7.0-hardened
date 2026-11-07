@@ -26754,7 +26754,7 @@ src/devices/dev_dec5800.c:359-367 at 987cb596: The DEC 5800 CPU-mask registers a
   now prints `NOLOG rc=<status>` and its check reds.  Witness (harness:): HEAD's gate PASS (15 checks) with every mutant
   crashed, the fixed gate FAIL (7 of 15 checks); controls 33 of 33 (`regress/artifacts/qhmutcrashscore/wkdc_20261105/controls/CONTROLS.txt`).  See the `#586` round
   block in CHANGELOG.md.
-* **Landed** -- in the commit that adds this section; the records commit after it names it.
+* **Landed** as `d2a6f233` (2026-11-07); the records commit after it names it.
 * **Filed, new (LOW):** `gate3runbound` -- gate 3 runs each mutant's differential with no time bound, so a mutant that
   hangs wedges the gate and the battery behind it (no false pass, no verdict).
 * **Filed, new (LOW):** `g3nologselfpin` -- from the regress review: the NOLOG guard has no standing
