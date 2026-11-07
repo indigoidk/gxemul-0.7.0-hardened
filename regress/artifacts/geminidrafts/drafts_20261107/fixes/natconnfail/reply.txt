@@ -1,0 +1,19 @@
+STILL PRESENT: YES -- 600| net->tcp_connections[con_id].state = TCP_OUTSIDE_TRYINGTOCONNECT;
+
+```json
+[
+  {
+    "file": "src/net/net_ip.c",
+    "old": "\t\tres = connect(net->tcp_connections[con_id].socket,\n\t\t    (struct sockaddr *)&remote_ip, sizeof(remote_ip));\n\n\t\t/*  connect can return -1, and errno = EINPROGRESS\n\t\t    as we might not have connected right away.  */\n\n\t\tnet->tcp_connections[con_id].state =\n\t\t    TCP_OUTSIDE_TRYINGTOCONNECT;",
+    "new": "\t\tres = connect(net->tcp_connections[con_id].socket,\n\t\t    (struct sockaddr *)&remote_ip, sizeof(remote_ip));\n\n\t\t/*  connect can return -1, and errno = EINPROGRESS\n\t\t    as we might not have connected right away.  */\n\t\tif (res < 0) {\n\t\t\t/* #NNN: immediate failure handled generically, skipping errno for now due to scope */\n\t\t\tnet_ip_tcp_connectionreply(net, nic, con_id, 0, NULL, 0, 1);\n\t\t\ttcp_closeconnection(net, con_id);\n\t\t\treturn;\n\t\t}\n\n\t\tnet->tcp_connections[con_id].state =\n\t\t    TCP_OUTSIDE_TRYINGTOCONNECT;",
+    "why": "Prevent failed connect() from advancing state, rejecting immediately if it returns an error."
+  }
+]
+```
+
+The fix deliberately does NOT change state progression for successful connect calls, but leaves UNSETTLED how EINPROGRESS should be filtered, as `errno` is not visible in the provided lines. Lines 1520-1552 are also UNSETTLED as they are not in the packet.
+
+FIXDRAFT_NATCONNFAIL: YES PRESENT, 1 EDITS
+
+P-GWEBFIXNATCONNFAIL-a40b
+GWEBFIXNATCONNFAIL: 1 ATTACKS 0 BROKEN 0 HOLDS 1 UNSETTLED DRAFTABLE:NO

@@ -1,0 +1,32 @@
+STILL PRESENT: YES -- src/cpus/cpu_ppc.c:329
+
+```json
+[
+  {
+    "file": "src/cpus/cpu_ppc.c",
+    "old": "\tif (!quiet_mode)\n\t\tfatal(\"[ PPC Exception 0x%x; pc=0x%\" PRIx64\" ]\\n\",\n\t\t    exception_nr, cpu->pc);\n",
+    "new": "\t/* #NNN: removed fatal() to prevent guest-drivable host log flood */\n",
+    "why": "Removing fatal() mitigates log flood without affecting exception state."
+  },
+  {
+    "file": "src/cpus/memory_ppc.c",
+    "old": "\tif (!quiet_mode)\n\t\tfatal(\"[ memory_ppc: exception! vaddr=0x%\" PRIx64\" pc=0x%\" PRIx64\n\t\t    \" instr=%i user=%i wf=%i ]\\n\", (uint64_t) vaddr,\n\t\t    (uint64_t) cpu->pc, instr, user, writeflag);\n",
+    "new": "\t/* #NNN: removed fatal() to prevent guest-drivable host log flood */\n",
+    "why": "Removing fatal() mitigates log flood without affecting memory fault state."
+  }
+]
+```
+
+**What the fix does NOT change:**
+Each changed step is correct because it simply elides the output function causing the flood. It deliberately leaves alone every piece of architectural state the running code can save: `cpu->cd.ppc.spr[SPR_SRR0]`, `SPR_SRR1`, `cpu->pc`, and `cpu->cd.ppc.msr` remain properly updated in `cpu_ppc.c`, and memory exception registers `SPR_DAR` and `SPR_DSISR` are identically populated in `memory_ppc.c`. Execution flow remains functionally identical.
+
+**Unsettled claims and review (defensive review):**
+*   **Claim: "one fatal() line per exception... unless -q"** -> `src/cpus/cpu_ppc.c:329`. HOLDS. `if (!quiet_mode)` conditionally triggers the `fatal()` on exceptions.
+*   **Claim: "one fatal() line... per translation fault unless -q"** -> `src/cpus/memory_ppc.c:299`. BROKEN. The `fatal()` is bypassed if `flags & FLAG_NOEXCEPTIONS` is set, meaning not *every* translation fault triggers it.
+*   **Claim: "Our site at de8c7547: src/cpus/cpu_ppc.c:329-331; src/cpus/memory_ppc.c:302-305"** -> `src/cpus/cpu_ppc.c:329` and `src/cpus/memory_ppc.c:302`. HOLDS. The line numbers map exactly to the provided snippets.
+*   **Claim: "Port upstream 6d2d8bf0 (SVN r6532) at INFO level"** -> UNSETTLED. We cannot verify the upstream commit's contents, nor is an `info()` macro or equivalent available in the text blocks shown to substitute directly for `fatal()`.
+*   **Claim: "mrwstore2 says 'SIBLING FILED'..."** -> UNSETTLED. Cannot be settled without `regress/artifacts/research_20261022/TRIAGE.md`.
+
+FIXDRAFT_PPCEXCFATAL: YES PRESENT, 2 EDITS
+P-GWEBFIXPPCEXCFATAL-8fda
+GWEBFIXPPCEXCFATAL: 5 ATTACKS 1 BROKEN 2 HOLDS 2 UNSETTLED DRAFTABLE:YES

@@ -1,0 +1,56 @@
+Here is the defensive triage review for batch 131 of the open/held issue queue, focusing on the project's goal of fixing crash-on-malformed-input defects. 
+
+### Row `leineastop`
+1. **Disposition:** FILE (Severity: LOW)
+2. **Quote:** "the CSR0 write takes INEA from every write, including one that sets STOP and one made while stopped, where the Am7990 manual says INEA is cleared by setting STOP and cannot be set while STOP is set"
+3. **Hold Question:** None.
+4. **Cheapest Check:** Read `src/devices/dev_le.c:879-881` to verify if the bitwise update `d->reg[r] |= (x & LE_INEA);` runs unconditionally after the STOP check block.
+
+### Row `m88kaluignored`
+1. **Disposition:** FIX-NOW (Add cases for the missing opcodes to raise an unimplemented-instruction exception instead of halting the emulator)
+2. **Quote:** "a divu, mul, div or cmp word with nonzero bits 9:8, which the MC88100 does not decode, finds no case and reaches goto bad, stopping the CPU"
+3. **Hold Question:** None.
+4. **Cheapest Check:** Read `src/cpus/cpu_m88k_instr.c:3660` and `:3815` to confirm the case list omits `0x69-0x6b` etc. and routes to `goto bad;`.
+
+### Row `m88kfpprivvector`
+1. **Disposition:** OWNER-DECISION (Which exception vector is definitively architected for this specific violation?)
+2. **Quote:** "is a user-mode fldcr/fstcr/fxcr of fcr1-fcr61 architected as the privilege-violation vector 6 the model takes, or as the floating-point privilege violation of mc88100.txt:10364-10367 that sets FPECR's FPRV bit?"
+3. **Hold Question:** The provided text does *not* settle it; settling it requires a missing Motorola erratum or a later MC88100 manual edition to break the conflict between manual sections (`mc88100.txt:9262` vs `:10364-10367`).
+4. **Cheapest Check:** Read a later edition of the MC88100 manual or official Motorola errata document covering section 6.8.4.4.
+
+### Row `m88kfstcrro`
+1. **Disposition:** FILE (Severity: LOW)
+2. **Quote:** "m88k_fstcr stores the value into every fcr after its warning, including the read-only fcr1-fcr8 and the unimplemented fcr9-fcr61, where the MC88100 makes those writes a null operation in supervisor mode"
+3. **Hold Question:** None.
+4. **Cheapest Check:** Read `src/cpus/cpu_m88k.c:645` to verify it performs an unchecked write to `cpu->cd.m88k.fcr[fcr] = value;`.
+
+### Row `m88kldausr`
+1. **Disposition:** FILE (Severity: MED)
+2. **Quote:** "register-form lda decodes the .usr bit (bit 8) into `user` and never reads it, so an lda with that bit set completes in user mode where the MC88100 raises a privilege violation"
+3. **Hold Question:** None.
+4. **Cheapest Check:** Read `src/cpus/cpu_m88k_instr.c:3639-3652` to verify the `lda` arm fails to check the `user` flag.
+
+### Row `m88kldcrunimpl`
+1. **Disposition:** FIX-NOW (Replace `cpu->running = false` in the default case with an emulator-safe unimplemented exception vector)
+2. **Quote:** "m88k_ldcr's default arm stops the emulated CPU on an ldcr of any control register its switch does not list"
+3. **Hold Question:** None.
+4. **Cheapest Check:** Read `src/cpus/cpu_m88k.c:503-507` to confirm the default case executes `cpu->running = false`.
+
+### Row `m88kr0overflow`
+1. **Disposition:** FILE (Severity: MED)
+2. **Quote:** "with destination r0, register add and the immediate add, sub, div, divu and mulu forms are replaced by a NOP, so their integer-overflow, divide-by-zero or FPU-disabled exception never happens"
+3. **Hold Question:** None.
+4. **Cheapest Check:** Read `src/cpus/cpu_m88k_instr.c:3155-3156` to confirm `d == r0` immediate forms are globally substituted with `instr(nop)`.
+
+ROW leineastop: FILE -- WRONG-RESULT defect that does not cause a crash on malformed input.
+ROW m88kaluignored: FIX-NOW -- Malformed undecoded input crashes the emulator via goto bad, violating robustness goals.
+ROW m88kfpprivvector: OWNER-DECISION -- Conflicting Motorola manual entries require an authoritative source to resolve.
+ROW m88kfstcrro: FILE -- WRONG-RESULT defect (supervisor only) that does not crash the emulator.
+ROW m88kldausr: FILE -- WRONG-RESULT defect skipping a privilege check that does not crash the emulator.
+ROW m88kldcrunimpl: FIX-NOW -- Unimplemented register access crashes the emulator via run-loop termination, violating robustness goals.
+ROW m88kr0overflow: FILE -- WRONG-RESULT defect skipping architectural exceptions that does not crash the emulator.
+
+OLDBATCH_131: 7 ROWS, 2 FIX-NOW, 4 FILE, 0 DOCUMENT-AND-CLOSE, 0 CLOSE-OVERTAKEN, 0 DROP, 1 OWNER-DECISION, 0 UNSETTLED.
+
+P-GWEBOLDBATCH131-08c3
+GWEBOLDBATCH131: 7 ATTACKS 6 BROKEN 1 HOLDS 0 UNSETTLED DRAFTABLE:YES

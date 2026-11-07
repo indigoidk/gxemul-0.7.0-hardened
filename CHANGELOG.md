@@ -1,3 +1,13 @@
+# Records, 2026-11-07: the Gemini-web drafts for the oldest open issues banked -- 1045 adjudication drafts, 101 fix drafts (74 compile), the attachment budget measured -- all PROPOSALS
+
+Banked so they live in git rather than only in `_scratchpad/` (`regress/artifacts/geminidrafts/drafts_20261107/SUMMARY.md`, `regress/artifacts/geminidrafts/drafts_20261107/PROVENANCE.md`).  None of it is adjudicated
+or applied: the adjudication drafts propose a disposition for every open or held row, oldest first, with the main loop's
+commits check beside them (`regress/artifacts/geminidrafts/drafts_20261107/adjudication/OLDBATCH_DRAFTS.md`); the fix drafts propose minimal edits for the oldest rows
+proposed FIX-NOW with no commit, each compile-checked in a scratch clone at HEAD (`regress/artifacts/geminidrafts/drafts_20261107/fixes/fixcheck_results.tsv`).
+Every one still owes the flagship's ruling and its round's full process before any code changes.  The attachment control
+(`regress/artifacts/geminidrafts/drafts_20261107/attachments/ATTTEST_SCORES.txt`) shows one ~60-70 KB budget per message for all attachments together.  No code,
+detector, gate, ledger row or score changes.
+
 # `#586` Records (follow-up, 2026-11-07): `qhmutcrashscore` names its landing commit `d2a6f233`; the committed-tree proofs; the pass-2 receipt
 
 `git ls-tree d2a6f233`, md5s hashed from the committed bytes: `regress/selftest_mutation.sh` blob `d353556fdb61`, md5 `abf7b2c7c34d`; `tools/pipeline/check_probe_wiring.py` blob `4042856eb49b`, md5 `0975ad6bd4ee`; the 80 committed files under `regress/artifacts/qhmutcrashscore/`, their md5s hashed in path order, `57fad10e7370`.  The working copy against each: selftest_mutation.sh the same; check_probe_wiring.py differs in 2 hunk(s) (other sessions' uncommitted edits).  `qhmutcrashscore`'s `commits` field and `killdrivercrash`'s (the class's live member shipped in it; the row stays held for the owner's decision, on the Mythos route) name `d2a6f233`.  The `regress/pass2_ledger.tsv` receipt line for `d2a6f233`, the Landed line in OUTSTANDING_BUGS.md's `#586` section and `matrix.html` re-rendered complete this records commit.

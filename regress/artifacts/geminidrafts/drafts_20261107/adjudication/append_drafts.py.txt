@@ -1,0 +1,43 @@
+#!/usr/bin/env python3
+"""append_drafts.py -- append every answered oldest-issue batch not yet in OLDBATCH_DRAFTS.md, with the mechanical check the
+main loop runs on each: a FIX-NOW or CLOSE-OVERTAKEN proposal on a row whose `commits` field is already set (b115/armbdt: the
+row's own round shipped; what it owes is its held stage).  Prints the running disposition tally.  Read-only on the repo."""
+import collections
+import io
+import json
+import os
+import re
+import subprocess
+
+H = "C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/gweb/jobs_20261106_kits/"
+P = H + "OLDBATCH_DRAFTS.md"
+t = io.open(P, encoding="utf-8").read()
+raw = subprocess.run(["git", "-C", "C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC", "show", "HEAD:tools/pipeline/ledger.json"],
+                     capture_output=True).stdout
+d = json.loads(raw.decode("utf-8"))
+by = {r.get("id"): r for r in (d["rows"] if isinstance(d, dict) and "rows" in d else d)}
+ROW = re.compile(r"^.*ROW `?([A-Za-z0-9_]+)`?: *\**([A-Z][A-Z-]+)\**.*$", re.M)
+added, flags = [], []
+for k in list(range(0, 200)) + [900] + list(range(911, 919)):
+    f = H + "oldbatch_%d/reply.txt" % k
+    if not os.path.exists(f) or ("## batch %d " % k) in t:
+        continue
+    src = io.open(f, encoding="utf-8").read()
+    if not re.search(r"OLDBATCH_%d:" % k, src):
+        continue
+    lines = [re.sub(r"[`*]", "", m.group(0)).strip() for m in ROW.finditer(src)]
+    lines = [l[l.index("ROW"):] for l in lines]
+    added.append("\n## batch %d -- `oldbatch_%d/reply.txt` (%d bytes)\n\n" % (k, k, len(src.encode())) + "\n".join("* " + l for l in lines))
+    for m in ROW.finditer(src):
+        rid, disp = m.group(1), m.group(2)
+        c = by.get(rid, {}).get("commits")
+        if disp in ("FIX-NOW", "CLOSE-OVERTAKEN") and c:
+            flags.append("* `%s` (batch %d): %s, but the row already carries commits `%s` -- its own round shipped; what it owes is its held stage." % (rid, k, disp, c))
+if added:
+    io.open(P, "a", encoding="utf-8", newline="\n").write("\n".join(added) + "\n\n**Mechanical check of these batches (FIX-NOW / CLOSE-OVERTAKEN on a row that already carries commits):**\n\n" + ("\n".join(flags) if flags else "* none") + "\n")
+t = io.open(P, encoding="utf-8").read()
+tally = collections.Counter(m.group(2) for m in re.finditer(r"^\* ROW ([A-Za-z0-9_]+): ([A-Z][A-Z-]+)", t, re.M))
+rows = len(re.findall(r"^\* ROW ", t, re.M))
+print("appended %d batches, %d flags; drafted rows %d; tally %s" % (len(added), len(flags), rows, dict(tally.most_common())))
+for f in flags:
+    print(f[:180])

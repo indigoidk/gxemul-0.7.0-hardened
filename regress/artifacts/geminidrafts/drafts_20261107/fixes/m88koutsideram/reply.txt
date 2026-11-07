@@ -1,0 +1,28 @@
+### Refuting the Claims
+
+1. **"cpus/memory_rw.c non-MIPS path beyond RAM"**: **BROKEN**. The code starting at line 694 is not strictly a "non-MIPS path". It is the generic fallback arm of an `else` block applied to all architectures *including* MIPS (for MIPS addresses that aren't PROM or Sprite regions). 
+2. **"an 88K access with no RAM or device behind it reads zeros or drops the write instead of raising a bus error"**: **BROKEN**. The `memory_rw.c` function is not responsible for raising CPU exceptions directly; it merely returns `MEMORY_ACCESS_FAILED` for the CPU model to inject the bus error. 
+3. **"(SVR4 memory sizing never terminates)"**: **BROKEN**. SVR4 memory sizing *could* terminate if the emulator is run with `VERBOSITY_ERROR` or higher. Once the probe exceeds `mem->physical_max + 0x40000`, `memory_warn_about_unimplemented_addr` returns `true` under high verbosity, failing the access and ending the loop. The bug is that correctness depends on logging verbosity.
+4. **"Filed 2026-10-22... Portable fix: yes... witness: none"**: **UNSETTLED**. I cannot consult the external GitHub URLs, confirm the date, or verify if luna88k/OpenBSD actually requires re-checking.
+
+STILL PRESENT: YES -- src/cpus/memory_rw.c:695
+
+```json
+[
+  {
+    "file": "src/cpus/memory_rw.c",
+    "old": "\t\t\tif (paddr >= mem->physical_max && !no_exceptions)\n\t\t\t\tif (memory_warn_about_unimplemented_addr\n\t\t\t\t    (cpu, mem, writeflag, paddr, len))\n\t\t\t\t\treturn MEMORY_ACCESS_FAILED;",
+    "new": "\t\t\tif (paddr >= mem->physical_max && !no_exceptions) {\n\t\t\t\tmemory_warn_about_unimplemented_addr\n\t\t\t\t    (cpu, mem, writeflag, paddr, len);\n\t\t\t\t/* #T38: decouple access failure from log verbosity to fix SVR4 memory sizing */\n\t\t\t\treturn MEMORY_ACCESS_FAILED;\n\t\t\t}",
+    "why": "Unconditionally fail accesses outside RAM to ensure the CPU raises a bus error, rather than linking structural failure to log verbosity."
+  }
+]
+```
+
+### What This Does Not Change & Unsettled Elements
+
+* **What it deliberately leaves alone:** The warning hack in `memory.c:605` that suppresses log spam for the first 0x40000 bytes past physical memory remains untouched. We also do not change the fallback behavior for `no_exceptions` (e.g., debug memory dumps), which will gracefully continue to read zeros without failing the access.
+* **Unsettled:** The comment at line 706 indicates this fall-through to `memset` might have been a workaround for a MIPS NetBSD PROM. I cannot settle whether unconditionally failing the access breaks that specific MIPS guest without seeing the guest's specific memory probing sequence. 
+
+FIXDRAFT_M88KOUTSIDERAM: YES PRESENT, 1 EDITS
+P-GWEBFIXM88KOUTSIDERAM-144b
+GWEBFIXM88KOUTSIDERAM: 4 ATTACKS 3 BROKEN 0 HOLDS 1 UNSETTLED DRAFTABLE:YES

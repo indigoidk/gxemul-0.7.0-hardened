@@ -1,0 +1,30 @@
+#!/usr/bin/env python3
+"""score_atttest.py -- score the attachment-truncation control: for each atttest_T*/ with a reply, which of each file's
+21 markers came back, the furthest one (the delivered fraction), and any marker the reply INVENTED (not in EXPECT.json)."""
+import glob
+import io
+import json
+import os
+import re
+
+H = os.path.dirname(os.path.abspath(__file__)).replace("\\", "/") + "/"
+print("%-4s %-3s %8s %6s  %-9s %-22s %s" % ("test", "f", "bytes", "lines", "found", "furthest (pct@byte)", "invented / note"))
+for d in sorted(x.replace(chr(92), "/") for x in glob.glob(H + "atttest_T*/")):
+    t = os.path.basename(d.rstrip("/")).split("_")[1]
+    rp = d + "reply.txt"
+    if not os.path.exists(rp):
+        print("%-4s (no reply)" % t)
+        continue
+    reply = io.open(rp, encoding="utf-8").read()
+    exp = json.load(io.open(d + "EXPECT.json", encoding="utf-8"))
+    known = {m["mark"] for f in exp.values() for m in f["marks"]}
+    seen = set(re.findall(r"MARK-F\d+-\d{3}-[0-9a-f]{6}", reply))
+    invented = sorted(seen - known)
+    for f, v in exp.items():
+        got = [m for m in v["marks"] if m["mark"] in seen]
+        far = max(got, key=lambda m: m["byte"]) if got else None
+        gaps = [m["mark"].split("-")[2] for m in v["marks"] if m["mark"] not in seen and far and m["byte"] < far["byte"]]
+        print("%-4s %-3s %8d %6d  %2d of %-4d %-22s %s" % (
+            t, f, v["bytes"], v["lines"], len(got), len(v["marks"]),
+            ("%s%%@%d" % (far["mark"].split("-")[2], far["byte"])) if far else "none",
+            ("invented %d" % len(invented) if invented else "") + ("  gaps before furthest: %s" % ",".join(gaps) if gaps else "")))

@@ -1,0 +1,79 @@
+#!/usr/bin/env python3
+"""mk_atttest.py -- the ATTACHMENT-TRUNCATION control for the Gemini-web seat (owner 2026-11-06: "find the point of
+non-throttled and throttled").  Builds jobs atttest_T1..T5 beside this script:
+
+  T1  one file  ~30 KB        T2  one file  ~60 KB        T3  one file  ~120 KB      T4  one file  ~240 KB
+  T5  three files ~30 KB each (90 KB together) -- the 2026-11-06 failure had three files, 83 KB, the third never seen
+
+Each file is real C source from HEAD (concatenated device/CPU models -- the content this seat is sent in practice) with a
+MARKER LINE `/* MARK-F<f>-<pct>-<hex> */` at every 5% of its length and one as its last line (21 per file, random hex),
+so the markers a reply reports pin how much of each file arrived.  EXPECT.json records each marker's byte offset and line.
+The inline packet is short and says what to report; it asks for nothing but the markers and the last visible line."""
+import io
+import json
+import os
+import secrets
+import subprocess
+
+H = os.path.dirname(os.path.abspath(__file__)).replace("\\", "/") + "/"
+REPO = "C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC"
+SRC = ["src/cpus/cpu_ppc_instr.c", "src/devices/dev_wdc.c", "src/devices/dev_le.c", "src/devices/dev_pvr.c",
+       "src/cpus/cpu_sh_instr.c", "src/devices/dev_sgi_re.c"]
+pool = "".join(subprocess.run(["git", "-C", REPO, "show", "HEAD:" + f], capture_output=True).stdout.decode("latin-1")
+               for f in SRC).replace("\r\n", "\n")
+pool_lines = pool.split("\n")
+
+
+def make_file(fileno, size, start_line):
+    """~size bytes of source lines from start_line, with 21 marker lines; returns text and its markers."""
+    lines, n, i = [], 0, start_line
+    while n < size:
+        l = pool_lines[i % len(pool_lines)]
+        lines.append(l)
+        n += len(l) + 1
+        i += 1
+    total = len(lines)
+    marks, out = [], []
+    at = {int(total * p / 100): p for p in range(0, 100, 5)}
+    for j, l in enumerate(lines):
+        if j in at:
+            m = "MARK-F%d-%03d-%s" % (fileno, at[j], secrets.token_hex(3))
+            marks.append(m)
+            out.append("/* %s */" % m)
+        out.append(l)
+    m = "MARK-F%d-100-%s" % (fileno, secrets.token_hex(3))
+    marks.append(m)
+    out.append("/* %s */" % m)
+    text = "\n".join(out) + "\n"
+    exp = []
+    for m in marks:
+        off = text.index(m)
+        exp.append({"mark": m, "byte": off, "line": text.count("\n", 0, off) + 1})
+    return text, exp, i
+
+
+TESTS = {"T1": [30000], "T2": [60000], "T3": [120000], "T4": [240000], "T5": [30000, 30000, 30000]}
+for t, sizes in TESTS.items():
+    d = H + "atttest_" + t + "/"
+    os.makedirs(d, exist_ok=True)
+    expect, start = {}, 0
+    for f, sz in enumerate(sizes, 1):
+        text, exp, start = make_file(f, sz, start)
+        io.open(d + "argon_bundle_%d.txt" % f, "w", encoding="utf-8", newline="\n").write(text)
+        expect["F%d" % f] = {"bytes": len(text.encode("utf-8")), "lines": text.count("\n"), "marks": exp}
+    io.open(d + "EXPECT.json", "w", encoding="utf-8", newline="\n").write(json.dumps(expect, indent=1))
+    body = "\n".join([
+        "# GXemul hardened fork -- a delivery check of attached files (a defensive project's tooling test)", "",
+        "This message has %d attached file(s), each a plain-text slice of C source code from an emulator project.  This is a" % len(sizes),
+        "DELIVERY CHECK, not a code review: we need to know how much of each attachment reached you.", "",
+        "Each file contains marker lines of the form `/* MARK-F<file>-<percent>-<six hex digits> */`.", "",
+        "## Report, for EACH attached file you can see:", "",
+        "1. the file as you see it (its name or its order);",
+        "2. EVERY marker token of the form MARK-F...-...-...... that you can actually see in it, copied exactly, in order --",
+        "   do not guess or reconstruct a token you cannot see, and do not list one twice;",
+        "3. the LAST line of that file that you can see, quoted exactly;",
+        "4. whether the file looked cut off.", "",
+        "If you can see fewer than %d attached file(s), say how many you see." % len(sizes), "",
+        "End with one line: `ATTCHECK_%s: <files seen> FILES, <markers listed> MARKERS`." % t, ""])
+    io.open(d + "packet_body.md", "w", encoding="utf-8", newline="\n").write(body)
+    print(t, [(k, v["bytes"], v["lines"], len(v["marks"])) for k, v in expect.items()])

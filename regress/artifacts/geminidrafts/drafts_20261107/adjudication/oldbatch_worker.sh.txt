@@ -1,0 +1,46 @@
+#!/bin/bash
+#  oldbatch_worker.sh ID FIRST LAST STRIDE -- one of N parallel Gemini-web senders on the oldest-issue adjudication drafts
+#  (owner 2026-11-06/07: "Try pushing harder Google Gemini").  Worker ID takes batches FIRST+ID, FIRST+ID+STRIDE, ... <= LAST.
+#  The 10-31 pattern (memory gxemul-gemini-web-seat: six parallel senders, ~150 jobs/h, no unusual-traffic check): CLAIM a job by
+#  writing `exit 2 in flight` to its gemini_web.exit, send with send_proxy.py, require server_model=gemini-4-argon, bank with
+#  bank_gweb.py.  Needs TODAY's control already passed (.prelim5_control_ok).  10 s between sends.  Stops on STOP_PROXY,
+#  STOP_OLDWORKERS, unusual-traffic/CAPTCHA text, or three consecutive failures.  Log: oldbatch_workers.log.
+set -u
+ID=$1; FIRST=$2; LAST=$3; STRIDE=$4
+K=/c/DocumentNoSnc/CC/GXEMUL/_scratchpad/gweb/jobs_20261106_kits; G=/c/DocumentNoSnc/CC/GXEMUL/_scratchpad/gweb
+MODEL="gemini-4-argon@think=2"; DAY=$(date +%F)
+LAB="gemini-4-argon@think=2 High (local web2api proxy, package entry point; oldest-issue ADJUDICATION DRAFT, proposed for Fable, $DAY)"
+LOG=$K/oldbatch_workers.log; fails=0
+say(){ echo "$(date '+%F %T') [w$ID] $*" >> "$LOG"; }
+read cday cts < <(cat "$G/.prelim5_control_ok" 2>/dev/null || echo "none 0")
+[ "$cday" = "$DAY" ] || { say "no control passed today ($cday) -- not sending"; exit 4; }
+say "start: batches $((FIRST+ID))..$LAST step $STRIDE"
+k=$((FIRST+ID))
+while [ "$k" -le "$LAST" ]; do
+    [ -f "$G/STOP_PROXY" ] && { say "STOP_PROXY"; break; }
+    [ -f "$K/STOP_OLDWORKERS" ] && { say "STOP_OLDWORKERS"; break; }
+    d=$K/oldbatch_$k
+    if grep -qhE 'OLDBATCH_'"$k"':' "$d/gemini_web.out" "$d/reply.txt" 2>/dev/null || grep -q 'in flight' "$d/gemini_web.exit" 2>/dev/null; then
+        k=$((k+STRIDE)); continue
+    fi
+    out=$(cd "$K" && python mk_oldbatch.py "$k" 7 2>&1) || { say "BUILD-FAIL $k"; k=$((k+STRIDE)); continue; }
+    echo "$out" | grep -q "rows \[\]" && { say "batch $k empty -- done"; break; }
+    (cd "$G" && python mk_gweb_job.py "$d" "$d/packet_body.md" "GWEBOLDBATCH$k" --title="oldbatch_$k" >/dev/null 2>&1) || { say "JOB-REFUSED $k"; k=$((k+STRIDE)); continue; }
+    echo "exit 2 in flight (oldbatch worker $ID, $(date '+%H:%M:%S'))" > "$d/gemini_web.exit"
+    sout=$(python "$G/send_proxy.py" "$d" "$MODEL" 2>&1); rc=$?
+    if grep -qiE 'unusual traffic|captcha|not a robot|automated queries' "$d/reply.txt" 2>/dev/null; then
+        echo "exit 1 unusual-traffic" > "$d/gemini_web.exit"; say "UNUSUAL-TRAFFIC at batch $k -- touching STOP_OLDWORKERS"; touch "$K/STOP_OLDWORKERS"; break
+    fi
+    if [ "$rc" != 0 ] || ! echo "$sout" | grep -q "server_model=gemini-4-argon"; then
+        echo "exit 1 send-fail rc=$rc" > "$d/gemini_web.exit"; fails=$((fails+1))
+        say "batch $k FAILED rc=$rc :: $(echo "$sout" | tail -1 | cut -c1-120) (consecutive $fails)"
+        mv -f "$d/reply.txt" "$d/reply.failed_$(date +%H%M%S).txt" 2>/dev/null
+        [ "$fails" -ge 3 ] && { say "three consecutive failures -- stopping"; break; }
+        sleep 30; continue                       # retry the same batch
+    fi
+    fails=0
+    (cd "$G" && python bank_gweb.py "$d" "$d/reply.txt" --model="$LAB" --transport=web2api-proxy >/dev/null 2>&1)
+    say "batch $k OK $(echo "$sout" | grep -oE 'bytes=[0-9]+') :: $(grep -hE 'OLDBATCH_'"$k"':' "$d/reply.txt" | tail -1 | cut -c1-140)"
+    k=$((k+STRIDE)); sleep 10
+done
+say "WORKER_DONE"

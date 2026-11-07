@@ -1,0 +1,101 @@
+#!/usr/bin/env python3
+"""mk_oldbatch.py K [N] -- Gemini-web ADJUDICATION DRAFT packet for batch K (0-based) of the OLDEST open/held ledger rows
+at HEAD, N rows per batch (default 7).  Owner 2026-11-03: "adjudication drafts via Argon"; 2026-11-06 /loop: "keep utilizing
+gemini web on the oldest set of the issues that we need to resolve".  Rows are ordered by the earliest date anywhere in
+the row; SKIP holds rows already ruled and held for Mythos.  Each row is inlined from HEAD's ledger, trimmed: its state,
+severity, hold_question, the head of its state_note and its two latest entries.  The packet asks for a PROPOSED
+disposition per row from the row's own text -- a draft for the flagship seat, never a ruling -- and asks for no test,
+probe or reproduction design.  Writes oldbatch_K/packet_body.md beside this script."""
+import io
+import json
+import os
+import re
+import subprocess
+import sys
+
+H = os.path.dirname(os.path.abspath(__file__)).replace("\\", "/") + "/"
+REPO = "C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC"
+SKIP = {"asanstale", "gateflr"}           # ruled; held for Mythos (HELD_FOR_MYTHOS.md rows 9-10)
+K = int(sys.argv[1])
+N = int(sys.argv[2]) if len(sys.argv) > 2 else 7
+head = subprocess.run(["git", "-C", REPO, "rev-parse", "--short=8", "HEAD"], capture_output=True, text=True).stdout.strip()
+raw = subprocess.run(["git", "-C", REPO, "show", "HEAD:tools/pipeline/ledger.json"], capture_output=True).stdout
+d = json.loads(raw.decode("utf-8"))
+rows = d["rows"] if isinstance(d, dict) and "rows" in d else d
+cand = []
+for r in rows:
+    if r.get("state") not in ("open", "held") or r.get("id") in SKIP:
+        continue
+    ds = re.findall(r"20\d\d-\d\d-\d\d", json.dumps(r, ensure_ascii=False))
+    cand.append((min(ds) if ds else "9999", r.get("id"), r))
+cand.sort(key=lambda c: (c[0], c[1]))
+batch = cand[K * N:(K + 1) * N]
+#  ONLY_IDS="a b": a TOP-UP batch of named rows (rows filed after the queue passed them -- the ledger changed mid-run).
+if os.environ.get("ONLY_IDS"):
+    want = set(os.environ["ONLY_IDS"].split())
+    batch = [c for c in cand if c[1] in want]
+
+
+#  mk_gweb_job.py refuses a packet containing a file-reading instruction ("grep the fork", "read the source", ...).  Row
+#  text QUOTES such phrases (batch 6 was refused for it), so quoted text is DEFANGED -- hyphenated, still legible -- the
+#  carrier's rule for quoting a machine-read marker.  The packet itself still tells the seat it cannot read files.
+FANGS = re.compile(r"(grep the fork|check the premises against the source|read the source|open the file)", re.I)
+
+
+FULL = os.environ.get("FULL") == "1"        # second pass on UNSETTLED rows: the row's text nearly whole, not its head
+
+
+def clip(s, n):
+    if FULL:
+        n = n * 5
+    s = FANGS.sub(lambda m: m.group(1).replace(" ", "-"), (s or "").strip())
+    return s if len(s) <= n else s[:n] + " [... %d more characters not shown]" % (len(s) - n)
+
+
+def entries(r):
+    es = []
+    for key in ("entries", "stages", "phases"):
+        v = r.get(key)
+        if isinstance(v, list):
+            es += v
+        elif isinstance(v, dict):
+            for ph, lst in v.items():
+                if isinstance(lst, list):
+                    es += [dict(e, phase=ph) if isinstance(e, dict) else {"phase": ph, "text": str(e)} for e in lst]
+    return es
+
+
+parts = []
+for first, rid, r in batch:
+    es = entries(r)
+    last = es[-2:] if es else []
+    lt = "\n".join("  - [%s %s %s] %s" % (e.get("date", ""), e.get("phase", ""), e.get("seat", ""),
+                                          clip(e.get("text") or e.get("note") or e.get("answer") or "", 700)) for e in last)
+    parts.append("\n".join([
+        "### row `%s` -- state `%s`, severity `%s`, earliest date in the row %s" % (rid, r.get("state"), r.get("severity") or r.get("sev") or "-", first),
+        "", "**title:** " + clip(r.get("title") or r.get("summary") or "", 400),
+        "", "**hold_question:** " + (clip(r.get("hold_question"), 900) or "(none)"),
+        "", "**state_note (head):**", "", clip(r.get("state_note") or r.get("note") or "", 2600),
+        "", "**latest entries (%d of %d):**" % (len(last), len(es)), lt or "  (none)", ""]))
+body = "\n".join([
+    "# GXemul hardened fork -- ADJUDICATION DRAFT for %d of the OLDEST open/held issues (a defensive project's queue triage)" % len(batch), "",
+    "PROJECT FRAMING -- a defensive software-robustness project: GXemul is a computer-architecture emulator, and this fork fixes",
+    "crash-on-malformed-input defects in its device and CPU models and keeps a ledger of every filed issue.  The rows below are the",
+    "OLDEST still open or held (batch %d, rows %d-%d of the queue, ledger at HEAD %s).  Each is inlined from the ledger, trimmed." % (K, K * N + 1, K * N + len(batch), head),
+    "You cannot read files, so work from the text given.  Your answer is a DRAFT for the project's flagship reviewer, who rules;",
+    "it is not a ruling.  Do not design tests, probes or reproductions -- only propose what should HAPPEN to each row and why.", "",
+    "## The rows", "", "\n".join(parts),
+    "## Questions -- verdict line first", "",
+    "For EACH row, give:",
+    "1. a PROPOSED disposition, one of: FIX-NOW (name the fix shape in one line), FILE (keep as debt; say its severity),",
+    "   DOCUMENT-AND-CLOSE (the row's own evidence already settles it), CLOSE-OVERTAKEN (name the commit or round its text says",
+    "   removed the defect, and the one control that must still be measured), DROP (why), or OWNER-DECISION (the question);",
+    "2. the sentence of the row's OWN text the proposal rests on, quoted;",
+    "3. if it has a hold_question, whether the text given settles it -- answer it if so, or say exactly what is missing;",
+    "4. the single cheapest check (a grep, a file read, a git log) that would confirm or refute your proposal.",
+    "Say UNSETTLED rather than guess.  Then one line per row:",
+    "`ROW <id>: <DISPOSITION> -- <one-line reason>`", "",
+    "End with one line: `OLDBATCH_%d: <n> ROWS, <f> FIX-NOW, <l> FILE, <d> DOCUMENT-AND-CLOSE, <o> CLOSE-OVERTAKEN, <x> DROP, <q> OWNER-DECISION, <u> UNSETTLED`." % K, ""])
+os.makedirs(H + "oldbatch_%d" % K, exist_ok=True)
+io.open(H + "oldbatch_%d/packet_body.md" % K, "w", encoding="utf-8", newline="\n").write(body)
+print("batch", K, "rows", [c[1] for c in batch], "bytes", len(body.encode()))

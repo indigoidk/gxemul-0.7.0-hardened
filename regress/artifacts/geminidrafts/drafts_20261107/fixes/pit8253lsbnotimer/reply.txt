@@ -1,0 +1,19 @@
+STILL PRESENT: YES -- 174| case I8253_TIMER_LSB:
+
+```json
+[
+  {
+    "file": "src/devices/dev_8253.c",
+    "old": "\t\t\tcase I8253_TIMER_LSB:\n\t\t\t\td->counter[relative_addr] &= 0xff00;\n\t\t\t\td->counter[relative_addr] |= (idata & 0xff);\n\t\t\t\tbreak;\n\t\t\tcase I8253_TIMER_MSB:\n\t\t\t\td->counter[relative_addr] &= 0x00ff;\n\t\t\t\td->counter[relative_addr] |= ((idata&0xff)<<8);\n\t\t\t\tif (d->counter[relative_addr] != 0)\n\t\t\t\t\td->hz[relative_addr] = (int) (\n\t\t\t\t\t    I8253_TIMER_FREQ / (float)\n\t\t\t\t\t    d->counter[relative_addr] + 0.5);\n\t\t\t\telse\n\t\t\t\t\td->hz[relative_addr] = 0;\n\t\t\t\tdebug(\"[ 8253: counter %i set to %i (%i Hz) \"\n\t\t\t\t    \"]\\n\", (int)relative_addr, d->counter[\n\t\t\t\t    relative_addr], d->hz[relative_addr]);\n\t\t\t\tswitch (relative_addr) {\n\t\t\t\tcase 0:\tif (d->timer0 == NULL)\n\t\t\t\t\t\td->timer0 = timer_add(\n\t\t\t\t\t\t    d->hz[0], timer0_tick, d);\n\t\t\t\t\telse\n\t\t\t\t\t\ttimer_update_frequency(\n\t\t\t\t\t\t    d->timer0, d->hz[0]);\n\t\t\t\t\tbreak;\n\t\t\t\tcase 1:\tfatal(\"TODO: DMA refresh?\\n\");\n\t\t\t\t\tbreak;\t/*  #223: (Codex/Fable) warn+ignore, don't exit() the host  */\n\t\t\t\tcase 2:\tfatal(\"TODO: 8253 tone generation?\\n\");\n\t\t\t\t\tbreak;\n\t\t\t\t}\n\t\t\t\tbreak;",
+    "new": "\t\t\tcase I8253_TIMER_LSB:\n\t\t\t\tif ((d->mode_byte & 0x30) == I8253_TIMER_LSB)\n\t\t\t\t\td->counter[relative_addr] = (idata & 0xff);\n\t\t\t\telse\n\t\t\t\t\td->counter[relative_addr] = (d->counter[relative_addr] & 0xff00) | (idata & 0xff);\n\t\t\t\tbreak;\n\t\t\tcase I8253_TIMER_MSB:\n\t\t\t\tif ((d->mode_byte & 0x30) == I8253_TIMER_MSB)\n\t\t\t\t\td->counter[relative_addr] = ((idata & 0xff) << 8);\n\t\t\t\telse\n\t\t\t\t\td->counter[relative_addr] = (d->counter[relative_addr] & 0x00ff) | ((idata & 0xff) << 8);\n\t\t\t\tbreak;\n\t\t\t}\n\t\t\t\n\t\t\t/* #442: Setup timer for all write formats */\n\t\t\tif (d->counter[relative_addr] != 0)\n\t\t\t\td->hz[relative_addr] = (int) (\n\t\t\t\t    I8253_TIMER_FREQ / (float)\n\t\t\t\t    d->counter[relative_addr] + 0.5);\n\t\t\telse\n\t\t\t\td->hz[relative_addr] = 0;\n\t\t\tdebug(\"[ 8253: counter %i set to %i (%i Hz) \"\n\t\t\t    \"]\\n\", (int)relative_addr, d->counter[\n\t\t\t    relative_addr], d->hz[relative_addr]);\n\t\t\tswitch (relative_addr) {\n\t\t\tcase 0:\tif (d->timer0 == NULL)\n\t\t\t\t\td->timer0 = timer_add(\n\t\t\t\t\t    d->hz[0], timer0_tick, d);\n\t\t\t\telse\n\t\t\t\t\ttimer_update_frequency(\n\t\t\t\t\t    d->timer0, d->hz[0]);\n\t\t\t\tbreak;\n\t\t\tcase 1:\tfatal(\"TODO: DMA refresh?\\n\");\n\t\t\t\tbreak;\t/*  #223: (Codex/Fable) warn+ignore, don't exit() the host  */\n\t\t\tcase 2:\tfatal(\"TODO: 8253 tone generation?\\n\");\n\t\t\t\tbreak;\n\t\t\t}\n\t\t\t/* End switch to continue matching outer block */\n\t\t\tswitch (rw) {\n\t\t\tcase I8253_TIMER_LSB:\n\t\t\tcase I8253_TIMER_MSB:\n\t\t\t\tbreak;",
+    "why": "Clear stale byte on one-byte formats and ensure timer runs on LSB writes."
+  }
+]
+```
+
+This fix relies on conditionally isolating the update step if it is a single-byte mode, while keeping the other half if in 16-bit format, and moves the timer frequency update outside the LSB/MSB switch so it runs for LSB as well. The behavior of reading the `timer0` frequency during intermediate 16-bit writes is unaffected structurally because 16-bit updates trigger twice anyway now instead of only once upon MSB write (or zero). The history of adjudications and seat claims are marked UNSETTLED as they rely on outside logs.
+
+FIXDRAFT_PIT8253LSBNOTIMER: YES PRESENT, 1 EDITS
+
+P-GWEBFIXPIT8253LSBNOTIMER-8e24
+GWEBFIXPIT8253LSBNOTIMER: 5 ATTACKS 1 BROKEN 2 HOLDS 2 UNSETTLED DRAFTABLE:YES

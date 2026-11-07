@@ -1,0 +1,31 @@
+STILL PRESENT: YES -- src/console/x11.c:247 and src/devices/dev_fb.c:249
+
+```json
+[
+  {
+    "file": "src/console/x11.c",
+    "old": "\tXImage *xtmp;\n\tCHECK_ALLOCATION(xtmp = XSubImage(fbwin->fb_ximage,\n\t    fbwin->cursor_x/fbwin->scaledown,\n\t    fbwin->cursor_y/fbwin->scaledown,\n\t    fbwin->cursor_xsize/fbwin->scaledown + 1,\n\t    fbwin->cursor_ysize/fbwin->scaledown + 1));",
+    "new": "\tint cxsize = fbwin->cursor_xsize/fbwin->scaledown + 1;\n\tint cysize = fbwin->cursor_ysize/fbwin->scaledown + 1;\n\tif (fbwin->cursor_x/fbwin->scaledown + cxsize > fbwin->fb_ximage->width)\n\t\tcxsize = fbwin->fb_ximage->width - fbwin->cursor_x/fbwin->scaledown;\n\tif (fbwin->cursor_y/fbwin->scaledown + cysize > fbwin->fb_ximage->height)\n\t\tcysize = fbwin->fb_ximage->height - fbwin->cursor_y/fbwin->scaledown;\n\tif (cxsize <= 0 || cysize <= 0)\n\t\treturn;\n\n\tXImage *xtmp;\n\tCHECK_ALLOCATION(xtmp = XSubImage(fbwin->fb_ximage,\n\t    fbwin->cursor_x/fbwin->scaledown,\n\t    fbwin->cursor_y/fbwin->scaledown,\n\t    cxsize, cysize));",
+    "why": "Clip XSubImage dimensions to the image bounds to prevent out-of-bounds reads in Xlib (#233)"
+  },
+  {
+    "file": "src/console/x11.c",
+    "old": "\t\t\tint px = x/fbwin->scaledown;\n\t\t\tint py = y/fbwin->scaledown;\n\t\t\tint p = 0, n = 0, c = 0;",
+    "new": "\t\t\tint px = x/fbwin->scaledown;\n\t\t\tint py = y/fbwin->scaledown;\n\t\t\tif (px >= cxsize || py >= cysize)\n\t\t\t\tcontinue;\n\t\t\tint p = 0, n = 0, c = 0;",
+    "why": "Prevent out-of-bounds pixel access in the clipped XSubImage (#233)"
+  },
+  {
+    "file": "src/devices/dev_fb.c",
+    "old": "\tif (cursor_x + cursor_xsize >= d->xsize)\n\t\tcursor_x = d->xsize - cursor_xsize;\n\tif (cursor_y + cursor_ysize >= d->ysize)\n\t\tcursor_y = d->ysize - cursor_ysize;",
+    "new": "\tif (cursor_x + cursor_xsize >= d->visible_xsize)\n\t\tcursor_x = d->visible_xsize - cursor_xsize;\n\tif (cursor_y + cursor_ysize >= d->visible_ysize)\n\t\tcursor_y = d->visible_ysize - cursor_ysize;",
+    "why": "Clamp cursor coordinates against visible size rather than VRAM size to match X11 window dimensions (#233)"
+  }
+]
+```
+
+This fix deliberately does NOT change the order of the clamping in `dev_fb_setcursor` (so if `cursor_xsize > d->visible_xsize`, `cursor_x` can become negative). It also doesn't fix `x11_redraw_cursor`'s `OLD_cursor` invalidation rectangle bounds, which may still over-read `fbwin->fb_ximage` if it is not clipped internally by `XPutImage`.
+UNSETTLED: Whether `XPutImage` for the old cursor needs similar explicit dimension clamping.
+
+FIXDRAFT_X11CURSORCLIP: YES PRESENT, 3 EDITS
+P-GWEBFIXX11CURSORCLIP-2deb
+GWEBFIXX11CURSORCLIP: 3 ATTACKS 3 BROKEN 0 HOLDS 0 UNSETTLED DRAFTABLE:YES

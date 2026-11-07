@@ -1,0 +1,31 @@
+STILL PRESENT: YES -- `cpu->cd.ppc.spr[SPR_SRR1] = (cpu->cd.ppc.msr & 0x87c0ffff);`
+
+```json
+[
+  {
+    "file": "src/cpus/cpu_ppc.c",
+    "old": "\telse\n\t\tcpu->cd.ppc.spr[SPR_SRR1] = (cpu->cd.ppc.msr & 0x87c0ffff);",
+    "new": "\telse {\n\t\tuint32_t reason = (exception_nr == PPC_EXCEPTION_ISI) ?\n\t\t    (cpu->cd.ppc.spr[SPR_SRR1] & ~0x87c0ffff) : 0;\n\t\tcpu->cd.ppc.spr[SPR_SRR1] = (cpu->cd.ppc.msr & 0x87c0ffff) | reason;\n\t}",
+    "why": "/* #ppcisisrr1: Preserve upper-half reason bits in SRR1 for ISI exceptions. */"
+  },
+  {
+    "file": "src/cpus/memory_ppc.c",
+    "old": "\t\tif (!instr) {\n\t\t\tcpu->cd.ppc.spr[SPR_DAR] = vaddr;\n\t\t\tcpu->cd.ppc.spr[SPR_DSISR] = match?\n\t\t\t    DSISR_PROTECT : DSISR_NOTFOUND;\n\t\t\tif (writeflag)\n\t\t\t\tcpu->cd.ppc.spr[SPR_DSISR] |= DSISR_STORE;\n\t\t}\n\t\tppc_exception(cpu, instr?\n\t\t    PPC_EXCEPTION_ISI : PPC_EXCEPTION_DSI);",
+    "new": "\t\tif (!instr) {\n\t\t\tcpu->cd.ppc.spr[SPR_DAR] = vaddr;\n\t\t\tcpu->cd.ppc.spr[SPR_DSISR] = match?\n\t\t\t    DSISR_PROTECT : DSISR_NOTFOUND;\n\t\t\tif (writeflag)\n\t\t\t\tcpu->cd.ppc.spr[SPR_DSISR] |= DSISR_STORE;\n\t\t} else {\n\t\t\t/* #ppcisisrr1: ISI uses the same bit layout as DSISR for not-found and protect. */\n\t\t\tcpu->cd.ppc.spr[SPR_SRR1] = match?\n\t\t\t    DSISR_PROTECT : DSISR_NOTFOUND;\n\t\t}\n\t\tppc_exception(cpu, instr?\n\t\t    PPC_EXCEPTION_ISI : PPC_EXCEPTION_DSI);",
+    "why": "Set the appropriate bits (not-found or protection) in SRR1 when raising an ISI exception."
+  }
+]
+```
+
+WHAT THE FIX DOES NOT CHANGE:
+- The `PPC_603` missing-TLB exception paths (IMISS/DMISS) are untouched, continuing to not use these reason bits.
+- External interrupts (EI, DEC) in `ppc_exception()` are unaffected since their `exception_nr` differs from `PPC_EXCEPTION_ISI`.
+
+UNSETTLED:
+- Whether `PPC_EXCEPTION_ISI` is implicitly visible in `cpu_ppc.c` without needing an extra header include, though it's highly likely given the other exception codes.
+- Whether `DSISR_PROTECT` and `DSISR_NOTFOUND` precisely match the PowerPC specification bitwise for the SRR1 ISI flags, though architectural mirroring is assumed here and they represent the same fault causes. Settle via the PowerPC architecture manuals.
+
+FIXDRAFT_PPCISISRR1: YES PRESENT, 2 EDITS
+
+P-GWEBFIXPPCISISRR1-8445
+GWEBFIXPPCISISRR1: 2 ATTACKS 0 BROKEN 0 HOLDS 2 UNSETTLED DRAFTABLE:YES

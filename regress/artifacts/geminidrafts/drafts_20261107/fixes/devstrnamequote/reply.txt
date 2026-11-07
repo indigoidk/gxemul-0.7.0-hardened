@@ -1,0 +1,37 @@
+To evaluate the claims in the issue report, I will treat each as a claim to be attacked defensively based only on the provided text.
+
+1. **Claim:** "a name2= value that is a lone quote makes len2 - 2 wrap to SIZE_MAX"
+   **Attack:** Let's trace `name2='` (a lone quote). `h` points to `'`. The `while (*h)` loop executes once, increments `len2` to 1, and increments `h` to `\0`. The loop terminates. `len2` is 1. Later, `if (*h == '\'')` (where `h` is reset to `'`) is true. It executes `len2 -= 2`. Since `len2` is of type `size_t` (unsigned), `1 - 2` wraps to `SIZE_MAX`. The claim holds.
+
+2. **Claim:** "so snprintf() is given size 0"
+   **Attack:** `len2` is now `SIZE_MAX`. The call is `snprintf(devinit.name2, len2 + 1, "%s", h);`. `SIZE_MAX + 1` wraps to 0. `snprintf` is given a size of 0. The claim holds.
+
+3. **Claim:** "and the new name buffer is left unterminated"
+   **Attack:** `malloc` does not zero memory, so `devinit.name2` contains whatever was in the heap. `snprintf` with a size of 0 writes nothing, not even a null terminator. The string is indeed left unterminated. The claim holds.
+
+4. **Claim:** "-- WRAP (host device strings only)"
+   **Attack:** Can we prove this issue applies only to "host device strings"? The code shown parses device parameters generally (like `addr=`, `irq=`, `name2=`). We have no evidence in `device.c` that `name2=` is exclusive to host devices. This claim is UNSETTLED; a file defining the contexts of `name2=` would be needed.
+
+5. **Claim (Triage):** "Subtracting 2 from length 1 causes underflow to SIZE_MAX and buffer issues."
+   **Attack:** As established in claims 1-3, `len2` is 1, and `1 - 2` underflows an unsigned type, leading to a size 0 buffer format and an unterminated string. The claim holds.
+
+STILL PRESENT: YES -- `src/devices/device.c:355-356`
+
+```json
+[
+  {
+    "file": "src/devices/device.c",
+    "old": "\t\t\tif (*h == '\\'')\n\t\t\t\tlen2 -= 2, h++;",
+    "new": "\t\t\tif (*h == '\\'') {\n\t\t\t\tlen2 = len2 >= 2 ? len2 - 2 : 0;\n\t\t\t\th++;\n\t\t\t}",
+    "why": "/* #devstrnamequote: Prevent len2 underflow on a lone unclosed quote */"
+  }
+]
+```
+
+**What this fix deliberately does NOT change:**
+It does not change the pre-existing parsing logic that aggressively shaves characters when an opening quote is found, even if a closing quote is missing (e.g., `name2='foo` still drops the trailing `o`). It also does not zero-initialize the memory before `snprintf` because providing the correct bounds to `snprintf` guarantees the string will be safely null-terminated.
+
+FIXDRAFT_DEVSTRNAMEQUOTE: YES PRESENT, 1 EDITS
+
+P-GWEBFIXDEVSTRNAMEQUOTE-7664
+GWEBFIXDEVSTRNAMEQUOTE: 5 ATTACKS 0 BROKEN 4 HOLDS 1 UNSETTLED DRAFTABLE:YES

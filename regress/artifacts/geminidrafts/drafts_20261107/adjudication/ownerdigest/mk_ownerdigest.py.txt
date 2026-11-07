@@ -1,0 +1,48 @@
+#!/usr/bin/env python3
+"""mk_ownerdigest.py -- ONE Gemini-web packet: the rows whose adjudication draft is OWNER-DECISION (latest proposal per row in
+OLDBATCH_DRAFTS.md), each with Gemini's one-line reason and the row's hold_question (trimmed), asking for a DIGEST grouped by
+theme -- the decision, the options, a recommended default, the rows each settles -- so the owner can clear many rows with a few
+decisions.  A proposal, not a ruling.  Writes ownerdigest/packet_body.md."""
+import io
+import json
+import os
+import re
+import subprocess
+
+H = "C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/gweb/jobs_20261106_kits/"
+REPO = "C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC"
+FANGS = re.compile(r"(grep the fork|check the premises against the source|read the source|open the file)", re.I)
+t = io.open(H + "OLDBATCH_DRAFTS.md", encoding="utf-8").read()
+last = {}
+for m in re.finditer(r"^\* ROW ([A-Za-z0-9_]+): ([A-Z][A-Z-]+[A-Z])\s*(?:--)?\s*(.*)$", t, re.M):
+    last[m.group(1)] = (m.group(2), m.group(3).strip())
+raw = subprocess.run(["git", "-C", REPO, "show", "HEAD:tools/pipeline/ledger.json"], capture_output=True).stdout
+d = json.loads(raw.decode("utf-8"))
+by = {r.get("id"): r for r in (d["rows"] if isinstance(d, dict) and "rows" in d else d)}
+rows = sorted(r for r, (disp, _) in last.items() if disp == "OWNER-DECISION" and r in by)
+lines = []
+for r in rows:
+    hq = FANGS.sub(lambda m: m.group(1).replace(" ", "-"), (by[r].get("hold_question") or "").strip().replace("\n", " "))
+    lines.append("* `%s` (%s, sev %s) -- %s%s" % (r, by[r].get("state"), by[r].get("severity") or by[r].get("sev") or "-",
+                                                 FANGS.sub(lambda m: m.group(1).replace(" ", "-"), last[r][1])[:220],
+                                                 ("  | HOLD Q: " + hq[:240]) if hq else ""))
+body = "\n".join([
+    "# GXemul hardened fork -- OWNER-DECISION DIGEST: %d filed issues that wait on the project owner's call (a defensive project's queue triage)" % len(rows), "",
+    "PROJECT FRAMING -- a defensive software-robustness project: GXemul is a computer-architecture emulator, and this fork fixes",
+    "crash-on-malformed-input defects and keeps a ledger of every filed issue.  An earlier triage pass proposed, for each row below,",
+    "that it needs the OWNER's decision (not more engineering), with a one-line reason; some rows also carry the question they are",
+    "held for.  You cannot read files; work from these lines.  This is a DRAFT for the owner, not a ruling.", "",
+    "## The rows (id, state, severity -- the triage pass's reason | the row's own held question, both trimmed)", "", "\n".join(lines), "",
+    "## What to return", "",
+    "Group the rows into THEMES -- decisions that, once made, settle many rows at once (for example: a policy for all rows of one",
+    "kind, a tooling question, a seat or roster question, an accept-the-debt question).  For EACH theme give:",
+    "1. the decision in one sentence, phrased as a question the owner can answer;",
+    "2. the options (two to four), with the cost of each in a phrase;",
+    "3. a RECOMMENDED default and why, in one sentence;",
+    "4. the row ids it settles.",
+    "Then list any row that fits no theme, with its own one-line question.  Order themes by how many rows they settle.",
+    "Every row id above must appear exactly once.", "",
+    "End with one line: `OWNERDIGEST: <t> THEMES, <n> ROWS PLACED, <s> SINGLETONS`.", ""])
+os.makedirs(H + "ownerdigest", exist_ok=True)
+io.open(H + "ownerdigest/packet_body.md", "w", encoding="utf-8", newline="\n").write(body)
+print("rows", len(rows), "bytes", len(body.encode()))

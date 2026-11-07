@@ -1,0 +1,32 @@
+#!/usr/bin/env python3
+"""apply_edits.py REPO REPLY... -- apply the single ```json edit block of each Gemini reply to REPO, in order.
+
+Each edit's `old` must occur EXACTLY ONCE in its file at the moment it is applied (overlapping count, as FIXCHECK.md
+required); bytes are replaced as-is, so no line ending is rewritten.  Prints one line per edit and APPLY_OK / APPLY_FAIL."""
+import io
+import json
+import re
+import sys
+
+repo, replies = sys.argv[1].rstrip("/"), sys.argv[2:]
+bad = 0
+for rp in replies:
+    t = io.open(rp, encoding="utf-8").read()
+    blocks = re.findall(r"```json\s*\n(.*?)```", t, re.S)
+    if len(blocks) != 1:
+        print("FAIL %s: %d json blocks" % (rp, len(blocks)))
+        bad += 1
+        continue
+    for k, e in enumerate(json.loads(blocks[0]), 1):
+        p = repo + "/" + e["file"]
+        s = io.open(p, encoding="latin-1", newline="").read()
+        n = sum(1 for i in range(len(s)) if s.startswith(e["old"], i))
+        if n != 1:
+            print("FAIL %s edit %d %s: old occurs %d times" % (rp.split("/")[-2], k, e["file"], n))
+            bad += 1
+            continue
+        line = s.count("\n", 0, s.index(e["old"])) + 1
+        io.open(p, "w", encoding="latin-1", newline="").write(s.replace(e["old"], e["new"], 1))
+        print("ok   %s edit %d %s:%d  (%s)" % (rp.split("/")[-2], k, e["file"], line, e.get("why", "")[:70]))
+print("APPLY_FAIL %d" % bad if bad else "APPLY_OK")
+sys.exit(1 if bad else 0)

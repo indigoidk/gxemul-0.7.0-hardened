@@ -1,0 +1,35 @@
+Claim 1: `physical_ram_in_mb * 1048576 is computed in 32 bits`
+UNSETTLED. The code snippet for `src/machines/machine_cats.c` ends at line 104, so we cannot inspect lines 110-111 to verify how `physical_ram_in_mb` is computed there. Need the rest of `src/machines/machine_cats.c` to settle.
+
+Claim 2: `so a -M of 4096 MB or more wraps the boot-info bt_memend`
+UNSETTLED. Since lines 110-111 are not shown, we cannot see the `bt_memend` assignment or confirm that it wraps.
+
+Claim 3: `the > 256 test only warns`
+HOLDS. `src/machines/machine_cats.c:59-61` performs a check `if (machine->physical_ram_in_mb > 256)` and only prints a warning via `fprintf`, allowing execution to continue with the overly large value.
+
+Claim 4: `requires a 64-bit cast to handle >4GB RAM arguments properly.`
+BROKEN. The emulated board is a 32-bit ARM machine that physically supports a maximum of 256 MB. Handling >4GB RAM by casting it to 64-bit for 32-bit registers and structs is fundamentally wrong. The emulator should clamp the value to the board's maximum instead of trying to pass it through.
+
+STILL PRESENT: YES -- src/machines/machine_cats.c:59
+
+```json
+[
+  {
+    "file": "src/machines/machine_cats.c",
+    "old": "\tif (machine->physical_ram_in_mb > 256)\n\t\tfprintf(stderr, \"WARNING! Real CATS machines cannot\"\n\t\t    \" have more than 256 MB RAM. Continuing anyway.\\n\");",
+    "new": "\tif (machine->physical_ram_in_mb > 256) {\n\t\tfprintf(stderr, \"WARNING! Real CATS machines cannot\"\n\t\t    \" have more than 256 MB RAM. Continuing anyway.\\n\");\n\t\t/* #001: clamp to avoid wrapping 32-bit boot info */\n\t\tmachine->physical_ram_in_mb = 256;\n\t}",
+    "why": "Clamp the RAM to the machine's maximum instead of casting to 64-bit or letting 32-bit math wrap."
+  }
+]
+```
+
+What the fix deliberately does NOT change:
+It does not change `physical_ram_in_mb` to a 64-bit integer or introduce a 64-bit cast, as supporting >4GB on a platform with 256MB physical limits and 32-bit data structures is incorrect. It preserves the warning idiom.
+
+What could not be settled from the code shown:
+Whether the exact computation at lines 110-111 calculates `physical_ram_in_mb * 1048576` and sets `bt_memend`, because the snippet omits lines 105 onwards.
+
+FIXDRAFT_CATSMEMWRAP: YES PRESENT, 1 EDITS
+
+P-GWEBFIXCATSMEMWRAP-4251
+GWEBFIXCATSMEMWRAP: 4 ATTACKS 1 BROKEN 1 HOLDS 2 UNSETTLED DRAFTABLE:YES

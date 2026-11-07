@@ -1,0 +1,33 @@
+diff --git a/src/cpus/cpu_ppc.c b/src/cpus/cpu_ppc.c
+index e9bbadaa..34210d4c 100644
+--- a/src/cpus/cpu_ppc.c
++++ b/src/cpus/cpu_ppc.c
+@@ -323,8 +323,11 @@ void ppc_exception(struct cpu *cpu, int exception_nr)
+ 	if (exception_nr >= 0x10 && exception_nr <= 0x13)
+ 		cpu->cd.ppc.spr[SPR_SRR1] = (cpu->cd.ppc.msr & 0xffff)
+ 		    | (cpu->cd.ppc.cr & 0xf0000000);
+-	else
+-		cpu->cd.ppc.spr[SPR_SRR1] = (cpu->cd.ppc.msr & 0x87c0ffff);
++	else {
++		uint32_t reason = (exception_nr == PPC_EXCEPTION_ISI) ?
++		    (cpu->cd.ppc.spr[SPR_SRR1] & ~0x87c0ffff) : 0;
++		cpu->cd.ppc.spr[SPR_SRR1] = (cpu->cd.ppc.msr & 0x87c0ffff) | reason;
++	}
+ 
+ 	if (!quiet_mode)
+ 		fatal("[ PPC Exception 0x%x; pc=0x%" PRIx64" ]\n",
+diff --git a/src/cpus/memory_ppc.c b/src/cpus/memory_ppc.c
+index a5bd8e99..f819d158 100644
+--- a/src/cpus/memory_ppc.c
++++ b/src/cpus/memory_ppc.c
+@@ -318,6 +318,10 @@ int ppc_translate_v2p(struct cpu *cpu, uint64_t vaddr,
+ 			    DSISR_PROTECT : DSISR_NOTFOUND;
+ 			if (writeflag)
+ 				cpu->cd.ppc.spr[SPR_DSISR] |= DSISR_STORE;
++		} else {
++			/* #ppcisisrr1: ISI uses the same bit layout as DSISR for not-found and protect. */
++			cpu->cd.ppc.spr[SPR_SRR1] = match?
++			    DSISR_PROTECT : DSISR_NOTFOUND;
+ 		}
+ 		ppc_exception(cpu, instr?
+ 		    PPC_EXCEPTION_ISI : PPC_EXCEPTION_DSI);
