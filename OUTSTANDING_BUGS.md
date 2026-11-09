@@ -48,6 +48,9 @@
 > 9. `vr41xx1kpage` (HIGH, new) -- VR41xx 1 KB-page TLB writes exit the host at two sites.  T11; design owed.
 > 10. `pvrrenderexit` (HIGH, FIXED by `#583` on 2026-11-05, closed) -- the zwrite exit only.  T5; shipped: the Z-write-disable
 >     bit honoured in both rasterizers (depth test kept, depth store skipped), a 164-row rung-3 detector in gate 14.
+> 11. `pvrexits3` (HIGH, new) -- dev_pvr.c's three remaining render/texture-loop exit(1)s: unimplemented texture pixel format,
+>     non-RGB565 render mode and unimplemented TA list command.  The siblings left by `#583`; DECLINE + latched announce.
+>     One round may take all three under the round-scope rule; witnesses owed.
 >
 > Tail, in order: (1) `fbsdrampair`, T12 -- FIXED by `#585` on 2026-11-06 (DECLINE, narrow: both reads declined with 0 and a
 > once-per-register announce, a 56-row rung-3 detector in gate 14; the dated section below); (2) `wdclbaaddr`, T4 -- FIXED by `#572` on 2026-10-24 (held for
@@ -26782,3 +26785,12 @@ src/devices/dev_dec5800.c:359-367 at 987cb596: The DEC 5800 CPU-mask registers a
 * **Owed:** Fable's REGRESS review of the round as committed, held on `ghostround`'s regress stage with its question.
 * **Filed (clause (e), pass 4):** a NONEMPTY short blame map -- the short-blame legs drive only the empty map real git writes (a SHA-256 repository), so a length guard narrowed to the empty map passes all 69 controls (measured); no production git writes a nonempty short map (the porcelain parser's two skip branches are uniform per repository or never fire on git's own output), so it is disclosed, not legged (`regress/artifacts/ghostround/wired_20261106/PASS4_RULING.md`).
 * **Not checked by P2** (so a green P2 is not over-read): an `open`/`held` row named only in a block's body; an incidental mention of the round; a round with no block of its own; RECORDS blocks; a round block with no number of its own falls back to the date rule; a round block written at H2 with a backticked number.
+
+## 2026-11-08 -- filed: pvrexits3
+
+* **Filed, new** -- `pvrexits3` (HIGH): three process-ending calls remain in `src/devices/dev_pvr.c` at HEAD `5934fffa`, each answering an unimplemented feature with `exit(1)`.  HIGH follows the ruling on sibling `pvrrenderexit`.  `#583` (`e1a091e4`, 2026-11-05) fixed the zwrite exit only, as open-list item 10 records; its dated section left these three siblings with their own disposition.
+* **Site `:874`, `texturedline()`** -- the default arm for `texture_pixelformat` calls `fatal()` and `exit(1)`.  The selector is TA polygon-header word 3 bits 29:27, decoded as `(list[3] >> 27) & 7`; values 3, 4, 5 and 7 reach the default.
+* **Site `:1090`, `pvr_render()`** -- `PVRREG_FB_RENDER_CFG`'s render-mode field, masked by `FB_RENDER_CFG_RENDER_MODE_MASK` (`0x07`), selects the arm.  Any value other than `0x1` prints `pvr: only RGB565 rendering has been implemented` and calls `exit(1)`.
+* **Site `:1432`, `pvr_render()`** -- the default arm for `cmd` calls `fatal()` and `exit(1)`.  The selector is TA command word 0 bits 31:29, decoded as `(list[0] >> 29) & 7`; values 2, 3, 5 and 6 reach the default.
+* **Disposition** -- the three siblings left by `#583`: DECLINE + latched announce, per option-set member 3.
+* **Round scope** -- one round may take all three: same device, same semantic class (an unimplemented feature ends the emulator process), one fix design, one detector with no new oracle.  Each site must be witnessed by the round; no witness is claimed by this filing.
